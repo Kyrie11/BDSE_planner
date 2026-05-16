@@ -241,15 +241,8 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
     # Do not slice every candidate again for every atom.  With E~70, K=32,
     # T=80 this alone removes thousands of repeated Python/Numpy allocations.
     eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
-    kinematic_cache: list[tuple[float, float, float]] = []
-    for traj in eval_trajs:
-        v = traj[:, 3]
-        acc = finite_difference(v, dt_eval)
-        jerk = finite_difference(acc, dt_eval)
-        curv = compute_curvature(traj[:, :2])
-        kinematic_cache.append((float(np.max(np.abs(acc))), float(np.max(np.abs(jerk))), float(np.max(np.abs(curv)))))
-
     route_dist_cache: dict[tuple[int, int], np.ndarray] = {}
+
     def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
         key = (id(route_arr), a)
         got = route_dist_cache.get(key)
@@ -259,25 +252,11 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
         return got
 
     for ei, atom in enumerate(atoms):
-        route_arr = None
-        if "route_centerline" in atom.anchor:
-            route_arr = np.asarray(atom.anchor["route_centerline"], dtype=np.float32)
+        agent_eval = None
+        if atom.type in {"occupancy", "ttc"}:
+            agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, dt), cfg)
         for a in range(K):
             traj = eval_trajs[a]
-            feat = np.zeros((ATOM_QUERY_DIM,), dtype=np.float32)
-            if "current_state" in atom.anchor:
-                cur = np.asarray(atom.anchor["current_state"], dtype=np.float32)
-                dist = np.linalg.norm(traj[:, :2] - cur[:2][None, :], axis=1)
-                arg = int(np.argmin(dist))
-                feat[0] = dist.min()
-                feat[1] = dist.mean()
-                feat[2] = traj[arg, 4]
-                feat[3] = cur[3] if len(cur) > 3 else 0.0
-            if route_arr is not None:
-                dist = cached_route_dist(route_arr, a)
-                feat[4] = dist.min()
-                feat[5] = dist.mean()
-                feat[6] = dist.max()
             if atom.type == "occupancy":
                 agent = agent_eval
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
@@ -310,7 +289,6 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 width = float(atom.anchor.get("width", 4.0))
                 polygons = [np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in atom.anchor.get("drivable_polygons", [])]
-
                 if polygons:
                     outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
                     # dist is distance to polygon boundary.  Penalize outside points by
@@ -388,16 +366,40 @@ def compute_query_features(atoms: list[EvidenceAtom], candidates: CandidateBank,
     dt_eval = base_dt * stride
 
     eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
+    kinematic_cache: list[tuple[float, float, float]] = []
+    for traj in eval_trajs:
+        v = traj[:, 3]
+        acc = finite_difference(v, dt_eval)
+        jerk = finite_difference(acc, dt_eval)
+        curv = compute_curvature(traj[:, :2])
+        kinematic_cache.append((float(np.max(np.abs(acc))), float(np.max(np.abs(jerk))), float(np.max(np.abs(curv)))))
+
+    route_dist_cache: dict[tuple[int, int], np.ndarray] = {}
+    def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
+        key = (id(route_arr), a)
+        got = route_dist_cache.get(key)
+        if got is None:
+            got = nearest_polyline_distance(eval_trajs[a][:, :2], route_arr)
+            route_dist_cache[key] = got
+        return got
+
     for ei, atom in enumerate(atoms):
+        route_arr = None
+        if "route_centerline" in atom.anchor:
+            route_arr = np.asarray(atom.anchor["route_centerline"], dtype=np.float32)
         for a in range(K):
-            traj = _eval_traj(candidates.trajectories[a], cfg)
+            traj = eval_trajs[a]
             feat = np.zeros((ATOM_QUERY_DIM,), dtype=np.float32)
             if "current_state" in atom.anchor:
                 cur = np.asarray(atom.anchor["current_state"], dtype=np.float32)
                 dist = np.linalg.norm(traj[:, :2] - cur[:2][None, :], axis=1)
-                feat[0] = dist.min(); feat[1] = dist.mean(); feat[2] = traj[np.argmin(dist), 4]; feat[3] = cur[3] if len(cur) > 3 else 0.0
-            if "route_centerline" in atom.anchor:
-                dist = nearest_polyline_distance(traj[:, :2], atom.anchor["route_centerline"])
+                arg = int(np.argmin(dist))
+                feat[0] = dist.min()
+                feat[1] = dist.mean()
+                feat[2] = traj[arg, 4]
+                feat[3] = cur[3] if len(cur) > 3 else 0.0
+            if route_arr is not None:
+                dist = cached_route_dist(route_arr, a)
                 feat[4] = dist.min(); feat[5] = dist.mean(); feat[6] = dist.max()
             if atom.type == "red_light":
                 stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
