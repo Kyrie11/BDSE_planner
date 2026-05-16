@@ -6,10 +6,10 @@ import os
 import re
 import sqlite3
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 import numpy as np
 from bdse.config import load_config
@@ -74,13 +74,14 @@ def scan_db_for_lidarpc_tokens(db_path: str | Path, split: str, folder: str, str
 
 
 class NuPlanScenarioSource:
-    def __init__(self, cfg: dict[str, Any], records: list[DBFileRecord], split: str, num_workers=None, use_process_pool=None):
+    def __init__(self, cfg: dict[str, Any], records: list[DBFileRecord], split: str, num_workers=None, use_process_pool=None, max_scenarios: int | None = None):
         self.cfg = cfg
         self.records = records
         self.split = split
         self._scenarios: list[Any] | None = None
         self.num_workers = num_workers
         self.use_process_pool = use_process_pool
+        self.max_scenarios = max_scenarios
 
     def _build_with_devkit(self) -> list[Any]:
         try:
@@ -105,11 +106,15 @@ class NuPlanScenarioSource:
         # process pool here can silently block before tqdm is created.  Keep discovery
         # threaded/single-process and parallelize sample materialization instead.
         builder_use_process_pool = bool(preprocess_cfg.get("scenario_builder_use_process_pool", False))
+        scenario_filter_limit = self.max_scenarios
+        if scenario_filter_limit is None:
+            scenario_filter_limit = preprocess_cfg.get("scenario_filter_limit_total_scenarios", None)
 
         db_files = db_files_for_nuplan_builder(self.records)
         print(
             f"[bdse] building nuPlan scenarios: split={self.split} db_files={len(db_files)} "
-            f"builder_workers={num_workers} builder_process_pool={builder_use_process_pool}",
+            f"builder_workers={num_workers} builder_process_pool={builder_use_process_pool} "
+            f"scenario_filter_limit={scenario_filter_limit}",
             flush=True,
         )
         builder = NuPlanScenarioBuilder(
@@ -128,7 +133,7 @@ class NuPlanScenarioSource:
             log_names=None,
             map_names=None,
             num_scenarios_per_type=None,
-            limit_total_scenarios=None,
+            limit_total_scenarios=scenario_filter_limit,
             timestamp_threshold_s=None,
             ego_displacement_minimum_m=None,
             expand_scenarios=False,
@@ -165,13 +170,39 @@ def _scenario_log_name(scenario: Any) -> str:
 
 
 def _scenario_folder_for_log(records: list[DBFileRecord], log_name: str, default_split: str) -> str:
+    # Kept for compatibility, but build_index() uses a precomputed lookup.
+    # The old implementation was called once per scenario and scanned all DB
+    # records, which is O(num_scenarios * num_db_files) and can stall for tens
+    # of minutes on full nuPlan val/train splits.
+    lookup = _folder_lookup(records)
+    return lookup.get(log_name, lookup.get(_safe_name(log_name), _default_folder(records, default_split)))
+
+
+def _folder_lookup(records: Iterable[DBFileRecord]) -> dict[str, str]:
+    out: dict[str, str] = {}
     for rec in records:
-        if rec.log_name == log_name or rec.path.stem == log_name:
-            return rec.folder
+        out[rec.log_name] = rec.folder
+        out[_safe_name(rec.log_name)] = rec.folder
+        out[rec.path.stem] = rec.folder
+        out[_safe_name(rec.path.stem)] = rec.folder
+    return out
+
+
+def _default_folder(records: Iterable[DBFileRecord], default_split: str) -> str:
     for rec in records:
         if rec.split == default_split:
             return rec.folder
     return default_split
+
+
+def _maybe_tqdm(iterable, total: int | None, desc: str, enable: bool):
+    if not enable:
+        return iterable
+    try:
+        from tqdm import tqdm
+        return tqdm(iterable, total=total, desc=desc, file=sys.stdout, mininterval=2.0)
+    except Exception:
+        return iterable
 
 
 def _num_iterations(scenario: Any) -> int:
@@ -217,6 +248,7 @@ class NuPlanBDSEDataset:
             split,
             num_workers=self.cfg.get("preprocess", {}).get("scenario_builder_workers", min(self.num_workers, 4)),
             use_process_pool=self.cfg.get("preprocess", {}).get("scenario_builder_use_process_pool", False),
+            max_scenarios=self.max_scenarios,
         ) if use_devkit else None
 
     def build_index(self) -> list[Any]:
@@ -225,17 +257,30 @@ class NuPlanBDSEDataset:
         if self.use_devkit:
             scenarios = self._scenario_source.scenarios() if self._scenario_source is not None else []
             out: list[DevkitScenarioIndexRecord] = []
-            for scenario in scenarios:
+            folder_lookup = _folder_lookup(self.records)
+            default_folder = _default_folder(self.records, self.split)
+            total_scenarios = len(scenarios)
+            print(
+                f"[bdse] expanding scenario index: split={self.split} "
+                f"scenario_objects={total_scenarios} stride={self.stride} "
+                f"max_scenarios={self.max_scenarios}",
+                flush=True,
+            )
+            show_index_progress = total_scenarios >= int(self.cfg.get("preprocess", {}).get("index_progress_threshold", 10000))
+            iterator = _maybe_tqdm(scenarios, total_scenarios, f"index:{self.split}", show_index_progress)
+            for scenario in iterator:
                 token = _scenario_token(scenario)
                 log_name = _scenario_log_name(scenario)
-                folder = _scenario_folder_for_log(self.records, log_name, self.split)
+                folder = folder_lookup.get(log_name, folder_lookup.get(_safe_name(log_name), default_folder))
                 n_iter = _num_iterations(scenario)
                 for iteration in range(0, n_iter, max(self.stride, 1)):
                     out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration))
                     if self.max_scenarios is not None and len(out) >= self.max_scenarios:
                         self._index = out
+                        print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
                         return self._index
             self._index = out
+            print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
             return self._index
         idx: list[ScenarioIndexRecord] = []
         per_file = None if self.max_scenarios is None else max(1, self.max_scenarios // max(len(self.records), 1))
@@ -305,13 +350,18 @@ class NuPlanBDSEDataset:
             )
             return []
 
-        all_paths = [self.cache_path_for_index(i, out) for i in range(total)]
-        if resume and not overwrite:
-            pending = [(i, p) for i, p in enumerate(all_paths) if not p.exists()]
-            skipped = total - len(pending)
-        else:
-            pending = list(enumerate(all_paths))
-            skipped = 0
+        print(f"[bdse] checking existing cache files: split={self.split} total={total} resume={resume} overwrite={overwrite}", flush=True)
+        all_paths: list[Path] = [Path()] * total
+        pending: list[tuple[int, Path]] = []
+        skipped = 0
+        check_iter = _maybe_tqdm(range(total), total, f"cache-check:{self.split}", show_progress and total >= 10000)
+        for i in check_iter:
+            p = self.cache_path_for_index(i, out)
+            all_paths[i] = p
+            if resume and not overwrite and p.exists():
+                skipped += 1
+            else:
+                pending.append((i, p))
 
         print(
             f"[bdse] split={self.split}: records={len(self.records)} scenarios/iterations={total} "
@@ -335,37 +385,70 @@ class NuPlanBDSEDataset:
         paths: list[Path] = list(all_paths)
         manifest_records: list[dict[str, Any]] = []
 
-        def _progress(iterable, total_count: int, desc: str):
-            if not show_progress:
-                return iterable
-            from tqdm import tqdm
-            return tqdm(iterable, total=total_count, desc=desc, file=sys.stdout, mininterval=1.0)
+        def _append_manifest(records: list[dict[str, Any]]) -> None:
+            if not records:
+                return
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            with manifest_path.open("a", encoding="utf-8") as f:
+                for rec in records:
+                    f.write(json.dumps(rec, sort_keys=True) + "\n")
+            records.clear()
+
+        def _handle_result(fut: Future, future_map: dict[Future, tuple[int, Path]]):
+            i0, path0 = future_map.pop(fut)
+            try:
+                i, written, rec = fut.result()
+            except Exception as exc:
+                raise RuntimeError(f"Failed preprocessing index={i0} path={path0}") from exc
+            paths[i] = written
+            if rec is not None:
+                manifest_records.append(rec)
 
         if workers <= 1:
-            for i, path in _progress(pending, len(pending), f"preprocess:{self.split}"):
+            iterator = _maybe_tqdm(pending, len(pending), f"preprocess:{self.split}", show_progress)
+            for i, path in iterator:
                 _, written, rec = self._write_one_preprocessed_index(i, path, manifest_path)
                 paths[i] = written
                 if rec is not None:
                     manifest_records.append(rec)
+                    if len(manifest_records) >= 256:
+                        _append_manifest(manifest_records)
         else:
             # Threading overlaps DB/map I/O without attempting to pickle nuPlan scenarios.
+            # Keep only a bounded number of futures in flight; submitting millions of
+            # futures before reading results can consume huge memory and makes it look
+            # like preprocessing has hung.
+            max_in_flight = max(workers, int(self.cfg.get("preprocess", {}).get("max_in_flight", workers * 4)))
+            pending_iter = iter(pending)
+            completed = 0
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                futures = {ex.submit(self._write_one_preprocessed_index, i, path, manifest_path): (i, path) for i, path in pending}
-                for fut in _progress(as_completed(futures), len(futures), f"preprocess:{self.split}"):
-                    i0, path0 = futures[fut]
+                futures: dict[Future, tuple[int, Path]] = {}
+                def submit_next() -> bool:
                     try:
-                        i, written, rec = fut.result()
-                    except Exception as exc:
-                        raise RuntimeError(f"Failed preprocessing index={i0} path={path0}") from exc
-                    paths[i] = written
-                    if rec is not None:
-                        manifest_records.append(rec)
+                        i, path = next(pending_iter)
+                    except StopIteration:
+                        return False
+                    futures[ex.submit(self._write_one_preprocessed_index, i, path, manifest_path)] = (i, path)
+                    return True
 
-        if manifest_records:
-            manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            with manifest_path.open("a", encoding="utf-8") as f:
-                for rec in sorted(manifest_records, key=lambda r: str(r["path"])):
-                    f.write(json.dumps(rec, sort_keys=True) + "\n")
+                for _ in range(min(max_in_flight, len(pending))):
+                    submit_next()
+                pbar = _maybe_tqdm(range(len(pending)), len(pending), f"preprocess:{self.split}", show_progress)
+                try:
+                    while futures:
+                        done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+                        for fut in done:
+                            _handle_result(fut, futures)
+                            completed += 1
+                            if hasattr(pbar, "update"):
+                                pbar.update(1)
+                            submit_next()
+                            if len(manifest_records) >= 256:
+                                _append_manifest(manifest_records)
+                finally:
+                    if hasattr(pbar, "close"):
+                        pbar.close()
+        _append_manifest(manifest_records)
         return paths
 
 
