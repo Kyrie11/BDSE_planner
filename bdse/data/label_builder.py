@@ -143,7 +143,7 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
                 parts.append(f"{name}={marks[name] - prev:.3f}s")
                 prev = marks[name]
         parts.append(f"total={total:.3f}s")
-        print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
+        # print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
     return Sample(token, timestamp_us, runtime, label_future, candidates, evidence, teacher, pairs)
 
 
