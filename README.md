@@ -130,15 +130,19 @@ Run a small validation preprocessing job:
 
 ```bash
 python -m bdse.experiments.preprocess \
-  --config bdse/configs/default.yaml \
+  --config bdse/configs/full_preprocess.yaml \
   --data-root /data0/senzeyu2/dataset/nuplan/data/cache \
-  --splits train val \
-  --folders train_boston train_pittsburgh train_singapore \
-  --max-files-per-split 1 \
-  --max-scenarios-per-split 100 \
-  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/train_set \
-  --resume \
-  --tqdm
+  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
+  --map-version nuplan-maps-v1.0 \
+  --splits val \
+  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/val_set \
+  --num-workers 4 \
+  --scenario-stride 10 \
+  --teacher-cost-eval-stride 1 \
+  --include-drivable-polygons \
+  --candidate-aware-agent-selection \
+  --profile \
+  --profile-threshold-s 0.2
 ```
 
 Run training preprocessing on selected train folders:
@@ -210,10 +214,11 @@ Run teacher/evidence diagnostics using teacher costs as the predictor oracle:
 
 ```bash
 python -m bdse.experiments.diagnostics \
+  --config bdse/configs/full_preprocess.yaml \
   --split val \
-  --max-files 1 \
-  --max-scenarios 100 \
-  --output outputs/diagnostics.json
+  --preprocessed-dir /data0/senzeyu2/dataset/nuplan/data/cache/val_set \
+  --max-scenarios 200 \
+  --output outputs/diagnostics_val_200.json
 ```
 
 Reported BDSE metrics include:

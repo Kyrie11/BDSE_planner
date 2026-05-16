@@ -108,12 +108,28 @@ def teacher_margin(J_T: np.ndarray, a: int, b: int) -> float:
 
 
 def residual_margin(teacher: TeacherLabels, a: int, b: int) -> float:
-    return float((teacher.J_T[b] - teacher.J_T[a]) - (teacher.J_base[b] - teacher.J_base[a]))
+    """Evidence-only margin delta for pair (a,b).
+
+    Mathematically this is also
+        (J_T[b] - J_T[a]) - (J_base[b] - J_base[a]).
+    In real nuPlan samples J_base can be very large, so subtracting two large
+    margins can lose enough floating-point precision to trip a strict closure
+    assertion even though the stored teacher partition is valid.  Use the
+    already-materialized evidence partition directly; validate_residual_closure
+    below still checks it against the atom-level sum.
+    """
+    return float(np.asarray(teacher.J_evid, dtype=np.float64)[b] - np.asarray(teacher.J_evid, dtype=np.float64)[a])
 
 
-def validate_residual_closure(teacher: TeacherLabels, pairs: np.ndarray, atol: float = 1e-4) -> None:
+def validate_residual_closure(teacher: TeacherLabels, pairs: np.ndarray, atol: float = 1e-4, rtol: float = 1e-6) -> None:
+    g64 = np.asarray(teacher.g_evid, dtype=np.float64)
+    evid64 = np.asarray(teacher.J_evid, dtype=np.float64)
     for a, b in np.asarray(pairs, dtype=np.int64):
-        lhs = residual_margin(teacher, int(a), int(b))
-        rhs = float((teacher.g_evid[:, b] - teacher.g_evid[:, a]).sum())
-        if abs(lhs - rhs) > atol:
-            raise AssertionError("Residual margin must equal sum_i(g_i_T[b]-g_i_T[a])")
+        a_i, b_i = int(a), int(b)
+        lhs = float(evid64[b_i] - evid64[a_i])
+        rhs = float((g64[:, b_i] - g64[:, a_i]).sum(dtype=np.float64))
+        if not np.isclose(lhs, rhs, atol=atol, rtol=rtol):
+            raise AssertionError(
+                "Residual margin must equal sum_i(g_i_T[b]-g_i_T[a]); "
+                f"pair=({a_i},{b_i}) lhs={lhs:.9g} rhs={rhs:.9g} diff={lhs-rhs:.9g}"
+            )

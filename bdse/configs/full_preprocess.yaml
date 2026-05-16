@@ -9,6 +9,9 @@ preprocess:
   # 10 lidar frames at the paper's 10 Hz feature cadence gives 1 Hz training
   # timesteps. Use 5 for 2 Hz if you need denser samples for an ablation.
   scenario_stride: 10
+  # Leave null for exhaustive generation. Set via --max-samples-per-log for
+  # balanced wall-clock tests without taking only the first log.
+  max_samples_per_log: null
   num_workers: 4
   max_in_flight: 8
   compress_npz: false

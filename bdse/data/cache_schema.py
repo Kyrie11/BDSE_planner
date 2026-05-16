@@ -323,15 +323,23 @@ def load_sample_npz(path: str | Path) -> Sample:
         pair_indices = np.asarray(z["pair_indices"], dtype=np.int64)
         if pair_indices.size:
             pair_indices = pair_indices.reshape(-1, 2)
-            pairs = PairLabels(
-                pairs=pair_indices,
-                margins=np.asarray(z["pair_margins"], dtype=np.float32),
-                weights=np.asarray(z["pair_weights"], dtype=np.float32),
-                residuals=np.asarray(z["pair_residuals"], dtype=np.float32),
-                valid_mask=np.asarray(z["pair_valid"], dtype=bool),
-            )
+            pair_margins = np.asarray(z["pair_margins"], dtype=np.float32)
+            pair_weights = np.asarray(z["pair_weights"], dtype=np.float32)
+            pair_residuals = np.asarray(z["pair_residuals"], dtype=np.float32)
+            pair_valid = np.asarray(z["pair_valid"], dtype=bool)
         else:
-            pairs = None
+            pair_indices = np.zeros((0, 2), dtype=np.int64)
+            pair_margins = np.zeros((0,), dtype=np.float32)
+            pair_weights = np.zeros((0,), dtype=np.float32)
+            pair_residuals = np.zeros((0,), dtype=np.float32)
+            pair_valid = np.zeros((0,), dtype=bool)
+        pairs = PairLabels(
+            pairs=pair_indices,
+            margins=pair_margins,
+            weights=pair_weights,
+            residuals=pair_residuals,
+            valid_mask=pair_valid,
+        )
     return Sample(scenario_token, timestamp_us, runtime, label_future, candidates, evidence_bank, teacher, pairs)
 
 

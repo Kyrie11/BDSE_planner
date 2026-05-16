@@ -81,13 +81,23 @@ def _iter_tracked_objects(container: Any) -> list[Any]:
         return list(container)
     tracked = getattr(container, "tracked_objects", None)
     if tracked is not None:
-        if hasattr(tracked, "get_tracked_objects_of_types"):
+        # nuPlan's DetectionsTracks.tracked_objects is usually a TrackedObjects
+        # container.  Prefer its concrete .tracked_objects list.  The previous
+        # implementation called get_tracked_objects_of_types([]) when the
+        # container did not expose tracked_object_types, which returns an empty
+        # list and silently removes every surrounding agent from preprocessing.
+        concrete = getattr(tracked, "tracked_objects", None)
+        if concrete is not None:
             try:
-                return list(tracked.get_tracked_objects_of_types(list(getattr(tracked, "tracked_object_types", []))))
+                return list(concrete)
+            except TypeError:
+                pass
+        types = getattr(tracked, "tracked_object_types", None)
+        if hasattr(tracked, "get_tracked_objects_of_types") and types:
+            try:
+                return list(tracked.get_tracked_objects_of_types(list(types)))
             except Exception:
-                return []
-        if hasattr(tracked, "tracked_objects"):
-            return list(tracked.tracked_objects)
+                pass
         try:
             return list(tracked)
         except TypeError:
@@ -389,6 +399,30 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
                 # do not change the teacher label but dominate Python geometry cost.
                 score = float(np.linalg.norm(local, axis=1).min())
                 scored_polys.append((score, obj, local))
+
+        # Some nuPlan map/devkit combinations do not expose a populated
+        # DRIVABLE_AREA layer through get_proximal_map_objects, while lane and
+        # lane-connector objects still carry polygons.  Falling back to those
+        # route/local lane polygons prevents the paper-faithful configuration
+        # from degenerating into a route-corridor-only off-drivable atom.
+        if not scored_polys:
+            fallback_objs: list[Any] = []
+            for obj in route_objs:
+                fallback_objs.extend(_extract_edges(obj) or [obj])
+            fallback_objs.extend(_flatten_by_layer(prox, "LANE"))
+            fallback_objs.extend(_flatten_by_layer(prox, "LANE_CONNECTOR"))
+            seen: set[str] = set()
+            for obj in fallback_objs:
+                oid = _obj_id(obj)
+                if oid in seen:
+                    continue
+                seen.add(oid)
+                pts = _geometry_points(obj)
+                if len(pts) >= 3:
+                    local = _to_local_xy(pts, origin_xy, origin_yaw)
+                    score = float(np.linalg.norm(local, axis=1).min())
+                    scored_polys.append((score, obj, local))
+
         for _, obj, local in sorted(scored_polys, key=lambda x: x[0])[:max_drivable]:
             features["drivable_polygons"].append(
                 {"id": _obj_id(obj), "xy": _simplify_polyline(local, max_poly_points)})

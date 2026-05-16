@@ -68,6 +68,8 @@ def _teacher_sample_metrics(s) -> dict[str, float]:
         "stop_line_count": float(len(s.runtime.map_features.get("stop_lines", []))),
         "agent_future_valid_rate": float(s.label_future.agent_valid.mean()) if s.label_future is not None else float("nan"),
         "atom_count": float(len(s.evidence_bank.atoms)),
+        "pair_count": float(0 if s.pairs is None else len(s.pairs.pairs)),
+        "pair_nonempty": float(s.pairs is not None and len(s.pairs.pairs) > 0),
         "interaction_atom_count": float(family_counts.get("interaction", 0)),
         "rule_map_atom_count": float(family_counts.get("rule_map", 0)),
         "kinematic_atom_count": float(family_counts.get("kinematic", 0)),
@@ -89,7 +91,7 @@ def _summarize_lists(acc: dict[str, list[float]]) -> dict[str, float]:
     out: dict[str, float] = {}
     for k, vals in sorted(acc.items()):
         out[k] = _finite_mean(vals)
-        if k in {"candidate_log_ade_min", "candidate_log_ade_teacher", "teacher_J_T_min", "teacher_regret_to_log_nearest", "valid_candidate_count", "atom_count"}:
+        if k in {"candidate_log_ade_min", "candidate_log_ade_teacher", "teacher_J_T_min", "teacher_regret_to_log_nearest", "valid_candidate_count", "atom_count", "pair_count", "interaction_atom_count", "drivable_polygon_count"}:
             out[k + "_p50"] = _finite_pct(vals, 50)
             out[k + "_p90"] = _finite_pct(vals, 90)
     return out
@@ -105,9 +107,11 @@ def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, 
     budget_acc: dict[str, list[float]] = defaultdict(list)
     budgets = cfg.get("diagnostics", {}).get("budget_sweep", [4, 8, 16, 24, 32])
     iterator = tqdm(range(len(dataset)), total=len(dataset), desc=f"diagnostics:{split}")
+    skipped_missing = 0
     for i in iterator:
         s = dataset[i]
-        if s.teacher is None or s.pairs is None or s.label_future is None:
+        if s.teacher is None or s.label_future is None:
+            skipped_missing += 1
             continue
         _update_lists(teacher_acc, _teacher_sample_metrics(s))
         J0 = s.teacher.J_base.copy()
@@ -124,7 +128,9 @@ def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, 
             hard = set(np.flatnonzero(s.evidence_bank.hard_mask() & s.evidence_bank.active_mask).astype(int).tolist())
             budget_acc[f"B{int(B)}_hard_recall"].append(float(len(hard & set(sel.selected)) / max(len(hard), 1)))
     return {
+        "num_loaded": int(len(dataset)),
         "num_samples": int(len(next(iter(teacher_acc.values()))) if teacher_acc else 0),
+        "num_skipped_missing_labels": int(skipped_missing),
         "E1_teacher_sanity_and_candidate_coverage": _summarize_lists(teacher_acc),
         "E2_evidence_sufficiency_oracle_teacher_interface": aggregate_metric_results(bdse_results),
         "E4_budget_sweep_oracle_teacher_interface": _summarize_lists(budget_acc),

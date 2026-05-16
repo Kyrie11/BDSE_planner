@@ -74,7 +74,8 @@ def compute_bdse_diagnostics(
         "decision_sufficiency": float(action_index == a_star),
         "selector_value_ratio": selector_ratio,
         "hard_evidence_recall": hard_recall,
-        "effective_query_count": float(len(selected_atoms) * max(len(pairs.pairs), 1)),
+        "effective_query_count": float(len(selected_atoms)),
+        "teacher_pair_count": float(len(pairs.pairs)),
     }
     return BDSEMetricResult(values=values, details={"full_action": full_action, "a_star": a_star, "selected_atoms": selected_atoms})
 

@@ -248,6 +248,8 @@ class NuPlanBDSEDataset:
         self.preprocessed_dir = Path(preprocessed_dir or self.cfg.get("paths", {}).get("preprocessed_cache", "cache"))
         self.max_scenarios = max_scenarios
         self.stride = int(stride if stride is not None else self.cfg.get("preprocess", {}).get("scenario_stride", 10))
+        max_per_log = self.cfg.get("preprocess", {}).get("max_samples_per_log", None)
+        self.max_samples_per_log = None if max_per_log is None else max(1, int(max_per_log))
         self._index: list[Any] | None = None
         self.num_workers = int(num_workers if num_workers is not None else self.cfg.get("preprocess", {}).get("num_workers", 1) or 1)
         self.use_process_pool = bool(use_process_pool if use_process_pool is not None else self.cfg.get("preprocess", {}).get("use_process_pool", False))
@@ -272,18 +274,22 @@ class NuPlanBDSEDataset:
             print(
                 f"[bdse] expanding scenario index: split={self.split} "
                 f"scenario_objects={total_scenarios} stride={self.stride} "
-                f"max_scenarios={self.max_scenarios}",
+                f"max_scenarios={self.max_scenarios} max_samples_per_log={self.max_samples_per_log}",
                 flush=True,
             )
             show_index_progress = total_scenarios >= int(self.cfg.get("preprocess", {}).get("index_progress_threshold", 10000))
             iterator = _maybe_tqdm(scenarios, total_scenarios, f"index:{self.split}", show_index_progress)
+            per_log_counts: dict[str, int] = {}
             for scenario in iterator:
                 token = _scenario_token(scenario)
                 log_name = _scenario_log_name(scenario)
                 folder = folder_lookup.get(log_name, folder_lookup.get(_safe_name(log_name), default_folder))
                 n_iter = _num_iterations(scenario)
                 for iteration in range(0, n_iter, max(self.stride, 1)):
+                    if self.max_samples_per_log is not None and per_log_counts.get(log_name, 0) >= self.max_samples_per_log:
+                        break
                     out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration))
+                    per_log_counts[log_name] = per_log_counts.get(log_name, 0) + 1
                     if self.max_scenarios is not None and len(out) >= self.max_scenarios:
                         self._index = out
                         print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
@@ -534,7 +540,13 @@ class PreprocessedBDSEDataset:
             paths.extend(self._paths_from_manifest(mp))
         if not paths:
             search_root = self.preprocessed_dir / self.split if self.split else self.preprocessed_dir
-            paths = sorted(search_root.rglob("*.npz"), key=lambda p: str(p)) if search_root.exists() else []
+            if search_root.exists():
+                paths = sorted(
+                    (p for p in search_root.rglob("*.npz") if not p.name.startswith(".") and ".tmp." not in p.name),
+                    key=lambda p: str(p),
+                )
+            else:
+                paths = []
         else:
             # Manifests may contain duplicates after resumed preprocessing. Keep the
             # last materialization of each path while preserving deterministic order.
