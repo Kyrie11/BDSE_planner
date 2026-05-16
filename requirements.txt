@@ -1,0 +1,5 @@
+numpy>=1.23
+pyyaml>=6.0
+torch>=1.13
+tqdm>=4.64
+pytest>=7.0
