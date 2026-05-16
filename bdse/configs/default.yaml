@@ -1,8 +1,8 @@
 seed: 17
 paths:
   data_cache_root: /data0/senzeyu2/dataset/nuplan/data/cache
-  maps_root: /data0/senzeyu2/dataset/nuplan/dataset/maps
-  exp_root: /data0/nuplan/exp/bdse
+  maps_root: /data0/senzeyu2/dataset/nuplan/maps
+  exp_root: /data0/nuplan/senzeyu2/dataset/nuplan/data/cache
   preprocessed_cache: /data0/nuplan/exp/bdse/cache
   map_version: nuplan-maps-v1.0
 
