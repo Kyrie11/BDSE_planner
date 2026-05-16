@@ -9,7 +9,7 @@ from bdse.planner.teacher_cost import residual_margin, validate_residual_closure
 
 
 def margin_matrix(J: np.ndarray) -> np.ndarray:
-    J = np.asarray(J, dtype=np.float32)
+    J = np.asarray(J)
     with np.errstate(invalid="ignore"):
         M = J[None, :] - J[:, None]
     return M

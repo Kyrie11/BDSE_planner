@@ -30,7 +30,7 @@ def _future_traffic_lights(scenario: Any, iteration: int, cfg: dict[str, Any]) -
     return out
 
 
-def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[str, Any]) -> LabelOnlyFuture:
+def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[str, Any], runtime=None) -> LabelOnlyFuture:
     cand_cfg = cfg.get("candidate", {})
     runtime_cfg = cfg.get("runtime", {})
     horizon = float(cand_cfg.get("horizon_s", 8.0))
@@ -55,7 +55,10 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
     logged_ego = transform_states_to_local(pad_array(ego_arr, (T, 5)), origin_xy, origin_yaw)
 
     current_objects = _call(scenario, ["get_tracked_objects_at_iteration"], iteration, default=[])
-    cur_objs = _iter_tracked_objects(current_objects)
+    cur_objs_all = _iter_tracked_objects(current_objects)
+    token_to_obj = {str(getattr(o, "track_token", getattr(o, "token", getattr(o, "tracked_object_id", i)))): o for i, o in enumerate(cur_objs_all)}
+    selected_tokens = list(getattr(runtime, "metadata", {}).get("selected_agent_tokens", [])) if runtime is not None else list(token_to_obj)[:max_agents]
+    cur_objs = [token_to_obj[t] for t in selected_tokens if t in token_to_obj][:max_agents]
     raw_current = np.asarray([_box_to_array(o) for o in cur_objs], dtype=np.float32) if cur_objs else np.zeros((0, 10), dtype=np.float32)
     n = min(max_agents, len(raw_current))
     logged_agents = np.zeros((max_agents, T, 5), dtype=np.float32)
@@ -69,7 +72,7 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
         default=None,
     )
     if future_objects is not None and n > 0:
-        token_to_local_idx = {str(getattr(o, "track_token", getattr(o, "token", i))): i for i, o in enumerate(cur_objs[:n])}
+        token_to_local_idx = {str(getattr(o, "track_token", getattr(o, "token", getattr(o, "tracked_object_id", i)))): i for i, o in enumerate(cur_objs[:n])}
         frames = list(future_objects) if not isinstance(future_objects, dict) else []
         for k, frame in enumerate(frames[:T]):
             for obj in _iter_tracked_objects(frame):
@@ -102,14 +105,16 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
 
 
 def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict[str, Any]) -> Sample:
-    runtime = build_runtime_features_from_scenario(scenario, iteration, cfg)
-    candidates = generate_candidate_bank(runtime, cfg)
-    label_future = build_label_future_from_scenario(scenario, iteration, cfg)
+    runtime0 = build_runtime_features_from_scenario(scenario, iteration, cfg)
+    candidates = generate_candidate_bank(runtime0, cfg)
+    runtime = build_runtime_features_from_scenario(scenario, iteration, cfg, candidates=candidates)
+    label_future = build_label_future_from_scenario(scenario, iteration, cfg, runtime=runtime)
     evidence = enumerate_evidence_atoms(runtime, candidates, cfg)
     teacher = evaluate_teacher_costs(runtime, label_future, candidates, evidence, cfg)
     pairs = build_pair_labels(candidates, teacher, cfg)
     token = str(getattr(scenario, "token", getattr(scenario, "scenario_name", "")))
-    timestamp_us = int(getattr(getattr(scenario, "start_time", None), "time_us", 0))
+    ts_obj = _call(scenario, ["get_time_point", "get_timestamp_at_iteration"], iteration, default=getattr(scenario, "start_time", None))
+    timestamp_us = int(getattr(ts_obj, "time_us", getattr(ts_obj, "timestamp_us", ts_obj if isinstance(ts_obj, (int, float)) else 0)) or 0)
     return Sample(token, timestamp_us, runtime, label_future, candidates, evidence, teacher, pairs)
 
 

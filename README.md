@@ -49,8 +49,6 @@ bdse/
 Recommended base environment:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
 pip install -e .
@@ -132,10 +130,15 @@ Run a small validation preprocessing job:
 
 ```bash
 python -m bdse.experiments.preprocess \
-  --split val \
-  --max-files 1 \
-  --max-scenarios 100 \
-  --output-dir /data0/nuplan/exp/bdse/cache
+  --config bdse/configs/default.yaml \
+  --data-root /data0/senzeyu2/dataset/nuplan/data/cache \
+  --splits train val \
+  --folders train_boston train_pittsburgh train_singapore \
+  --max-files-per-split 1 \
+  --max-scenarios-per-split 100 \
+  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/train_set \
+  --resume \
+  --tqdm
 ```
 
 Run training preprocessing on selected train folders:

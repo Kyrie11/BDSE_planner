@@ -21,22 +21,19 @@ def _unit_cost(cfg: dict[str, Any], atom_type: str, family: str) -> float:
 
 
 def _new_atom(atom_id: int, atom_type: str, anchor: dict[str, Any], family: str, is_hard: bool, cfg: dict[str, Any]) -> EvidenceAtom:
-    return EvidenceAtom(
-        atom_id=atom_id,
-        type=atom_type,
-        anchor=anchor,
-        budget_cost=_unit_cost(cfg, atom_type, family),
-        is_hard=is_hard,
-        family=family,
-        active_mask=True,
-    )
+    return EvidenceAtom(atom_id=atom_id, type=atom_type, anchor=anchor, budget_cost=_unit_cost(cfg, atom_type, family), is_hard=is_hard, family=family, active_mask=True)
 
 
 def _has_red_light(runtime: RuntimeFeatures) -> bool:
-    for tl in runtime.traffic_lights:
-        if "red" in str(tl.get("status", "")).lower():
-            return True
-    return False
+    return any("red" in str(tl.get("status", "")).lower() for tl in runtime.traffic_lights)
+
+
+def _min_candidate_distance(candidates: CandidateBank, xy: np.ndarray) -> float:
+    valid = candidates.trajectories[candidates.valid_mask]
+    if len(valid) == 0:
+        return 1e6
+    pts = valid[..., :2].reshape(-1, 2)
+    return float(np.linalg.norm(pts - xy[None, :], axis=1).min())
 
 
 def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> EvidenceBank:
@@ -53,44 +50,28 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
                 continue
             cur = runtime.current_agents[j]
             d = float(np.linalg.norm(cur[:2]))
-            anchor = {
-                "agent_index": int(j),
-                "current_state": cur.copy(),
-                "length": float(cur[7]) if cur.shape[0] > 7 else 4.8,
-                "width": float(cur[8]) if cur.shape[0] > 8 else 2.0,
-                "priority_distance": d,
-            }
-            atoms.append(_new_atom(next_id, "occupancy", anchor, "interaction", True, cfg))
-            next_id += 1
-            atoms.append(_new_atom(next_id, "ttc", anchor, "interaction", False, cfg))
-            next_id += 1
+            anchor = {"agent_index": int(j), "current_state": cur.copy(), "length": float(cur[7]) if cur.shape[0] > 7 else 4.8, "width": float(cur[8]) if cur.shape[0] > 8 else 2.0, "priority_distance": d}
+            atoms.append(_new_atom(next_id, "occupancy", anchor, "interaction", True, cfg)); next_id += 1
+            atoms.append(_new_atom(next_id, "ttc", anchor, "interaction", False, cfg)); next_id += 1
+            atoms.append(_new_atom(next_id, "gap", anchor, "interaction", False, cfg)); next_id += 1
             if len([a for a in atoms if a.family == "interaction"]) >= max_inter:
                 break
 
     if ecfg.get("include_rule_map", True):
-        route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
+        route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32).reshape(-1, 2)
         route_width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
-        atoms.append(_new_atom(next_id, "drivable_area", {"route_centerline": route, "width": route_width}, "rule_map", True, cfg))
-        next_id += 1
-        atoms.append(_new_atom(next_id, "wrong_way", {"route_centerline": route}, "rule_map", True, cfg))
-        next_id += 1
+        drivable_polys = [np.asarray(p.get("xy"), dtype=np.float32).reshape(-1, 2) for p in runtime.map_features.get("drivable_polygons", []) if np.asarray(p.get("xy", [])).size >= 6]
+        atoms.append(_new_atom(next_id, "drivable_area", {"route_centerline": route, "width": route_width, "drivable_polygons": drivable_polys, "map_valid": bool(runtime.map_features.get("map_valid", False))}, "rule_map", True, cfg)); next_id += 1
+        atoms.append(_new_atom(next_id, "wrong_way", {"route_centerline": route}, "rule_map", True, cfg)); next_id += 1
         speed_limit = float(runtime.map_features.get("speed_limit_mps", 13.4))
-        atoms.append(_new_atom(next_id, "speed_limit", {"speed_limit_mps": speed_limit}, "rule_map", False, cfg))
-        next_id += 1
-        if _has_red_light(runtime) or runtime.map_features.get("stop_lines"):
-            stop_line_x = 20.0
-            stop_lines = runtime.map_features.get("stop_lines", [])
-            if stop_lines:
-                try:
-                    xy = np.asarray(stop_lines[0].get("xy", []), dtype=np.float32).reshape(-1, 2)
-                    if len(xy):
-                        stop_line_x = float(np.mean(xy[:, 0]))
-                except Exception:
-                    stop_line_x = 20.0
-            atoms.append(_new_atom(next_id, "red_light", {"stop_line_x": stop_line_x, "red": _has_red_light(runtime)}, "rule_map", True, cfg))
-            next_id += 1
-        atoms.append(_new_atom(next_id, "route_connector", {"route_centerline": route}, "rule_map", False, cfg))
-        next_id += 1
+        atoms.append(_new_atom(next_id, "speed_limit", {"speed_limit_mps": speed_limit}, "rule_map", False, cfg)); next_id += 1
+        red_now = _has_red_light(runtime)
+        if red_now:
+            for sl in runtime.map_features.get("stop_lines", [])[: max(1, max_map - 4)]:
+                xy = np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)
+                if len(xy) >= 2 and _min_candidate_distance(candidates, xy.mean(axis=0)) < 80.0:
+                    atoms.append(_new_atom(next_id, "red_light", {"stop_line_xy": xy, "red": True, "id": sl.get("id", "")}, "rule_map", True, cfg)); next_id += 1
+        atoms.append(_new_atom(next_id, "route_connector", {"route_centerline": route}, "rule_map", False, cfg)); next_id += 1
         map_atoms = [a for a in atoms if a.family == "rule_map"]
         if len(map_atoms) > max_map:
             keep_ids = {a.atom_id for a in map_atoms[:max_map]}
@@ -98,8 +79,7 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
 
     if ecfg.get("include_kinematic", True):
         for atom_type in ["local_comfort_accel", "local_comfort_jerk", "local_comfort_curvature", "local_comfort_brake"][:max_kin]:
-            atoms.append(_new_atom(next_id, atom_type, {}, "kinematic", False, cfg))
-            next_id += 1
+            atoms.append(_new_atom(next_id, atom_type, {}, "kinematic", False, cfg)); next_id += 1
 
     atoms = cap_evidence_atoms(atoms, candidates, runtime, cfg)
     q = compute_query_features(atoms, candidates, runtime, cfg)
@@ -121,6 +101,8 @@ def cap_evidence_atoms(atoms: list[EvidenceAtom], candidates: CandidateBank, run
             dist = float(np.linalg.norm(cand_xy - atom.anchor["current_state"][:2][None, :], axis=1).min())
         elif "route_centerline" in atom.anchor and len(cand_xy):
             dist = float(nearest_polyline_distance(cand_xy, atom.anchor["route_centerline"]).min())
+        elif "stop_line_xy" in atom.anchor and len(cand_xy):
+            dist = float(np.linalg.norm(cand_xy - np.asarray(atom.anchor["stop_line_xy"]).mean(axis=0)[None, :], axis=1).min())
         return (hard_rank, dist, atom.type, atom.atom_id)
 
     return sorted(atoms, key=priority)[:max_atoms]
@@ -162,13 +144,74 @@ def _collision_overlap_series(ego: np.ndarray, agent: np.ndarray, atom: Evidence
     return out
 
 
-def raw_local_costs(
-    atoms: list[EvidenceAtom],
-    candidates: CandidateBank,
-    runtime: RuntimeFeatures,
-    label_future: LabelOnlyFuture | None,
-    cfg: dict[str, Any],
-) -> np.ndarray:
+def _point_in_poly(points: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    x = points[:, 0]
+    y = points[:, 1]
+    px = poly[:, 0]
+    py = poly[:, 1]
+    inside = np.zeros(points.shape[0], dtype=bool)
+    j = len(poly) - 1
+    for i in range(len(poly)):
+        cond = ((py[i] > y) != (py[j] > y)) & (x < (px[j] - px[i]) * (y - py[i]) / (py[j] - py[i] + 1e-9) + px[i])
+        inside ^= cond
+        j = i
+    return inside
+
+
+def _poly_boundary_distance(points: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    d = np.full(points.shape[0], 1e6, dtype=np.float32)
+    for i in range(len(poly)):
+        a = poly[i]
+        b = poly[(i + 1) % len(poly)]
+        ab = b - a
+        t = np.clip(((points - a[None, :]) @ ab) / (float(ab @ ab) + 1e-9), 0.0, 1.0)
+        proj = a[None, :] + t[:, None] * ab[None, :]
+        d = np.minimum(d, np.linalg.norm(points - proj, axis=1))
+    return d
+
+
+def _outside_drivable(points: np.ndarray, polygons: list[np.ndarray], route: np.ndarray, width: float) -> tuple[np.ndarray, np.ndarray]:
+    if polygons:
+        inside_any = np.zeros(points.shape[0], dtype=bool)
+        boundary = np.full(points.shape[0], 1e6, dtype=np.float32)
+        for poly in polygons:
+            if len(poly) < 3:
+                continue
+            inside_any |= _point_in_poly(points, poly)
+            boundary = np.minimum(boundary, _poly_boundary_distance(points, poly))
+        return ~inside_any, boundary
+    dist = nearest_polyline_distance(points, route)
+    return dist > width, np.maximum(0.0, dist - width)
+
+
+def _route_heading_at(points: np.ndarray, route: np.ndarray) -> np.ndarray:
+    if len(route) < 2:
+        return np.zeros(points.shape[0], dtype=np.float32)
+    seg_a = route[:-1]
+    seg_b = route[1:]
+    seg = seg_b - seg_a
+    mids = 0.5 * (seg_a + seg_b)
+    idx = np.argmin(np.linalg.norm(points[:, None, :] - mids[None, :, :], axis=2), axis=1)
+    return np.arctan2(seg[idx, 1], seg[idx, 0]).astype(np.float32)
+
+
+def _segments_intersect(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray) -> bool:
+    def ccw(p, q, r):
+        return (r[1] - p[1]) * (q[0] - p[0]) > (q[1] - p[1]) * (r[0] - p[0])
+    return bool(ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d))
+
+
+def _crosses_polyline(traj_xy: np.ndarray, line_xy: np.ndarray) -> bool:
+    if len(line_xy) < 2 or len(traj_xy) < 2:
+        return False
+    for i in range(len(traj_xy) - 1):
+        for j in range(len(line_xy) - 1):
+            if _segments_intersect(traj_xy[i], traj_xy[i + 1], line_xy[j], line_xy[j + 1]):
+                return True
+    return False
+
+
+def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> np.ndarray:
     E, K = len(atoms), candidates.K
     raw = np.zeros((E, K), dtype=np.float32)
     safety = cfg.get("evidence", {}).get("safety", {})
@@ -204,21 +247,22 @@ def raw_local_costs(
                 rear = np.maximum(-dx, 0.0)
                 raw[ei, a] = float(np.maximum(0.0, front_gap - front.max()) ** 2 + np.maximum(0.0, rear_gap - rear.max()) ** 2)
             elif atom.type == "red_light":
-                stop_x = float(atom.anchor.get("stop_line_x", 20.0))
+                stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
                 red = bool(atom.anchor.get("red", True))
-                crosses = bool(np.any((traj[:-1, 0] < stop_x) & (traj[1:, 0] >= stop_x)))
-                d_line = max(stop_x - float(traj[-1, 0]), 0.0)
+                crosses = _crosses_polyline(traj[:, :2], stop)
+                d_line = float(np.linalg.norm(traj[:, None, :2] - stop[None, :, :], axis=2).min()) if len(stop) else 1e6
                 raw[ei, a] = float(c_red * float(red and crosses) + np.maximum(0.0, 1.0 - d_line) ** 2)
             elif atom.type == "drivable_area":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 width = float(atom.anchor.get("width", 4.0))
-                dist = nearest_polyline_distance(traj[:, :2], route)
-                off = dist > width
-                raw[ei, a] = float(c_off * off.max() + np.maximum(0.0, margin + dist - width).sum())
+                polygons = [np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in atom.anchor.get("drivable_polygons", [])]
+                outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
+                raw[ei, a] = float(c_off * outside.max() + np.maximum(0.0, margin + dist).sum())
             elif atom.type == "wrong_way":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 route_dist = nearest_polyline_distance(traj[:, :2], route)
-                heading_bad = np.abs(angle_wrap(traj[:, 2])) > (0.5 * np.pi)
+                route_yaw = _route_heading_at(traj[:, :2], route)
+                heading_bad = np.abs(angle_wrap(traj[:, 2] - route_yaw)) > (0.5 * np.pi)
                 raw[ei, a] = float(c_wrong * np.logical_and(heading_bad, route_dist < 5.0).max())
             elif atom.type == "route_connector":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
@@ -239,8 +283,6 @@ def raw_local_costs(
                     raw[ei, a] = float(np.maximum(0.0, np.abs(curv) - 0.25).sum())
                 elif atom.type.endswith("brake"):
                     raw[ei, a] = float(np.maximum(0.0, -acc - 5.0).sum())
-            else:
-                raw[ei, a] = 0.0
     raw[:, ~candidates.valid_mask] = 0.0
     return raw
 
@@ -284,33 +326,26 @@ def compute_query_features(atoms: list[EvidenceAtom], candidates: CandidateBank,
             if "current_state" in atom.anchor:
                 cur = np.asarray(atom.anchor["current_state"], dtype=np.float32)
                 dist = np.linalg.norm(traj[:, :2] - cur[:2][None, :], axis=1)
-                feat[0] = dist.min()
-                feat[1] = dist.mean()
-                feat[2] = traj[np.argmin(dist), 4]
-                feat[3] = cur[3] if len(cur) > 3 else 0.0
+                feat[0] = dist.min(); feat[1] = dist.mean(); feat[2] = traj[np.argmin(dist), 4]; feat[3] = cur[3] if len(cur) > 3 else 0.0
             if "route_centerline" in atom.anchor:
                 dist = nearest_polyline_distance(traj[:, :2], atom.anchor["route_centerline"])
-                feat[4] = dist.min()
-                feat[5] = dist.mean()
-                feat[6] = dist.max()
+                feat[4] = dist.min(); feat[5] = dist.mean(); feat[6] = dist.max()
             if atom.type == "red_light":
-                stop_x = float(atom.anchor.get("stop_line_x", 20.0))
-                feat[7] = float(np.any((traj[:-1, 0] < stop_x) & (traj[1:, 0] >= stop_x)))
-                feat[8] = stop_x - float(traj[-1, 0])
+                stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
+                feat[7] = float(_crosses_polyline(traj[:, :2], stop))
+                feat[8] = float(np.linalg.norm(traj[-1, None, :2] - stop, axis=1).min()) if len(stop) else 1e6
             v = traj[:, 3]
             acc = finite_difference(v, dt)
             jerk = finite_difference(acc, dt)
             curv = compute_curvature(traj[:, :2])
-            feat[9] = float(np.max(np.abs(acc)))
-            feat[10] = float(np.max(np.abs(jerk)))
-            feat[11] = float(np.max(np.abs(curv)))
+            feat[9] = float(np.max(np.abs(acc))); feat[10] = float(np.max(np.abs(jerk))); feat[11] = float(np.max(np.abs(curv)))
             q[ei, a] = feat
     q[:, ~candidates.valid_mask, :] = 0.0
     return q
 
 
 def hard_event_ownership(atoms: list[EvidenceAtom]) -> dict[str, int]:
-    owners = {}
+    owners: dict[str, int] = {}
     for atom in atoms:
         if atom.is_hard:
             if atom.type in {"occupancy", "collision"}:

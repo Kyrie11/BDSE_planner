@@ -55,6 +55,7 @@ def evaluate_base_costs(runtime: RuntimeFeatures, label_future: LabelOnlyFuture 
         + float(tcfg.get("comfort_global_weight", 1.0)) * comfort / max(float(tcfg.get("comfort_scale", 80.0)), 1e-6)
         + float(tcfg.get("demo_weight", 1.0)) * demo / max(float(tcfg.get("demo_scale", 320.0)), 1e-6)
     ).astype(np.float32)
+    J = J.astype(np.float64)
     J[~candidates.valid_mask] = np.inf
     return J
 
@@ -71,8 +72,8 @@ def evaluate_teacher_costs(
     J_base = evaluate_base_costs(runtime, label_future, candidates, cfg)
     raw = raw_local_costs(evidence_bank.atoms, candidates, runtime, label_future, cfg)
     g = normalize_atom_costs(raw, evidence_bank.atoms, cfg)
-    J_evid = g.sum(axis=0).astype(np.float32)
-    J_T = (J_base + J_evid).astype(np.float32)
+    J_evid = g.sum(axis=0, dtype=np.float64)
+    J_T = J_base.astype(np.float64) + J_evid
     J_T[~candidates.valid_mask] = np.inf
     if not np.any(candidates.valid_mask):
         raise ValueError("Teacher cost requires at least one valid candidate")
@@ -82,10 +83,10 @@ def evaluate_teacher_costs(
     if hard_mask.size:
         hard_violation = (g[hard_mask] > 1e-6).any(axis=0) & candidates.valid_mask
     labels = TeacherLabels(
-        J_base=J_base.astype(np.float32),
+        J_base=J_base.astype(np.float64),
         g_evid=g.astype(np.float32),
-        J_evid=J_evid.astype(np.float32),
-        J_T=J_T.astype(np.float32),
+        J_evid=J_evid.astype(np.float64),
+        J_T=J_T.astype(np.float64),
         a_star=a_star,
         hard_violation_mask=hard_violation,
         diagnostics={

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import json
+import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +24,16 @@ class ScenarioIndexRecord:
     folder: str
     token: str
     timestamp_us: int
+    iteration: int
+
+
+@dataclass(frozen=True, slots=True)
+class DevkitScenarioIndexRecord:
+    scenario: Any
+    split: str
+    folder: str
+    log_name: str
+    token: str
     iteration: int
 
 
@@ -107,6 +120,42 @@ class NuPlanScenarioSource:
         return self._scenarios
 
 
+def _safe_name(text: Any) -> str:
+    s = str(text) if text is not None else "unknown"
+    s = re.sub(r"[^A-Za-z0-9_.=-]+", "_", s)
+    return s[:180] if len(s) > 180 else s
+
+
+def _scenario_token(scenario: Any) -> str:
+    return _safe_name(getattr(scenario, "token", getattr(scenario, "scenario_name", getattr(scenario, "_scenario_name", "scenario"))))
+
+
+def _scenario_log_name(scenario: Any) -> str:
+    return _safe_name(getattr(scenario, "log_name", getattr(scenario, "_log_name", "log")))
+
+
+def _scenario_folder_for_log(records: list[DBFileRecord], log_name: str, default_split: str) -> str:
+    for rec in records:
+        if rec.log_name == log_name or rec.path.stem == log_name:
+            return rec.folder
+    for rec in records:
+        if rec.split == default_split:
+            return rec.folder
+    return default_split
+
+
+def _num_iterations(scenario: Any) -> int:
+    for name in ["get_number_of_iterations", "get_num_iterations", "num_iterations", "database_interval"]:
+        obj = getattr(scenario, name, None)
+        try:
+            val = obj() if callable(obj) else obj
+            if isinstance(val, (int, np.integer)) and int(val) > 0:
+                return int(val)
+        except Exception:
+            pass
+    return 1
+
+
 class NuPlanBDSEDataset:
     def __init__(
         self,
@@ -115,7 +164,7 @@ class NuPlanBDSEDataset:
         folders: list[str] | None = None,
         max_files: int | None = None,
         max_scenarios: int | None = None,
-        stride: int = 10,
+        stride: int | None = None,
         use_devkit: bool = True,
         preprocessed_dir: str | Path | None = None,
     ):
@@ -126,7 +175,7 @@ class NuPlanBDSEDataset:
         self.use_devkit = use_devkit
         self.preprocessed_dir = Path(preprocessed_dir or self.cfg.get("paths", {}).get("preprocessed_cache", "cache"))
         self.max_scenarios = max_scenarios
-        self.stride = stride
+        self.stride = int(stride if stride is not None else self.cfg.get("preprocess", {}).get("scenario_stride", 10))
         self._scenario_source = NuPlanScenarioSource(self.cfg, self.records, split) if use_devkit else None
         self._index: list[Any] | None = None
 
@@ -135,9 +184,18 @@ class NuPlanBDSEDataset:
             return self._index
         if self.use_devkit:
             scenarios = self._scenario_source.scenarios() if self._scenario_source is not None else []
-            if self.max_scenarios is not None:
-                scenarios = scenarios[: self.max_scenarios]
-            self._index = scenarios
+            out: list[DevkitScenarioIndexRecord] = []
+            for scenario in scenarios:
+                token = _scenario_token(scenario)
+                log_name = _scenario_log_name(scenario)
+                folder = _scenario_folder_for_log(self.records, log_name, self.split)
+                n_iter = _num_iterations(scenario)
+                for iteration in range(0, n_iter, max(self.stride, 1)):
+                    out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration))
+                    if self.max_scenarios is not None and len(out) >= self.max_scenarios:
+                        self._index = out
+                        return self._index
+            self._index = out
             return self._index
         idx: list[ScenarioIndexRecord] = []
         per_file = None if self.max_scenarios is None else max(1, self.max_scenarios // max(len(self.records), 1))
@@ -154,23 +212,48 @@ class NuPlanBDSEDataset:
     def __getitem__(self, idx: int) -> Sample:
         item = self.build_index()[idx]
         if self.use_devkit:
-            scenario = item
-            iteration = 0
-            return build_training_sample_from_scenario(scenario, iteration, self.cfg)
+            assert isinstance(item, DevkitScenarioIndexRecord)
+            sample = build_training_sample_from_scenario(item.scenario, item.iteration, self.cfg)
+            if not sample.scenario_token:
+                sample.scenario_token = item.token
+            return sample
         raise RuntimeError("Raw SQLite indexing is available for discovery only; use nuPlan devkit for sample construction.")
 
     def iter_samples(self) -> Iterator[Sample]:
         for i in range(len(self)):
             yield self[i]
 
-    def write_preprocessed_cache(self, out_dir: str | Path | None = None) -> list[Path]:
+    def cache_path_for_index(self, idx: int, out_dir: str | Path | None = None) -> Path:
+        out = Path(out_dir or self.preprocessed_dir)
+        item = self.build_index()[idx]
+        if isinstance(item, DevkitScenarioIndexRecord):
+            return out / item.split / item.folder / item.log_name / f"{item.token}_it{item.iteration:06d}.npz"
+        if isinstance(item, ScenarioIndexRecord):
+            return out / item.split / item.folder / item.db_path.stem / f"{_safe_name(item.token)}_it{item.iteration:06d}.npz"
+        return out / self.split / f"{idx:08d}.npz"
+
+    def write_preprocessed_cache(self, out_dir: str | Path | None = None, resume: bool = True, overwrite: bool = False, show_progress: bool = True, manifest_name: str | None = None) -> list[Path]:
         out = Path(out_dir or self.preprocessed_dir)
         out.mkdir(parents=True, exist_ok=True)
+        manifest_path = out / (manifest_name or self.cfg.get("preprocess", {}).get("manifest_name", "manifest.jsonl"))
         paths: list[Path] = []
-        for i, sample in enumerate(self.iter_samples()):
-            path = out / self.split / f"{i:08d}_{sample.scenario_token}.npz"
-            save_sample_npz(sample, path)
+        iterator = range(len(self))
+        if show_progress:
+            from tqdm import tqdm
+            iterator = tqdm(iterator, total=len(self), desc=f"preprocess:{self.split}")
+        for i in iterator:
+            path = self.cache_path_for_index(i, out)
+            if resume and path.exists() and not overwrite:
+                paths.append(path)
+                continue
+            sample = self[i]
+            tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+            save_sample_npz(sample, tmp)
+            os.replace(tmp, path)
             paths.append(path)
+            rec = {"path": str(path), "split": self.split, "scenario_token": sample.scenario_token, "timestamp_us": int(sample.timestamp_us), "a_star": int(sample.teacher.a_star if sample.teacher is not None else -1), "valid_candidates": int(sample.candidates.valid_mask.sum())}
+            with manifest_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, sort_keys=True) + "\n")
         return paths
 
 

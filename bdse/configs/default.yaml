@@ -1,10 +1,25 @@
 seed: 17
 paths:
-  data_cache_root: /data0/nuplan/data/cache
-  maps_root: /data0/nuplan/dataset/maps
+  data_cache_root: /data0/senzeyu2/dataset/nuplan/data/cache
+  maps_root: /data0/senzeyu2/dataset/nuplan/dataset/maps
   exp_root: /data0/nuplan/exp/bdse
   preprocessed_cache: /data0/nuplan/exp/bdse/cache
   map_version: nuplan-maps-v1.0
+
+data:
+  split_folders:
+    train:
+      - train_boston
+      - train_pittsburgh
+      - train_singapore
+    val:
+      - val
+preprocess:
+  resume: true
+  overwrite: false
+  atomic_write: true
+  manifest_name: manifest.jsonl
+  scenario_stride: 10
 runtime:
   history_s: 2.0
   history_hz: 10
