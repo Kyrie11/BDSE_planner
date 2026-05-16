@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
-
+import os
+import time
 import numpy as np
 
 from bdse.data.cache_schema import LabelOnlyFuture, Sample, pad_array
@@ -105,16 +106,44 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
 
 
 def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict[str, Any]) -> Sample:
-    runtime0 = build_runtime_features_from_scenario(scenario, iteration, cfg)
-    candidates = generate_candidate_bank(runtime0, cfg)
-    runtime = build_runtime_features_from_scenario(scenario, iteration, cfg, candidates=candidates)
+    pcfg = cfg.get("preprocess", {})
+    profile = bool(pcfg.get("profile", False)) or bool(os.environ.get("BDSE_PROFILE_PREPROCESS"))
+    threshold_s = float(pcfg.get("profile_threshold_s", 2.0))
+    t0 = time.perf_counter()
+    marks: dict[str, float] = {}
+
+    def mark(name: str) -> None:
+        if profile:
+            marks[name] = time.perf_counter()
+
+    runtime = build_runtime_features_from_scenario(scenario, iteration, cfg)
+    mark("runtime")
+    candidates = generate_candidate_bank(runtime, cfg)
+    mark("candidates")
+    if bool(pcfg.get("candidate_aware_agent_selection", False)):
+        runtime = build_runtime_features_from_scenario(scenario, iteration, cfg, candidates=candidates)
+        mark("runtime_resort")
     label_future = build_label_future_from_scenario(scenario, iteration, cfg, runtime=runtime)
+    mark("label_future")
     evidence = enumerate_evidence_atoms(runtime, candidates, cfg)
+    mark("evidence")
     teacher = evaluate_teacher_costs(runtime, label_future, candidates, evidence, cfg)
+    mark("teacher")
     pairs = build_pair_labels(candidates, teacher, cfg)
+    mark("pairs")
     token = str(getattr(scenario, "token", getattr(scenario, "scenario_name", "")))
     ts_obj = _call(scenario, ["get_time_point", "get_timestamp_at_iteration"], iteration, default=getattr(scenario, "start_time", None))
     timestamp_us = int(getattr(ts_obj, "time_us", getattr(ts_obj, "timestamp_us", ts_obj if isinstance(ts_obj, (int, float)) else 0)) or 0)
+    total = time.perf_counter() - t0
+    if profile and total >= threshold_s:
+        prev = t0
+        parts = []
+        for name in ["runtime", "candidates", "runtime_resort", "label_future", "evidence", "teacher", "pairs"]:
+            if name in marks:
+                parts.append(f"{name}={marks[name] - prev:.3f}s")
+                prev = marks[name]
+        parts.append(f"total={total:.3f}s")
+        print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
     return Sample(token, timestamp_us, runtime, label_future, candidates, evidence, teacher, pairs)
 
 

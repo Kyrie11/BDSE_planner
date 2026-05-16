@@ -37,6 +37,15 @@ def main() -> None:
     parser.add_argument("--list-splits", action="store_true")
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--use-process-pool", action="store_true")
+    parser.add_argument("--profile", action="store_true", help="Print per-sample preprocessing time breakdowns.")
+    parser.add_argument("--profile-threshold-s", type=float, default=None,
+                        help="Only print profiling rows slower than this many seconds.")
+    parser.add_argument("--candidate-aware-agent-selection", action="store_true",
+                        help="Do a second runtime extraction after candidate generation to sort agents by candidate proximity. Slower.")
+    parser.add_argument("--include-drivable-polygons", action="store_true",
+                        help="Extract full drivable-area polygons from map API. Much slower; route-corridor fallback is used otherwise.")
+    parser.add_argument("--teacher-cost-eval-stride", type=int, default=None,
+                        help="Evaluate expensive teacher costs every N candidate timesteps; candidates are still saved at full resolution.")
     args = parser.parse_args()
     cfg = load_config(args.config)
     cfg.setdefault("paths", {})
@@ -56,6 +65,16 @@ def main() -> None:
     if args.use_process_pool:
         cfg["preprocess"]["use_process_pool"] = True
         cfg["preprocess"].setdefault("scenario_builder_use_process_pool", False)
+    if args.profile:
+        cfg["preprocess"]["profile"] = True
+    if args.profile_threshold_s is not None:
+        cfg["preprocess"]["profile_threshold_s"] = float(args.profile_threshold_s)
+    if args.candidate_aware_agent_selection:
+        cfg["preprocess"]["candidate_aware_agent_selection"] = True
+    if args.include_drivable_polygons:
+        cfg.setdefault("runtime", {})["include_drivable_polygons"] = True
+    if args.teacher_cost_eval_stride is not None:
+        cfg.setdefault("teacher", {})["cost_eval_stride"] = max(1, int(args.teacher_cost_eval_stride))
     if args.list_splits:
         print(discover_available_splits(cfg["paths"]["data_cache_root"]))
         return

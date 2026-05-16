@@ -211,6 +211,15 @@ def _crosses_polyline(traj_xy: np.ndarray, line_xy: np.ndarray) -> bool:
                 return True
     return False
 
+def _teacher_eval_stride(cfg: dict[str, Any]) -> int:
+    return max(1, int(cfg.get("teacher", {}).get("cost_eval_stride", 1)))
+
+def _eval_traj(traj: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
+    stride = _teacher_eval_stride(cfg)
+    if stride <= 1 or traj.shape[0] <= 2:
+        return traj
+    # Keep the terminal state so progress/terminal-distance costs remain stable
+    return np.concatenate([traj[::stride], traj[-1:]], axis=0) if (traj.shape[0] - 1) % stride else traj[::stride]
 
 def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> np.ndarray:
     E, K = len(atoms), candidates.K
@@ -227,16 +236,19 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
     c_wrong = float(safety.get("wrong_raw", 50.0))
     dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
     for ei, atom in enumerate(atoms):
+        agent_eval = None
+        if atom.type in {"occupancy", "ttc"}:
+            agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, dt), cfg)
         for a in range(K):
-            traj = candidates.trajectories[a]
+            traj = _eval_traj(candidates.trajectories[a], cfg)
             if atom.type == "occupancy":
-                agent = _agent_future_for_atom(atom, runtime, label_future, candidates.T, dt)
+                agent = agent_eval
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
                 near = np.maximum(0.0, d_safe - dist) ** 2
                 overlap = _collision_overlap_series(traj, agent, atom)
                 raw[ei, a] = float(near.sum() + c_col * overlap.max())
             elif atom.type == "ttc":
-                agent = _agent_future_for_atom(atom, runtime, label_future, candidates.T, dt)
+                agent = agent_eval
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
                 rel_speed = np.maximum(np.abs(traj[:, 3] - agent[:, 3]), 0.1)
                 ttc = dist / rel_speed
@@ -336,7 +348,7 @@ def compute_query_features(atoms: list[EvidenceAtom], candidates: CandidateBank,
     dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
     for ei, atom in enumerate(atoms):
         for a in range(K):
-            traj = candidates.trajectories[a]
+            traj = _eval_traj(candidates.trajectories[a], cfg)
             feat = np.zeros((ATOM_QUERY_DIM,), dtype=np.float32)
             if "current_state" in atom.anchor:
                 cur = np.asarray(atom.anchor["current_state"], dtype=np.float32)

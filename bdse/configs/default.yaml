@@ -19,6 +19,14 @@ preprocess:
   atomic_write: true
   manifest_name: manifest.jsonl
   scenario_stride: 10
+  num_workers: 1
+  max_in_flight: 2
+  compress_npz: false
+  profile: false
+  profile_threshold_s: 2.0
+  # False keeps preprocessing and closed-loop runtime from extracting DB/map features twice.
+  # Turn on only for an ablation that needs candidate-proximity agent reordering.
+  candidate_aware_agent_selection: false
 runtime:
   history_s: 2.0
   history_hz: 10
@@ -26,6 +34,11 @@ runtime:
   agent_radius_m: 80.0
   max_agents: 32
   max_map_polylines: 128
+  # Full drivable-area polygon extraction is expensive on nuPlan.  The teacher still
+  # has an off-route/off-drivable hard atom via the route-corridor fallback.
+  include_drivable_polygons: false
+  max_drivable_polygons: 12
+  max_polygon_points: 64
   use_future_traffic_lights_for_teacher: false
 candidate:
   K: 32
@@ -109,6 +122,7 @@ teacher:
   atom_normalization_first: true
   separate_hard_gate: false
   use_reactive_proxy: false
+  cost_eval_stride: 2
   demo_scale: 320.0
   route_scale: 1.0
   progress_scale: 10.0

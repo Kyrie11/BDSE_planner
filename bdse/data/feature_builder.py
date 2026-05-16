@@ -225,8 +225,9 @@ def _get_map_object(map_api: Any, obj_id: str, layers: Sequence[str]) -> Any | N
     return None
 
 
-def _proximal_objects(map_api: Any, center_global: np.ndarray, radius_m: float) -> dict[Any, list[Any]]:
-    layer_names = ["LANE", "LANE_CONNECTOR", "STOP_LINE", "CROSSWALK", "INTERSECTION", "DRIVABLE_AREA", "ROADBLOCK", "ROADBLOCK_CONNECTOR"]
+def _proximal_objects(map_api: Any, center_global: np.ndarray, radius_m: float, layer_names: list[str] | None = None) -> dict[Any, list[Any]]:
+    layer_names = layer_names or ["LANE", "LANE_CONNECTOR", "STOP_LINE", "CROSSWALK", "INTERSECTION", "DRIVABLE_AREA",
+                                  "ROADBLOCK", "ROADBLOCK_CONNECTOR"]
     layers = [_layer(n) for n in layer_names]
     center = _point2d(float(center_global[0]), float(center_global[1]))
     prox = _call(map_api, ["get_proximal_map_objects"], center, radius_m, layers, default=None)
@@ -278,8 +279,14 @@ def _speed_limit_from_obj(obj: Any) -> float | None:
                 pass
     return None
 
+def _simplify_polyline(points: np.ndarray, max_points: int) -> np.ndarray:
+    arr = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+    if max_points <= 0 or len(arr) <= max_points:
+        return arr
+    idx = np.linspace(0, len(arr) - 1, max_points).round().astype(np.int64)
+    return arr[idx]
 
-def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, radius_m: float, route_ids: list[str], traffic_lights: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, radius_m: float, route_ids: list[str], traffic_lights: list[dict[str, Any]] | None = None, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     origin_xy = np.asarray(ego_state_global[:2], dtype=np.float32)
     origin_yaw = float(ego_state_global[2])
     features: dict[str, Any] = {
@@ -301,7 +308,21 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
     red_connector_ids = {str(t.get("lane_connector_id", "")) for t in (traffic_lights or []) if "red" in str(t.get("status", "")).lower() and str(t.get("lane_connector_id", ""))}
     features["red_lane_connector_ids"] = sorted(red_connector_ids)
     features["red_lane_connectors"] = []
-    prox = _proximal_objects(map_api, origin_xy, radius_m)
+
+    # Avoid a full 100m proximal map scan for every sample when the scenario already
+    # provides route roadblock ids.  Full DRIVABLE_AREA polygons are especially slow
+    # on nuPlan and are disabled by default; the hard off-road atom falls back to a
+    # route-corridor approximation unless --include-drivable-polygons is requested.
+    prox_layers: list[str] = []
+    if not route_ids:
+        prox_layers += ["LANE", "LANE_CONNECTOR"]
+    if red_connector_ids:
+        prox_layers += ["STOP_LINE"]
+    if include_drivable:
+        prox_layers += ["DRIVABLE_AREA"]
+    if include_crosswalks:
+        prox_layers += ["CROSSWALK"]
+    prox = _proximal_objects(map_api, origin_xy, radius_m, sorted(set(prox_layers))) if prox_layers else {}
 
     for cid in sorted(red_connector_ids):
         conn = _get_map_object(map_api, cid, ["LANE_CONNECTOR"])
@@ -350,11 +371,19 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
     if features["speed_limits"]:
         features["speed_limit_mps"] = float(np.median([x["speed_limit_mps"] for x in features["speed_limits"]]))
 
-    for obj in _flatten_by_layer(prox, "DRIVABLE_AREA"):
-        pts = _geometry_points(obj)
-        if len(pts) >= 3:
-            local = _to_local_xy(pts, origin_xy, origin_yaw)
-            features["drivable_polygons"].append({"id": _obj_id(obj), "xy": local})
+    if include_drivable:
+        scored_polys: list[tuple[float, Any, np.ndarray]] = []
+        for obj in _flatten_by_layer(prox, "DRIVABLE_AREA"):
+            pts = _geometry_points(obj)
+            if len(pts) >= 3:
+                local = _to_local_xy(pts, origin_xy, origin_yaw)
+                # Keep only polygons that are near the ego/candidate corridor; far polygons
+                # do not change the teacher label but dominate Python geometry cost.
+                score = float(np.linalg.norm(local, axis=1).min())
+                scored_polys.append((score, obj, local))
+        for _, obj, local in sorted(scored_polys, key=lambda x: x[0])[:max_drivable]:
+            features["drivable_polygons"].append({"id": _obj_id(obj), "xy": _simplify_polyline(local, max_poly_points)})
+
     red_connector_polys = [np.asarray(x.get("xy"), dtype=np.float32).reshape(-1, 2) for x in features.get("red_lane_connectors", []) if np.asarray(x.get("xy", [])).size >= 4]
     for obj in _flatten_by_layer(prox, "STOP_LINE"):
         pts = _geometry_points(obj)
@@ -383,11 +412,13 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
                             is_red = True
                             break
                 features["stop_lines"].append({"id": stop_id, "xy": local, "red": is_red})
-    for obj in _flatten_by_layer(prox, "CROSSWALK"):
-        pts = _geometry_points(obj)
-        if len(pts) >= 3:
-            features["crosswalks"].append({"id": _obj_id(obj), "xy": _to_local_xy(pts, origin_xy, origin_yaw)})
-
+    if include_crosswalks:
+        for obj in _flatten_by_layer(prox, "CROSSWALK"):
+            pts = _geometry_points(obj)
+            if len(pts) >= 3:
+                features["crosswalks"].append({"id": _obj_id(obj),
+                                               "xy": _simplify_polyline(_to_local_xy(pts, origin_xy, origin_yaw),
+                                                                        max_poly_points)})
     if route_objs:
         # Use explicit adjacent edge metadata when available. Conservative default is False.
         left = any(getattr(o, "left_neighbor", None) is not None or getattr(o, "adjacent_edges", None) is not None for o in route_objs)
@@ -489,7 +520,8 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
     route_ids = list(_call(scenario, ["get_route_roadblock_ids", "route_roadblock_ids"], default=[]) or [])
     mission_goal_state = _call(scenario, ["get_mission_goal", "mission_goal"], default=None)
     mission_goal = None if mission_goal_state is None else transform_states_to_local(_state_to_array(mission_goal_state)[None], origin_xy, origin_yaw)[0]
-    map_features = extract_map_features_from_api(getattr(scenario, "map_api", None), ego_arr_global, map_radius, [str(r) for r in route_ids], traffic_lights)
+    map_features = extract_map_features_from_api(getattr(scenario, "map_api", None), ego_arr_global, map_radius,
+                                                 [str(r) for r in route_ids], traffic_lights, cfg)
     return RuntimeFeatures(
         ego_history=ego_history.astype(np.float32),
         agent_history=agent_hist.astype(np.float32),

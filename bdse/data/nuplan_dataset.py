@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 import re
+import time
 import sqlite3
 import sys
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -326,10 +327,22 @@ class NuPlanBDSEDataset:
         return out / self.split / f"{idx:08d}.npz"
 
     def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None) -> tuple[int, Path, dict[str, Any] | None]:
+        pcfg = self.cfg.get("preprocess", {})
+        profile = bool(pcfg.get("profile", False))
+        threshold_s = float(pcfg.get("profile_threshold_s", 2.0))
+        t0 = time.perf_counter()
         sample = self[i]
+        t_sample = time.perf_counter()
         tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{i}")
-        save_sample_npz(sample, tmp, compressed=bool(self.cfg.get("preprocess", {}).get("compress_npz", False)))
+        save_sample_npz(sample, tmp, compressed=bool(pcfg.get("compress_npz", False)))
         os.replace(tmp, path)
+        t_done = time.perf_counter()
+        if profile and (t_done - t0) >= threshold_s:
+            print(
+                f"[bdse][profile-write] idx={i} build={t_sample - t0:.3f}s "
+                f"save={t_done - t_sample:.3f}s total={t_done - t0:.3f}s path={path}",
+                flush=True,
+            )
         rec = {
             "path": str(path),
             "split": self.split,

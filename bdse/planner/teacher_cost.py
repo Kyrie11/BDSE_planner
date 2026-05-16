@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, EvidenceBank, LabelOnlyFuture, RuntimeFeatures, TeacherLabels
-from bdse.planner.evidence_atoms import normalize_atom_costs, raw_local_costs
+from bdse.planner.evidence_atoms import _eval_traj, normalize_atom_costs, raw_local_costs
 from bdse.utils import compute_curvature, finite_difference, nearest_polyline_distance, route_progress_along_polyline
 
 
@@ -43,12 +43,13 @@ def evaluate_base_costs(runtime: RuntimeFeatures, label_future: LabelOnlyFuture 
     demo = np.zeros((K,), dtype=np.float32)
     terminal_progress = route_progress_along_polyline(candidates.trajectories[:, -1, :2], route)
     best_progress = terminal_progress[candidates.valid_mask].max() if np.any(candidates.valid_mask) else 0.0
+    logged_ego_eval = None if label_future is None else _eval_traj(label_future.logged_ego, cfg)
     for a in range(K):
-        traj = candidates.trajectories[a]
+        traj = _eval_traj(candidates.trajectories[a], cfg)
         route_dev[a] = float(np.square(nearest_polyline_distance(traj[:, :2], route)).mean())
         progress_def[a] = float(max(0.0, best_progress - terminal_progress[a]))
         comfort[a] = global_comfort_cost(traj, dt)
-        demo[a] = demo_cost(traj, None if label_future is None else label_future.logged_ego)
+        demo[a] = demo_cost(traj, logged_ego_eval)
     J = (
         float(tcfg.get("route_weight", 50.0)) * route_dev / max(float(tcfg.get("route_scale", 1.0)), 1e-6)
         + float(tcfg.get("progress_weight", 5.0)) * progress_def / max(float(tcfg.get("progress_scale", 10.0)), 1e-6)

@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.config import load_config
+from bdse.utils import angle_wrap
 from bdse.data.cache_schema import RuntimeFeatures
 from bdse.data.feature_builder import build_runtime_features_from_scenario
 from bdse.planner.candidate_generator import generate_candidate_bank
@@ -117,12 +118,24 @@ class BDSEnuPlanPlanner:
             ego_state = getattr(current_input, "history", None)
             last = ego_state.ego_states[-1] if ego_state is not None and getattr(ego_state, "ego_states", None) else None
             start_us = int(getattr(getattr(last, "time_point", None), "time_us", 0))
+            rear = getattr(last, "rear_axle", last)
+            ox = float(getattr(rear, "x", 0.0))
+            oy = float(getattr(rear, "y", 0.0))
+            oyaw = float(getattr(rear, "heading", 0.0))
+            c = float(np.cos(oyaw))
+            s = float(np.sin(oyaw))
             states = []
             for row in trajectory:
+                # Candidate trajectories are represented in the ego-local frame. nuPlan
+                # expects global SE2 states in closed-loop simulation.
+                lx, ly = float(row[0]), float(row[1])
+                gx = ox + c * lx - s * ly
+                gy = oy + s * lx + c * ly
+                gyaw = float(angle_wrap(oyaw + float(row[2])))
                 t_us = start_us + int(float(row[4]) * 1e6)
                 if hasattr(EgoState, "build_from_rear_axle"):
                     state = EgoState.build_from_rear_axle(
-                        rear_axle_pose=StateSE2(float(row[0]), float(row[1]), float(row[2])),
+                        rear_axle_pose=StateSE2(gx, gy, gyaw),
                         rear_axle_velocity_2d=None,
                         rear_axle_acceleration_2d=None,
                         tire_steering_angle=0.0,
@@ -130,7 +143,7 @@ class BDSEnuPlanPlanner:
                         vehicle_parameters=getattr(getattr(self, "initialization", None), "vehicle_parameters", None),
                     )
                 else:
-                    state = row
+                    state = np.asarray([gx, gy, gyaw, row[3], row[4]], dtype=np.float32)
                 states.append(state)
             return InterpolatedTrajectory(states)
         except Exception:
