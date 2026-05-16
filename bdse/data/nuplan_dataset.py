@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import numpy as np
-
+from nuplan.planning.utils.multithreading.worker_parallel import SingleMachineParallelExecutor
 from bdse.config import load_config
 from bdse.data.cache_schema import Sample, save_sample_npz
 from bdse.data.label_builder import build_training_sample_from_scenario
 from bdse.data.scenario_sampler import DBFileRecord, db_files_for_nuplan_builder, discover_db_files, select_records
-
+from nuplan.planning.utils.multithreading.worker_parallel import SingleMachineParallelExecutor
 
 @dataclass(frozen=True, slots=True)
 class ScenarioIndexRecord:
@@ -96,7 +96,7 @@ class NuPlanScenarioSource:
             db_files=db_files_for_nuplan_builder(self.records),
             map_version=str(paths.get("map_version", "nuplan-maps-v1.0")),
             include_cameras=False,
-            max_workers=4,
+            max_workers=None,
             verbose=False,
         )
         scenario_filter = ScenarioFilter(
@@ -112,7 +112,8 @@ class NuPlanScenarioSource:
             remove_invalid_goals=True,
             shuffle=False,
         )
-        return list(builder.get_scenarios(scenario_filter, worker=4))
+        worker = SingleMachineParallelExecutor(use_process_pool=True)
+        return list(builder.get_scenarios(scenario_filter, worker=worker))
 
     def scenarios(self) -> list[Any]:
         if self._scenarios is None:
