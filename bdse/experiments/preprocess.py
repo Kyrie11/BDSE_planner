@@ -35,6 +35,8 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-tqdm", action="store_true")
     parser.add_argument("--list-splits", action="store_true")
+    parser.add_argument("--num-workers", type=int, default=None)
+    parser.add_argument("--use-process-pool", action="store_true")
     args = parser.parse_args()
     cfg = load_config(args.config)
     cfg.setdefault("paths", {})
@@ -49,7 +51,10 @@ def main() -> None:
         cfg["paths"]["preprocessed_cache"] = args.output_dir
     if args.scenario_stride is not None:
         cfg["preprocess"]["scenario_stride"] = int(args.scenario_stride)
-
+    if args.num_workers is not None:
+        cfg["preprocess"]["num_workers"] =args.num_workers
+    if args.use_thread_pool:
+        cfg["preprocess"]["use_process_pool"] = args.use_process_pool
     if args.list_splits:
         print(discover_available_splits(cfg["paths"]["data_cache_root"]))
         return

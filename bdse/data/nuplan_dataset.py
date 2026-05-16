@@ -74,11 +74,14 @@ def scan_db_for_lidarpc_tokens(db_path: str | Path, split: str, folder: str, str
 
 
 class NuPlanScenarioSource:
-    def __init__(self, cfg: dict[str, Any], records: list[DBFileRecord], split: str):
+    def __init__(self, cfg: dict[str, Any], records: list[DBFileRecord], split: str, num_workers=None, use_process_pool=None):
         self.cfg = cfg
         self.records = records
         self.split = split
         self._scenarios: list[Any] | None = None
+        self.num_workers = num_workers
+        self.use_process_pool = use_process_pool
+
 
     def _build_with_devkit(self) -> list[Any]:
         try:
@@ -112,7 +115,22 @@ class NuPlanScenarioSource:
             remove_invalid_goals=True,
             shuffle=False,
         )
-        worker = SingleMachineParallelExecutor(use_process_pool=True)
+
+        preprocess_cfg = self.cfg.get("preprocess", {})
+
+        num_workers = self.num_workers
+        if num_workers is None:
+            num_workers = preprocess_cfg.get("num_workers", None)
+
+        use_process_pool = self.use_process_pool
+        if use_process_pool is None:
+            use_process_pool = bool(preprocess_cfg.get("use_process_pool", True))
+
+        worker = SingleMachineParallelExecutor(
+            use_process_pool=use_process_pool,
+            max_workers=num_workers,
+        )
+
         return list(builder.get_scenarios(scenario_filter, worker=worker))
 
     def scenarios(self) -> list[Any]:
@@ -168,6 +186,8 @@ class NuPlanBDSEDataset:
         stride: int | None = None,
         use_devkit: bool = True,
         preprocessed_dir: str | Path | None = None,
+        num_workers: int | None = None,
+        use_process_pool: bool | None = None,
     ):
         self.cfg = cfg or load_config()
         records = discover_db_files(self.cfg.get("paths", {}).get("data_cache_root", "/data0/nuplan/data/cache"))
@@ -179,6 +199,13 @@ class NuPlanBDSEDataset:
         self.stride = int(stride if stride is not None else self.cfg.get("preprocess", {}).get("scenario_stride", 10))
         self._scenario_source = NuPlanScenarioSource(self.cfg, self.records, split) if use_devkit else None
         self._index: list[Any] | None = None
+        self._scenario_source = NuPlanScenarioSource(
+            self.cfg,
+            self.records,
+            split,
+            num_workers=num_workers,
+            use_process_pool=use_process_pool,
+        ) if use_devkit else None
 
     def build_index(self) -> list[Any]:
         if self._index is not None:
