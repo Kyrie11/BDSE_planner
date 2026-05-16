@@ -148,10 +148,11 @@ def pad_array(arr: np.ndarray, shape: tuple[int, ...], value: float = 0.0, dtype
     return out
 
 
-def save_sample_npz(sample: Sample, path: str | Path) -> None:
+def save_sample_npz(sample: Sample, path: str | Path, compressed: bool = False) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
+    save_fn = np.savez_compressed if compressed else np.savez
+    save_fn(
         p,
         scenario_token=np.asarray(sample.scenario_token),
         timestamp_us=np.asarray(sample.timestamp_us, dtype=np.int64),

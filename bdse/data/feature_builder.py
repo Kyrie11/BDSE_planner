@@ -475,6 +475,10 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
                     if token in token_to_idx:
                         arr = _box_to_array(obj)
                         arr[0:5] = transform_states_to_local(arr[[0, 1, 2, 3, 4]], origin_xy, origin_yaw)
+                        c = math.cos(-origin_yaw)
+                        s = math.sin(-origin_yaw)
+                        rot = np.asarray([[c, -s], [s, c]], dtype=np.float32)
+                        arr[5:7] = arr[5:7] @ rot.T
                         raw_hist[token_to_idx[token], start + fi] = arr
     cand_traj = None if candidates is None else getattr(candidates, "trajectories", candidates)
     order = _agent_selection_order(raw_current, np.zeros(2, dtype=np.float32), max_agents, radius, cand_traj)

@@ -127,6 +127,14 @@ class NuPlanScenarioSource:
             max_workers=num_workers,
             verbose=False,
         )
+        # Apply temporal thinning inside nuPlan ScenarioBuilder. Without this,
+        # scenario_types=None can materialize one scenario per lidar frame; on full val
+        # this can produce millions of Scenario objects before BDSE's own stride is used
+        timestamp_threshold_s = preprocess_cfg.get("scenario_builder_timestamp_threshold_s", None)
+        if timestamp_threshold_s is None:
+            timestamp_threshold_s = max(0.1, float(preprocess_cfg.get("scenario_stride", 10)) * float(
+                self.cfg.get("candidate", {}).get("step_s", 0.1)))
+
         scenario_filter = ScenarioFilter(
             scenario_types=None,
             scenario_tokens=None,
@@ -134,7 +142,7 @@ class NuPlanScenarioSource:
             map_names=None,
             num_scenarios_per_type=None,
             limit_total_scenarios=scenario_filter_limit,
-            timestamp_threshold_s=None,
+            timestamp_threshold_s=float(timestamp_threshold_s),
             ego_displacement_minimum_m=None,
             expand_scenarios=False,
             remove_invalid_goals=True,
@@ -320,7 +328,7 @@ class NuPlanBDSEDataset:
     def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None) -> tuple[int, Path, dict[str, Any] | None]:
         sample = self[i]
         tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{i}")
-        save_sample_npz(sample, tmp)
+        save_sample_npz(sample, tmp, compressed=bool(self.cfg.get("preprocess", {}).get("compress_npz", False)))
         os.replace(tmp, path)
         rec = {
             "path": str(path),

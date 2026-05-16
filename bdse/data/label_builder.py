@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import LabelOnlyFuture, Sample, pad_array
-from bdse.data.feature_builder import _call, _iter_tracked_objects, _state_to_array, _box_to_array, build_runtime_features_from_scenario
+from bdse.data.feature_builder import _call, _iter_tracked_objects, _state_to_array, _box_to_array, _object_token, build_runtime_features_from_scenario
 from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.pair_builder import build_pair_labels
@@ -56,7 +56,7 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
 
     current_objects = _call(scenario, ["get_tracked_objects_at_iteration"], iteration, default=[])
     cur_objs_all = _iter_tracked_objects(current_objects)
-    token_to_obj = {str(getattr(o, "track_token", getattr(o, "token", getattr(o, "tracked_object_id", i)))): o for i, o in enumerate(cur_objs_all)}
+    token_to_obj = {_object_token(o, i): o for i, o in enumerate(cur_objs_all)}
     selected_tokens = list(getattr(runtime, "metadata", {}).get("selected_agent_tokens", [])) if runtime is not None else list(token_to_obj)[:max_agents]
     cur_objs = [token_to_obj[t] for t in selected_tokens if t in token_to_obj][:max_agents]
     raw_current = np.asarray([_box_to_array(o) for o in cur_objs], dtype=np.float32) if cur_objs else np.zeros((0, 10), dtype=np.float32)
@@ -76,7 +76,7 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
         frames = list(future_objects) if not isinstance(future_objects, dict) else []
         for k, frame in enumerate(frames[:T]):
             for obj in _iter_tracked_objects(frame):
-                token = str(getattr(obj, "track_token", getattr(obj, "token", "")))
+                token = _object_token(obj)
                 if token in token_to_local_idx:
                     i = token_to_local_idx[token]
                     arr = _box_to_array(obj)
