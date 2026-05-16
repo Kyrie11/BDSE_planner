@@ -234,13 +234,50 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
     c_red = float(safety.get("red_raw", 50.0))
     c_off = float(safety.get("off_raw", 50.0))
     c_wrong = float(safety.get("wrong_raw", 50.0))
-    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    base_dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    stride = _teacher_eval_stride(cfg)
+    dt_eval = base_dt * stride
+
+    # Do not slice every candidate again for every atom.  With E~70, K=32,
+    # T=80 this alone removes thousands of repeated Python/Numpy allocations.
+    eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
+    kinematic_cache: list[tuple[float, float, float]] = []
+    for traj in eval_trajs:
+        v = traj[:, 3]
+        acc = finite_difference(v, dt_eval)
+        jerk = finite_difference(acc, dt_eval)
+        curv = compute_curvature(traj[:, :2])
+        kinematic_cache.append((float(np.max(np.abs(acc))), float(np.max(np.abs(jerk))), float(np.max(np.abs(curv)))))
+
+    route_dist_cache: dict[tuple[int, int], np.ndarray] = {}
+    def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
+        key = (id(route_arr), a)
+        got = route_dist_cache.get(key)
+        if got is None:
+            got = nearest_polyline_distance(eval_trajs[a][:, :2], route_arr)
+            route_dist_cache[key] = got
+        return got
+
     for ei, atom in enumerate(atoms):
-        agent_eval = None
-        if atom.type in {"occupancy", "ttc"}:
-            agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, dt), cfg)
+        route_arr = None
+        if "route_centerline" in atom.anchor:
+            route_arr = np.asarray(atom.anchor["route_centerline"], dtype=np.float32)
         for a in range(K):
-            traj = _eval_traj(candidates.trajectories[a], cfg)
+            traj = eval_trajs[a]
+            feat = np.zeros((ATOM_QUERY_DIM,), dtype=np.float32)
+            if "current_state" in atom.anchor:
+                cur = np.asarray(atom.anchor["current_state"], dtype=np.float32)
+                dist = np.linalg.norm(traj[:, :2] - cur[:2][None, :], axis=1)
+                arg = int(np.argmin(dist))
+                feat[0] = dist.min()
+                feat[1] = dist.mean()
+                feat[2] = traj[arg, 4]
+                feat[3] = cur[3] if len(cur) > 3 else 0.0
+            if route_arr is not None:
+                dist = cached_route_dist(route_arr, a)
+                feat[4] = dist.min()
+                feat[5] = dist.mean()
+                feat[6] = dist.max()
             if atom.type == "occupancy":
                 agent = agent_eval
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
@@ -273,34 +310,35 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 width = float(atom.anchor.get("width", 4.0))
                 polygons = [np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in atom.anchor.get("drivable_polygons", [])]
-                outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
+
                 if polygons:
+                    outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
                     # dist is distance to polygon boundary.  Penalize outside points by
                     # their distance back to the drivable polygon, and penalize inside
-                    # points only when they are too close to the boundary.  The previous
-                    # margin+dist expression penalized perfectly valid center-of-road
-                    # rollouts more than near-boundary rollouts.
+                    # points only when they are too close to the boundary.
                     outside_dist = float(dist[outside].sum()) if np.any(outside) else 0.0
                     near_boundary = float(np.maximum(0.0, margin - dist[~outside]).sum()) if np.any(~outside) else 0.0
                     raw[ei, a] = float(c_off * float(outside.max()) + outside_dist + near_boundary)
                 else:
-                    raw[ei, a] = float(c_off * float(outside.max()) + np.maximum(0.0, dist).sum())
+                    dist = cached_route_dist(route, a)
+                    outside = dist > width
+                    raw[ei, a] = float(c_off * float(outside.max()) + np.maximum(0.0, dist - width).sum())
             elif atom.type == "wrong_way":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
-                route_dist = nearest_polyline_distance(traj[:, :2], route)
+                route_dist = cached_route_dist(route, a)
                 route_yaw = _route_heading_at(traj[:, :2], route)
                 heading_bad = np.abs(angle_wrap(traj[:, 2] - route_yaw)) > (0.5 * np.pi)
                 raw[ei, a] = float(c_wrong * np.logical_and(heading_bad, route_dist < 5.0).max())
             elif atom.type == "route_connector":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
-                raw[ei, a] = float(np.square(nearest_polyline_distance(traj[:, :2], route)).mean())
+                raw[ei, a] = float(np.square(cached_route_dist(route, a)).mean())
             elif atom.type == "speed_limit":
                 limit = float(atom.anchor.get("speed_limit_mps", 13.4))
                 raw[ei, a] = float(np.maximum(0.0, traj[:, 3] - limit).max() ** 2)
             elif atom.type.startswith("local_comfort"):
                 v = traj[:, 3]
-                acc = finite_difference(v, dt)
-                jerk = finite_difference(acc, dt)
+                acc = finite_difference(v, dt_eval)
+                jerk = finite_difference(acc, dt_eval)
                 curv = compute_curvature(traj[:, :2])
                 if atom.type.endswith("accel"):
                     raw[ei, a] = float(np.maximum(0.0, np.abs(acc) - 3.0).sum())
@@ -345,7 +383,11 @@ def normalize_atom_costs(raw_costs: np.ndarray, atoms: list[EvidenceAtom], cfg: 
 def compute_query_features(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, cfg: dict[str, Any]) -> np.ndarray:
     E, K = len(atoms), candidates.K
     q = np.zeros((E, K, ATOM_QUERY_DIM), dtype=np.float32)
-    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    base_dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    stride = _teacher_eval_stride(cfg)
+    dt_eval = base_dt * stride
+
+    eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
     for ei, atom in enumerate(atoms):
         for a in range(K):
             traj = _eval_traj(candidates.trajectories[a], cfg)
@@ -361,11 +403,7 @@ def compute_query_features(atoms: list[EvidenceAtom], candidates: CandidateBank,
                 stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
                 feat[7] = float(_crosses_polyline(traj[:, :2], stop))
                 feat[8] = float(np.linalg.norm(traj[-1, None, :2] - stop, axis=1).min()) if len(stop) else 1e6
-            v = traj[:, 3]
-            acc = finite_difference(v, dt)
-            jerk = finite_difference(acc, dt)
-            curv = compute_curvature(traj[:, :2])
-            feat[9] = float(np.max(np.abs(acc))); feat[10] = float(np.max(np.abs(jerk))); feat[11] = float(np.max(np.abs(curv)))
+            feat[9], feat[10], feat[11] = kinematic_cache[a]
             q[ei, a] = feat
     q[:, ~candidates.valid_mask, :] = 0.0
     return q

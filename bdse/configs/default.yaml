@@ -39,6 +39,7 @@ runtime:
   include_drivable_polygons: false
   max_drivable_polygons: 12
   max_polygon_points: 64
+  max_route_points: 256
   use_future_traffic_lights_for_teacher: false
 candidate:
   K: 32

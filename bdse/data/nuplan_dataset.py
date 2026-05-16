@@ -333,7 +333,10 @@ class NuPlanBDSEDataset:
         t0 = time.perf_counter()
         sample = self[i]
         t_sample = time.perf_counter()
-        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{i}")
+        # np.savez appends ".npz" when the target name does not already end with it.
+        # Keep the temporary filename ending in .npz, otherwise os.replace(tmp, path)
+        # will look for a different file than the one numpy created.
+        tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{i}.npz")
         save_sample_npz(sample, tmp, compressed=bool(pcfg.get("compress_npz", False)))
         os.replace(tmp, path)
         t_done = time.perf_counter()

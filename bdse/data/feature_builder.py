@@ -286,7 +286,8 @@ def _simplify_polyline(points: np.ndarray, max_points: int) -> np.ndarray:
     idx = np.linspace(0, len(arr) - 1, max_points).round().astype(np.int64)
     return arr[idx]
 
-def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, radius_m: float, route_ids: list[str], traffic_lights: list[dict[str, Any]] | None = None, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, radius_m: float, route_ids: list[str],
+                                  traffic_lights: list[dict[str, Any]] | None = None, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     origin_xy = np.asarray(ego_state_global[:2], dtype=np.float32)
     origin_yaw = float(ego_state_global[2])
     features: dict[str, Any] = {
@@ -310,6 +311,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
     include_crosswalks = bool(runtime_cfg.get("include_crosswalks", False))
     max_drivable = int(runtime_cfg.get("max_drivable_polygons", 12))
     max_poly_points = int(runtime_cfg.get("max_polygon_points", 64))
+    max_route_points = int(runtime_cfg.get("max_route_points", 256))
 
     red_connector_ids = {str(t.get("lane_connector_id", "")) for t in (traffic_lights or []) if "red" in str(t.get("status", "")).lower() and str(t.get("lane_connector_id", ""))}
     features["red_lane_connector_ids"] = sorted(red_connector_ids)
@@ -370,7 +372,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
             if v is not None:
                 features["speed_limits"].append({"id": _obj_id(obj), "speed_limit_mps": v})
     if route_polys:
-        features["route_centerline"] = _concat_route_polylines(route_polys)
+        features["route_centerline"] = _simplify_polyline(_concat_route_polylines(route_polys), max_route_points)
         features["route_source"] = "route_roadblocks" if route_ids else "proximal_lane"
         features["map_valid"] = True
 
@@ -388,8 +390,8 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
                 score = float(np.linalg.norm(local, axis=1).min())
                 scored_polys.append((score, obj, local))
         for _, obj, local in sorted(scored_polys, key=lambda x: x[0])[:max_drivable]:
-            features["drivable_polygons"].append({"id": _obj_id(obj), "xy": _simplify_polyline(local, max_poly_points)})
-
+            features["drivable_polygons"].append(
+                {"id": _obj_id(obj), "xy": _simplify_polyline(local, max_poly_points)})
     red_connector_polys = [np.asarray(x.get("xy"), dtype=np.float32).reshape(-1, 2) for x in features.get("red_lane_connectors", []) if np.asarray(x.get("xy", [])).size >= 4]
     for obj in _flatten_by_layer(prox, "STOP_LINE"):
         pts = _geometry_points(obj)
