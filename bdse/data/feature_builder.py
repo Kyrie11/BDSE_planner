@@ -305,6 +305,12 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
     if map_api is None:
         return features
 
+    runtime_cfg = (cfg or {}).get("runtime", {})
+    include_drivable = bool(runtime_cfg.get("include_drivable_polygons", False))
+    include_crosswalks = bool(runtime_cfg.get("include_crosswalks", False))
+    max_drivable = int(runtime_cfg.get("max_drivable_polygons", 12))
+    max_poly_points = int(runtime_cfg.get("max_polygon_points", 64))
+
     red_connector_ids = {str(t.get("lane_connector_id", "")) for t in (traffic_lights or []) if "red" in str(t.get("status", "")).lower() and str(t.get("lane_connector_id", ""))}
     features["red_lane_connector_ids"] = sorted(red_connector_ids)
     features["red_lane_connectors"] = []
