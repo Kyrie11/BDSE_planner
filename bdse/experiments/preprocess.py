@@ -53,7 +53,7 @@ def main() -> None:
         cfg["preprocess"]["scenario_stride"] = int(args.scenario_stride)
     if args.num_workers is not None:
         cfg["preprocess"]["num_workers"] =args.num_workers
-    if args.use_thread_pool:
+    if args.use_process_pool:
         cfg["preprocess"]["use_process_pool"] = args.use_process_pool
     if args.list_splits:
         print(discover_available_splits(cfg["paths"]["data_cache_root"]))
