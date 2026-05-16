@@ -96,7 +96,7 @@ class NuPlanScenarioSource:
             db_files=db_files_for_nuplan_builder(self.records),
             map_version=str(paths.get("map_version", "nuplan-maps-v1.0")),
             include_cameras=False,
-            max_workers=None,
+            max_workers=4,
             verbose=False,
         )
         scenario_filter = ScenarioFilter(
@@ -112,7 +112,7 @@ class NuPlanScenarioSource:
             remove_invalid_goals=True,
             shuffle=False,
         )
-        return list(builder.get_scenarios(scenario_filter, worker=None))
+        return list(builder.get_scenarios(scenario_filter, worker=4))
 
     def scenarios(self) -> list[Any]:
         if self._scenarios is None:

@@ -5,7 +5,6 @@ paths:
   exp_root: /data0/nuplan/senzeyu2/dataset/nuplan/data/cache
   preprocessed_cache: /data0/nuplan/exp/bdse/cache
   map_version: nuplan-maps-v1.0
-
 data:
   split_folders:
     train:
