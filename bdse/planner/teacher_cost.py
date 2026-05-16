@@ -35,7 +35,9 @@ def demo_cost(traj: np.ndarray, logged_ego: np.ndarray | None) -> float:
 def evaluate_base_costs(runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
     tcfg = cfg.get("teacher", {})
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
-    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    base_dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    stride = max(1, int(cfg.get("teacher", {}).get("cost_eval_stride", 1)))
+    dt_eval = base_dt * stride
     K = candidates.K
     route_dev = np.zeros((K,), dtype=np.float32)
     progress_def = np.zeros((K,), dtype=np.float32)
@@ -48,7 +50,7 @@ def evaluate_base_costs(runtime: RuntimeFeatures, label_future: LabelOnlyFuture 
         traj = _eval_traj(candidates.trajectories[a], cfg)
         route_dev[a] = float(np.square(nearest_polyline_distance(traj[:, :2], route)).mean())
         progress_def[a] = float(max(0.0, best_progress - terminal_progress[a]))
-        comfort[a] = global_comfort_cost(traj, dt)
+        comfort[a] = global_comfort_cost(traj, dt_eval)
         demo[a] = demo_cost(traj, logged_ego_eval)
     J = (
         float(tcfg.get("route_weight", 50.0)) * route_dev / max(float(tcfg.get("route_scale", 1.0)), 1e-6)

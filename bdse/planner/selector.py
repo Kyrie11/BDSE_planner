@@ -15,10 +15,21 @@ class SelectionResult:
     diagnostics: dict[str, Any]
 
 
+def _finite_cost_for_margin(cost: np.ndarray) -> np.ndarray:
+    cost = np.asarray(cost, dtype=np.float32).copy()
+    finite = np.isfinite(cost)
+    if finite.any():
+        fill = float(np.nanmax(cost[finite]) + 1e6)
+    else:
+        fill = 1e6
+    cost[~finite] = fill
+    return cost
+
+
 def full_interface_margin(J0: np.ndarray, g: np.ndarray) -> np.ndarray:
     J0 = np.asarray(J0, dtype=np.float32)
     g = np.asarray(g, dtype=np.float32)
-    full_cost = J0 + g.sum(axis=0)
+    full_cost = _finite_cost_for_margin(J0 + g.sum(axis=0))
     return full_cost[None, :] - full_cost[:, None]
 
 
@@ -29,6 +40,7 @@ def budgeted_margin(J0: np.ndarray, g: np.ndarray, selected: list[int] | np.ndar
         cost = J0 + g[np.asarray(selected, dtype=np.int64)].sum(axis=0)
     else:
         cost = J0.copy()
+    cost = _finite_cost_for_margin(cost)
     return cost[None, :] - cost[:, None]
 
 

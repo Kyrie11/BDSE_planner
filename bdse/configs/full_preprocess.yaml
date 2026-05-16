@@ -1,0 +1,60 @@
+# Paper-faithful preprocessing overrides for BDSE/nuPlan.
+# Use this for dataset generation used in final training/diagnostics/experiments,
+# not for smoke tests or quick pipeline checks.
+preprocess:
+  resume: true
+  overwrite: false
+  atomic_write: true
+  manifest_name: manifest.jsonl
+  # 10 lidar frames at the paper's 10 Hz feature cadence gives 1 Hz training
+  # timesteps. Use 5 for 2 Hz if you need denser samples for an ablation.
+  scenario_stride: 10
+  num_workers: 4
+  max_in_flight: 8
+  compress_npz: false
+  profile: false
+  profile_threshold_s: 2.0
+  candidate_aware_agent_selection: true
+runtime:
+  history_s: 2.0
+  history_hz: 10
+  map_radius_m: 100.0
+  agent_radius_m: 80.0
+  max_agents: 32
+  max_map_polylines: 128
+  include_drivable_polygons: true
+  include_crosswalks: true
+  max_drivable_polygons: 24
+  max_polygon_points: 128
+  max_route_points: 512
+  use_future_traffic_lights_for_teacher: false
+candidate:
+  K: 32
+  horizon_s: 8.0
+  step_s: 0.1
+evidence:
+  max_atoms: 128
+  max_interaction_atoms: 64
+  max_map_atoms: 32
+  max_kinematic_atoms: 16
+  include_interaction: true
+  include_rule_map: true
+  include_kinematic: true
+  include_hard_atoms: true
+  budget: 16
+teacher:
+  atom_normalization_first: true
+  separate_hard_gate: false
+  use_reactive_proxy: false
+  # Full 10 Hz teacher evidence evaluation. Do not raise this for final labels.
+  cost_eval_stride: 1
+pairs:
+  winner_top_l: 16
+  target_min: 64
+  target_max: 256
+  pair_batch_per_scene: 128
+  eta_percentile: 20
+selector:
+  mode: runtime_predicted
+tournament:
+  L_infer: 16

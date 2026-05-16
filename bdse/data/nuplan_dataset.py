@@ -14,7 +14,7 @@ from typing import Any, Iterable, Iterator
 
 import numpy as np
 from bdse.config import load_config
-from bdse.data.cache_schema import Sample, save_sample_npz
+from bdse.data.cache_schema import Sample, load_sample_npz, save_sample_npz
 from bdse.data.label_builder import build_training_sample_from_scenario
 from bdse.data.scenario_sampler import DBFileRecord, db_files_for_nuplan_builder, discover_db_files, select_records
 
@@ -321,9 +321,18 @@ class NuPlanBDSEDataset:
         out = Path(out_dir or self.preprocessed_dir)
         item = self.build_index()[idx]
         if isinstance(item, DevkitScenarioIndexRecord):
-            return out / item.split / item.folder / item.log_name / f"{item.token}_it{item.iteration:06d}.npz"
+            parts = [out, Path(item.split)]
+            # Avoid paths such as <out>/val/val/... when the folder is only the
+            # split bucket.  City-specific train folders are preserved as
+            # <out>/train/train_boston/... for traceability.
+            if item.folder and item.folder != item.split:
+                parts.append(Path(item.folder))
+            return Path(*parts) / item.log_name / f"{item.token}_it{item.iteration:06d}.npz"
         if isinstance(item, ScenarioIndexRecord):
-            return out / item.split / item.folder / item.db_path.stem / f"{_safe_name(item.token)}_it{item.iteration:06d}.npz"
+            parts = [out, Path(item.split)]
+            if item.folder and item.folder != item.split:
+                parts.append(Path(item.folder))
+            return Path(*parts) / item.db_path.stem / f"{_safe_name(item.token)}_it{item.iteration:06d}.npz"
         return out / self.split / f"{idx:08d}.npz"
 
     def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None) -> tuple[int, Path, dict[str, Any] | None]:
@@ -474,6 +483,79 @@ class NuPlanBDSEDataset:
                         pbar.close()
         _append_manifest(manifest_records)
         return paths
+
+
+class PreprocessedBDSEDataset:
+    def __init__(
+        self,
+        preprocessed_dir: str | Path,
+        split: str | None = None,
+        manifest_name: str = "manifest.jsonl",
+        max_scenarios: int | None = None,
+    ):
+        self.preprocessed_dir = Path(preprocessed_dir)
+        self.split = split
+        self.manifest_name = manifest_name
+        self.max_scenarios = max_scenarios
+        self._paths: list[Path] | None = None
+
+    def _paths_from_manifest(self, manifest_path: Path) -> list[Path]:
+        paths: list[Path] = []
+        if not manifest_path.exists():
+            return paths
+        with manifest_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if self.split is not None and rec.get("split") != self.split:
+                    continue
+                path = Path(str(rec.get("path", "")))
+                if not path.is_absolute():
+                    path = self.preprocessed_dir / path
+                if path.exists():
+                    paths.append(path)
+        return paths
+
+    def build_index(self) -> list[Path]:
+        if self._paths is not None:
+            return self._paths
+        if not self.preprocessed_dir.exists():
+            raise FileNotFoundError(f"preprocessed cache root does not exist: {self.preprocessed_dir}")
+        manifest_paths = [self.preprocessed_dir / self.manifest_name]
+        if self.split:
+            manifest_paths.append(self.preprocessed_dir / self.split / self.manifest_name)
+        paths: list[Path] = []
+        for mp in manifest_paths:
+            paths.extend(self._paths_from_manifest(mp))
+        if not paths:
+            search_root = self.preprocessed_dir / self.split if self.split else self.preprocessed_dir
+            paths = sorted(search_root.rglob("*.npz"), key=lambda p: str(p)) if search_root.exists() else []
+        else:
+            # Manifests may contain duplicates after resumed preprocessing. Keep the
+            # last materialization of each path while preserving deterministic order.
+            paths = sorted(dict.fromkeys(paths), key=lambda p: str(p))
+        if self.max_scenarios is not None:
+            paths = paths[: int(self.max_scenarios)]
+        if not paths:
+            hint = f" split={self.split}" if self.split else ""
+            raise FileNotFoundError(f"No .npz samples found under {self.preprocessed_dir}{hint}")
+        self._paths = paths
+        return self._paths
+
+    def __len__(self) -> int:
+        return len(self.build_index())
+
+    def __getitem__(self, idx: int) -> Sample:
+        return load_sample_npz(self.build_index()[idx])
+
+    def iter_samples(self) -> Iterator[Sample]:
+        for i in range(len(self)):
+            yield self[i]
 
 
 def discover_available_splits(data_cache_root: str | Path = "/data0/nuplan/data/cache") -> dict[str, list[str]]:

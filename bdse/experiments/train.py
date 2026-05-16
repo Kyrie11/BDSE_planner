@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from bdse.config import load_config
 from bdse.data.cache_schema import Sample
-from bdse.data.nuplan_dataset import NuPlanBDSEDataset
+from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.model.bdse_model import BDSEModel, EVIDENCE_TYPE_TO_ID, FAMILY_TO_ID
 from bdse.model.losses import compute_bdse_losses
 from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
@@ -115,10 +115,14 @@ def main() -> None:
     parser.add_argument("--split", type=str, default="train")
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
+    parser.add_argument("--preprocessed-dir", type=str, default=None, help="Load generated .npz cache instead of building samples on the fly.")
     parser.add_argument("--output", type=str, default="outputs/bdse_model.pt")
     args = parser.parse_args()
     cfg = load_config(args.config)
-    dataset = NuPlanBDSEDataset(cfg, split=args.split, max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
+    if args.preprocessed_dir:
+        dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios)
+    else:
+        dataset = NuPlanBDSEDataset(cfg, split=args.split, max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
     loader = DataLoader(OnTheFlyDataset(dataset), batch_size=int(cfg["training"]["batch_size"]), shuffle=True, num_workers=0, collate_fn=lambda x: collate(x, cfg))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BDSEModel(cfg).to(device)

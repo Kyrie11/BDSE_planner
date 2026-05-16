@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import tqdm
 
 from bdse.config import load_config
-from bdse.data.nuplan_dataset import NuPlanBDSEDataset
+from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
@@ -95,8 +95,11 @@ def _summarize_lists(acc: dict[str, list[float]]) -> dict[str, float]:
     return out
 
 
-def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, max_files: int | None, max_scenarios: int | None, scenario_stride: int | None) -> dict[str, Any]:
-    dataset = NuPlanBDSEDataset(cfg, split=split, folders=folders, max_files=max_files, max_scenarios=max_scenarios, stride=scenario_stride, use_devkit=True)
+def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, max_files: int | None, max_scenarios: int | None, scenario_stride: int | None, preprocessed_dir: str | None = None) -> dict[str, Any]:
+    if preprocessed_dir:
+        dataset = PreprocessedBDSEDataset(preprocessed_dir, split=split, max_scenarios=max_scenarios)
+    else:
+        dataset = NuPlanBDSEDataset(cfg, split=split, folders=folders, max_files=max_files, max_scenarios=max_scenarios, stride=scenario_stride, use_devkit=True)
     teacher_acc: dict[str, list[float]] = defaultdict(list)
     bdse_results = []
     budget_acc: dict[str, list[float]] = defaultdict(list)
@@ -138,6 +141,7 @@ def main() -> None:
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--scenario-stride", type=int, default=None)
+    parser.add_argument("--preprocessed-dir", type=str, default=None, help="Load generated .npz cache instead of rebuilding samples through nuPlan devkit.")
     parser.add_argument("--output", type=str, default="outputs/diagnostics.json")
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -146,7 +150,7 @@ def main() -> None:
     if args.maps_root:
         cfg.setdefault("paths", {})["maps_root"] = args.maps_root
     folders = args.folders or cfg.get("data", {}).get("split_folders", {}).get(args.split)
-    metrics = run_diagnostics(cfg, args.split, folders, args.max_files, args.max_scenarios, args.scenario_stride)
+    metrics = run_diagnostics(cfg, args.split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")

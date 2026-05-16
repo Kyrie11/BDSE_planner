@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, EvidenceBank, PairLabels, TeacherLabels
-from bdse.planner.selector import budgeted_margin, oracle_objective_value
+from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, oracle_objective_value
 from bdse.planner.tournament import full_interface_action
 
 
@@ -44,7 +44,8 @@ def compute_bdse_diagnostics(
     valid = candidates.valid_mask.astype(bool)
     J = teacher.J_T
     a_star = int(teacher.a_star)
-    teacher_M = J[None, :] - J[:, None]
+    J_margin = _finite_cost_for_margin(J)
+    teacher_M = J_margin[None, :] - J_margin[:, None]
     M_B = budgeted_margin(predicted_base, predicted_atom_costs, selected_atoms)
     full_action = full_interface_action(predicted_base, predicted_atom_costs, valid, cfg)
     budget_vs_full = int(action_index == full_action)

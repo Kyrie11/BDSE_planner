@@ -254,7 +254,7 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
     for ei, atom in enumerate(atoms):
         agent_eval = None
         if atom.type in {"occupancy", "ttc"}:
-            agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, dt), cfg)
+            agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, base_dt), cfg)
         for a in range(K):
             traj = eval_trajs[a]
             if atom.type == "occupancy":
