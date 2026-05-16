@@ -349,12 +349,12 @@ class NuPlanBDSEDataset:
         save_sample_npz(sample, tmp, compressed=bool(pcfg.get("compress_npz", False)))
         os.replace(tmp, path)
         t_done = time.perf_counter()
-        if profile and (t_done - t0) >= threshold_s:
-            print(
-                f"[bdse][profile-write] idx={i} build={t_sample - t0:.3f}s "
-                f"save={t_done - t_sample:.3f}s total={t_done - t0:.3f}s path={path}",
-                flush=True,
-            )
+        # if profile and (t_done - t0) >= threshold_s:
+        #     print(
+        #         f"[bdse][profile-write] idx={i} build={t_sample - t0:.3f}s "
+        #         f"save={t_done - t_sample:.3f}s total={t_done - t0:.3f}s path={path}",
+        #         flush=True,
+        #     )
         rec = {
             "path": str(path),
             "split": self.split,
