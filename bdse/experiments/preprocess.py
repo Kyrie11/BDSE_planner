@@ -52,9 +52,10 @@ def main() -> None:
     if args.scenario_stride is not None:
         cfg["preprocess"]["scenario_stride"] = int(args.scenario_stride)
     if args.num_workers is not None:
-        cfg["preprocess"]["num_workers"] =args.num_workers
+        cfg["preprocess"]["num_workers"] = int(args.num_workers)
     if args.use_process_pool:
-        cfg["preprocess"]["use_process_pool"] = args.use_process_pool
+        cfg["preprocess"]["use_process_pool"] = True
+        cfg["preprocess"].setdefault("scenario_builder_use_process_pool", False)
     if args.list_splits:
         print(discover_available_splits(cfg["paths"]["data_cache_root"]))
         return
@@ -74,11 +75,21 @@ def main() -> None:
             stride=args.scenario_stride,
             use_devkit=True,
             preprocessed_dir=out_dir,
+            num_workers=cfg.get("preprocess", {}).get("num_workers", 1),
+            use_process_pool=cfg.get("preprocess", {}).get("use_process_pool", False),
         )
-        paths = dataset.write_preprocessed_cache(out_dir, resume=resume, overwrite=args.overwrite, show_progress=not args.no_tqdm)
+        print(f"[bdse] start preprocessing split={split} folders={folders} data_root={cfg['paths']['data_cache_root']} out={out_dir}", flush=True)
+        paths = dataset.write_preprocessed_cache(
+            out_dir,
+            resume=resume,
+            overwrite=args.overwrite,
+            show_progress=not args.no_tqdm,
+            num_workers=cfg.get("preprocess", {}).get("num_workers", 1),
+            use_process_pool=cfg.get("preprocess", {}).get("use_process_pool", False),
+        )
         total_paths.extend(paths)
-        print(f"split={split}: materialized {len(paths)} sample paths under {out_dir}")
-    print(f"Done. materialized {len(total_paths)} sample paths under {out_dir}")
+        print(f"split={split}: materialized {len(paths)} sample paths under {out_dir}", flush=True)
+    print(f"Done. materialized {len(total_paths)} sample paths under {out_dir}", flush=True)
 
 
 if __name__ == "__main__":

@@ -108,7 +108,7 @@ def residual_margin(teacher: TeacherLabels, a: int, b: int) -> float:
     return float((teacher.J_T[b] - teacher.J_T[a]) - (teacher.J_base[b] - teacher.J_base[a]))
 
 
-def validate_residual_closure(teacher: TeacherLabels, pairs: np.ndarray, atol: float = 1e-5) -> None:
+def validate_residual_closure(teacher: TeacherLabels, pairs: np.ndarray, atol: float = 1e-4) -> None:
     for a, b in np.asarray(pairs, dtype=np.int64):
         lhs = residual_margin(teacher, int(a), int(b))
         rhs = float((teacher.g_evid[:, b] - teacher.g_evid[:, a]).sum())

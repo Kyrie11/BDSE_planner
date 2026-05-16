@@ -5,17 +5,17 @@ import json
 import os
 import re
 import sqlite3
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
 import numpy as np
-from nuplan.planning.utils.multithreading.worker_parallel import SingleMachineParallelExecutor
 from bdse.config import load_config
 from bdse.data.cache_schema import Sample, save_sample_npz
 from bdse.data.label_builder import build_training_sample_from_scenario
 from bdse.data.scenario_sampler import DBFileRecord, db_files_for_nuplan_builder, discover_db_files, select_records
-from nuplan.planning.utils.multithreading.worker_parallel import SingleMachineParallelExecutor
 
 @dataclass(frozen=True, slots=True)
 class ScenarioIndexRecord:
@@ -82,24 +82,44 @@ class NuPlanScenarioSource:
         self.num_workers = num_workers
         self.use_process_pool = use_process_pool
 
-
     def _build_with_devkit(self) -> list[Any]:
         try:
             builder_mod = importlib.import_module("nuplan.planning.scenario_builder.nuplan_db.nuplan_scenario_builder")
             filter_mod = importlib.import_module("nuplan.planning.scenario_builder.scenario_filter")
+            worker_mod = importlib.import_module("nuplan.planning.utils.multithreading.worker_parallel")
         except ImportError as exc:
             raise RuntimeError("nuPlan devkit is not installed; install nuplan-devkit or use preprocessed cache.") from exc
         NuPlanScenarioBuilder = getattr(builder_mod, "NuPlanScenarioBuilder")
         ScenarioFilter = getattr(filter_mod, "ScenarioFilter")
+        SingleMachineParallelExecutor = getattr(worker_mod, "SingleMachineParallelExecutor")
+
         paths = self.cfg.get("paths", {})
+        preprocess_cfg = self.cfg.get("preprocess", {})
+        num_workers = self.num_workers
+        if num_workers is None:
+            num_workers = preprocess_cfg.get("scenario_builder_workers", 1)
+        num_workers = max(1, int(num_workers or 1))
+
+        # Important: do not reuse the sample-generation process-pool switch here.
+        # nuPlan scenario discovery constructs DB/map-backed scenario objects; using a
+        # process pool here can silently block before tqdm is created.  Keep discovery
+        # threaded/single-process and parallelize sample materialization instead.
+        builder_use_process_pool = bool(preprocess_cfg.get("scenario_builder_use_process_pool", False))
+
+        db_files = db_files_for_nuplan_builder(self.records)
+        print(
+            f"[bdse] building nuPlan scenarios: split={self.split} db_files={len(db_files)} "
+            f"builder_workers={num_workers} builder_process_pool={builder_use_process_pool}",
+            flush=True,
+        )
         builder = NuPlanScenarioBuilder(
             data_root=str(paths.get("data_cache_root", "/data0/nuplan/data/cache")),
             map_root=str(paths.get("maps_root", "/data0/nuplan/dataset/maps")),
             sensor_root=str(paths.get("sensor_root", paths.get("data_cache_root", "/data0/nuplan/data/cache"))),
-            db_files=db_files_for_nuplan_builder(self.records),
+            db_files=db_files,
             map_version=str(paths.get("map_version", "nuplan-maps-v1.0")),
             include_cameras=False,
-            max_workers=None,
+            max_workers=num_workers,
             verbose=False,
         )
         scenario_filter = ScenarioFilter(
@@ -116,22 +136,13 @@ class NuPlanScenarioSource:
             shuffle=False,
         )
 
-        preprocess_cfg = self.cfg.get("preprocess", {})
-
-        num_workers = self.num_workers
-        if num_workers is None:
-            num_workers = preprocess_cfg.get("num_workers", None)
-
-        use_process_pool = self.use_process_pool
-        if use_process_pool is None:
-            use_process_pool = bool(preprocess_cfg.get("use_process_pool", True))
-
         worker = SingleMachineParallelExecutor(
-            use_process_pool=use_process_pool,
+            use_process_pool=builder_use_process_pool,
             max_workers=num_workers,
         )
-
-        return list(builder.get_scenarios(scenario_filter, worker=worker))
+        scenarios = list(builder.get_scenarios(scenario_filter, worker=worker))
+        print(f"[bdse] built {len(scenarios)} nuPlan scenarios for split={self.split}", flush=True)
+        return scenarios
 
     def scenarios(self) -> list[Any]:
         if self._scenarios is None:
@@ -197,14 +208,15 @@ class NuPlanBDSEDataset:
         self.preprocessed_dir = Path(preprocessed_dir or self.cfg.get("paths", {}).get("preprocessed_cache", "cache"))
         self.max_scenarios = max_scenarios
         self.stride = int(stride if stride is not None else self.cfg.get("preprocess", {}).get("scenario_stride", 10))
-        self._scenario_source = NuPlanScenarioSource(self.cfg, self.records, split) if use_devkit else None
         self._index: list[Any] | None = None
+        self.num_workers = int(num_workers if num_workers is not None else self.cfg.get("preprocess", {}).get("num_workers", 1) or 1)
+        self.use_process_pool = bool(use_process_pool if use_process_pool is not None else self.cfg.get("preprocess", {}).get("use_process_pool", False))
         self._scenario_source = NuPlanScenarioSource(
             self.cfg,
             self.records,
             split,
-            num_workers=num_workers,
-            use_process_pool=use_process_pool,
+            num_workers=self.cfg.get("preprocess", {}).get("scenario_builder_workers", min(self.num_workers, 4)),
+            use_process_pool=self.cfg.get("preprocess", {}).get("scenario_builder_use_process_pool", False),
         ) if use_devkit else None
 
     def build_index(self) -> list[Any]:
@@ -260,28 +272,100 @@ class NuPlanBDSEDataset:
             return out / item.split / item.folder / item.db_path.stem / f"{_safe_name(item.token)}_it{item.iteration:06d}.npz"
         return out / self.split / f"{idx:08d}.npz"
 
-    def write_preprocessed_cache(self, out_dir: str | Path | None = None, resume: bool = True, overwrite: bool = False, show_progress: bool = True, manifest_name: str | None = None) -> list[Path]:
+    def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None) -> tuple[int, Path, dict[str, Any] | None]:
+        sample = self[i]
+        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}.{i}")
+        save_sample_npz(sample, tmp)
+        os.replace(tmp, path)
+        rec = {
+            "path": str(path),
+            "split": self.split,
+            "scenario_token": sample.scenario_token,
+            "timestamp_us": int(sample.timestamp_us),
+            "a_star": int(sample.teacher.a_star if sample.teacher is not None else -1),
+            "valid_candidates": int(sample.candidates.valid_mask.sum()),
+            "iteration": int(getattr(self.build_index()[i], "iteration", -1)),
+        }
+        return i, path, rec
+
+    def write_preprocessed_cache(self, out_dir: str | Path | None = None, resume: bool = True, overwrite: bool = False, show_progress: bool = True, manifest_name: str | None = None, num_workers: int | None = None, use_process_pool: bool | None = None) -> list[Path]:
         out = Path(out_dir or self.preprocessed_dir)
         out.mkdir(parents=True, exist_ok=True)
         manifest_path = out / (manifest_name or self.cfg.get("preprocess", {}).get("manifest_name", "manifest.jsonl"))
-        paths: list[Path] = []
-        iterator = range(len(self))
-        if show_progress:
+
+        # Build the index once. cache_path_for_index() is pure after this and can be
+        # used to decide skip/write before expensive sample construction.
+        index = self.build_index()
+        total = len(index)
+        if total == 0:
+            print(
+                f"[bdse] no scenarios found for split={self.split}; records={len(self.records)}. "
+                "Check --data-root, --folders, map_root/map_version, and nuPlan devkit installation.",
+                flush=True,
+            )
+            return []
+
+        all_paths = [self.cache_path_for_index(i, out) for i in range(total)]
+        if resume and not overwrite:
+            pending = [(i, p) for i, p in enumerate(all_paths) if not p.exists()]
+            skipped = total - len(pending)
+        else:
+            pending = list(enumerate(all_paths))
+            skipped = 0
+
+        print(
+            f"[bdse] split={self.split}: records={len(self.records)} scenarios/iterations={total} "
+            f"pending={len(pending)} skipped={skipped} out={out}",
+            flush=True,
+        )
+        if not pending:
+            return all_paths
+
+        workers = int(num_workers if num_workers is not None else self.num_workers or 1)
+        workers = max(1, workers)
+        requested_process_pool = bool(use_process_pool if use_process_pool is not None else self.use_process_pool)
+        if requested_process_pool and self.use_devkit:
+            print(
+                "[bdse] --use-process-pool requested, but nuPlan scenario objects carry DB/map handles "
+                "and are not safely pickleable. Using a ThreadPoolExecutor for sample materialization; "
+                "scenario discovery remains single-process/threaded.",
+                flush=True,
+            )
+
+        paths: list[Path] = list(all_paths)
+        manifest_records: list[dict[str, Any]] = []
+
+        def _progress(iterable, total_count: int, desc: str):
+            if not show_progress:
+                return iterable
             from tqdm import tqdm
-            iterator = tqdm(iterator, total=len(self), desc=f"preprocess:{self.split}")
-        for i in iterator:
-            path = self.cache_path_for_index(i, out)
-            if resume and path.exists() and not overwrite:
-                paths.append(path)
-                continue
-            sample = self[i]
-            tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-            save_sample_npz(sample, tmp)
-            os.replace(tmp, path)
-            paths.append(path)
-            rec = {"path": str(path), "split": self.split, "scenario_token": sample.scenario_token, "timestamp_us": int(sample.timestamp_us), "a_star": int(sample.teacher.a_star if sample.teacher is not None else -1), "valid_candidates": int(sample.candidates.valid_mask.sum())}
+            return tqdm(iterable, total=total_count, desc=desc, file=sys.stdout, mininterval=1.0)
+
+        if workers <= 1:
+            for i, path in _progress(pending, len(pending), f"preprocess:{self.split}"):
+                _, written, rec = self._write_one_preprocessed_index(i, path, manifest_path)
+                paths[i] = written
+                if rec is not None:
+                    manifest_records.append(rec)
+        else:
+            # Threading overlaps DB/map I/O without attempting to pickle nuPlan scenarios.
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(self._write_one_preprocessed_index, i, path, manifest_path): (i, path) for i, path in pending}
+                for fut in _progress(as_completed(futures), len(futures), f"preprocess:{self.split}"):
+                    i0, path0 = futures[fut]
+                    try:
+                        i, written, rec = fut.result()
+                    except Exception as exc:
+                        raise RuntimeError(f"Failed preprocessing index={i0} path={path0}") from exc
+                    paths[i] = written
+                    if rec is not None:
+                        manifest_records.append(rec)
+
+        if manifest_records:
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
             with manifest_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, sort_keys=True) + "\n")
+                for rec in sorted(manifest_records, key=lambda r: str(r["path"])):
+                    f.write(json.dumps(rec, sort_keys=True) + "\n")
         return paths
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from typing import Any, Iterable, Sequence
 
@@ -65,7 +66,7 @@ def _box_to_array(obj: Any) -> np.ndarray:
     length = float(getattr(box, "length", getattr(obj, "length", 4.8)))
     width = float(getattr(box, "width", getattr(obj, "width", 2.0)))
     token = getattr(obj, "track_token", getattr(obj, "token", getattr(obj, "tracked_object_id", "")))
-    token_hash = float(abs(hash(str(token))) % 1000000) / 1000000.0
+    token_hash = int(hashlib.blake2b(str(token).encode("utf-8"), digest_size=4).hexdigest(), 16) / float(0xFFFFFFFF)
     return np.asarray([x, y, yaw, math.hypot(vx, vy), 0.0, vx, vy, length, width, token_hash], dtype=np.float32)
 
 
@@ -299,7 +300,14 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
 
     red_connector_ids = {str(t.get("lane_connector_id", "")) for t in (traffic_lights or []) if "red" in str(t.get("status", "")).lower() and str(t.get("lane_connector_id", ""))}
     features["red_lane_connector_ids"] = sorted(red_connector_ids)
+    features["red_lane_connectors"] = []
     prox = _proximal_objects(map_api, origin_xy, radius_m)
+
+    for cid in sorted(red_connector_ids):
+        conn = _get_map_object(map_api, cid, ["LANE_CONNECTOR"])
+        pts = _baseline_points(conn) if conn is not None else np.zeros((0, 2), dtype=np.float32)
+        if len(pts) >= 2:
+            features["red_lane_connectors"].append({"id": cid, "xy": _to_local_xy(pts, origin_xy, origin_yaw)})
 
     route_polys: list[np.ndarray] = []
     route_objs: list[Any] = []
@@ -347,13 +355,34 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         if len(pts) >= 3:
             local = _to_local_xy(pts, origin_xy, origin_yaw)
             features["drivable_polygons"].append({"id": _obj_id(obj), "xy": local})
+    red_connector_polys = [np.asarray(x.get("xy"), dtype=np.float32).reshape(-1, 2) for x in features.get("red_lane_connectors", []) if np.asarray(x.get("xy", [])).size >= 4]
     for obj in _flatten_by_layer(prox, "STOP_LINE"):
         pts = _geometry_points(obj)
         if len(pts) >= 2:
             local = _to_local_xy(pts, origin_xy, origin_yaw)
             centroid = local.mean(axis=0)
             if -20.0 <= float(centroid[0]) <= radius_m + 20.0:
-                features["stop_lines"].append({"id": _obj_id(obj), "xy": local, "red": bool(red_connector_ids)})
+                stop_id = _obj_id(obj)
+                explicit_ids = set()
+                for attr in ["lane_connector_ids", "lane_connectors", "traffic_light_lane_connector_ids"]:
+                    val = getattr(obj, attr, None)
+                    if val is None:
+                        continue
+                    try:
+                        explicit_ids.update(str(getattr(v, "id", v)) for v in val)
+                    except TypeError:
+                        explicit_ids.add(str(getattr(val, "id", val)))
+                is_red = bool(explicit_ids & red_connector_ids)
+                if not is_red and red_connector_polys:
+                    # In nuPlan maps, the stop line should be spatially near the beginning of
+                    # the traffic-light-controlled lane connector.  Use this as a conservative
+                    # fallback when connector membership is not exposed by the map object.
+                    for conn_xy in red_connector_polys:
+                        d = float(np.linalg.norm(local[:, None, :] - conn_xy[None, :, :], axis=2).min())
+                        if d <= 8.0:
+                            is_red = True
+                            break
+                features["stop_lines"].append({"id": stop_id, "xy": local, "red": is_red})
     for obj in _flatten_by_layer(prox, "CROSSWALK"):
         pts = _geometry_points(obj)
         if len(pts) >= 3:

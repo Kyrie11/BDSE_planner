@@ -67,7 +67,8 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
         atoms.append(_new_atom(next_id, "speed_limit", {"speed_limit_mps": speed_limit}, "rule_map", False, cfg)); next_id += 1
         red_now = _has_red_light(runtime)
         if red_now:
-            for sl in runtime.map_features.get("stop_lines", [])[: max(1, max_map - 4)]:
+            red_stop_lines = [sl for sl in runtime.map_features.get("stop_lines", []) if bool(sl.get("red", False))]
+            for sl in red_stop_lines[: max(1, max_map - 4)]:
                 xy = np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)
                 if len(xy) >= 2 and _min_candidate_distance(candidates, xy.mean(axis=0)) < 80.0:
                     atoms.append(_new_atom(next_id, "red_light", {"stop_line_xy": xy, "red": True, "id": sl.get("id", "")}, "rule_map", True, cfg)); next_id += 1
@@ -243,9 +244,13 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
             elif atom.type == "gap":
                 cur = np.asarray(atom.anchor.get("current_state", np.zeros(10)), dtype=np.float32)
                 dx = cur[0] - traj[:, 0]
-                front = np.maximum(dx, 0.0)
-                rear = np.maximum(-dx, 0.0)
-                raw[ei, a] = float(np.maximum(0.0, front_gap - front.max()) ** 2 + np.maximum(0.0, rear_gap - rear.max()) ** 2)
+                dy = np.abs(cur[1] - traj[:, 1])
+                same_corridor = dy < 3.5
+                front_vals = dx[np.logical_and(dx > 0.0, same_corridor)]
+                rear_vals = (-dx)[np.logical_and(dx < 0.0, same_corridor)]
+                front_min = float(front_vals.min()) if front_vals.size else 1e6
+                rear_min = float(rear_vals.min()) if rear_vals.size else 1e6
+                raw[ei, a] = float(np.maximum(0.0, front_gap - front_min) ** 2 + np.maximum(0.0, rear_gap - rear_min) ** 2)
             elif atom.type == "red_light":
                 stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
                 red = bool(atom.anchor.get("red", True))
@@ -257,7 +262,17 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                 width = float(atom.anchor.get("width", 4.0))
                 polygons = [np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in atom.anchor.get("drivable_polygons", [])]
                 outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
-                raw[ei, a] = float(c_off * outside.max() + np.maximum(0.0, margin + dist).sum())
+                if polygons:
+                    # dist is distance to polygon boundary.  Penalize outside points by
+                    # their distance back to the drivable polygon, and penalize inside
+                    # points only when they are too close to the boundary.  The previous
+                    # margin+dist expression penalized perfectly valid center-of-road
+                    # rollouts more than near-boundary rollouts.
+                    outside_dist = float(dist[outside].sum()) if np.any(outside) else 0.0
+                    near_boundary = float(np.maximum(0.0, margin - dist[~outside]).sum()) if np.any(~outside) else 0.0
+                    raw[ei, a] = float(c_off * float(outside.max()) + outside_dist + near_boundary)
+                else:
+                    raw[ei, a] = float(c_off * float(outside.max()) + np.maximum(0.0, dist).sum())
             elif atom.type == "wrong_way":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 route_dist = nearest_polyline_distance(traj[:, :2], route)
