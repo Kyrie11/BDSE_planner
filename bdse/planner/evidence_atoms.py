@@ -68,10 +68,28 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
         red_now = _has_red_light(runtime)
         if red_now:
             red_stop_lines = [sl for sl in runtime.map_features.get("stop_lines", []) if bool(sl.get("red", False))]
-            for sl in red_stop_lines[: max(1, max_map - 4)]:
-                xy = np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)
+            red_sources = []
+            for sl in red_stop_lines:
+                red_sources.append((sl.get("id", ""), np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)))
+            if not red_sources:
+                # Some map/devkit combinations expose the traffic-light-controlled
+                # lane connector but not the associated stop-line object.  Use the
+                # first short segment of the red connector baseline as a conservative
+                # stop-line proxy so red-light evidence does not disappear entirely.
+                for conn in runtime.map_features.get("red_lane_connectors", []):
+                    xy = np.asarray(conn.get("xy", []), dtype=np.float32).reshape(-1, 2)
+                    if len(xy) >= 2:
+                        p0, p1 = xy[0], xy[1]
+                        heading = p1 - p0
+                        norm = np.linalg.norm(heading)
+                        if norm > 1e-6:
+                            heading = heading / norm
+                            normal = np.asarray([-heading[1], heading[0]], dtype=np.float32)
+                            proxy = np.stack([p0 - 2.0 * normal, p0 + 2.0 * normal], axis=0)
+                            red_sources.append((conn.get("id", "red_connector_proxy"), proxy.astype(np.float32)))
+            for sid, xy in red_sources[: max(1, max_map - 4)]:
                 if len(xy) >= 2 and _min_candidate_distance(candidates, xy.mean(axis=0)) < 80.0:
-                    atoms.append(_new_atom(next_id, "red_light", {"stop_line_xy": xy, "red": True, "id": sl.get("id", "")}, "rule_map", True, cfg)); next_id += 1
+                    atoms.append(_new_atom(next_id, "red_light", {"stop_line_xy": xy, "red": True, "id": sid}, "rule_map", True, cfg)); next_id += 1
         atoms.append(_new_atom(next_id, "route_connector", {"route_centerline": route}, "rule_map", False, cfg)); next_id += 1
         map_atoms = [a for a in atoms if a.family == "rule_map"]
         if len(map_atoms) > max_map:
@@ -172,6 +190,8 @@ def _poly_boundary_distance(points: np.ndarray, poly: np.ndarray) -> np.ndarray:
 
 
 def _outside_drivable(points: np.ndarray, polygons: list[np.ndarray], route: np.ndarray, width: float) -> tuple[np.ndarray, np.ndarray]:
+    dist_route = nearest_polyline_distance(points, route)
+    route_inside = dist_route <= width
     if polygons:
         inside_any = np.zeros(points.shape[0], dtype=bool)
         boundary = np.full(points.shape[0], 1e6, dtype=np.float32)
@@ -180,9 +200,14 @@ def _outside_drivable(points: np.ndarray, polygons: list[np.ndarray], route: np.
                 continue
             inside_any |= _point_in_poly(points, poly)
             boundary = np.minimum(boundary, _poly_boundary_distance(points, poly))
-        return ~inside_any, boundary
-    dist = nearest_polyline_distance(points, route)
-    return dist > width, np.maximum(0.0, dist - width)
+        # The extracted polygon set is intentionally capped for preprocessing speed
+        # and memory.  Treat the route corridor as a conservative drivable fallback
+        # for route-following candidates; otherwise a partial polygon crop can mark
+        # every candidate as off-drivable and destroy teacher labels.
+        inside = inside_any | route_inside
+        dist_back = np.minimum(boundary, np.maximum(0.0, dist_route - width))
+        return ~inside, dist_back.astype(np.float32)
+    return ~route_inside, np.maximum(0.0, dist_route - width)
 
 
 def _route_heading_at(points: np.ndarray, route: np.ndarray) -> np.ndarray:

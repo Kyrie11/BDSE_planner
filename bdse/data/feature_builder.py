@@ -277,6 +277,65 @@ def _concat_route_polylines(polys_local: list[np.ndarray]) -> np.ndarray:
     return merged.astype(np.float32)
 
 
+
+
+def _route_length(polyline: np.ndarray) -> float:
+    arr = np.asarray(polyline, dtype=np.float32).reshape(-1, 2)
+    if len(arr) < 2:
+        return 0.0
+    return float(np.linalg.norm(np.diff(arr, axis=0), axis=1).sum())
+
+
+def _trim_route_from_ego_projection(polyline: np.ndarray, min_length_m: float = 40.0) -> np.ndarray:
+    """Return a local route whose arclength origin is the ego projection.
+
+    nuPlan route roadblock ids usually describe the whole route, not just the
+    current local segment.  If candidate rollout starts at the first route point,
+    trajectories can begin hundreds of metres away from the ego.  Project the
+    local ego origin (0, 0) onto the closest route segment and keep the route tail
+    from that point onward.  The trajectory sampler then interprets s=0 as the
+    current ego progress along the route, which is the intended planner frame.
+    """
+    arr = np.asarray(polyline, dtype=np.float32).reshape(-1, 2)
+    if len(arr) < 2:
+        return arr
+    origin = np.zeros(2, dtype=np.float32)
+    best_i = 0
+    best_t = 0.0
+    best_d = float("inf")
+    best_proj = arr[0].copy()
+    for i, (a, b) in enumerate(zip(arr[:-1], arr[1:])):
+        ab = b - a
+        denom = float(ab @ ab)
+        if denom <= 1e-9:
+            continue
+        t = float(np.clip(((origin - a) @ ab) / denom, 0.0, 1.0))
+        proj = a + t * ab
+        d = float(np.linalg.norm(proj - origin))
+        # Prefer segments that are not entirely behind ego in local x when close.
+        behind_penalty = 5.0 if max(float(a[0]), float(b[0])) < -2.0 else 0.0
+        score = d + behind_penalty
+        if score < best_d:
+            best_d = score
+            best_i = i
+            best_t = t
+            best_proj = proj.astype(np.float32)
+    tail = [best_proj]
+    tail.extend(arr[best_i + 1 :])
+    out = np.asarray(tail, dtype=np.float32)
+    if len(out) >= 2:
+        keep = [0]
+        for i in range(1, len(out)):
+            if np.linalg.norm(out[i] - out[keep[-1]]) > 1e-3:
+                keep.append(i)
+        out = out[keep]
+    # If the tail is too short or points mostly behind ego, keep a safe straight
+    # fallback rather than constructing candidates on a degenerate route fragment.
+    if len(out) < 2 or _route_length(out) < min_length_m or float(np.nanmax(out[:, 0])) < 5.0:
+        return make_default_route_centerline()
+    return _simplify_polyline(out, 512)
+
+
 def _speed_limit_from_obj(obj: Any) -> float | None:
     for attr in ["speed_limit_mps", "speed_limit", "speed_limit_meters_per_second"]:
         val = getattr(obj, attr, None)
@@ -382,7 +441,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
             if v is not None:
                 features["speed_limits"].append({"id": _obj_id(obj), "speed_limit_mps": v})
     if route_polys:
-        features["route_centerline"] = _simplify_polyline(_concat_route_polylines(route_polys), max_route_points)
+        features["route_centerline"] = _simplify_polyline(_trim_route_from_ego_projection(_concat_route_polylines(route_polys)), max_route_points)
         features["route_source"] = "route_roadblocks" if route_ids else "proximal_lane"
         features["map_valid"] = True
 
