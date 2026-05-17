@@ -355,6 +355,62 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
     return raw
 
 
+
+def hard_event_matrix(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> np.ndarray:
+    """Return actual hard-event ownership [E,K].
+
+    Hard atoms may also carry soft proximity costs (near-collision distance,
+    boundary margin, stop-line approach distance). Those soft costs should remain
+    in J_evid, but they must not make a candidate count as a hard violation.
+    This matrix only marks discrete hard events: box collision, red-light
+    crossing, leaving drivable/route corridor, and wrong-way heading.
+    """
+    E, K = len(atoms), candidates.K
+    out = np.zeros((E, K), dtype=bool)
+    safety = cfg.get("evidence", {}).get("safety", {})
+    c_route_width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
+    base_dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
+    route_dist_cache: dict[tuple[int, int], np.ndarray] = {}
+
+    def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
+        key = (id(route_arr), a)
+        got = route_dist_cache.get(key)
+        if got is None:
+            got = nearest_polyline_distance(eval_trajs[a][:, :2], route_arr)
+            route_dist_cache[key] = got
+        return got
+
+    for ei, atom in enumerate(atoms):
+        if not atom.is_hard:
+            continue
+        agent_eval = None
+        if atom.type in {"occupancy", "collision"}:
+            agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, base_dt), cfg)
+        for a in range(K):
+            if not candidates.valid_mask[a]:
+                continue
+            traj = eval_trajs[a]
+            if atom.type in {"occupancy", "collision"}:
+                out[ei, a] = bool(_collision_overlap_series(traj, agent_eval, atom).max() > 0.0)
+            elif atom.type == "red_light":
+                stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
+                out[ei, a] = bool(atom.anchor.get("red", True) and _crosses_polyline(traj[:, :2], stop))
+            elif atom.type == "drivable_area":
+                route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
+                width = float(atom.anchor.get("width", c_route_width))
+                polygons = [np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in atom.anchor.get("drivable_polygons", [])]
+                outside, _ = _outside_drivable(traj[:, :2], polygons, route, width)
+                out[ei, a] = bool(np.any(outside))
+            elif atom.type == "wrong_way":
+                route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
+                route_dist = cached_route_dist(route, a)
+                route_yaw = _route_heading_at(traj[:, :2], route)
+                heading_bad = np.abs(angle_wrap(traj[:, 2] - route_yaw)) > (0.5 * np.pi)
+                out[ei, a] = bool(np.logical_and(heading_bad, route_dist < 5.0).max())
+    out[:, ~candidates.valid_mask] = False
+    return out
+
 def atom_weight_scale_cap(atom: EvidenceAtom, cfg: dict[str, Any]) -> tuple[float, float, float]:
     ecfg = cfg.get("evidence", {})
     weights = ecfg.get("weights", {})

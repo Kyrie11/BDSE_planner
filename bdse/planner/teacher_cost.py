@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, EvidenceBank, LabelOnlyFuture, RuntimeFeatures, TeacherLabels
-from bdse.planner.evidence_atoms import _eval_traj, normalize_atom_costs, raw_local_costs
+from bdse.planner.evidence_atoms import _eval_traj, hard_event_matrix, normalize_atom_costs, raw_local_costs
 from bdse.utils import compute_curvature, finite_difference, nearest_polyline_distance, route_progress_along_polyline
 
 
@@ -81,10 +81,11 @@ def evaluate_teacher_costs(
     if not np.any(candidates.valid_mask):
         raise ValueError("Teacher cost requires at least one valid candidate")
     a_star = int(np.argmin(J_T))
+    hard_events = hard_event_matrix(evidence_bank.atoms, candidates, runtime, label_future, cfg)
     hard_mask = evidence_bank.hard_mask()
     hard_violation = np.zeros((candidates.K,), dtype=bool)
     if hard_mask.size:
-        hard_violation = (g[hard_mask] > 1e-6).any(axis=0) & candidates.valid_mask
+        hard_violation = hard_events[hard_mask].any(axis=0) & candidates.valid_mask
     labels = TeacherLabels(
         J_base=J_base.astype(np.float64),
         g_evid=g.astype(np.float32),
@@ -97,6 +98,7 @@ def evaluate_teacher_costs(
             "teacher_cost_min": float(J_T[a_star]),
             "atom_count": len(evidence_bank.atoms),
             "hard_violation_rate": float(hard_violation[candidates.valid_mask].mean()) if np.any(candidates.valid_mask) else 0.0,
+            "hard_event_atom_count": int(hard_events[hard_mask].any(axis=1).sum()) if hard_mask.size else 0,
         },
     )
     labels.validate_partition(candidates.valid_mask)

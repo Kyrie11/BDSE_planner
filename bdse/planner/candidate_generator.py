@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, RuntimeFeatures
-from bdse.utils import compute_curvature, finite_difference, route_progress_along_polyline, sample_polyline
+from bdse.utils import angle_wrap, compute_curvature, finite_difference, route_progress_along_polyline, sample_polyline
 
 MANEUVER_IDS = {
     "keep_follow": 0,
@@ -133,7 +133,8 @@ def _append_candidate(
     dyn = _cfg_dyn(cfg)
     dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
     dflags = _dynamic_flags(traj, dt, dyn)
-    valid_flag = bool(force_valid and dflags["dynamically_feasible"])
+    strict = bool(cfg.get("candidate", {}).get("valid_requires_dynamic", False))
+    valid_flag = bool(force_valid and (dflags["dynamically_feasible"] or not strict))
     trajectories.append(traj.astype(np.float32))
     valid.append(valid_flag)
     maneuver_ids.append(MANEUVER_IDS[maneuver])
@@ -149,6 +150,100 @@ def _legal_lane_change(runtime: RuntimeFeatures, side: str) -> bool:
         return bool(lane_change[key])
     return True
 
+
+
+def _history_motion_priors(runtime: RuntimeFeatures, times: np.ndarray, cfg: dict[str, Any]) -> list[tuple[np.ndarray, dict[str, Any]]]:
+    """Runtime-only kinematic priors from the past ego state.
+
+    These do not use logged future. They improve candidate-set coverage in cases
+    where the route centerline is locally noisy, incomplete, or the vehicle is
+    still aligning to the route. The teacher still decides using the same
+    J_base + evidence partition.
+    """
+    if not bool(cfg.get("candidate", {}).get("include_history_priors", True)):
+        return []
+    hist = np.asarray(runtime.ego_history, dtype=np.float32)
+    if hist.ndim != 2 or hist.shape[0] < 2:
+        return []
+    step = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    cur = hist[-1]
+    v0 = float(max(cur[3] if cur.shape[0] > 3 else 0.0, 0.0))
+    n_back = min(6, hist.shape[0])
+    past = hist[-n_back:]
+    dt_hist = max(step * (n_back - 1), 1e-3)
+    yaw0 = float(cur[2]) if cur.shape[0] > 2 else 0.0
+    yaw_prev = float(past[0, 2]) if past.shape[1] > 2 else yaw0
+    yaw_rate_hist = float(angle_wrap(yaw0 - yaw_prev) / dt_hist)
+    v_prev = float(max(past[0, 3] if past.shape[1] > 3 else v0, 0.0))
+    accel_hist = float(np.clip((v0 - v_prev) / dt_hist, -2.0, 2.0))
+
+    variants = [
+        ("history_cv", 0.0, 0.0),
+        ("history_ca", accel_hist, 0.0),
+        ("history_ctrv", 0.0, float(np.clip(yaw_rate_hist, -0.35, 0.35))),
+        ("history_slow", -min(max(v0 / max(float(times[-1]), 1e-3), 0.2), 2.5), float(np.clip(yaw_rate_hist, -0.25, 0.25))),
+    ]
+    out: list[tuple[np.ndarray, dict[str, Any]]] = []
+    for name, acc, yaw_rate in variants:
+        x = np.zeros((len(times),), dtype=np.float32)
+        y = np.zeros((len(times),), dtype=np.float32)
+        yaw = np.zeros((len(times),), dtype=np.float32)
+        v = np.zeros((len(times),), dtype=np.float32)
+        px = py = 0.0
+        pyaw = 0.0
+        pv = v0
+        last_t = 0.0
+        for k, t in enumerate(times):
+            dt = float(t - last_t)
+            last_t = float(t)
+            pv = max(0.0, pv + float(acc) * dt)
+            pyaw = float(angle_wrap(pyaw + float(yaw_rate) * dt))
+            px += pv * np.cos(pyaw) * dt
+            py += pv * np.sin(pyaw) * dt
+            x[k], y[k], yaw[k], v[k] = px, py, pyaw, pv
+        traj = np.stack([x, y, yaw, v, times], axis=1).astype(np.float32)
+        out.append((traj, {"target_speed": float(v[-1]), "history_prior": name, "accel": float(acc), "yaw_rate": float(yaw_rate)}))
+    return out
+
+
+def _inject_history_priors(
+    runtime: RuntimeFeatures,
+    times: np.ndarray,
+    trajectories: list[np.ndarray],
+    valid: list[bool],
+    maneuver_ids: list[int],
+    theta: list[dict[str, Any]],
+    flags: list[dict[str, bool]],
+    metadata: list[dict[str, Any]],
+    cfg: dict[str, Any],
+) -> None:
+    priors = _history_motion_priors(runtime, times, cfg)
+    if not priors or not trajectories:
+        return
+    # Keep safe_fallback entries. Replace route-turn/filler/invalid entries first.
+    replace_order = [
+        i for i, m in enumerate(metadata)
+        if m.get("maneuver") in {"route_turn_connector", "keep_follow"} and not m.get("filled_by", "").startswith("safe")
+    ]
+    replace_order = replace_order[-len(priors):]
+    if len(replace_order) < len(priors):
+        used = set(replace_order)
+        for i in range(len(trajectories)):
+            if i not in used and metadata[i].get("maneuver") != "safe_fallback":
+                replace_order.append(i)
+            if len(replace_order) >= len(priors):
+                break
+    dyn = _cfg_dyn(cfg)
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    strict = bool(cfg.get("candidate", {}).get("valid_requires_dynamic", False))
+    for idx, (traj, params) in zip(replace_order, priors):
+        dflags = _dynamic_flags(traj, dt, dyn)
+        trajectories[idx] = traj.astype(np.float32)
+        valid[idx] = bool(dflags["dynamically_feasible"] or not strict)
+        maneuver_ids[idx] = MANEUVER_IDS["keep_follow"]
+        theta[idx] = dict(params)
+        flags[idx] = dflags
+        metadata[idx] = {"maneuver": "keep_follow", "filled_by": params.get("history_prior", "history_prior"), "history_prior": True}
 
 def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> CandidateBank:
     cand_cfg = cfg.get("candidate", {})
@@ -241,6 +336,8 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
             cfg,
         )
         filler_i += 1
+
+    _inject_history_priors(runtime, times, trajectories, valid, maneuver_ids, theta, flags, metadata, cfg)
 
     if len(trajectories) > K:
         trajectories = trajectories[:K]

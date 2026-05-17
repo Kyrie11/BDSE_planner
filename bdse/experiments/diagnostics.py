@@ -13,6 +13,7 @@ from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
+from bdse.planner.evidence_atoms import hard_event_matrix
 from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
 from bdse.planner.tournament import run_tournament
 
@@ -44,6 +45,11 @@ def _teacher_sample_metrics(s) -> dict[str, float]:
     map_valid = float(bool(s.runtime.map_features.get("map_valid", False)))
     route_fallback = float(str(s.runtime.map_features.get("route_source", "")).startswith("fallback"))
     hard_valid = s.teacher.hard_violation_mask[valid]
+    hard_events = hard_event_matrix(s.evidence_bank.atoms, s.candidates, s.runtime, s.label_future, {})
+    hard_event_by_type = Counter()
+    for ei, atom in enumerate(s.evidence_bank.atoms):
+        if atom.is_hard and hard_events[ei, valid].any():
+            hard_event_by_type[atom.type] += 1
     teacher_vs_log = float(log_nearest >= 0 and log_nearest != a_star)
     teacher_regret_to_log = float(s.teacher.J_T[log_nearest] - s.teacher.J_T[a_star]) if log_nearest >= 0 and np.isfinite(s.teacher.J_T[log_nearest]) else float("nan")
     family_counts = Counter(a.family for a in s.evidence_bank.atoms)
@@ -54,6 +60,10 @@ def _teacher_sample_metrics(s) -> dict[str, float]:
         "safe_candidate_exists": float(((~s.teacher.hard_violation_mask) & valid).any()),
         "teacher_hard_violation": float(s.teacher.hard_violation_mask[a_star]),
         "candidate_hard_violation_rate": float(hard_valid.mean()) if hard_valid.size else float("nan"),
+        "hard_event_occupancy_atom_count": float(hard_event_by_type.get("occupancy", 0)),
+        "hard_event_red_light_atom_count": float(hard_event_by_type.get("red_light", 0)),
+        "hard_event_drivable_area_atom_count": float(hard_event_by_type.get("drivable_area", 0)),
+        "hard_event_wrong_way_atom_count": float(hard_event_by_type.get("wrong_way", 0)),
         "valid_candidate_count": float(valid.sum()),
         "candidate_log_ade_min": float(np.nanmin(log_costs)) if log_nearest >= 0 else float("nan"),
         "candidate_log_ade_teacher": float(log_costs[a_star]) if log_nearest >= 0 else float("nan"),

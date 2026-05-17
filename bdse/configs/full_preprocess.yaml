@@ -35,6 +35,10 @@ candidate:
   K: 32
   horizon_s: 8.0
   step_s: 0.1
+  # Keep candidates in the bank even if they slightly exceed dynamic comfort;
+  # comfort/evidence costs, not the mask, should rank them down.
+  valid_requires_dynamic: false
+  include_history_priors: true
 evidence:
   max_atoms: 128
   max_interaction_atoms: 64

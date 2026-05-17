@@ -53,7 +53,16 @@ def compute_bdse_diagnostics(
     hard = evidence_bank.hard_mask() & evidence_bank.active_mask
     selected_set = set(map(int, selected_atoms))
     active_hard = set(map(int, np.flatnonzero(hard)))
-    hard_recall = float(len(selected_set & active_hard) / max(len(active_hard), 1))
+    # Paper-relevant hard recall: hard atoms that actually support at least one
+    # labeled positive pair, not every hard atom merely present in the scene.
+    decisive_hard: set[int] = set()
+    if len(pairs.pairs):
+        for a, b in np.asarray(pairs.pairs[pairs.valid_mask], dtype=np.int64):
+            delta = np.asarray(teacher.g_evid[:, b] - teacher.g_evid[:, a], dtype=np.float32)
+            for i in np.flatnonzero(hard & (delta > 1e-6)):
+                decisive_hard.add(int(i))
+    denom = decisive_hard if decisive_hard else active_hard
+    hard_recall = float(len(selected_set & denom) / max(len(denom), 1))
     suff = evidence_sufficiency(teacher_M, M_B, pairs.pairs[pairs.valid_mask], pairs.weights[pairs.valid_mask])
     selector_ratio = np.nan
     if runtime_selected_atoms_for_oracle_value is not None and oracle_selected_atoms is not None and len(pairs.pairs):
