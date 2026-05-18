@@ -10,6 +10,27 @@ import numpy as np
 from bdse.config import load_config
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
 from bdse.planner.evidence_atoms import hard_event_matrix
+from bdse.utils import nearest_polyline_distance
+
+
+def _route_stats(route: np.ndarray) -> dict[str, float]:
+    route = np.asarray(route, dtype=np.float32).reshape(-1, 2)
+    if len(route) < 2:
+        return {"route_max_segment_m": 0.0, "route_jump_count": 0.0, "route_length_m": 0.0}
+    seg = np.linalg.norm(np.diff(route, axis=0), axis=1)
+    return {
+        "route_max_segment_m": float(seg.max(initial=0.0)),
+        "route_jump_count": float((seg > 10.0).sum()),
+        "route_length_m": float(seg.sum()),
+    }
+
+
+def _hard_type_counts(s, hard_events: np.ndarray, valid: np.ndarray) -> dict[str, int]:
+    out = {}
+    for ei, atom in enumerate(s.evidence_bank.atoms):
+        if atom.is_hard and hard_events[ei, valid].any():
+            out[atom.type] = out.get(atom.type, 0) + 1
+    return out
 
 
 def _sample_metrics(s, cfg):
@@ -20,19 +41,34 @@ def _sample_metrics(s, cfg):
     log_costs = np.where(valid, log_costs, np.inf)
     log_nearest = int(np.argmin(log_costs)) if np.isfinite(log_costs).any() else -1
     hard_events = hard_event_matrix(s.evidence_bank.atoms, s.candidates, s.runtime, s.label_future, cfg)
-    return {
+    route = np.asarray(s.runtime.map_features.get("route_centerline", []), dtype=np.float32).reshape(-1, 2)
+    rstats = _route_stats(route)
+    if len(route) >= 2:
+        gt_route_dist = nearest_polyline_distance(s.label_future.logged_ego[:, :2], route)
+        logged_ego_route_dist_p95 = float(np.percentile(gt_route_dist, 95))
+    else:
+        logged_ego_route_dist_p95 = float("nan")
+    safe_mask = (~s.teacher.hard_violation_mask) & valid
+    out = {
         "token": s.scenario_token,
         "timestamp_us": int(s.timestamp_us),
         "valid_candidate_count": int(valid.sum()),
         "candidate_log_ade_min": float(log_costs[log_nearest]) if log_nearest >= 0 else float("nan"),
+        "candidate_log_ade_teacher": float(log_costs[int(s.teacher.a_star)]) if log_nearest >= 0 else float("nan"),
         "log_nearest": log_nearest,
         "teacher": int(s.teacher.a_star),
         "teacher_hard_violation": bool(s.teacher.hard_violation_mask[int(s.teacher.a_star)]),
-        "safe_candidate_exists": bool(((~s.teacher.hard_violation_mask) & valid).any()),
+        "safe_candidate_exists": bool(safe_mask.any()),
+        "safe_candidate_count": int(safe_mask.sum()),
+        "teacher_hard_when_safe_exists": bool(s.teacher.hard_violation_mask[int(s.teacher.a_star)] and safe_mask.any()),
         "pair_count": 0 if s.pairs is None else int(len(s.pairs.pairs)),
         "atom_count": int(len(s.evidence_bank.atoms)),
         "hard_event_atoms": int(hard_events[:, valid].any(axis=1).sum()) if valid.any() else 0,
+        "logged_ego_route_dist_p95": logged_ego_route_dist_p95,
     }
+    out.update(rstats)
+    out["hard_event_types"] = _hard_type_counts(s, hard_events, valid)
+    return out
 
 
 def _plot_sample(s, cfg, out_path: Path, title: str = ""):
@@ -57,17 +93,25 @@ def _plot_sample(s, cfg, out_path: Path, title: str = ""):
     route = np.asarray(s.runtime.map_features.get("route_centerline", []), dtype=np.float32).reshape(-1, 2)
     if len(route) >= 2:
         ax.plot(route[:, 0], route[:, 1], linewidth=2.0, label="route")
+        seg = np.linalg.norm(np.diff(route, axis=0), axis=1)
+        for ji in np.flatnonzero(seg > 10.0):
+            mid = 0.5 * (route[ji] + route[ji + 1])
+            ax.scatter([mid[0]], [mid[1]], marker="x", s=40, label="route jump")
 
+    hard_mask = s.teacher.hard_violation_mask.astype(bool)
     for i in np.flatnonzero(valid):
         tr = s.candidates.trajectories[i]
         lw = 1.0
-        alpha = 0.35
-        label = None
+        alpha = 0.28
+        label = "hard candidate" if hard_mask[i] else "safe candidate"
+        linestyle = ":" if hard_mask[i] else "-"
         if i == a_star:
-            lw, alpha, label = 3.0, 0.95, "teacher"
+            lw, alpha, label, linestyle = 3.2, 0.95, "teacher", "-"
         elif i == log_nearest:
-            lw, alpha, label = 2.5, 0.85, "log-nearest"
-        ax.plot(tr[:, 0], tr[:, 1], linewidth=lw, alpha=alpha, label=label)
+            lw, alpha, label, linestyle = 2.8, 0.90, "log-nearest", "-"
+        ax.plot(tr[:, 0], tr[:, 1], linewidth=lw, alpha=alpha, linestyle=linestyle, label=label)
+        if i in {a_star, log_nearest}:
+            ax.text(float(tr[-1, 0]), float(tr[-1, 1]), str(i), fontsize=7)
 
     gt = s.label_future.logged_ego
     ax.plot(gt[:, 0], gt[:, 1], linestyle="--", linewidth=2.0, label="logged ego")
@@ -100,7 +144,18 @@ def _plot_sample(s, cfg, out_path: Path, title: str = ""):
 
 
 def _plot_summary(metrics: list[dict], out_path: Path):
-    keys = ["valid_candidate_count", "candidate_log_ade_min", "pair_count", "atom_count", "hard_event_atoms"]
+    keys = [
+        "valid_candidate_count",
+        "candidate_log_ade_min",
+        "candidate_log_ade_teacher",
+        "safe_candidate_count",
+        "pair_count",
+        "atom_count",
+        "hard_event_atoms",
+        "route_jump_count",
+        "route_max_segment_m",
+        "logged_ego_route_dist_p95",
+    ]
     for key in keys:
         vals = np.asarray([m[key] for m in metrics if np.isfinite(m[key])], dtype=np.float32)
         if not len(vals):
@@ -123,7 +178,22 @@ def main():
     parser.add_argument("--max-samples", type=int, default=200)
     parser.add_argument("--num-plots", type=int, default=12)
     parser.add_argument("--output-dir", type=str, default="outputs/dataset_viz")
-    parser.add_argument("--rank-by", type=str, default="candidate_log_ade_min", choices=["candidate_log_ade_min", "pair_count", "valid_candidate_count", "hard_event_atoms"])
+    parser.add_argument(
+        "--rank-by",
+        type=str,
+        default="candidate_log_ade_min",
+        choices=[
+            "candidate_log_ade_min",
+            "candidate_log_ade_teacher",
+            "pair_count",
+            "valid_candidate_count",
+            "hard_event_atoms",
+            "route_jump_count",
+            "route_max_segment_m",
+            "logged_ego_route_dist_p95",
+            "teacher_hard_when_safe_exists",
+        ],
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -145,7 +215,11 @@ def main():
     chosen = sorted(metrics, key=lambda m: (m[args.rank_by], m["index"]), reverse=reverse)[: args.num_plots]
     for rank, m in enumerate(chosen):
         s = ds[m["index"]]
-        title = f"rank={rank} idx={m['index']} ADE={m['candidate_log_ade_min']:.2f} valid={m['valid_candidate_count']} pairs={m['pair_count']}"
+        title = (
+            f"rank={rank} idx={m['index']} ADE={m['candidate_log_ade_min']:.2f} "
+            f"tADE={m['candidate_log_ade_teacher']:.2f} valid={m['valid_candidate_count']} "
+            f"safe={m['safe_candidate_count']} routeJump={m['route_jump_count']}"
+        )
         _plot_sample(s, cfg, out_dir / f"sample_{rank:02d}_idx{m['index']:05d}.png", title)
     print(json.dumps({"num_metrics": len(metrics), "output_dir": str(out_dir), "rank_by": args.rank_by}, indent=2))
 

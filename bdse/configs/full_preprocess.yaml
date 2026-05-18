@@ -30,14 +30,16 @@ runtime:
   max_drivable_polygons: 24
   max_polygon_points: 128
   max_route_points: 512
+  max_route_connection_gap_m: 12.0
   use_future_traffic_lights_for_teacher: false
 candidate:
   K: 32
   horizon_s: 8.0
   step_s: 0.1
-  # Keep candidates in the bank even if they slightly exceed dynamic comfort;
-  # comfort/evidence costs, not the mask, should rank them down.
-  valid_requires_dynamic: false
+  # For final labels, mask dynamically impossible rollouts.  The previous
+  # relaxed setting was useful for smoke tests but lets broken route centerlines
+  # enter the teacher argmin and creates noisy hard events.
+  valid_requires_dynamic: true
   include_history_priors: true
 evidence:
   max_atoms: 128

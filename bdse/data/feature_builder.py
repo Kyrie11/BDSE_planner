@@ -259,24 +259,52 @@ def _flatten_by_layer(prox: dict[Any, list[Any]], layer_name: str) -> list[Any]:
     return out
 
 
-def _concat_route_polylines(polys_local: list[np.ndarray]) -> np.ndarray:
-    polys = [p for p in polys_local if p.ndim == 2 and p.shape[0] >= 2]
-    if not polys:
-        return make_default_route_centerline()
-    # Keep route pieces that are near/ahead of ego and sort by local longitudinal position.
-    polys = sorted(polys, key=lambda p: float(np.nanmin(p[:, 0])))
-    out: list[np.ndarray] = []
-    for p in polys:
-        if len(out) and np.linalg.norm(out[-1][-1] - p[0]) < 2.0:
-            out[-1] = np.concatenate([out[-1], p[1:]], axis=0)
-        else:
-            out.append(p)
-    merged = np.concatenate(out, axis=0)
-    if merged.shape[0] < 2 or np.nanmax(merged[:, 0]) < 5.0:
-        return max(polys, key=lambda p: p.shape[0])
-    return merged.astype(np.float32)
+def _dedup_polyline(polyline: np.ndarray, eps: float = 1e-3) -> np.ndarray:
+    arr = np.asarray(polyline, dtype=np.float32).reshape(-1, 2)
+    if len(arr) < 2:
+        return arr
+    keep = [0]
+    for i in range(1, len(arr)):
+        if np.linalg.norm(arr[i] - arr[keep[-1]]) > eps:
+            keep.append(i)
+    return arr[keep]
 
 
+def _polyline_heading(polyline: np.ndarray, at_end: bool = False) -> float:
+    arr = _dedup_polyline(polyline)
+    if len(arr) < 2:
+        return 0.0
+    if at_end:
+        d = arr[-1] - arr[-2]
+    else:
+        d = arr[1] - arr[0]
+    return float(math.atan2(float(d[1]), float(d[0])))
+
+
+def _project_origin_tail(polyline: np.ndarray) -> np.ndarray:
+    """Trim one lane/connector baseline so s=0 is the ego projection."""
+    arr = _dedup_polyline(polyline)
+    if len(arr) < 2:
+        return arr
+    origin = np.zeros(2, dtype=np.float32)
+    best_i, best_t, best_score = 0, 0.0, float("inf")
+    best_proj = arr[0].copy()
+    for i, (a, b) in enumerate(zip(arr[:-1], arr[1:])):
+        ab = b - a
+        denom = float(ab @ ab)
+        if denom <= 1e-9:
+            continue
+        t = float(np.clip(((origin - a) @ ab) / denom, 0.0, 1.0))
+        proj = a + t * ab
+        d = float(np.linalg.norm(proj - origin))
+        heading = math.atan2(float(ab[1]), float(ab[0]))
+        heading_penalty = 2.0 * abs(float(angle_wrap(heading)))
+        behind_penalty = 8.0 if max(float(a[0]), float(b[0])) < -2.0 else 0.0
+        score = d + heading_penalty + behind_penalty
+        if score < best_score:
+            best_i, best_t, best_score = i, t, score
+            best_proj = proj.astype(np.float32)
+    return _dedup_polyline(np.asarray([best_proj, *arr[best_i + 1 :]], dtype=np.float32))
 
 
 def _route_length(polyline: np.ndarray) -> float:
@@ -284,6 +312,104 @@ def _route_length(polyline: np.ndarray) -> float:
     if len(arr) < 2:
         return 0.0
     return float(np.linalg.norm(np.diff(arr, axis=0), axis=1).sum())
+
+
+def _route_geometry_stats(polyline: np.ndarray) -> dict[str, float]:
+    arr = np.asarray(polyline, dtype=np.float32).reshape(-1, 2)
+    if len(arr) < 2:
+        return {"route_length_m": 0.0, "route_max_segment_m": 0.0, "route_jump_count": 0.0, "route_backtrack_frac": 0.0}
+    seg = np.linalg.norm(np.diff(arr, axis=0), axis=1)
+    dx = np.diff(arr[:, 0])
+    return {
+        "route_length_m": float(seg.sum()),
+        "route_max_segment_m": float(seg.max(initial=0.0)),
+        "route_jump_count": float((seg > 10.0).sum()),
+        "route_backtrack_frac": float((dx < -0.5).mean()) if dx.size else 0.0,
+    }
+
+
+def _connect_candidate(prev_end: np.ndarray, prev_heading: float, polyline: np.ndarray, reverse_penalty: float = 5.0) -> tuple[float, np.ndarray, float, float]:
+    arr = _dedup_polyline(polyline)
+    best = (float("inf"), arr, 1e6, 0.0)
+    for rev in (False, True):
+        cand = arr[::-1].copy() if rev else arr
+        if len(cand) < 2:
+            continue
+        gap = float(np.linalg.norm(cand[0] - prev_end))
+        hdg = _polyline_heading(cand, at_end=False)
+        hdg_err = abs(float(angle_wrap(hdg - prev_heading)))
+        score = gap + 3.0 * hdg_err + (reverse_penalty if rev else 0.0)
+        if score < best[0]:
+            best = (score, cand, gap, hdg_err)
+    return best
+
+
+def _build_continuous_route_from_groups(route_groups: list[list[np.ndarray]], max_gap_m: float = 12.0, min_length_m: float = 40.0) -> tuple[np.ndarray, dict[str, float]]:
+    """Pick one continuous lane/connector chain instead of concatenating all lanes.
+
+    A nuPlan route roadblock contains multiple candidate lanes/connectors.  Concatenating
+    every edge by local x creates artificial jumps and self-crossing centerlines, which then
+    corrupts candidate rollouts and teacher hard labels.  This helper chooses a single
+    ego-aligned lane in the current route group and greedily connects one compatible edge
+    from subsequent route groups.
+    """
+    groups = [[_dedup_polyline(p) for p in g if np.asarray(p).ndim == 2 and len(p) >= 2] for g in route_groups]
+    groups = [g for g in groups if g]
+    if not groups:
+        return make_default_route_centerline(), {"route_selected_groups": 0.0, "route_connection_gap_max": 0.0}
+
+    starts: list[tuple[float, int, np.ndarray]] = []
+    origin = np.zeros(2, dtype=np.float32)
+    for gi, group in enumerate(groups):
+        for p in group:
+            tail = _project_origin_tail(p)
+            if len(tail) < 2:
+                continue
+            dist = float(np.linalg.norm(tail[0] - origin))
+            heading = _polyline_heading(tail, at_end=False)
+            heading_penalty = 3.0 * abs(float(angle_wrap(heading)))
+            behind_penalty = 10.0 if float(np.nanmax(tail[:, 0])) < 5.0 else 0.0
+            starts.append((dist + heading_penalty + behind_penalty, gi, tail))
+    if not starts:
+        return make_default_route_centerline(), {"route_selected_groups": 0.0, "route_connection_gap_max": 0.0}
+
+    _, start_gi, start = min(starts, key=lambda x: x[0])
+    pieces = [start]
+    prev_end = start[-1]
+    prev_heading = _polyline_heading(start, at_end=True)
+    gaps: list[float] = []
+    selected_groups = 1
+    for group in groups[start_gi + 1 :]:
+        candidates = [_connect_candidate(prev_end, prev_heading, p) for p in group]
+        candidates = [c for c in candidates if np.isfinite(c[0])]
+        if not candidates:
+            continue
+        _, best_poly, gap, hdg_err = min(candidates, key=lambda x: x[0])
+        # Do not join disconnected roadblocks with a straight chord.  A short gap is
+        # acceptable because map baselines can have small discontinuities at connectors.
+        if gap > max_gap_m and _route_length(np.concatenate(pieces, axis=0)) >= min_length_m:
+            break
+        if gap <= max_gap_m and hdg_err <= np.deg2rad(120.0):
+            pieces.append(best_poly[1:] if np.linalg.norm(best_poly[0] - prev_end) < 1e-3 else best_poly)
+            prev_end = best_poly[-1]
+            prev_heading = _polyline_heading(best_poly, at_end=True)
+            gaps.append(gap)
+            selected_groups += 1
+
+    merged = _dedup_polyline(np.concatenate(pieces, axis=0))
+    if len(merged) < 2 or _route_length(merged) < min_length_m or float(np.nanmax(merged[:, 0])) < 5.0:
+        # Last resort: use a straight route rather than a disconnected polyline that
+        # would create impossible candidates and noisy hard events.
+        merged = make_default_route_centerline()
+    diag = {"route_selected_groups": float(selected_groups), "route_connection_gap_max": float(max(gaps) if gaps else 0.0)}
+    diag.update(_route_geometry_stats(merged))
+    return merged.astype(np.float32), diag
+
+
+def _concat_route_polylines(polys_local: list[np.ndarray]) -> np.ndarray:
+    # Backwards-compatible wrapper for tests/synthetic callers.
+    route, _ = _build_continuous_route_from_groups([[p] for p in polys_local])
+    return route
 
 
 def _trim_route_from_ego_projection(polyline: np.ndarray, min_length_m: float = 40.0) -> np.ndarray:
@@ -371,6 +497,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         "lane_change": {"left": False, "right": False},
         "red_lane_connector_ids": [],
         "map_valid": False,
+        "route_quality": {},
     }
     if map_api is None:
         return features
@@ -407,22 +534,25 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         if len(pts) >= 2:
             features["red_lane_connectors"].append({"id": cid, "xy": _to_local_xy(pts, origin_xy, origin_yaw)})
 
-    route_polys: list[np.ndarray] = []
+    route_groups: list[list[np.ndarray]] = []
     route_objs: list[Any] = []
     for rid in route_ids:
         obj = _get_map_object(map_api, str(rid), ["ROADBLOCK", "ROADBLOCK_CONNECTOR", "LANE", "LANE_CONNECTOR"])
         if obj is None:
             continue
         route_objs.append(obj)
+        group: list[np.ndarray] = []
         edges = _extract_edges(obj) or [obj]
         for edge in edges:
             pts = _baseline_points(edge)
             if len(pts) >= 2:
-                route_polys.append(_to_local_xy(pts, origin_xy, origin_yaw))
+                group.append(_to_local_xy(pts, origin_xy, origin_yaw))
             v = _speed_limit_from_obj(edge)
             if v is not None:
                 features["speed_limits"].append({"id": _obj_id(edge), "speed_limit_mps": v})
-    if not route_polys:
+        if group:
+            route_groups.append(group)
+    if not route_groups:
         lanes = _flatten_by_layer(prox, "LANE") + _flatten_by_layer(prox, "LANE_CONNECTOR")
         scored = []
         for obj in lanes:
@@ -434,16 +564,26 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
                 continue
             score = float(np.nanmin(np.linalg.norm(local, axis=1))) + 0.05 * abs(float(local[-1, 1]))
             scored.append((score, local, obj))
-        for _, local, obj in sorted(scored, key=lambda x: x[0])[:6]:
-            route_polys.append(local)
+        # Proximal fallback is a single group: choose one ego-aligned lane, do not
+        # concatenate all nearby lanes into a fake route.
+        group = []
+        for _, local, obj in sorted(scored, key=lambda x: x[0])[:8]:
+            group.append(local)
             route_objs.append(obj)
             v = _speed_limit_from_obj(obj)
             if v is not None:
                 features["speed_limits"].append({"id": _obj_id(obj), "speed_limit_mps": v})
-    if route_polys:
-        features["route_centerline"] = _simplify_polyline(_trim_route_from_ego_projection(_concat_route_polylines(route_polys)), max_route_points)
-        features["route_source"] = "route_roadblocks" if route_ids else "proximal_lane"
-        features["map_valid"] = True
+        if group:
+            route_groups.append(group)
+    if route_groups:
+        max_gap = float(runtime_cfg.get("max_route_connection_gap_m", 12.0))
+        route, route_diag = _build_continuous_route_from_groups(route_groups, max_gap_m=max_gap)
+        route = _trim_route_from_ego_projection(route)
+        route_diag.update(_route_geometry_stats(route))
+        features["route_centerline"] = _simplify_polyline(route, max_route_points)
+        features["route_quality"] = route_diag
+        features["route_source"] = "route_roadblocks_continuous" if route_ids else "proximal_lane_single"
+        features["map_valid"] = bool(route_diag.get("route_jump_count", 0.0) == 0.0 and route_diag.get("route_max_segment_m", 0.0) <= max_gap)
 
     if features["speed_limits"]:
         features["speed_limit_mps"] = float(np.median([x["speed_limit_mps"] for x in features["speed_limits"]]))

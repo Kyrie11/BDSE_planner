@@ -14,6 +14,7 @@ from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.evidence_atoms import hard_event_matrix
+from bdse.utils import nearest_polyline_distance
 from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
 from bdse.planner.tournament import run_tournament
 
@@ -37,39 +38,92 @@ def _log_nearest(s) -> tuple[int, np.ndarray]:
     return int(np.argmin(costs)), costs
 
 
-def _teacher_sample_metrics(s) -> dict[str, float]:
+def _route_stats(route: np.ndarray) -> dict[str, float]:
+    arr = np.asarray(route, dtype=np.float32).reshape(-1, 2)
+    if len(arr) < 2:
+        return {
+            "route_length_m": 0.0,
+            "route_max_segment_m": 0.0,
+            "route_jump_count": 0.0,
+            "route_backtrack_frac": 0.0,
+        }
+    seg = np.linalg.norm(np.diff(arr, axis=0), axis=1)
+    dx = np.diff(arr[:, 0])
+    return {
+        "route_length_m": float(seg.sum()),
+        "route_max_segment_m": float(seg.max(initial=0.0)),
+        "route_jump_count": float((seg > 10.0).sum()),
+        "route_backtrack_frac": float((dx < -0.5).mean()) if dx.size else 0.0,
+    }
+
+
+def _dynamic_feasible_rate(s, valid: np.ndarray) -> float:
+    vals = []
+    for i, ok in enumerate(valid.astype(bool).tolist()):
+        if not ok:
+            continue
+        flags = s.candidates.dynamic_flags[i] if i < len(s.candidates.dynamic_flags) else {}
+        vals.append(float(bool(flags.get("dynamically_feasible", True))))
+    return float(np.mean(vals)) if vals else float("nan")
+
+
+def _hard_event_type_counts(s, hard_events: np.ndarray, valid: np.ndarray) -> dict[str, float]:
+    out = Counter()
+    for ei, atom in enumerate(s.evidence_bank.atoms):
+        if atom.is_hard and hard_events[ei, valid].any():
+            out[atom.type] += 1
+    return {f"hard_event_{k}_atom_count": float(v) for k, v in out.items()}
+
+
+def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
     log_nearest, log_costs = _log_nearest(s)
     valid = s.candidates.valid_mask.astype(bool)
     a_star = int(s.teacher.a_star)
-    route = np.asarray(s.runtime.map_features.get("route_centerline", []), dtype=np.float32)
+    route = np.asarray(s.runtime.map_features.get("route_centerline", []), dtype=np.float32).reshape(-1, 2)
     map_valid = float(bool(s.runtime.map_features.get("map_valid", False)))
-    route_fallback = float(str(s.runtime.map_features.get("route_source", "")).startswith("fallback"))
+    route_source = str(s.runtime.map_features.get("route_source", ""))
+    route_fallback = float(route_source.startswith("fallback"))
+    hard_events = hard_event_matrix(s.evidence_bank.atoms, s.candidates, s.runtime, s.label_future, cfg)
     hard_valid = s.teacher.hard_violation_mask[valid]
-    hard_events = hard_event_matrix(s.evidence_bank.atoms, s.candidates, s.runtime, s.label_future, {})
-    hard_event_by_type = Counter()
-    for ei, atom in enumerate(s.evidence_bank.atoms):
-        if atom.is_hard and hard_events[ei, valid].any():
-            hard_event_by_type[atom.type] += 1
+    safe_mask = valid & (~s.teacher.hard_violation_mask.astype(bool))
+    hard_candidate_mask_from_atoms = hard_events[s.evidence_bank.hard_mask()][:, valid].any(axis=0) if valid.any() and s.evidence_bank.hard_mask().any() else np.zeros((int(valid.sum()),), dtype=bool)
     teacher_vs_log = float(log_nearest >= 0 and log_nearest != a_star)
     teacher_regret_to_log = float(s.teacher.J_T[log_nearest] - s.teacher.J_T[a_star]) if log_nearest >= 0 and np.isfinite(s.teacher.J_T[log_nearest]) else float("nan")
     family_counts = Counter(a.family for a in s.evidence_bank.atoms)
     hard_counts = Counter(a.type for a in s.evidence_bank.atoms if a.is_hard)
-    return {
+    route_diag = dict(s.runtime.map_features.get("route_quality", {}) or {})
+    route_diag.update(_route_stats(route))
+    if s.label_future is not None and len(route) >= 2 and s.label_future.logged_ego.size:
+        logged_route_dist = nearest_polyline_distance(s.label_future.logged_ego[:, :2], route)
+        log_route_dist_mean = float(np.mean(logged_route_dist))
+        log_route_dist_p95 = float(np.percentile(logged_route_dist, 95))
+        log_route_dist_final = float(logged_route_dist[-1])
+    else:
+        log_route_dist_mean = log_route_dist_p95 = log_route_dist_final = float("nan")
+    out = {
         "teacher_vs_log_disagreement": teacher_vs_log,
         "teacher_regret_to_log_nearest": teacher_regret_to_log,
-        "safe_candidate_exists": float(((~s.teacher.hard_violation_mask) & valid).any()),
+        "safe_candidate_exists": float(safe_mask.any()),
+        "safe_candidate_count": float(safe_mask.sum()),
         "teacher_hard_violation": float(s.teacher.hard_violation_mask[a_star]),
+        "teacher_hard_when_safe_exists": float(bool(s.teacher.hard_violation_mask[a_star]) and bool(safe_mask.any())),
+        "log_nearest_hard_violation": float(log_nearest >= 0 and bool(s.teacher.hard_violation_mask[log_nearest])),
         "candidate_hard_violation_rate": float(hard_valid.mean()) if hard_valid.size else float("nan"),
-        "hard_event_occupancy_atom_count": float(hard_event_by_type.get("occupancy", 0)),
-        "hard_event_red_light_atom_count": float(hard_event_by_type.get("red_light", 0)),
-        "hard_event_drivable_area_atom_count": float(hard_event_by_type.get("drivable_area", 0)),
-        "hard_event_wrong_way_atom_count": float(hard_event_by_type.get("wrong_way", 0)),
+        "candidate_hard_violation_rate_from_atoms": float(hard_candidate_mask_from_atoms.mean()) if hard_candidate_mask_from_atoms.size else float("nan"),
         "valid_candidate_count": float(valid.sum()),
+        "candidate_dynamic_feasible_rate": _dynamic_feasible_rate(s, valid),
         "candidate_log_ade_min": float(np.nanmin(log_costs)) if log_nearest >= 0 else float("nan"),
         "candidate_log_ade_teacher": float(log_costs[a_star]) if log_nearest >= 0 else float("nan"),
         "map_valid_rate": map_valid,
         "route_fallback_rate": route_fallback,
         "route_centerline_points": float(len(route)),
+        "route_length_m": float(route_diag.get("route_length_m", float("nan"))),
+        "route_max_segment_m": float(route_diag.get("route_max_segment_m", float("nan"))),
+        "route_jump_count": float(route_diag.get("route_jump_count", float("nan"))),
+        "route_backtrack_frac": float(route_diag.get("route_backtrack_frac", float("nan"))),
+        "logged_ego_route_dist_mean": log_route_dist_mean,
+        "logged_ego_route_dist_p95": log_route_dist_p95,
+        "logged_ego_route_dist_final": log_route_dist_final,
         "route_ids_nonempty": float(len(s.runtime.route_roadblock_ids) > 0),
         "mission_goal_nonempty": float(s.runtime.mission_goal is not None and np.asarray(s.runtime.mission_goal).size > 0),
         "traffic_light_nonempty": float(len(s.runtime.traffic_lights) > 0),
@@ -87,9 +141,12 @@ def _teacher_sample_metrics(s) -> dict[str, float]:
         "teacher_J_base_min": float(np.nanmin(s.teacher.J_base[valid])) if valid.any() else float("nan"),
         "teacher_J_evid_min": float(np.nanmin(s.teacher.J_evid[valid])) if valid.any() else float("nan"),
         "teacher_J_T_min": float(s.teacher.J_T[a_star]),
+        "teacher_evidence_share_at_star": float(s.teacher.J_evid[a_star] / max(abs(s.teacher.J_T[a_star]), 1e-6)),
         "partition_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_T[valid] - (s.teacher.J_base[valid] + s.teacher.J_evid[valid])))) if valid.any() else float("nan"),
         "evidence_sum_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_evid[valid] - s.teacher.g_evid[:, valid].sum(axis=0)))) if valid.any() else float("nan"),
     }
+    out.update(_hard_event_type_counts(s, hard_events, valid))
+    return out
 
 
 def _update_lists(acc: dict[str, list[float]], vals: dict[str, float]) -> None:
@@ -101,7 +158,13 @@ def _summarize_lists(acc: dict[str, list[float]]) -> dict[str, float]:
     out: dict[str, float] = {}
     for k, vals in sorted(acc.items()):
         out[k] = _finite_mean(vals)
-        if k in {"candidate_log_ade_min", "candidate_log_ade_teacher", "teacher_J_T_min", "teacher_regret_to_log_nearest", "valid_candidate_count", "atom_count", "pair_count", "interaction_atom_count", "drivable_polygon_count"}:
+        if (
+            k.endswith("_count")
+            or k.endswith("_rate")
+            or "ade" in k
+            or "route" in k
+            or k in {"teacher_J_T_min", "teacher_J_base_min", "teacher_J_evid_min", "teacher_regret_to_log_nearest"}
+        ):
             out[k + "_p50"] = _finite_pct(vals, 50)
             out[k + "_p90"] = _finite_pct(vals, 90)
     return out
@@ -123,7 +186,7 @@ def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, 
         if s.teacher is None or s.label_future is None:
             skipped_missing += 1
             continue
-        _update_lists(teacher_acc, _teacher_sample_metrics(s))
+        _update_lists(teacher_acc, _teacher_sample_metrics(s, cfg))
         J0 = s.teacher.J_base.copy()
         g = s.teacher.g_evid.copy()
         flags = runtime_safety_flags_from_runtime(s.runtime, s.candidates, cfg)
