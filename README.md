@@ -135,7 +135,7 @@ python -m bdse.experiments.preprocess \
   --maps-root /data0/senzeyu2/dataset/nuplan/maps \
   --map-version nuplan-maps-v1.0 \
   --splits val \
-  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/val_set \
+  --output-dir /data0/senzeyu2/d[preprocess_v3.patch](../preprocess_v3.patch)ataset/nuplan/data/cache/val_set \
   --num-workers 4 \
   --scenario-stride 10 \
   --teacher-cost-eval-stride 1 \
@@ -149,9 +149,19 @@ Run training preprocessing on selected train folders:
 
 ```bash
 python -m bdse.experiments.preprocess \
-  --split train \
-  --folders train_boston train_singapore \
-  --output-dir /data0/nuplan/exp/bdse/cache
+  --config bdse/configs/full_preprocess.yaml \
+  --data-root /data0/senzeyu2/dataset/nuplan/data/cache \
+  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
+  --map-version nuplan-maps-v1.0 \
+  --splits train \
+  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_full_qualityfix \
+  --num-workers 4 \
+  --scenario-stride 10 \
+  --teacher-cost-eval-stride 1 \
+  --include-drivable-polygons \
+  --candidate-aware-agent-selection \
+  --profile \
+  --profile-threshold-s 1.0
 ```
 
 During preprocessing:

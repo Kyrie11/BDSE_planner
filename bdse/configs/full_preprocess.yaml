@@ -30,10 +30,12 @@ runtime:
   max_drivable_polygons: 24
   max_polygon_points: 128
   max_route_points: 512
+  route_horizon_m: 220.0
+  route_resample_step_m: 2.0
   max_route_connection_gap_m: 12.0
   use_future_traffic_lights_for_teacher: false
 candidate:
-  K: 32
+  K: 48
   horizon_s: 8.0
   step_s: 0.1
   # For final labels, mask dynamically impossible rollouts.  The previous
@@ -41,9 +43,19 @@ candidate:
   # enter the teacher argmin and creates noisy hard events.
   valid_requires_dynamic: true
   include_history_priors: true
-  conflict_stop_count: 4
-  conflict_route_radius_m: 6.0
-  conflict_stop_clearance_m: 7.0
+  conflict_stop_count: 6
+  conflict_route_radius_m: 8.0
+  conflict_stop_clearance_m: 8.0
+  conflict_agent_time_stride: 5
+  stop_distance_grid_m: [5, 10, 15, 20, 30, 40, 55, 70]
+  counts:
+    keep_follow: 10
+    decelerate_stop: 12
+    yield_creep: 6
+    lane_change_left: 4
+    lane_change_right: 4
+    route_turn_connector: 4
+    safe_fallback: 8
 evidence:
   max_atoms: 128
   max_interaction_atoms: 36
@@ -60,8 +72,8 @@ evidence:
   include_hard_atoms: true
   budget: 16
 teacher:
-  demo_weight: 8.0
-  demo_scale: 120.0
+  demo_weight: 10.0
+  demo_scale: 100.0
   atom_normalization_first: true
   separate_hard_gate: false
   use_reactive_proxy: false

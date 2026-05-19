@@ -71,7 +71,11 @@ def _box_to_array(obj: Any) -> np.ndarray:
 
 
 def _object_token(obj: Any, fallback: int | str = "") -> str:
-    return str(getattr(obj, "track_token", getattr(obj, "token", getattr(obj, "tracked_object_id", fallback))))
+    for name in ["track_token", "token", "tracked_object_id"]:
+        val = getattr(obj, name, None)
+        if val is not None and str(val) != "":
+            return str(val)
+    return str(fallback)
 
 
 def _iter_tracked_objects(container: Any) -> list[Any]:
@@ -312,6 +316,60 @@ def _route_length(polyline: np.ndarray) -> float:
     if len(arr) < 2:
         return 0.0
     return float(np.linalg.norm(np.diff(arr, axis=0), axis=1).sum())
+
+
+def _resample_polyline_by_arclength(polyline: np.ndarray, step_m: float = 2.0, max_length_m: float | None = None) -> np.ndarray:
+    arr = _dedup_polyline(polyline)
+    if len(arr) < 2:
+        return arr
+    seg = np.linalg.norm(np.diff(arr, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg)]).astype(np.float32)
+    total = float(s[-1])
+    if total <= 1e-6:
+        return arr[:1]
+    end = total if max_length_m is None else min(total, max(float(max_length_m), 0.0))
+    step = max(float(step_m), 0.25)
+    query = np.arange(0.0, end + 0.5 * step, step, dtype=np.float32)
+    if query.size == 0 or float(query[-1]) < end:
+        query = np.concatenate([query, np.asarray([end], dtype=np.float32)])
+    x = np.interp(query, s, arr[:, 0]).astype(np.float32)
+    y = np.interp(query, s, arr[:, 1]).astype(np.float32)
+    return _dedup_polyline(np.stack([x, y], axis=1))
+
+
+def _sanitize_route_for_runtime(polyline: np.ndarray, runtime_cfg: dict[str, Any], max_gap_m: float, min_length_m: float = 40.0) -> tuple[np.ndarray, dict[str, float]]:
+    """Return a short, dense, gap-free local planning route.
+
+    The extracted nuPlan roadblock route can be hundreds of metres long and may
+    contain city-dependent connector discontinuities.  Candidate generation only
+    needs the next few seconds, so truncate at the first large discontinuity and
+    resample by arclength.  This prevents a single bad far-away roadblock from
+    introducing route jumps/off-drivable labels into the local candidate set.
+    """
+    arr = _dedup_polyline(polyline)
+    diag: dict[str, float] = {"route_sanitized": 0.0, "route_truncated_at_gap": 0.0}
+    if len(arr) < 2:
+        out = make_default_route_centerline()
+        diag.update(_route_geometry_stats(out))
+        diag["route_sanitized"] = 1.0
+        return out, diag
+
+    seg = np.linalg.norm(np.diff(arr, axis=0), axis=1)
+    bad = np.flatnonzero(seg > max(float(max_gap_m), 1.0))
+    if bad.size:
+        # Keep the component starting at the ego projection.  If it is too short,
+        # the guard below uses a straight local route instead of joining across the gap.
+        arr = arr[: int(bad[0]) + 1]
+        diag["route_truncated_at_gap"] = 1.0
+
+    horizon_m = float(runtime_cfg.get("route_horizon_m", 220.0))
+    step_m = float(runtime_cfg.get("route_resample_step_m", 2.0))
+    arr = _resample_polyline_by_arclength(arr, step_m=step_m, max_length_m=horizon_m)
+    if len(arr) < 2 or _route_length(arr) < min_length_m or float(np.nanmax(arr[:, 0])) < 5.0:
+        arr = make_default_route_centerline(horizon_m=min(horizon_m, 160.0), step_m=step_m)
+        diag["route_sanitized"] = 1.0
+    diag.update(_route_geometry_stats(arr))
+    return arr.astype(np.float32), diag
 
 
 def _route_geometry_stats(polyline: np.ndarray) -> dict[str, float]:
@@ -596,8 +654,11 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         max_gap = float(runtime_cfg.get("max_route_connection_gap_m", 12.0))
         route, route_diag = _build_continuous_route_from_groups(route_groups, max_gap_m=max_gap)
         route = _trim_route_from_ego_projection(route)
+        route, sanitize_diag = _sanitize_route_for_runtime(route, runtime_cfg, max_gap_m=max_gap)
+        route_diag.update(sanitize_diag)
+        route = _simplify_polyline(route, max_route_points)
         route_diag.update(_route_geometry_stats(route))
-        features["route_centerline"] = _simplify_polyline(route, max_route_points)
+        features["route_centerline"] = route
         features["route_quality"] = route_diag
         features["route_source"] = "route_roadblocks_continuous" if route_ids else "proximal_lane_single"
         features["map_valid"] = bool(route_diag.get("route_jump_count", 0.0) == 0.0 and route_diag.get("route_max_segment_m", 0.0) <= max_gap)

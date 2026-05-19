@@ -245,54 +245,100 @@ def _inject_history_priors(
         flags[idx] = dflags
         metadata[idx] = {"maneuver": "keep_follow", "filled_by": params.get("history_prior", "history_prior"), "history_prior": True}
 
-def _conflict_stop_distances(runtime: RuntimeFeatures, route: np.ndarray, times: np.ndarray, v0: float, cfg: dict[str, Any]) -> list[float]:
-    """Runtime-only braking targets before route-conflict agents.
+def _unique_distances(values: list[float], min_sep_m: float = 2.5) -> list[float]:
+    out: list[float] = []
+    for d in sorted(float(x) for x in values if np.isfinite(x) and float(x) > 0.0):
+        if all(abs(d - prev) >= min_sep_m for prev in out):
+            out.append(d)
+    return out
 
-    The fixed stop table [5, 10, ..., 40] misses many scenes where the first
-    route obstacle/crossing object is at a non-tabulated distance.  Missing a
-    stop-before-conflict candidate is exactly what drives safe_candidate_exists
-    down, so infer a few stop distances from current agents and the route only
-    (no logged future).
+
+def _min_dynamic_stop_distance(v0: float, cfg: dict[str, Any], comfort_fraction: float = 0.85) -> float:
+    dyn = _cfg_dyn(cfg)
+    return max(2.0, float(v0 * v0 / max(2.0 * abs(dyn.max_decel) * max(comfort_fraction, 1e-3), 1e-3)))
+
+
+def _candidate_stop_grid(v0: float, times: np.ndarray, cfg: dict[str, Any]) -> list[float]:
+    ccfg = cfg.get("candidate", {})
+    horizon_dist = max(float(v0) * float(times[-1]), 10.0)
+    min_stop = _min_dynamic_stop_distance(v0, cfg)
+    configured = [float(x) for x in ccfg.get("stop_distance_grid_m", [5, 10, 15, 20, 30, 40, 55, 70])]
+    dynamic = [
+        min_stop,
+        min_stop + 5.0,
+        min_stop + 12.0,
+        max(min_stop + 20.0, 0.35 * horizon_dist),
+        max(min_stop + 30.0, 0.55 * horizon_dist),
+        max(min_stop + 45.0, 0.75 * horizon_dist),
+    ]
+    return _unique_distances(configured + dynamic, min_sep_m=3.0)
+
+
+def _conflict_stop_distances(runtime: RuntimeFeatures, route: np.ndarray, times: np.ndarray, v0: float, cfg: dict[str, Any]) -> list[float]:
+    """Runtime-only braking targets before route conflicts.
+
+    Use current red stop-lines plus constant-velocity predictions of nearby agents.
+    This remains runtime-only but covers train scenes where the blocker/crossing
+    actor is not yet exactly on the route at the current frame.
     """
     ccfg = cfg.get("candidate", {})
-    max_count = int(ccfg.get("conflict_stop_count", 4))
-    if max_count <= 0 or len(route) < 2 or not runtime.agent_valid.any():
+    max_count = int(ccfg.get("conflict_stop_count", 6))
+    if max_count <= 0 or len(route) < 2:
         return []
     route_width = float(runtime.map_features.get("route_corridor_width", ccfg.get("route_width_m", 4.0)))
-    radius = float(ccfg.get("conflict_route_radius_m", route_width + 2.0))
-    clearance = float(ccfg.get("conflict_stop_clearance_m", 7.0))
-    horizon_dist = max(float(v0) * float(times[-1]) + 25.0, 35.0)
-    dyn = _cfg_dyn(cfg)
-    min_dynamic_stop = max(2.0, float(v0 * v0 / max(2.0 * abs(dyn.max_decel) * 0.9, 1e-3)))
+    radius = float(ccfg.get("conflict_route_radius_m", route_width + 3.0))
+    clearance = float(ccfg.get("conflict_stop_clearance_m", 8.0))
+    min_stop = _min_dynamic_stop_distance(v0, cfg)
+    horizon_dist = max(float(v0) * float(times[-1]) + 35.0, 50.0)
+    stop_ds: list[float] = []
 
+    # 1) Red-light stop lines are a map/runtime signal. Add a stop-before-line
+    # candidate even when no currently selected agent suggests stopping.
+    for sl in runtime.map_features.get("stop_lines", []):
+        if not bool(sl.get("red", False)):
+            continue
+        xy = np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)
+        if len(xy) < 2:
+            continue
+        center = xy.mean(axis=0, keepdims=True)
+        route_d = float(nearest_polyline_distance(center, route)[0])
+        if route_d > max(radius + 6.0, 12.0):
+            continue
+        p = float(route_progress_along_polyline(center, route)[0])
+        if 2.0 < p < horizon_dist:
+            stop_ds.append(max(min_stop, p - clearance))
+
+    if not runtime.agent_valid.any():
+        return _unique_distances(stop_ds)[:max_count]
+
+    # 2) Current and constant-velocity future agent-route conflicts.
     cur = np.asarray(runtime.current_agents, dtype=np.float32)
     valid = np.asarray(runtime.agent_valid, dtype=bool)
-    xy = cur[valid, :2]
-    if len(xy) == 0:
-        return []
-    d_route = nearest_polyline_distance(xy, route)
-    progress = route_progress_along_polyline(xy, route)
-    rows: list[tuple[float, float]] = []
-    for local_i, (p, d) in enumerate(zip(progress, d_route)):
-        x = float(xy[local_i, 0])
-        if float(d) > radius:
+    pred_times = times[:: max(1, int(ccfg.get("conflict_agent_time_stride", 5)))]
+    for j in np.flatnonzero(valid):
+        st = cur[j]
+        xy0 = st[:2]
+        vx = float(st[5]) if st.shape[0] > 5 else float(st[3]) * np.cos(float(st[2]))
+        vy = float(st[6]) if st.shape[0] > 6 else float(st[3]) * np.sin(float(st[2]))
+        speed = float(np.hypot(vx, vy))
+        pts = xy0[None, :] + pred_times[:, None] * np.asarray([vx, vy], dtype=np.float32)[None, :]
+        # Include the current position for static/slow obstacles.
+        pts = np.concatenate([xy0[None, :], pts], axis=0).astype(np.float32)
+        d_route = nearest_polyline_distance(pts, route)
+        k = int(np.argmin(d_route))
+        agent_len = float(st[7]) if st.shape[0] > 7 else 4.8
+        agent_radius = 0.5 * agent_len + 1.0
+        if float(d_route[k]) > radius + agent_radius:
             continue
-        if float(p) <= 2.0 or float(p) > horizon_dist:
+        p = float(route_progress_along_polyline(pts[k : k + 1], route)[0])
+        if p <= 2.0 or p > horizon_dist:
             continue
-        if x < -5.0:
+        # Ignore objects that are behind ego and moving away from the route region.
+        if float(xy0[0]) < -8.0 and speed < 0.5:
             continue
-        # Stop before the occupied/crossing region, but do not ask for an
-        # impossible braking distance under the configured dynamic limits.
-        stop_d = max(min_dynamic_stop, float(p) - clearance)
-        rows.append((stop_d, float(d)))
-    rows = sorted(rows, key=lambda t: (t[0], t[1]))
-    out: list[float] = []
-    for d, _ in rows:
-        if all(abs(d - prev) > 3.0 for prev in out):
-            out.append(float(d))
-        if len(out) >= max_count:
-            break
-    return out
+        stop_ds.append(max(min_stop, p - clearance - 0.5 * agent_len))
+
+    return _unique_distances(stop_ds)[:max_count]
 
 
 def _inject_conflict_stop_priors(
@@ -361,16 +407,18 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
         (0.9 * v_ref, 0.05),
         (1.1 * v_ref, 0.05),
         (min(speed_limit, 1.3 * v_ref), 0.0),
+        (0.35 * v_ref, -0.25),
+        (min(speed_limit, 1.45 * v_ref), 0.05),
     ]
     for target, accel_bias in keep_params[: int(counts.get("keep_follow", 8))]:
         traj = _rollout_on_route(route, v0, times, target, accel_bias=accel_bias)
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "keep_follow", {"target_speed": target, "accel_bias": accel_bias}, cfg)
 
-    for sd in [5, 10, 15, 20, 30, 40][: int(counts.get("decelerate_stop", 6))]:
+    for sd in _candidate_stop_grid(v0, times, cfg)[: int(counts.get("decelerate_stop", 6))]:
         traj = _rollout_on_route(route, v0, times, 0.0, stop_distance=float(sd))
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "decelerate_stop", {"stop_distance": float(sd)}, cfg)
 
-    yield_profiles = [(0.8, 0.0), (0.5, 0.0), (0.3, 5.0), (0.2, 10.0)]
+    yield_profiles = [(0.8, 0.0), (0.5, 0.0), (0.3, 5.0), (0.2, 10.0), (0.15, 15.0), (0.1, 20.0)]
     for frac, delay in yield_profiles[: int(counts.get("yield_creep", 4))]:
         stop_dist = None if delay <= 0 else delay
         traj = _rollout_on_route(route, v0, times, frac * v_ref, stop_distance=stop_dist)
@@ -404,9 +452,21 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "route_turn_connector", {"target_speed": target}, cfg)
 
     safe_count = int(counts.get("safe_fallback", 2))
-    for stop_dist in [max(2.0, v0 * 0.8), max(4.0, v0 * 1.2)][:safe_count]:
-        traj = _rollout_on_route(route, v0, times, 0.0, stop_distance=stop_dist)
-        _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "safe_fallback", {"stop_distance": stop_dist}, cfg, force_valid=True)
+    min_safe_stop = _min_dynamic_stop_distance(v0, cfg)
+    horizon_dist = max(float(v0) * float(times[-1]), 10.0)
+    safe_stop_grid = _unique_distances([
+        min_safe_stop,
+        min_safe_stop + 5.0,
+        min_safe_stop + 12.0,
+        min_safe_stop + 20.0,
+        min_safe_stop + 30.0,
+        max(min_safe_stop + 35.0, 0.45 * horizon_dist),
+        max(min_safe_stop + 45.0, 0.60 * horizon_dist),
+        max(min_safe_stop + 60.0, 0.80 * horizon_dist),
+    ], min_sep_m=3.0)
+    for stop_dist in safe_stop_grid[:safe_count]:
+        traj = _rollout_on_route(route, v0, times, 0.0, stop_distance=float(stop_dist))
+        _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "safe_fallback", {"stop_distance": float(stop_dist)}, cfg, force_valid=True)
 
     _inject_conflict_stop_priors(runtime, route, times, v0, trajectories, valid, maneuver_ids, theta, flags, metadata, cfg)
 

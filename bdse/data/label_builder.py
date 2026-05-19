@@ -73,7 +73,11 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
         default=None,
     )
     if future_objects is not None and n > 0:
-        token_to_local_idx = {str(getattr(o, "track_token", getattr(o, "token", getattr(o, "tracked_object_id", i)))): i for i, o in enumerate(cur_objs[:n])}
+        # Use the same token canonicalization as runtime agent selection.  Some
+        # nuPlan object wrappers expose a present-but-empty token attribute; falling
+        # back consistently prevents selected agents from being silently matched to
+        # the wrong future row or downgraded to constant-velocity fallback.
+        token_to_local_idx = {_object_token(o, i): i for i, o in enumerate(cur_objs[:n])}
         frames = list(future_objects) if not isinstance(future_objects, dict) else []
         for k, frame in enumerate(frames[:T]):
             for obj in _iter_tracked_objects(frame):

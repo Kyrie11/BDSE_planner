@@ -49,9 +49,11 @@ candidate:
   # comfort/evidence costs, not the mask, should rank them down.
   valid_requires_dynamic: false
   include_history_priors: true
-  conflict_stop_count: 4
-  conflict_route_radius_m: 6.0
-  conflict_stop_clearance_m: 7.0
+  conflict_stop_count: 6
+  conflict_route_radius_m: 8.0
+  conflict_stop_clearance_m: 8.0
+  conflict_agent_time_stride: 5
+  stop_distance_grid_m: [5, 10, 15, 20, 30, 40, 55, 70]
   lane_width_m: 3.5
   route_width_m: 4.0
   max_accel: 3.0
@@ -62,12 +64,12 @@ candidate:
   max_lateral_accel: 3.0
   counts:
     keep_follow: 8
-    decelerate_stop: 6
+    decelerate_stop: 8
     yield_creep: 4
-    lane_change_left: 4
-    lane_change_right: 4
-    route_turn_connector: 4
-    safe_fallback: 2
+    lane_change_left: 3
+    lane_change_right: 3
+    route_turn_connector: 3
+    safe_fallback: 3
 evidence:
   max_atoms: 128
   max_interaction_atoms: 36
