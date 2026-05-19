@@ -129,6 +129,13 @@ evidence:
     off_raw: 100.0
     wrong_raw: 100.0
     yield_raw: 20.0
+    collision_min_frames: 2
+    off_drivable_min_frames: 3
+    off_drivable_slack_m: 0.75
+    wrong_way_min_frames: 3
+    red_light_route_radius_m: 10.0
+    red_light_min_progress_m: -2.0
+    red_light_max_progress_m: 120.0
 teacher:
   route_weight: 50.0
   progress_weight: 5.0

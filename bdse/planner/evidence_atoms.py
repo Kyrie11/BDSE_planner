@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, EvidenceAtom, EvidenceBank, LabelOnlyFuture, RuntimeFeatures
-from bdse.utils import angle_wrap, compute_curvature, finite_difference, nearest_polyline_distance, oriented_box_corners, polygons_overlap_sat
+from bdse.utils import angle_wrap, compute_curvature, finite_difference, nearest_polyline_distance, oriented_box_corners, polygons_overlap_sat, route_progress_along_polyline
 
 ATOM_QUERY_DIM = 12
 
@@ -139,8 +139,9 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
                             proxy = np.stack([p0 - 2.0 * normal, p0 + 2.0 * normal], axis=0)
                             red_sources.append((conn.get("id", "red_connector_proxy"), proxy.astype(np.float32)))
             for sid, xy in red_sources[: max(1, max_map - 4)]:
-                if len(xy) >= 2 and _min_candidate_distance(candidates, xy.mean(axis=0)) < 80.0:
-                    atoms.append(_new_atom(next_id, "red_light", {"stop_line_xy": xy, "red": True, "id": sid}, "rule_map", True, cfg)); next_id += 1
+                relevant, route_d, progress = _red_stop_line_relevant(xy, route, route_width, cfg)
+                if len(xy) >= 2 and relevant and _min_candidate_distance(candidates, xy.mean(axis=0)) < 80.0:
+                    atoms.append(_new_atom(next_id, "red_light", {"stop_line_xy": xy, "red": True, "id": sid, "route_distance": route_d, "route_progress": progress}, "rule_map", True, cfg)); next_id += 1
         atoms.append(_new_atom(next_id, "route_connector", {"route_centerline": route}, "rule_map", False, cfg)); next_id += 1
         map_atoms = [a for a in atoms if a.family == "rule_map"]
         if len(map_atoms) > max_map:
@@ -297,6 +298,32 @@ def _eval_traj(traj: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
     # Keep the terminal state so progress/terminal-distance costs remain stable
     return np.concatenate([traj[::stride], traj[-1:]], axis=0) if (traj.shape[0] - 1) % stride else traj[::stride]
 
+def _sustained_true(mask: np.ndarray, min_frames: int) -> bool:
+    arr = np.asarray(mask, dtype=bool).reshape(-1)
+    n = max(int(min_frames), 1)
+    if n <= 1:
+        return bool(arr.any())
+    run = 0
+    for v in arr:
+        run = run + 1 if bool(v) else 0
+        if run >= n:
+            return True
+    return False
+
+
+def _red_stop_line_relevant(xy: np.ndarray, route: np.ndarray, route_width: float, cfg: dict[str, Any]) -> tuple[bool, float, float]:
+    if len(xy) < 2 or len(route) < 2:
+        return False, 1e6, 0.0
+    safety = cfg.get("evidence", {}).get("safety", {})
+    center = np.asarray(xy, dtype=np.float32).reshape(-1, 2).mean(axis=0, keepdims=True)
+    route_d = float(nearest_polyline_distance(center, route)[0])
+    progress = float(route_progress_along_polyline(center, route)[0])
+    max_route_d = float(safety.get("red_light_route_radius_m", max(route_width + 6.0, 10.0)))
+    min_progress = float(safety.get("red_light_min_progress_m", -2.0))
+    max_progress = float(safety.get("red_light_max_progress_m", 120.0))
+    return bool(route_d <= max_route_d and min_progress <= progress <= max_progress), route_d, progress
+
+
 def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> np.ndarray:
     E, K = len(atoms), candidates.K
     raw = np.zeros((E, K), dtype=np.float32)
@@ -443,22 +470,32 @@ def hard_event_matrix(atoms: list[EvidenceAtom], candidates: CandidateBank, runt
                 continue
             traj = eval_trajs[a]
             if atom.type in {"occupancy", "collision"}:
-                out[ei, a] = bool(_collision_overlap_series(traj, agent_eval, atom).max() > 0.0)
+                overlap = _collision_overlap_series(traj, agent_eval, atom) > 0.0
+                min_frames = int(safety.get("collision_min_frames", 2))
+                out[ei, a] = _sustained_true(overlap, min_frames)
             elif atom.type == "red_light":
                 stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
-                out[ei, a] = bool(atom.anchor.get("red", True) and _crosses_polyline(traj[:, :2], stop))
+                red = bool(atom.anchor.get("red", True))
+                relevant = True
+                route = np.asarray(runtime.map_features.get("route_centerline", np.zeros((0, 2))), dtype=np.float32).reshape(-1, 2)
+                if len(stop) >= 2 and len(route) >= 2:
+                    relevant, _, _ = _red_stop_line_relevant(stop, route, c_route_width, cfg)
+                out[ei, a] = bool(red and relevant and _crosses_polyline(traj[:, :2], stop))
             elif atom.type == "drivable_area":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 width = float(atom.anchor.get("width", c_route_width))
                 polygons = [np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in atom.anchor.get("drivable_polygons", [])]
-                outside, _ = _outside_drivable(traj[:, :2], polygons, route, width)
-                out[ei, a] = bool(np.any(outside))
+                outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
+                slack = float(safety.get("off_drivable_slack_m", 0.75))
+                min_frames = int(safety.get("off_drivable_min_frames", 3))
+                out[ei, a] = _sustained_true(np.logical_and(outside, dist > slack), min_frames)
             elif atom.type == "wrong_way":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 route_dist = cached_route_dist(route, a)
                 route_yaw = _route_heading_at(traj[:, :2], route)
                 heading_bad = np.abs(angle_wrap(traj[:, 2] - route_yaw)) > (0.5 * np.pi)
-                out[ei, a] = bool(np.logical_and(heading_bad, route_dist < 5.0).max())
+                min_frames = int(safety.get("wrong_way_min_frames", 3))
+                out[ei, a] = _sustained_true(np.logical_and(heading_bad, route_dist < 5.0), min_frames)
     out[:, ~candidates.valid_mask] = False
     return out
 

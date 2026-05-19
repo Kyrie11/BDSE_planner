@@ -75,6 +75,35 @@ def _hard_event_type_counts(s, hard_events: np.ndarray, valid: np.ndarray) -> di
     return {f"hard_event_{k}_atom_count": float(v) for k, v in out.items()}
 
 
+def _hard_event_type_flags(s, hard_events: np.ndarray, candidate_idx: int, prefix: str) -> dict[str, float]:
+    out = Counter()
+    if candidate_idx < 0 or candidate_idx >= s.candidates.K:
+        return {}
+    for ei, atom in enumerate(s.evidence_bank.atoms):
+        if atom.is_hard and bool(hard_events[ei, candidate_idx]):
+            out[atom.type] += 1
+    return {f"{prefix}_{k}": float(v) for k, v in out.items()}
+
+
+def _safe_absence_type_flags(s, hard_events: np.ndarray, valid: np.ndarray) -> dict[str, float]:
+    """For no-safe scenes, report which hard types cover all valid candidates."""
+    valid_idx = np.flatnonzero(valid)
+    if valid_idx.size == 0:
+        return {}
+    hard_mask = np.zeros((valid_idx.size,), dtype=bool)
+    out: dict[str, float] = {}
+    for typ in sorted({a.type for a in s.evidence_bank.atoms if a.is_hard}):
+        rows = [ei for ei, atom in enumerate(s.evidence_bank.atoms) if atom.is_hard and atom.type == typ]
+        if not rows:
+            continue
+        type_mask = hard_events[np.asarray(rows), :][:, valid_idx].any(axis=0)
+        out[f"safe_absent_all_candidates_{typ}"] = float(type_mask.all())
+        out[f"safe_absent_any_candidate_{typ}"] = float(type_mask.any())
+        hard_mask |= type_mask
+    out["safe_absent_all_candidates_any_hard"] = float(hard_mask.all())
+    return out
+
+
 def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
     log_nearest, log_costs = _log_nearest(s)
     valid = s.candidates.valid_mask.astype(bool)
@@ -146,6 +175,10 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
         "evidence_sum_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_evid[valid] - s.teacher.g_evid[:, valid].sum(axis=0)))) if valid.any() else float("nan"),
     }
     out.update(_hard_event_type_counts(s, hard_events, valid))
+    out.update(_hard_event_type_flags(s, hard_events, a_star, "teacher_hard_type"))
+    out.update(_hard_event_type_flags(s, hard_events, log_nearest, "log_nearest_hard_type"))
+    if not bool(safe_mask.any()):
+        out.update(_safe_absence_type_flags(s, hard_events, valid))
     return out
 
 
