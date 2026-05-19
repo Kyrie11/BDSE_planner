@@ -49,6 +49,9 @@ candidate:
   # comfort/evidence costs, not the mask, should rank them down.
   valid_requires_dynamic: false
   include_history_priors: true
+  conflict_stop_count: 4
+  conflict_route_radius_m: 6.0
+  conflict_stop_clearance_m: 7.0
   lane_width_m: 3.5
   route_width_m: 4.0
   max_accel: 3.0
@@ -67,7 +70,12 @@ candidate:
     safe_fallback: 2
 evidence:
   max_atoms: 128
-  max_interaction_atoms: 64
+  max_interaction_atoms: 36
+  max_interaction_agents: 12
+  interaction_candidate_radius_m: 30.0
+  interaction_route_radius_m: 7.0
+  interaction_close_radius_m: 18.0
+  interaction_ahead_limit_m: 90.0
   max_map_atoms: 32
   max_kinematic_atoms: 16
   include_interaction: true
@@ -78,32 +86,32 @@ evidence:
   unit_cost: true
   eps: 1.0e-6
   weights:
-    occupancy: 20.0
+    occupancy: 10.0
     collision: 100.0
-    ttc: 20.0
-    gap: 15.0
+    ttc: 4.0
+    gap: 2.0
     yield: 20.0
     red_light: 50.0
     drivable_area: 50.0
     wrong_way: 50.0
-    route_connector: 10.0
-    speed_limit: 10.0
+    route_connector: 2.0
+    speed_limit: 5.0
     local_comfort: 1.0
   scales:
-    occupancy: 320.0
+    occupancy: 800.0
     collision: 1.0
-    ttc: 4.0
-    gap: 10.0
+    ttc: 8.0
+    gap: 64.0
     yield: 1.0
     red_light: 1.0
     drivable_area: 1.0
     wrong_way: 1.0
-    route_connector: 1.0
+    route_connector: 4.0
     speed_limit: 4.0
     local_comfort: 80.0
   caps:
-    hard: 100.0
-    inter: 20.0
+    hard: 200.0
+    inter: 6.0
     rule: 20.0
     map: 20.0
     kin: 10.0
@@ -114,21 +122,21 @@ evidence:
     front_gap_m: 8.0
     rear_gap_m: 12.0
     boundary_margin_m: 0.5
-    collision_raw: 100.0
-    red_raw: 50.0
-    off_raw: 50.0
-    wrong_raw: 50.0
+    collision_raw: 32000.0
+    red_raw: 100.0
+    off_raw: 100.0
+    wrong_raw: 100.0
     yield_raw: 20.0
 teacher:
   route_weight: 50.0
   progress_weight: 5.0
   comfort_global_weight: 1.0
-  demo_weight: 1.0
+  demo_weight: 8.0
   atom_normalization_first: true
   separate_hard_gate: false
   use_reactive_proxy: false
   cost_eval_stride: 2
-  demo_scale: 320.0
+  demo_scale: 120.0
   route_scale: 1.0
   progress_scale: 10.0
   comfort_scale: 80.0

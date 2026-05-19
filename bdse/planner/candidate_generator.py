@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, RuntimeFeatures
-from bdse.utils import angle_wrap, compute_curvature, finite_difference, route_progress_along_polyline, sample_polyline
+from bdse.utils import angle_wrap, compute_curvature, finite_difference, nearest_polyline_distance, route_progress_along_polyline, sample_polyline
 
 MANEUVER_IDS = {
     "keep_follow": 0,
@@ -245,6 +245,95 @@ def _inject_history_priors(
         flags[idx] = dflags
         metadata[idx] = {"maneuver": "keep_follow", "filled_by": params.get("history_prior", "history_prior"), "history_prior": True}
 
+def _conflict_stop_distances(runtime: RuntimeFeatures, route: np.ndarray, times: np.ndarray, v0: float, cfg: dict[str, Any]) -> list[float]:
+    """Runtime-only braking targets before route-conflict agents.
+
+    The fixed stop table [5, 10, ..., 40] misses many scenes where the first
+    route obstacle/crossing object is at a non-tabulated distance.  Missing a
+    stop-before-conflict candidate is exactly what drives safe_candidate_exists
+    down, so infer a few stop distances from current agents and the route only
+    (no logged future).
+    """
+    ccfg = cfg.get("candidate", {})
+    max_count = int(ccfg.get("conflict_stop_count", 4))
+    if max_count <= 0 or len(route) < 2 or not runtime.agent_valid.any():
+        return []
+    route_width = float(runtime.map_features.get("route_corridor_width", ccfg.get("route_width_m", 4.0)))
+    radius = float(ccfg.get("conflict_route_radius_m", route_width + 2.0))
+    clearance = float(ccfg.get("conflict_stop_clearance_m", 7.0))
+    horizon_dist = max(float(v0) * float(times[-1]) + 25.0, 35.0)
+    dyn = _cfg_dyn(cfg)
+    min_dynamic_stop = max(2.0, float(v0 * v0 / max(2.0 * abs(dyn.max_decel) * 0.9, 1e-3)))
+
+    cur = np.asarray(runtime.current_agents, dtype=np.float32)
+    valid = np.asarray(runtime.agent_valid, dtype=bool)
+    xy = cur[valid, :2]
+    if len(xy) == 0:
+        return []
+    d_route = nearest_polyline_distance(xy, route)
+    progress = route_progress_along_polyline(xy, route)
+    rows: list[tuple[float, float]] = []
+    for local_i, (p, d) in enumerate(zip(progress, d_route)):
+        x = float(xy[local_i, 0])
+        if float(d) > radius:
+            continue
+        if float(p) <= 2.0 or float(p) > horizon_dist:
+            continue
+        if x < -5.0:
+            continue
+        # Stop before the occupied/crossing region, but do not ask for an
+        # impossible braking distance under the configured dynamic limits.
+        stop_d = max(min_dynamic_stop, float(p) - clearance)
+        rows.append((stop_d, float(d)))
+    rows = sorted(rows, key=lambda t: (t[0], t[1]))
+    out: list[float] = []
+    for d, _ in rows:
+        if all(abs(d - prev) > 3.0 for prev in out):
+            out.append(float(d))
+        if len(out) >= max_count:
+            break
+    return out
+
+
+def _inject_conflict_stop_priors(
+    runtime: RuntimeFeatures,
+    route: np.ndarray,
+    times: np.ndarray,
+    v0: float,
+    trajectories: list[np.ndarray],
+    valid: list[bool],
+    maneuver_ids: list[int],
+    theta: list[dict[str, Any]],
+    flags: list[dict[str, bool]],
+    metadata: list[dict[str, Any]],
+    cfg: dict[str, Any],
+) -> None:
+    stop_distances = _conflict_stop_distances(runtime, route, times, v0, cfg)
+    if not stop_distances or not trajectories:
+        return
+    replace_order = [
+        i for i, m in enumerate(metadata)
+        if m.get("maneuver") in {"route_turn_connector", "keep_follow", "yield_creep"}
+        and not m.get("history_prior", False)
+        and m.get("maneuver") != "safe_fallback"
+    ]
+    # Replace low-priority/filler route-following samples first, preserving the
+    # tabulated decelerate_stop and safe_fallback families.
+    replace_order = replace_order[-len(stop_distances):]
+    dyn = _cfg_dyn(cfg)
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    strict = bool(cfg.get("candidate", {}).get("valid_requires_dynamic", False))
+    for idx, stop_d in zip(replace_order, stop_distances):
+        traj = _rollout_on_route(route, v0, times, 0.0, stop_distance=float(stop_d))
+        dflags = _dynamic_flags(traj, dt, dyn)
+        trajectories[idx] = traj.astype(np.float32)
+        valid[idx] = bool(dflags["dynamically_feasible"] or not strict)
+        maneuver_ids[idx] = MANEUVER_IDS["safe_fallback"]
+        theta[idx] = {"stop_distance": float(stop_d), "conflict_stop": True}
+        flags[idx] = dflags
+        metadata[idx] = {"maneuver": "safe_fallback", "filled_by": "conflict_stop_prior", "conflict_stop": True}
+
+
 def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> CandidateBank:
     cand_cfg = cfg.get("candidate", {})
     K = int(cand_cfg.get("K", 32))
@@ -318,6 +407,8 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
     for stop_dist in [max(2.0, v0 * 0.8), max(4.0, v0 * 1.2)][:safe_count]:
         traj = _rollout_on_route(route, v0, times, 0.0, stop_distance=stop_dist)
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "safe_fallback", {"stop_distance": stop_dist}, cfg, force_valid=True)
+
+    _inject_conflict_stop_priors(runtime, route, times, v0, trajectories, valid, maneuver_ids, theta, flags, metadata, cfg)
 
     filler_i = 0
     while len(trajectories) < K:

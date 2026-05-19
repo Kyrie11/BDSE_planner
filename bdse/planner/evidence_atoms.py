@@ -36,6 +36,48 @@ def _min_candidate_distance(candidates: CandidateBank, xy: np.ndarray) -> float:
     return float(np.linalg.norm(pts - xy[None, :], axis=1).min())
 
 
+def _relevant_interaction_agent_indices(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> list[tuple[int, float, float]]:
+    """Return candidate-relevant agents sorted by likely decision impact.
+
+    Earlier versions emitted occupancy/ttc/gap atoms for every selected agent up
+    to max_interaction_atoms.  On nuPlan this often means many parked, adjacent,
+    or far-away objects dominate J_evid even though they cannot change the ego
+    candidate ranking.  BDSE atoms should be queryable decision evidence, so keep
+    agents that are close to at least one valid candidate or close to the route
+    corridor ahead of ego.
+    """
+    ecfg = cfg.get("evidence", {})
+    max_agents = int(ecfg.get("max_interaction_agents", max(1, int(ecfg.get("max_interaction_atoms", 64)) // 3)))
+    cand_radius = float(ecfg.get("interaction_candidate_radius_m", 30.0))
+    route_radius = float(ecfg.get("interaction_route_radius_m", runtime.map_features.get("route_corridor_width", 4.0) + 3.0))
+    close_radius = float(ecfg.get("interaction_close_radius_m", 18.0))
+    ahead_limit = float(ecfg.get("interaction_ahead_limit_m", 90.0))
+
+    valid_agents = np.flatnonzero(runtime.agent_valid.astype(bool)).tolist()
+    if not valid_agents or max_agents <= 0:
+        return []
+    valid_traj = candidates.trajectories[candidates.valid_mask]
+    cand_xy = valid_traj[..., :2].reshape(-1, 2) if len(valid_traj) else np.zeros((0, 2), dtype=np.float32)
+    route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32).reshape(-1, 2)
+    rows: list[tuple[int, float, float]] = []
+    for j in valid_agents:
+        cur = runtime.current_agents[j]
+        xy = cur[:2]
+        ego_dist = float(np.linalg.norm(xy))
+        min_cand = float(np.linalg.norm(cand_xy - xy[None, :], axis=1).min()) if len(cand_xy) else ego_dist
+        route_dist = float(nearest_polyline_distance(xy[None, :], route)[0]) if len(route) >= 2 else abs(float(xy[1]))
+        ahead = -8.0 <= float(xy[0]) <= ahead_limit
+        relevant = (min_cand <= cand_radius) or (ahead and route_dist <= route_radius) or (ego_dist <= close_radius)
+        if not relevant:
+            continue
+        # Give hard proximity to valid candidate rollouts priority, then route-corridor
+        # objects, then ego distance.  Store the route distance for diagnostics/query.
+        priority = min(min_cand, 0.5 * route_dist + 0.05 * max(float(xy[0]), 0.0), ego_dist)
+        rows.append((int(j), float(priority), float(route_dist)))
+    rows.sort(key=lambda r: (r[1], r[2], r[0]))
+    return rows[:max_agents]
+
+
 def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> EvidenceBank:
     ecfg = cfg.get("evidence", {})
     atoms: list[EvidenceAtom] = []
@@ -45,15 +87,24 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
     max_kin = int(ecfg.get("max_kinematic_atoms", 16))
 
     if ecfg.get("include_interaction", True):
-        for j, valid in enumerate(runtime.agent_valid.astype(bool)):
-            if not valid:
-                continue
+        for j, priority_distance, route_dist in _relevant_interaction_agent_indices(runtime, candidates, cfg):
             cur = runtime.current_agents[j]
             d = float(np.linalg.norm(cur[:2]))
-            anchor = {"agent_index": int(j), "current_state": cur.copy(), "length": float(cur[7]) if cur.shape[0] > 7 else 4.8, "width": float(cur[8]) if cur.shape[0] > 8 else 2.0, "priority_distance": d}
+            anchor = {
+                "agent_index": int(j),
+                "current_state": cur.copy(),
+                "length": float(cur[7]) if cur.shape[0] > 7 else 4.8,
+                "width": float(cur[8]) if cur.shape[0] > 8 else 2.0,
+                "priority_distance": float(priority_distance),
+                "route_distance": float(route_dist),
+                "ego_distance": d,
+            }
             atoms.append(_new_atom(next_id, "occupancy", anchor, "interaction", True, cfg)); next_id += 1
-            atoms.append(_new_atom(next_id, "ttc", anchor, "interaction", False, cfg)); next_id += 1
-            atoms.append(_new_atom(next_id, "gap", anchor, "interaction", False, cfg)); next_id += 1
+            # Soft interaction atoms are useful but should not swamp the teacher;
+            # they are emitted only for the same filtered decision-relevant agents.
+            if len([a for a in atoms if a.family == "interaction"]) + 2 <= max_inter:
+                atoms.append(_new_atom(next_id, "ttc", anchor, "interaction", False, cfg)); next_id += 1
+                atoms.append(_new_atom(next_id, "gap", anchor, "interaction", False, cfg)); next_id += 1
             if len([a for a in atoms if a.family == "interaction"]) >= max_inter:
                 break
 

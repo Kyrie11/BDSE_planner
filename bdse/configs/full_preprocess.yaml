@@ -41,9 +41,17 @@ candidate:
   # enter the teacher argmin and creates noisy hard events.
   valid_requires_dynamic: true
   include_history_priors: true
+  conflict_stop_count: 4
+  conflict_route_radius_m: 6.0
+  conflict_stop_clearance_m: 7.0
 evidence:
   max_atoms: 128
-  max_interaction_atoms: 64
+  max_interaction_atoms: 36
+  max_interaction_agents: 12
+  interaction_candidate_radius_m: 30.0
+  interaction_route_radius_m: 7.0
+  interaction_close_radius_m: 18.0
+  interaction_ahead_limit_m: 90.0
   max_map_atoms: 32
   max_kinematic_atoms: 16
   include_interaction: true
@@ -52,6 +60,8 @@ evidence:
   include_hard_atoms: true
   budget: 16
 teacher:
+  demo_weight: 8.0
+  demo_scale: 120.0
   atom_normalization_first: true
   separate_hard_gate: false
   use_reactive_proxy: false

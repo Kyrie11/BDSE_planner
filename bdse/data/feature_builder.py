@@ -385,16 +385,20 @@ def _build_continuous_route_from_groups(route_groups: list[list[np.ndarray]], ma
         if not candidates:
             continue
         _, best_poly, gap, hdg_err = min(candidates, key=lambda x: x[0])
-        # Do not join disconnected roadblocks with a straight chord.  A short gap is
-        # acceptable because map baselines can have small discontinuities at connectors.
-        if gap > max_gap_m and _route_length(np.concatenate(pieces, axis=0)) >= min_length_m:
-            break
-        if gap <= max_gap_m and hdg_err <= np.deg2rad(120.0):
-            pieces.append(best_poly[1:] if np.linalg.norm(best_poly[0] - prev_end) < 1e-3 else best_poly)
-            prev_end = best_poly[-1]
-            prev_heading = _polyline_heading(best_poly, at_end=True)
-            gaps.append(gap)
-            selected_groups += 1
+        # Do not join disconnected roadblocks with a straight chord.  The previous
+        # version allowed a >max_gap join when the current piece was short, which
+        # created rare 50m+ route jumps and noisy route-conditioned rollouts.  Skip
+        # that route group instead; if the chain remains too short, the final guard
+        # falls back to a straight ego-local route rather than inventing a shortcut.
+        if gap > max_gap_m or hdg_err > np.deg2rad(120.0):
+            if _route_length(np.concatenate(pieces, axis=0)) >= min_length_m:
+                break
+            continue
+        pieces.append(best_poly[1:] if np.linalg.norm(best_poly[0] - prev_end) < 1e-3 else best_poly)
+        prev_end = best_poly[-1]
+        prev_heading = _polyline_heading(best_poly, at_end=True)
+        gaps.append(gap)
+        selected_groups += 1
 
     merged = _dedup_polyline(np.concatenate(pieces, axis=0))
     if len(merged) < 2 or _route_length(merged) < min_length_m or float(np.nanmax(merged[:, 0])) < 5.0:
@@ -532,7 +536,20 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         conn = _get_map_object(map_api, cid, ["LANE_CONNECTOR"])
         pts = _baseline_points(conn) if conn is not None else np.zeros((0, 2), dtype=np.float32)
         if len(pts) >= 2:
-            features["red_lane_connectors"].append({"id": cid, "xy": _to_local_xy(pts, origin_xy, origin_yaw)})
+            conn_xy = _to_local_xy(pts, origin_xy, origin_yaw)
+            features["red_lane_connectors"].append({"id": cid, "xy": conn_xy})
+            # If STOP_LINE objects are unavailable in this nuPlan/devkit build, keep
+            # a runtime-only proxy in map_features.  This makes diagnostics honest
+            # (stop_line_count no longer stays at zero) and gives the red-light atom
+            # a stable anchor without using any future labels.
+            if len(conn_xy) >= 2:
+                p0, p1 = conn_xy[0], conn_xy[1]
+                heading = p1 - p0
+                norm = np.linalg.norm(heading)
+                if norm > 1e-6:
+                    normal = np.asarray([-heading[1], heading[0]], dtype=np.float32) / float(norm)
+                    proxy = np.stack([p0 - 2.0 * normal, p0 + 2.0 * normal], axis=0).astype(np.float32)
+                    features["stop_lines"].append({"id": f"{cid}:proxy_stop", "xy": proxy, "red": True, "proxy": True})
 
     route_groups: list[list[np.ndarray]] = []
     route_objs: list[Any] = []
