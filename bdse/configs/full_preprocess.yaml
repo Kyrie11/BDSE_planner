@@ -47,6 +47,10 @@ candidate:
   conflict_route_radius_m: 8.0
   conflict_stop_clearance_m: 8.0
   conflict_agent_time_stride: 5
+  dynamic_eval_quantile: 0.98
+  dynamic_low_speed_mps: 0.3
+  repair_low_valid_count: true
+  min_valid_candidates: 24
   stop_distance_grid_m: [5, 10, 15, 20, 30, 40, 55, 70]
   counts:
     keep_follow: 10

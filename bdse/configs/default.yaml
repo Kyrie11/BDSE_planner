@@ -62,6 +62,12 @@ candidate:
   max_curvature: 0.25
   max_curvature_rate: 0.20
   max_lateral_accel: 3.0
+  # Use high-percentile dynamic envelopes rather than one-frame maxima so route
+  # discretization kinks and stop-profile clamps do not collapse the valid bank.
+  dynamic_eval_quantile: 0.98
+  dynamic_low_speed_mps: 0.3
+  repair_low_valid_count: true
+  min_valid_candidates: 16
   counts:
     keep_follow: 8
     decelerate_stop: 8

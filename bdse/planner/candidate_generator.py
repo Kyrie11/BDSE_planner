@@ -28,6 +28,8 @@ class DynamicFeasibility:
     max_curvature: float
     max_curvature_rate: float
     max_lateral_accel: float
+    eval_quantile: float = 1.0
+    low_speed_mps: float = 0.3
 
 
 def _cfg_dyn(cfg: dict[str, Any]) -> DynamicFeasibility:
@@ -39,6 +41,8 @@ def _cfg_dyn(cfg: dict[str, Any]) -> DynamicFeasibility:
         max_curvature=float(c.get("max_curvature", 0.25)),
         max_curvature_rate=float(c.get("max_curvature_rate", 0.20)),
         max_lateral_accel=float(c.get("max_lateral_accel", 3.0)),
+        eval_quantile=float(c.get("dynamic_eval_quantile", 0.98)),
+        low_speed_mps=float(c.get("dynamic_low_speed_mps", 0.3)),
     )
 
 
@@ -98,22 +102,94 @@ def _rollout_on_route(
     return np.stack([xy[:, 0], xy[:, 1], yaw, v, times], axis=1).astype(np.float32)
 
 
-def _dynamic_flags(traj: np.ndarray, dt: float, dyn: DynamicFeasibility) -> dict[str, bool]:
+def _rollout_straight(v0: float, times: np.ndarray, target_speed: float, stop_distance: float | None = None) -> np.ndarray:
+    """Ego-frame straight fallback rollout using only runtime current speed.
+
+    This is used as a last-resort recovery candidate when a map connector is so
+    sharp/noisy that route-centered rollouts are dynamically masked.  It stays
+    runtime-only and will still receive route-deviation cost from the teacher,
+    but it prevents the candidate bank from degenerating to a handful of valid
+    actions.
+    """
+    s, v = _speed_profile(v0, target_speed, times, stop_distance)
+    x = s.astype(np.float32)
+    y = np.zeros_like(x, dtype=np.float32)
+    yaw = np.zeros_like(x, dtype=np.float32)
+    return np.stack([x, y, yaw, v.astype(np.float32), times], axis=1).astype(np.float32)
+
+
+def _robust_max(values: np.ndarray, q: float) -> float:
+    arr = np.asarray(values, dtype=np.float32).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return 0.0
+    if q >= 1.0 or arr.size < 4:
+        return float(np.nanmax(arr))
+    return float(np.nanquantile(arr, q))
+
+
+def _robust_min(values: np.ndarray, q: float) -> float:
+    arr = np.asarray(values, dtype=np.float32).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return 0.0
+    if q >= 1.0 or arr.size < 4:
+        return float(np.nanmin(arr))
+    return float(np.nanquantile(arr, 1.0 - q))
+
+
+def _dynamic_flags(traj: np.ndarray, dt: float, dyn: DynamicFeasibility) -> dict[str, Any]:
     v = traj[:, 3]
     acc = finite_difference(v, dt)
     jerk = finite_difference(acc, dt)
     curv = compute_curvature(traj[:, :2])
     curv_rate = finite_difference(curv, dt)
     lat_acc = v * v * np.abs(curv)
+    q = float(np.clip(dyn.eval_quantile, 0.5, 1.0))
+
+    # Finite-difference maxima are brittle for nuPlan centerlines: a single
+    # duplicate point, map-connector kink, or stop-profile clamp can create a
+    # one-frame jerk/curvature spike and collapse the valid candidate bank.  The
+    # teacher should reject physically impossible rollouts, not route-map
+    # discretization noise, so use high-percentile dynamic envelopes and ignore
+    # steering/jerk spikes after the rollout has effectively stopped.
+    moving = np.asarray(v > max(float(dyn.low_speed_mps), 0.0), dtype=bool)
+    if moving.any():
+        jerk_eval = jerk[moving]
+        curv_eval = curv[moving]
+        curv_rate_eval = curv_rate[moving]
+        lat_eval = lat_acc[moving]
+    else:
+        jerk_eval = jerk[:1] * 0.0
+        curv_eval = curv[:1] * 0.0
+        curv_rate_eval = curv_rate[:1] * 0.0
+        lat_eval = lat_acc[:1] * 0.0
+
+    max_accel = _robust_max(acc, q)
+    min_accel = _robust_min(acc, q)
+    max_jerk = _robust_max(np.abs(jerk_eval), q)
+    max_curv = _robust_max(np.abs(curv_eval), q)
+    max_curv_rate = _robust_max(np.abs(curv_rate_eval), q)
+    max_lat = _robust_max(lat_eval, q)
     flags = {
-        "accel_ok": bool(np.nanmax(acc) <= dyn.max_accel + 1e-4),
-        "decel_ok": bool(np.nanmin(acc) >= dyn.max_decel - 1e-4),
-        "jerk_ok": bool(np.nanmax(np.abs(jerk)) <= dyn.max_jerk + 1e-4),
-        "curvature_ok": bool(np.nanmax(np.abs(curv)) <= dyn.max_curvature + 1e-4),
-        "curvature_rate_ok": bool(np.nanmax(np.abs(curv_rate)) <= dyn.max_curvature_rate + 1e-4),
-        "lateral_accel_ok": bool(np.nanmax(lat_acc) <= dyn.max_lateral_accel + 1e-4),
+        "accel_ok": bool(max_accel <= dyn.max_accel + 1e-4),
+        "decel_ok": bool(min_accel >= dyn.max_decel - 1e-4),
+        "jerk_ok": bool(max_jerk <= dyn.max_jerk + 1e-4),
+        "curvature_ok": bool(max_curv <= dyn.max_curvature + 1e-4),
+        "curvature_rate_ok": bool(max_curv_rate <= dyn.max_curvature_rate + 1e-4),
+        "lateral_accel_ok": bool(max_lat <= dyn.max_lateral_accel + 1e-4),
+        "max_accel": float(max_accel),
+        "min_accel": float(min_accel),
+        "max_jerk_abs": float(max_jerk),
+        "max_curvature_abs": float(max_curv),
+        "max_curvature_rate_abs": float(max_curv_rate),
+        "max_lateral_accel_abs": float(max_lat),
+        "dynamic_eval_quantile": float(q),
     }
-    flags["dynamically_feasible"] = all(flags.values())
+    flags["dynamically_feasible"] = all(
+        bool(flags[k])
+        for k in ["accel_ok", "decel_ok", "jerk_ok", "curvature_ok", "curvature_rate_ok", "lateral_accel_ok"]
+    )
     return flags
 
 
@@ -380,6 +456,129 @@ def _inject_conflict_stop_priors(
         metadata[idx] = {"maneuver": "safe_fallback", "filled_by": "conflict_stop_prior", "conflict_stop": True}
 
 
+def _replace_slot_with_recovery_candidate(
+    idx: int,
+    traj: np.ndarray,
+    maneuver: str,
+    params: dict[str, Any],
+    trajectories: list[np.ndarray],
+    valid: list[bool],
+    maneuver_ids: list[int],
+    theta: list[dict[str, Any]],
+    flags: list[dict[str, Any]],
+    metadata: list[dict[str, Any]],
+    cfg: dict[str, Any],
+) -> bool:
+    dyn = _cfg_dyn(cfg)
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    dflags = _dynamic_flags(traj, dt, dyn)
+    ok = bool(dflags["dynamically_feasible"])
+    trajectories[idx] = traj.astype(np.float32)
+    valid[idx] = ok
+    maneuver_ids[idx] = MANEUVER_IDS[maneuver]
+    theta[idx] = dict(params)
+    flags[idx] = dflags
+    metadata[idx] = {"maneuver": maneuver, "filled_by": "valid_count_recovery", "recovery_candidate": True, **params}
+    return ok
+
+
+def _repair_low_valid_count(
+    runtime: RuntimeFeatures,
+    route: np.ndarray,
+    times: np.ndarray,
+    v0: float,
+    v_ref: float,
+    trajectories: list[np.ndarray],
+    valid: list[bool],
+    maneuver_ids: list[int],
+    theta: list[dict[str, Any]],
+    flags: list[dict[str, Any]],
+    metadata: list[dict[str, Any]],
+    cfg: dict[str, Any],
+) -> None:
+    """Keep the finite candidate bank from degenerating into a tiny action set.
+
+    In final preprocessing we use strict dynamic masking, but the initial
+    lattice can occasionally lose most actions because a route connector is
+    numerically sharp or a braking profile has a one-frame finite-difference
+    spike.  That violates the paper's candidate-set assumption: the generator
+    should fill the bank with legal route-following and fallback candidates
+    before masked padding is used.  This repair pass only replaces already
+    invalid slots with conservative, freshly generated low-speed/stop rollouts
+    that pass the same dynamic checker; it never marks a failed rollout valid.
+    """
+    ccfg = cfg.get("candidate", {})
+    if not bool(ccfg.get("repair_low_valid_count", True)):
+        return
+    K = int(ccfg.get("K", 32))
+    target = int(ccfg.get("min_valid_candidates", min(K, max(16, K // 3))))
+    target = max(1, min(target, K))
+    if sum(bool(x) for x in valid[:K]) >= target:
+        return
+    invalid_slots = [i for i in range(min(K, len(valid))) if not bool(valid[i])]
+    if not invalid_slots:
+        return
+
+    min_stop = _min_dynamic_stop_distance(v0, cfg, comfort_fraction=0.9)
+    horizon_dist = max(float(v0) * float(times[-1]), 12.0)
+    candidate_specs: list[tuple[np.ndarray, str, dict[str, Any]]] = []
+
+    for stop_d in _unique_distances(
+        [
+            min_stop,
+            min_stop + 4.0,
+            min_stop + 8.0,
+            min_stop + 14.0,
+            min_stop + 22.0,
+            max(min_stop + 28.0, 0.35 * horizon_dist),
+            max(min_stop + 40.0, 0.55 * horizon_dist),
+            max(min_stop + 55.0, 0.75 * horizon_dist),
+        ],
+        min_sep_m=2.0,
+    ):
+        candidate_specs.append(
+            (_rollout_on_route(route, v0, times, 0.0, stop_distance=float(stop_d)), "safe_fallback", {"stop_distance": float(stop_d)})
+        )
+        candidate_specs.append(
+            (
+                _rollout_straight(v0, times, 0.0, stop_distance=float(stop_d)),
+                "safe_fallback",
+                {"stop_distance": float(stop_d), "straight_fallback": True},
+            )
+        )
+
+    for frac in [0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.65, 0.80, 0.95, 1.10]:
+        target_v = max(0.2, float(frac) * float(v_ref))
+        candidate_specs.append(
+            (_rollout_on_route(route, v0, times, target_v), "keep_follow", {"target_speed": float(target_v), "low_speed_recovery": True})
+        )
+        candidate_specs.append(
+            (
+                _rollout_straight(v0, times, target_v),
+                "keep_follow",
+                {"target_speed": float(target_v), "low_speed_recovery": True, "straight_fallback": True},
+            )
+        )
+
+    # If the route connector itself is the numerical source of invalidity,
+    # runtime-only history priors can still provide non-degenerate low-speed
+    # actions for selector training without using logged futures.
+    for traj, params in _history_motion_priors(runtime, times, cfg):
+        p = dict(params)
+        p["history_recovery"] = True
+        candidate_specs.append((traj, "keep_follow", p))
+
+    slot_iter = iter(invalid_slots)
+    for traj, maneuver, params in candidate_specs:
+        if sum(bool(x) for x in valid[:K]) >= target:
+            break
+        try:
+            idx = next(slot_iter)
+        except StopIteration:
+            break
+        _replace_slot_with_recovery_candidate(idx, traj, maneuver, params, trajectories, valid, maneuver_ids, theta, flags, metadata, cfg)
+
+
 def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> CandidateBank:
     cand_cfg = cfg.get("candidate", {})
     K = int(cand_cfg.get("K", 32))
@@ -489,6 +688,21 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
         filler_i += 1
 
     _inject_history_priors(runtime, times, trajectories, valid, maneuver_ids, theta, flags, metadata, cfg)
+
+    _repair_low_valid_count(
+        runtime,
+        route,
+        times,
+        v0,
+        v_ref,
+        trajectories,
+        valid,
+        maneuver_ids,
+        theta,
+        flags,
+        metadata,
+        cfg,
+    )
 
     if len(trajectories) > K:
         trajectories = trajectories[:K]
