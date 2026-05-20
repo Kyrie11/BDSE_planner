@@ -13,7 +13,7 @@ from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
-from bdse.planner.evidence_atoms import hard_event_matrix
+from bdse.planner.evidence_atoms import hard_event_matrix, atom_weight_scale_cap
 from bdse.utils import nearest_polyline_distance
 from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
 from bdse.planner.tournament import run_tournament
@@ -85,6 +85,33 @@ def _hard_event_type_flags(s, hard_events: np.ndarray, candidate_idx: int, prefi
     return {f"{prefix}_{k}": float(v) for k, v in out.items()}
 
 
+def _atom_saturation_metrics(s, valid: np.ndarray, cfg: dict[str, Any]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    if s.teacher is None or s.teacher.g_evid.size == 0 or not valid.any():
+        return out
+    total_active = 0
+    total_sat = 0
+    by_type: dict[str, list[float]] = defaultdict(list)
+    g = np.asarray(s.teacher.g_evid, dtype=np.float32)
+    for ei, atom in enumerate(s.evidence_bank.atoms):
+        if ei >= g.shape[0]:
+            continue
+        weight, _, cap = atom_weight_scale_cap(atom, cfg)
+        g_cap = float(weight) * float(cap)
+        vals = g[ei, valid]
+        active = vals > 1e-6
+        if not np.any(active) or g_cap <= 0.0:
+            continue
+        sat = vals[active] >= 0.999 * g_cap
+        total_active += int(active.sum())
+        total_sat += int(sat.sum())
+        by_type[atom.type].append(float(sat.mean()))
+    out["atom_saturation_active_rate"] = float(total_sat / max(total_active, 1)) if total_active else 0.0
+    for typ, rates in by_type.items():
+        out[f"atom_saturation_type_{typ}"] = float(np.mean(rates))
+    return out
+
+
 def _safe_absence_type_flags(s, hard_events: np.ndarray, valid: np.ndarray) -> dict[str, float]:
     """For no-safe scenes, report which hard types cover all valid candidates."""
     valid_idx = np.flatnonzero(valid)
@@ -129,6 +156,10 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
         log_route_dist_final = float(logged_route_dist[-1])
     else:
         log_route_dist_mean = log_route_dist_p95 = log_route_dist_final = float("nan")
+    label_meta = getattr(s.label_future, "metadata", {}) if s.label_future is not None else {}
+    logged_mask = np.asarray(label_meta.get("agent_future_logged_mask", []), dtype=bool)
+    cv_mask = np.asarray(label_meta.get("agent_future_cv_fallback_mask", []), dtype=bool)
+    selected_agent_count = int(label_meta.get("selected_agent_count", int(s.runtime.agent_valid.sum())))
     out = {
         "teacher_vs_log_disagreement": teacher_vs_log,
         "teacher_regret_to_log_nearest": teacher_regret_to_log,
@@ -159,7 +190,10 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
         "red_light_atom_count": float(sum(1 for a in s.evidence_bank.atoms if a.type == "red_light")),
         "drivable_polygon_count": float(len(s.runtime.map_features.get("drivable_polygons", []))),
         "stop_line_count": float(len(s.runtime.map_features.get("stop_lines", []))),
-        "agent_future_valid_rate": float(s.label_future.agent_valid.mean()) if s.label_future is not None else float("nan"),
+        "agent_slot_valid_rate": float(s.label_future.agent_valid.mean()) if s.label_future is not None else float("nan"),
+        "selected_agent_count": float(selected_agent_count),
+        "agent_future_logged_rate": float(logged_mask.sum() / max(selected_agent_count, 1)) if logged_mask.size else float("nan"),
+        "agent_future_cv_fallback_rate": float(cv_mask.sum() / max(selected_agent_count, 1)) if cv_mask.size else float("nan"),
         "atom_count": float(len(s.evidence_bank.atoms)),
         "pair_count": float(0 if s.pairs is None else len(s.pairs.pairs)),
         "pair_nonempty": float(s.pairs is not None and len(s.pairs.pairs) > 0),
@@ -175,6 +209,7 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
         "evidence_sum_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_evid[valid] - s.teacher.g_evid[:, valid].sum(axis=0)))) if valid.any() else float("nan"),
     }
     out.update(_hard_event_type_counts(s, hard_events, valid))
+    out.update(_atom_saturation_metrics(s, valid, cfg))
     out.update(_hard_event_type_flags(s, hard_events, a_star, "teacher_hard_type"))
     out.update(_hard_event_type_flags(s, hard_events, log_nearest, "log_nearest_hard_type"))
     if not bool(safe_mask.any()):
@@ -246,7 +281,8 @@ def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--split", type=str, default="val")
+    parser.add_argument("--split", type=str, default=None, help="Single split, kept for backward compatibility.")
+    parser.add_argument("--splits", type=str, nargs="*", default=None, help="One or more splits. When multiple are given, metrics are returned per split.")
     parser.add_argument("--folders", type=str, nargs="*", default=None)
     parser.add_argument("--data-root", type=str, default=None)
     parser.add_argument("--maps-root", type=str, default=None)
@@ -261,8 +297,16 @@ def main() -> None:
         cfg.setdefault("paths", {})["data_cache_root"] = args.data_root
     if args.maps_root:
         cfg.setdefault("paths", {})["maps_root"] = args.maps_root
-    folders = args.folders or cfg.get("data", {}).get("split_folders", {}).get(args.split)
-    metrics = run_diagnostics(cfg, args.split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir)
+    splits = args.splits or ([args.split] if args.split else ["val"])
+    if len(splits) == 1:
+        split = splits[0]
+        folders = args.folders or cfg.get("data", {}).get("split_folders", {}).get(split)
+        metrics = run_diagnostics(cfg, split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir)
+    else:
+        metrics = {}
+        for split in splits:
+            folders = args.folders or cfg.get("data", {}).get("split_folders", {}).get(split)
+            metrics[split] = run_diagnostics(cfg, split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")

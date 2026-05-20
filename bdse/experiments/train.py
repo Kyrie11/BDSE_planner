@@ -30,7 +30,12 @@ class OnTheFlyDataset(Dataset):
 
 def sample_to_tensors(sample: Sample, cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     Emax = int(cfg.get("evidence", {}).get("max_atoms", 128))
-    K = int(cfg.get("candidate", {}).get("K", 32))
+    K = int(cfg.get("candidate", {}).get("K", sample.candidates.K))
+    if sample.candidates.K != K:
+        raise ValueError(
+            f"Candidate count mismatch: cache has K={sample.candidates.K}, config expects K={K}. "
+            "Use the same --config for preprocessing, diagnostics, and training, or regenerate the cache."
+        )
     efd = int(cfg.get("model", {}).get("evidence_feature_dim", 24))
     qfd = int(cfg.get("model", {}).get("query_feature_dim", 12))
     Pmax = int(cfg.get("pairs", {}).get("target_max", 256))

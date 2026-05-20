@@ -64,6 +64,8 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
     n = min(max_agents, len(raw_current))
     logged_agents = np.zeros((max_agents, T, 5), dtype=np.float32)
     valid = np.zeros((max_agents,), dtype=bool)
+    logged_mask = np.zeros((max_agents,), dtype=bool)
+    cv_fallback_mask = np.zeros((max_agents,), dtype=bool)
     future_objects = _call(
         scenario,
         ["get_future_tracked_objects", "get_tracked_objects_future_trajectory"],
@@ -88,6 +90,7 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
                     st = np.asarray([arr[0], arr[1], arr[2], arr[3], (k + 1) * step], dtype=np.float32)
                     logged_agents[i, k] = transform_states_to_local(st[None], origin_xy, origin_yaw)[0]
                     valid[i] = True
+                    logged_mask[i] = True
     for i in range(n):
         if not valid[i]:
             arr = raw_current[i]
@@ -100,12 +103,21 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
             logged_agents[i, :, 3] = st_local[3]
             logged_agents[i, :, 4] = times
             valid[i] = True
+            cv_fallback_mask[i] = True
     return LabelOnlyFuture(
         logged_ego=logged_ego.astype(np.float32),
         logged_agents=logged_agents.astype(np.float32),
         agent_valid=valid,
         future_traffic_lights=_future_traffic_lights(scenario, iteration, cfg),
-        metadata={"iteration": int(iteration), "label_only": True},
+        metadata={
+            "iteration": int(iteration),
+            "label_only": True,
+            "selected_agent_count": int(n),
+            "agent_future_logged_mask": logged_mask.tolist(),
+            "agent_future_cv_fallback_mask": cv_fallback_mask.tolist(),
+            "agent_future_logged_count": int(logged_mask.sum()),
+            "agent_future_cv_fallback_count": int(cv_fallback_mask.sum()),
+        },
     )
 
 
@@ -125,8 +137,13 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
     candidates = generate_candidate_bank(runtime, cfg)
     mark("candidates")
     if bool(pcfg.get("candidate_aware_agent_selection", False)):
+        # Pass 1 builds a candidate bank so agent selection can be ordered by
+        # candidate proximity.  After re-selecting agents, regenerate the bank so
+        # conflict-stop priors and evidence/teacher labels use the same agents.
         runtime = build_runtime_features_from_scenario(scenario, iteration, cfg, candidates=candidates)
         mark("runtime_resort")
+        candidates = generate_candidate_bank(runtime, cfg)
+        mark("candidates_resort")
     label_future = build_label_future_from_scenario(scenario, iteration, cfg, runtime=runtime)
     mark("label_future")
     evidence = enumerate_evidence_atoms(runtime, candidates, cfg)
@@ -142,7 +159,7 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
     if profile and total >= threshold_s:
         prev = t0
         parts = []
-        for name in ["runtime", "candidates", "runtime_resort", "label_future", "evidence", "teacher", "pairs"]:
+        for name in ["runtime", "candidates", "runtime_resort", "candidates_resort", "label_future", "evidence", "teacher", "pairs"]:
             if name in marks:
                 parts.append(f"{name}={marks[name] - prev:.3f}s")
                 prev = marks[name]
