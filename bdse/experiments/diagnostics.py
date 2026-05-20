@@ -281,7 +281,7 @@ def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--split", type=str, default=None, help="Single split, kept for backward compatibility.")
+    parser.add_argument("--split", type=str, nargs="+", default=None, help="One or more splits. Kept for backward compatibility with a single value.")
     parser.add_argument("--splits", type=str, nargs="*", default=None, help="One or more splits. When multiple are given, metrics are returned per split.")
     parser.add_argument("--folders", type=str, nargs="*", default=None)
     parser.add_argument("--data-root", type=str, default=None)
@@ -297,7 +297,7 @@ def main() -> None:
         cfg.setdefault("paths", {})["data_cache_root"] = args.data_root
     if args.maps_root:
         cfg.setdefault("paths", {})["maps_root"] = args.maps_root
-    splits = args.splits or ([args.split] if args.split else ["val"])
+    splits = args.splits or (args.split if args.split else ["val"])
     if len(splits) == 1:
         split = splits[0]
         folders = args.folders or cfg.get("data", {}).get("split_folders", {}).get(split)

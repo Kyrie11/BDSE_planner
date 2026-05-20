@@ -130,6 +130,8 @@ evidence:
     wrong_raw: 100.0
     yield_raw: 20.0
     collision_min_frames: 2
+    # Ignore first-few-frame overlaps that all candidates inherit before ego can react.
+    collision_grace_s: 0.5
     off_drivable_min_frames: 3
     off_drivable_slack_m: 0.75
     wrong_way_min_frames: 3

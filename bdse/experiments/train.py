@@ -117,17 +117,20 @@ def collate(samples: list[Sample], cfg: dict[str, Any]) -> dict[str, torch.Tenso
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--split", type=str, default="train")
+    parser.add_argument("--split", type=str, nargs="+", default=["train"], help="One or more preprocessed splits/folders, e.g. train or train_1 train_2.")
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--preprocessed-dir", type=str, default=None, help="Load generated .npz cache instead of building samples on the fly.")
     parser.add_argument("--output", type=str, default="outputs/bdse_model.pt")
     args = parser.parse_args()
     cfg = load_config(args.config)
+    splits = args.split
     if args.preprocessed_dir:
-        dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios)
+        dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=splits, max_scenarios=args.max_scenarios)
     else:
-        dataset = NuPlanBDSEDataset(cfg, split=args.split, max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
+        if len(splits) != 1:
+            raise ValueError("On-the-fly training supports one split at a time; preprocess first to train from multiple split folders.")
+        dataset = NuPlanBDSEDataset(cfg, split=splits[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
     loader = DataLoader(OnTheFlyDataset(dataset), batch_size=int(cfg["training"]["batch_size"]), shuffle=True, num_workers=0, collate_fn=lambda x: collate(x, cfg))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BDSEModel(cfg).to(device)

@@ -311,6 +311,25 @@ def _sustained_true(mask: np.ndarray, min_frames: int) -> bool:
     return False
 
 
+
+
+def _collision_decision_slice(n: int, dt_eval: float, safety: dict[str, Any]) -> slice:
+    """Ignore unavoidable near-immediate overlaps for hard collision evidence.
+
+    Candidate trajectories start at the first future control step.  In dense
+    nuPlan scenes, an adjacent or already-overlapping agent can create the same
+    first-few-frame box overlap for every candidate, which is not decision
+    evidence and makes the whole candidate set look unsafe.  Hard occupancy
+    ownership should begin after a short reaction grace period; soft proximity
+    costs can still use the full series.
+    """
+    if n <= 0:
+        return slice(0, 0)
+    grace_s = max(0.0, float(safety.get("collision_grace_s", 0.0)))
+    start = int(np.floor(grace_s / max(float(dt_eval), 1e-6)))
+    start = min(max(start, 0), max(n - 1, 0))
+    return slice(start, None)
+
 def _red_stop_line_relevant(xy: np.ndarray, route: np.ndarray, route_width: float, cfg: dict[str, Any]) -> tuple[bool, float, float]:
     if len(xy) < 2 or len(route) < 2:
         return False, 1e6, 0.0
@@ -365,7 +384,8 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
                 near = np.maximum(0.0, d_safe - dist) ** 2
                 overlap = _collision_overlap_series(traj, agent, atom)
-                raw[ei, a] = float(near.sum() + c_col * overlap.max())
+                decision_overlap = overlap[_collision_decision_slice(len(overlap), dt_eval, safety)]
+                raw[ei, a] = float(near.sum() + c_col * (decision_overlap.max() if decision_overlap.size else 0.0))
             elif atom.type == "ttc":
                 agent = agent_eval
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
@@ -471,6 +491,7 @@ def hard_event_matrix(atoms: list[EvidenceAtom], candidates: CandidateBank, runt
             traj = eval_trajs[a]
             if atom.type in {"occupancy", "collision"}:
                 overlap = _collision_overlap_series(traj, agent_eval, atom) > 0.0
+                overlap = overlap[_collision_decision_slice(len(overlap), base_dt * _teacher_eval_stride(cfg), safety)]
                 min_frames = int(safety.get("collision_min_frames", 2))
                 out[ei, a] = _sustained_true(overlap, min_frames)
             elif atom.type == "red_light":

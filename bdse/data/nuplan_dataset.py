@@ -16,7 +16,7 @@ import numpy as np
 from bdse.config import load_config
 from bdse.data.cache_schema import Sample, load_sample_npz, save_sample_npz
 from bdse.data.label_builder import build_training_sample_from_scenario
-from bdse.data.scenario_sampler import DBFileRecord, db_files_for_nuplan_builder, discover_db_files, select_records
+from bdse.data.scenario_sampler import DBFileRecord, db_files_for_nuplan_builder, discover_db_files, normalize_split_name, select_records
 
 @dataclass(frozen=True, slots=True)
 class ScenarioIndexRecord:
@@ -375,7 +375,10 @@ class NuPlanBDSEDataset:
     def write_preprocessed_cache(self, out_dir: str | Path | None = None, resume: bool = True, overwrite: bool = False, show_progress: bool = True, manifest_name: str | None = None, num_workers: int | None = None, use_process_pool: bool | None = None) -> list[Path]:
         out = Path(out_dir or self.preprocessed_dir)
         out.mkdir(parents=True, exist_ok=True)
-        manifest_path = out / (manifest_name or self.cfg.get("preprocess", {}).get("manifest_name", "manifest.jsonl"))
+        # Keep each requested split/folder self-contained.  For example,
+        # preprocessing ``--split train_1 train_2 --output-dir ROOT`` writes
+        # samples and manifests under ``ROOT/train_1`` and ``ROOT/train_2``.
+        manifest_path = out / self.split / (manifest_name or self.cfg.get("preprocess", {}).get("manifest_name", "manifest.jsonl"))
 
         # Build the index once. cache_path_for_index() is pure after this and can be
         # used to decide skip/write before expensive sample construction.
@@ -495,15 +498,67 @@ class PreprocessedBDSEDataset:
     def __init__(
         self,
         preprocessed_dir: str | Path,
-        split: str | None = None,
+        split: str | list[str] | tuple[str, ...] | None = None,
         manifest_name: str = "manifest.jsonl",
         max_scenarios: int | None = None,
     ):
         self.preprocessed_dir = Path(preprocessed_dir)
-        self.split = split
+        if split is None:
+            self.splits: list[str] | None = None
+        elif isinstance(split, str):
+            self.splits = [split]
+        else:
+            self.splits = [str(s) for s in split]
+        # Backward-compatible public attribute used by a few scripts.
+        self.split = None if self.splits is None else (self.splits[0] if len(self.splits) == 1 else list(self.splits))
         self.manifest_name = manifest_name
         self.max_scenarios = max_scenarios
         self._paths: list[Path] | None = None
+
+    @staticmethod
+    def _is_canonical_split_name(split: str) -> bool:
+        return split == normalize_split_name(split)
+
+    def _record_matches_split(self, rec_split: Any) -> bool:
+        if self.splits is None:
+            return True
+        rec = str(rec_split)
+        rec_norm = normalize_split_name(rec)
+        for split in self.splits:
+            if rec == split:
+                return True
+            # Canonical selectors such as ``train`` should also match concrete
+            # preprocessed folders/manifests like ``train_1`` or ``train_boston``.
+            # Concrete selectors such as ``train_1`` remain exact-match only.
+            if self._is_canonical_split_name(split) and rec_norm == split:
+                return True
+        return False
+
+    def _split_search_roots(self) -> list[Path]:
+        root = self.preprocessed_dir
+        if self.splits is None:
+            return [root]
+        roots: list[Path] = []
+        for split in self.splits:
+            direct = root / split
+            if direct.exists():
+                roots.append(direct)
+            if self._is_canonical_split_name(split) and root.exists():
+                for child in sorted(root.iterdir(), key=lambda p: p.name):
+                    if child.is_dir() and normalize_split_name(child.name) == split:
+                        roots.append(child)
+        return sorted(dict.fromkeys(roots), key=lambda p: str(p))
+
+    def _manifest_paths(self) -> list[Path]:
+        root = self.preprocessed_dir
+        paths = [root / self.manifest_name]
+        for search_root in self._split_search_roots():
+            paths.append(search_root / self.manifest_name)
+        if self.splits is None and root.exists():
+            for child in sorted(root.iterdir(), key=lambda p: p.name):
+                if child.is_dir():
+                    paths.append(child / self.manifest_name)
+        return sorted(dict.fromkeys(paths), key=lambda p: str(p))
 
     def _paths_from_manifest(self, manifest_path: Path) -> list[Path]:
         paths: list[Path] = []
@@ -518,7 +573,7 @@ class PreprocessedBDSEDataset:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if self.split is not None and rec.get("split") != self.split:
+                if not self._record_matches_split(rec.get("split", "")):
                     continue
                 path = Path(str(rec.get("path", "")))
                 if not path.is_absolute():
@@ -532,29 +587,28 @@ class PreprocessedBDSEDataset:
             return self._paths
         if not self.preprocessed_dir.exists():
             raise FileNotFoundError(f"preprocessed cache root does not exist: {self.preprocessed_dir}")
-        manifest_paths = [self.preprocessed_dir / self.manifest_name]
-        if self.split:
-            manifest_paths.append(self.preprocessed_dir / self.split / self.manifest_name)
         paths: list[Path] = []
-        for mp in manifest_paths:
+        for mp in self._manifest_paths():
             paths.extend(self._paths_from_manifest(mp))
         if not paths:
-            search_root = self.preprocessed_dir / self.split if self.split else self.preprocessed_dir
-            if search_root.exists():
-                paths = sorted(
-                    (p for p in search_root.rglob("*.npz") if not p.name.startswith(".") and ".tmp." not in p.name),
-                    key=lambda p: str(p),
-                )
-            else:
-                paths = []
-        else:
-            # Manifests may contain duplicates after resumed preprocessing. Keep the
-            # last materialization of each path while preserving deterministic order.
-            paths = sorted(dict.fromkeys(paths), key=lambda p: str(p))
+            search_roots = self._split_search_roots()
+            if not search_roots:
+                search_roots = [self.preprocessed_dir]
+            for search_root in search_roots:
+                if search_root.exists():
+                    paths.extend(
+                        p for p in search_root.rglob("*.npz")
+                        if not p.name.startswith(".") and ".tmp." not in p.name
+                    )
+        # Manifests may contain duplicates after resumed preprocessing. Keep one
+        # copy of each path and sort deterministically.
+        paths = sorted(dict.fromkeys(paths), key=lambda p: str(p))
         if self.max_scenarios is not None:
             paths = paths[: int(self.max_scenarios)]
         if not paths:
-            hint = f" split={self.split}" if self.split else ""
+            hint = ""
+            if self.splits is not None:
+                hint = f" split={','.join(self.splits)}"
             raise FileNotFoundError(f"No .npz samples found under {self.preprocessed_dir}{hint}")
         self._paths = paths
         return self._paths
@@ -568,7 +622,6 @@ class PreprocessedBDSEDataset:
     def iter_samples(self) -> Iterator[Sample]:
         for i in range(len(self)):
             yield self[i]
-
 
 def discover_available_splits(data_cache_root: str | Path = "/data0/nuplan/data/cache") -> dict[str, list[str]]:
     records = discover_db_files(data_cache_root)

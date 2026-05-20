@@ -18,7 +18,7 @@ def _folders_for_split(cfg: dict, split: str, cli_folders: list[str] | None) -> 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--split", type=str, default=None, help="Single split, kept for backward compatibility.")
+    parser.add_argument("--split", type=str, nargs="+", default=None, help="One or more splits. Kept for backward compatibility with a single value.")
     parser.add_argument("--splits", type=str, nargs="*", default=None, help="One or more splits, e.g. train val. Defaults to --split or train.")
     parser.add_argument("--folders", type=str, nargs="*", default=None, help="Explicit DB subfolders to use for every selected split.")
     parser.add_argument("--data-root", type=str, default=None)
@@ -83,7 +83,7 @@ def main() -> None:
         print(discover_available_splits(cfg["paths"]["data_cache_root"]))
         return
 
-    splits = args.splits or ([args.split] if args.split else ["train"])
+    splits = args.splits or (args.split if args.split else ["train"])
     resume = bool(cfg.get("preprocess", {}).get("resume", True)) if args.resume is None else bool(args.resume)
     out_dir = Path(args.output_dir or cfg["paths"].get("preprocessed_cache", "cache"))
     total_paths = []
@@ -101,7 +101,7 @@ def main() -> None:
             num_workers=cfg.get("preprocess", {}).get("num_workers", 1),
             use_process_pool=cfg.get("preprocess", {}).get("use_process_pool", False),
         )
-        print(f"[bdse] start preprocessing split={split} folders={folders} data_root={cfg['paths']['data_cache_root']} out={out_dir}", flush=True)
+        print(f"[bdse] start preprocessing split={split} folders={folders} data_root={cfg['paths']['data_cache_root']} out={out_dir / split}", flush=True)
         paths = dataset.write_preprocessed_cache(
             out_dir,
             resume=resume,

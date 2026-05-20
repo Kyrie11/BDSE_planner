@@ -70,8 +70,19 @@ def select_records(
 ) -> list[DBFileRecord]:
     recs = list(records)
     if split is not None:
+        # ``train_1`` / ``train_2`` style folders should be addressable as
+        # concrete DB buckets.  The previous predicate also matched their
+        # normalized split (``train``), so requesting ``train_1`` accidentally
+        # selected every training DB and then wrote them below a single
+        # ``train_1`` output prefix.  Prefer an exact folder match whenever the
+        # requested name is a sub-split folder; keep canonical names such as
+        # ``train`` and ``val`` as aggregate split selectors.
         norm = normalize_split_name(split)
-        recs = [r for r in recs if r.split == norm or r.folder == split]
+        exact_folders = {r.folder for r in recs}
+        if split in exact_folders and split != norm:
+            recs = [r for r in recs if r.folder == split]
+        else:
+            recs = [r for r in recs if r.split == norm]
     if folders is not None:
         folder_set = set(folders)
         recs = [r for r in recs if r.folder in folder_set]
