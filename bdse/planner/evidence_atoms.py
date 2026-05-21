@@ -395,9 +395,19 @@ def _red_stop_line_relevant(xy: np.ndarray, route: np.ndarray, route_width: floa
     return bool(route_d <= max_route_d and min_progress <= progress <= max_progress), route_d, progress
 
 
-def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> np.ndarray:
+def raw_local_costs_with_hard_events(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    """Evaluate raw atom costs and owned hard-event flags in one pass.
+
+    The teacher needs both ``g_i^T(a)`` and the per-candidate hard-violation
+    diagnostics.  Computing the latter with ``hard_event_matrix`` after
+    ``raw_local_costs`` repeats the same expensive SAT collision checks,
+    drivable-area distances, and wrong-way route projections.  This function
+    keeps the exact hard-event semantics while reusing the intermediate values
+    already produced during raw-cost evaluation.
+    """
     E, K = len(atoms), candidates.K
     raw = np.zeros((E, K), dtype=np.float32)
+    hard_events = np.zeros((E, K), dtype=bool)
     safety = cfg.get("evidence", {}).get("safety", {})
     d_safe = float(safety.get("d_safe_m", 2.0))
     tau_safe = float(safety.get("tau_safe_s", 2.0))
@@ -408,9 +418,14 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
     c_red = float(safety.get("red_raw", 50.0))
     c_off = float(safety.get("off_raw", 50.0))
     c_wrong = float(safety.get("wrong_raw", 50.0))
+    c_route_width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
     base_dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
     stride = _teacher_eval_stride(cfg)
     dt_eval = base_dt * stride
+    collision_min_frames = int(safety.get("collision_min_frames", 2))
+    off_min_frames = int(safety.get("off_drivable_min_frames", 3))
+    off_slack = float(safety.get("off_drivable_slack_m", 0.75))
+    wrong_min_frames = int(safety.get("wrong_way_min_frames", 3))
 
     # Do not slice every candidate again for every atom.  With E~70, K=32,
     # T=80 this alone removes thousands of repeated Python/Numpy allocations.
@@ -442,6 +457,8 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                 near = np.maximum(0.0, d_safe - dist) ** 2
                 decision_overlap = collision_decision[a] if collision_decision is not None else np.zeros((0,), dtype=bool)
                 raw[ei, a] = float(near.sum() + c_col * (decision_overlap.max() if decision_overlap.size else 0.0))
+                if atom.is_hard and candidates.valid_mask[a]:
+                    hard_events[ei, a] = _sustained_true(decision_overlap, collision_min_frames)
             elif atom.type == "ttc":
                 agent = agent_eval
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
@@ -464,6 +481,12 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                 crosses = _crosses_polyline(traj[:, :2], stop)
                 d_line = float(np.linalg.norm(traj[:, None, :2] - stop[None, :, :], axis=2).min()) if len(stop) else 1e6
                 raw[ei, a] = float(c_red * float(red and crosses) + np.maximum(0.0, 1.0 - d_line) ** 2)
+                if atom.is_hard and candidates.valid_mask[a]:
+                    relevant = True
+                    route = np.asarray(runtime.map_features.get("route_centerline", np.zeros((0, 2))), dtype=np.float32).reshape(-1, 2)
+                    if len(stop) >= 2 and len(route) >= 2:
+                        relevant, _, _ = _red_stop_line_relevant(stop, route, c_route_width, cfg)
+                    hard_events[ei, a] = bool(red and relevant and crosses)
             elif atom.type == "drivable_area":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 width = float(atom.anchor.get("width", 4.0))
@@ -476,16 +499,23 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                     outside_dist = float(dist[outside].sum()) if np.any(outside) else 0.0
                     near_boundary = float(np.maximum(0.0, margin - dist[~outside]).sum()) if np.any(~outside) else 0.0
                     raw[ei, a] = float(c_off * float(outside.max()) + outside_dist + near_boundary)
+                    hard_mask = np.logical_and(outside, dist > off_slack)
                 else:
                     dist = cached_route_dist(route, a)
                     outside = dist > width
                     raw[ei, a] = float(c_off * float(outside.max()) + np.maximum(0.0, dist - width).sum())
+                    hard_mask = np.logical_and(outside, np.maximum(0.0, dist - width) > off_slack)
+                if atom.is_hard and candidates.valid_mask[a]:
+                    hard_events[ei, a] = _sustained_true(hard_mask, off_min_frames)
             elif atom.type == "wrong_way":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 route_dist = cached_route_dist(route, a)
                 route_yaw = _route_heading_at(traj[:, :2], route)
                 heading_bad = np.abs(angle_wrap(traj[:, 2] - route_yaw)) > (0.5 * np.pi)
-                raw[ei, a] = float(c_wrong * np.logical_and(heading_bad, route_dist < 5.0).max())
+                wrong_mask = np.logical_and(heading_bad, route_dist < 5.0)
+                raw[ei, a] = float(c_wrong * wrong_mask.max())
+                if atom.is_hard and candidates.valid_mask[a]:
+                    hard_events[ei, a] = _sustained_true(wrong_mask, wrong_min_frames)
             elif atom.type == "route_connector":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 raw[ei, a] = float(np.square(cached_route_dist(route, a)).mean())
@@ -506,6 +536,12 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
                 elif atom.type.endswith("brake"):
                     raw[ei, a] = float(np.maximum(0.0, -acc - 5.0).sum())
     raw[:, ~candidates.valid_mask] = 0.0
+    hard_events[:, ~candidates.valid_mask] = False
+    return raw, hard_events
+
+
+def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> np.ndarray:
+    raw, _ = raw_local_costs_with_hard_events(atoms, candidates, runtime, label_future, cfg)
     return raw
 
 

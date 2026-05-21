@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, EvidenceBank, LabelOnlyFuture, RuntimeFeatures, TeacherLabels
-from bdse.planner.evidence_atoms import _eval_traj, hard_event_matrix, normalize_atom_costs, raw_local_costs
+from bdse.planner.evidence_atoms import _eval_traj, normalize_atom_costs, raw_local_costs_with_hard_events
 from bdse.utils import compute_curvature, finite_difference, nearest_polyline_distance, route_progress_along_polyline
 
 
@@ -73,7 +73,7 @@ def evaluate_teacher_costs(
     if cfg.get("teacher", {}).get("separate_hard_gate", False):
         raise ValueError("BDSE teacher cost has exactly J_base_T + sum_i g_i_T; no separate hard gate is allowed.")
     J_base = evaluate_base_costs(runtime, label_future, candidates, cfg)
-    raw = raw_local_costs(evidence_bank.atoms, candidates, runtime, label_future, cfg)
+    raw, hard_events = raw_local_costs_with_hard_events(evidence_bank.atoms, candidates, runtime, label_future, cfg)
     g = normalize_atom_costs(raw, evidence_bank.atoms, cfg)
     J_evid = g.sum(axis=0, dtype=np.float64)
     J_T = J_base.astype(np.float64) + J_evid
@@ -81,7 +81,6 @@ def evaluate_teacher_costs(
     if not np.any(candidates.valid_mask):
         raise ValueError("Teacher cost requires at least one valid candidate")
     a_star = int(np.argmin(J_T))
-    hard_events = hard_event_matrix(evidence_bank.atoms, candidates, runtime, label_future, cfg)
     hard_mask = evidence_bank.hard_mask()
     hard_violation = np.zeros((candidates.K,), dtype=bool)
     if hard_mask.size:

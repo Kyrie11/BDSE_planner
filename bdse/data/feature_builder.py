@@ -153,6 +153,20 @@ def _temporal_cache_max_entries(cfg: dict[str, Any]) -> int:
     return max(128, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_max_entries"), 4096))
 
 
+def _temporal_cache_individual_miss_threshold(cfg: dict[str, Any]) -> int:
+    """Maximum number of future-frame cache misses to fill one-by-one.
+
+    Adjacent BDSE samples often share most of an 8 s future window, so reading a
+    handful of newly exposed tail frames by iteration is cheaper than rebuilding
+    the full nuPlan future trajectory.  On a cold miss, however, the previous
+    implementation made 80 independent DB/object reconstruction calls at 10 Hz;
+    that is much slower than nuPlan's exact bulk future API and does not improve
+    label fidelity.  This threshold keeps the tail-fill optimization only for the
+    case it was designed for.
+    """
+    return max(0, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_individual_miss_threshold"), 8))
+
+
 def _scenario_log_name_for_cache(scenario: Any) -> str:
     for name in ("log_name", "_log_name", "scenario_name", "_scenario_name", "token"):
         val = getattr(scenario, name, None)
@@ -362,10 +376,10 @@ def cached_tracked_window(
         # For future windows, only the newly exposed tail frames are usually
         # missing when samples are processed in log-time order. Fill just those
         # frames via get_tracked_objects_at_iteration(iteration+k+1) instead of
-        # reconstructing the full 80-frame get_future_tracked_objects window. This
-        # is semantics-preserving for nuPlan's discrete 10 Hz scenario API; if any
-        # individual frame read fails, fall back to the original bulk API below.
-        if direction == "future":
+        # reconstructing the full 80-frame get_future_tracked_objects window.
+        # On a cold or highly concurrent miss this would issue one DB call per
+        # timestep, so use the exact bulk API unless the miss count is small.
+        if direction == "future" and stats["cache_miss_frames"] <= _temporal_cache_individual_miss_threshold(cfg):
             filled = True
             stats["individual_frame_calls"] = 0
             for k, frame in enumerate(frames):
@@ -440,7 +454,7 @@ def cached_ego_window(
                 stats["cache_hit_frames"] += 1
         if all(s is not None for s in states):
             return [s for s in states if s is not None], stats
-        if direction == "future":
+        if direction == "future" and stats["cache_miss_frames"] <= _temporal_cache_individual_miss_threshold(cfg):
             filled = True
             stats["individual_frame_calls"] = 0
             for k, state in enumerate(states):
