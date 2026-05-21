@@ -6,7 +6,7 @@ import time
 import numpy as np
 
 from bdse.data.cache_schema import LabelOnlyFuture, Sample, pad_array
-from bdse.data.feature_builder import _call, _iter_tracked_objects, _state_to_array, _box_to_array, _object_token, build_runtime_features_from_scenario
+from bdse.data.feature_builder import _call, _iter_tracked_objects, _state_to_array, _box_to_array, _object_token, build_runtime_features_from_scenario, resort_runtime_agents_for_candidates
 from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.pair_builder import build_pair_labels
@@ -138,9 +138,11 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
     mark("candidates")
     if bool(pcfg.get("candidate_aware_agent_selection", False)):
         # Pass 1 builds a candidate bank so agent selection can be ordered by
-        # candidate proximity.  After re-selecting agents, regenerate the bank so
-        # conflict-stop priors and evidence/teacher labels use the same agents.
-        runtime = build_runtime_features_from_scenario(scenario, iteration, cfg, candidates=candidates)
+        # candidate proximity.  Re-select agents from the all-agent arrays cached
+        # in the first runtime pass, but do not re-extract ego/map/drivable polygon
+        # features.  This preserves candidate-aware quality while removing the
+        # dominant duplicate map-API cost.
+        runtime = resort_runtime_agents_for_candidates(runtime, candidates, cfg)
         mark("runtime_resort")
         candidates = generate_candidate_bank(runtime, cfg)
         mark("candidates_resort")

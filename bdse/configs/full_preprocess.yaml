@@ -35,7 +35,7 @@ runtime:
   max_route_connection_gap_m: 12.0
   use_future_traffic_lights_for_teacher: false
 candidate:
-  K: 48
+  K: 32
   horizon_s: 8.0
   step_s: 0.1
   # For final labels, mask dynamically impossible rollouts.  The previous
@@ -75,6 +75,12 @@ evidence:
   include_kinematic: true
   include_hard_atoms: true
   budget: 16
+  safety:
+    # Keep final labels at 10 Hz, but suppress only hard collision frames that are
+    # effectively universal across the finite valid candidate bank.  Soft occupancy
+    # costs still see the full agent tube.
+    collision_shared_frame_fraction: 0.98
+    collision_shared_min_candidates: 4
 teacher:
   demo_weight: 10.0
   demo_scale: 100.0

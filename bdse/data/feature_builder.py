@@ -779,6 +779,67 @@ def select_agents_deterministic(raw_current_agents: np.ndarray, raw_agent_histor
     return out_hist, out_cur, valid
 
 
+_TRANSIENT_AGENT_METADATA_KEYS = {
+    "_raw_agent_tokens",
+    "_raw_current_agents",
+    "_raw_agent_history",
+}
+
+
+def _drop_transient_agent_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Remove preprocessing-only arrays before a sample is serialized."""
+    return {k: v for k, v in dict(metadata).items() if k not in _TRANSIENT_AGENT_METADATA_KEYS}
+
+
+def resort_runtime_agents_for_candidates(runtime: RuntimeFeatures, candidates: Any, cfg: dict[str, Any]) -> RuntimeFeatures:
+    """Re-select agents by candidate proximity without re-reading map/ego features.
+
+    The old candidate-aware pass called ``build_runtime_features_from_scenario`` a
+    second time after the first candidate bank was generated.  That improves agent
+    ordering, but it also repeats expensive nuPlan map extraction, including full
+    drivable polygons.  During the first pass we keep the all-agent current/history
+    arrays in private metadata; this helper reuses them, updates only the agent
+    tensors and selected-token list, and strips the private arrays before caching.
+    """
+    meta = dict(runtime.metadata or {})
+    raw_current = np.asarray(meta.get("_raw_current_agents", np.zeros((0, 10), dtype=np.float32)), dtype=np.float32)
+    raw_hist = np.asarray(meta.get("_raw_agent_history", np.zeros((0, 1, 10), dtype=np.float32)), dtype=np.float32)
+    raw_tokens = [str(x) for x in list(meta.get("_raw_agent_tokens", []))]
+    clean_meta = _drop_transient_agent_metadata(meta)
+
+    if raw_current.ndim != 2 or raw_current.shape[0] == 0 or raw_hist.ndim != 3:
+        runtime.metadata = clean_meta
+        return runtime
+
+    runtime_cfg = cfg.get("runtime", {})
+    max_agents = int(runtime_cfg.get("max_agents", runtime.current_agents.shape[0] if runtime.current_agents.ndim == 2 else 32))
+    radius = float(runtime_cfg.get("agent_radius_m", 80.0))
+    cand_traj = None if candidates is None else getattr(candidates, "trajectories", candidates)
+    order = _agent_selection_order(raw_current, np.zeros(2, dtype=np.float32), max_agents, radius, cand_traj)
+    agent_hist, current_agents, agent_valid = select_agents_deterministic(
+        raw_current,
+        raw_hist,
+        np.zeros(2, dtype=np.float32),
+        max_agents,
+        radius,
+        cand_traj,
+    )
+    clean_meta["selected_agent_tokens"] = [raw_tokens[i] for i in order if i < len(raw_tokens)]
+    clean_meta["candidate_aware_agent_selection"] = True
+    clean_meta["raw_agent_count"] = int(raw_current.shape[0])
+    return RuntimeFeatures(
+        ego_history=runtime.ego_history,
+        agent_history=agent_hist.astype(np.float32),
+        agent_valid=agent_valid,
+        current_agents=current_agents.astype(np.float32),
+        traffic_lights=runtime.traffic_lights,
+        map_features=runtime.map_features,
+        route_roadblock_ids=runtime.route_roadblock_ids,
+        mission_goal=runtime.mission_goal,
+        metadata=clean_meta,
+    )
+
+
 def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dict[str, Any], candidates=None) -> RuntimeFeatures:
     runtime_cfg = cfg.get("runtime", {})
     hist_s = float(runtime_cfg.get("history_s", 2.0))
@@ -841,6 +902,12 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
     mission_goal = None if mission_goal_state is None else transform_states_to_local(_state_to_array(mission_goal_state)[None], origin_xy, origin_yaw)[0]
     map_features = extract_map_features_from_api(getattr(scenario, "map_api", None), ego_arr_global, map_radius,
                                                  [str(r) for r in route_ids], traffic_lights, cfg)
+    metadata = {"scenario_token": str(getattr(scenario, "token", getattr(scenario, "scenario_name", ""))), "iteration": int(iteration), "origin_xy": origin_xy, "origin_yaw": origin_yaw, "selected_agent_tokens": selected_tokens, "map_valid": bool(map_features.get("map_valid", False)), "route_source": str(map_features.get("route_source", "unknown"))}
+    if bool(cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)):
+        metadata["_raw_agent_tokens"] = raw_tokens
+        metadata["_raw_current_agents"] = raw_current.astype(np.float32)
+        metadata["_raw_agent_history"] = raw_hist.astype(np.float32)
+
     return RuntimeFeatures(
         ego_history=ego_history.astype(np.float32),
         agent_history=agent_hist.astype(np.float32),
@@ -850,7 +917,7 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
         map_features=map_features,
         route_roadblock_ids=[str(r) for r in route_ids],
         mission_goal=mission_goal,
-        metadata={"scenario_token": str(getattr(scenario, "token", getattr(scenario, "scenario_name", ""))), "iteration": int(iteration), "origin_xy": origin_xy, "origin_yaw": origin_yaw, "selected_agent_tokens": selected_tokens, "map_valid": bool(map_features.get("map_valid", False)), "route_source": str(map_features.get("route_source", "unknown"))},
+        metadata=metadata,
     )
 
 

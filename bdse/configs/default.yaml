@@ -138,6 +138,12 @@ evidence:
     collision_min_frames: 2
     # Ignore first-few-frame overlaps that all candidates inherit before ego can react.
     collision_grace_s: 0.5
+    # If an occupancy hard-overlap frame is shared by almost every valid candidate,
+    # treat it as non-decision hard evidence and keep only its soft proximity cost.
+    # This avoids no-safe candidate sets caused by unavoidable current-frame or
+    # non-reactive-agent-tube artifacts while preserving candidate-specific crashes.
+    collision_shared_frame_fraction: 0.98
+    collision_shared_min_candidates: 4
     off_drivable_min_frames: 3
     off_drivable_slack_m: 0.75
     wrong_way_min_frames: 3

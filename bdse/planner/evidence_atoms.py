@@ -330,6 +330,33 @@ def _collision_decision_slice(n: int, dt_eval: float, safety: dict[str, Any]) ->
     start = min(max(start, 0), max(n - 1, 0))
     return slice(start, None)
 
+
+def _filter_shared_collision_frames(overlap: np.ndarray, valid_mask: np.ndarray, safety: dict[str, Any]) -> np.ndarray:
+    """Drop collision frames that are shared by almost every valid candidate.
+
+    Such frames are usually inherited from the current nuPlan snapshot: an agent is
+    already adjacent/overlapping or the non-reactive future tube covers the entire
+    route before ego has a meaningful alternative.  They are still useful as soft
+    proximity cost, but as hard *decision* evidence they make the whole finite
+    candidate set unsafe and destroy the teacher's winner-vs-rival signal.  Only
+    frames whose overlap is nearly universal across valid candidates are removed;
+    candidate-specific collision frames remain hard evidence.
+    """
+    arr = np.asarray(overlap, dtype=bool)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    if arr.ndim != 2 or arr.shape[0] != valid.shape[0] or not valid.any():
+        return arr
+    frac = float(safety.get("collision_shared_frame_fraction", 0.98))
+    min_candidates = int(safety.get("collision_shared_min_candidates", 4))
+    if frac <= 0.0 or valid.sum() < max(min_candidates, 1):
+        return arr
+    shared = arr[valid].mean(axis=0) >= min(frac, 1.0)
+    if not np.any(shared):
+        return arr
+    out = arr.copy()
+    out[:, shared] = False
+    return out
+
 def _red_stop_line_relevant(xy: np.ndarray, route: np.ndarray, route_width: float, cfg: dict[str, Any]) -> tuple[bool, float, float]:
     if len(xy) < 2 or len(route) < 2:
         return False, 1e6, 0.0
@@ -375,16 +402,20 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
 
     for ei, atom in enumerate(atoms):
         agent_eval = None
+        collision_decision = None
         if atom.type in {"occupancy", "ttc"}:
             agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, base_dt), cfg)
+        if atom.type == "occupancy" and agent_eval is not None:
+            overlap = np.stack([_collision_overlap_series(eval_trajs[a], agent_eval, atom) > 0.0 for a in range(K)], axis=0)
+            ds = _collision_decision_slice(overlap.shape[1], dt_eval, safety)
+            collision_decision = _filter_shared_collision_frames(overlap[:, ds], candidates.valid_mask, safety)
         for a in range(K):
             traj = eval_trajs[a]
             if atom.type == "occupancy":
                 agent = agent_eval
                 dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
                 near = np.maximum(0.0, d_safe - dist) ** 2
-                overlap = _collision_overlap_series(traj, agent, atom)
-                decision_overlap = overlap[_collision_decision_slice(len(overlap), dt_eval, safety)]
+                decision_overlap = collision_decision[a] if collision_decision is not None else np.zeros((0,), dtype=bool)
                 raw[ei, a] = float(near.sum() + c_col * (decision_overlap.max() if decision_overlap.size else 0.0))
             elif atom.type == "ttc":
                 agent = agent_eval
@@ -485,6 +516,14 @@ def hard_event_matrix(atoms: list[EvidenceAtom], candidates: CandidateBank, runt
         agent_eval = None
         if atom.type in {"occupancy", "collision"}:
             agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, base_dt), cfg)
+            overlap = np.stack([_collision_overlap_series(eval_trajs[a], agent_eval, atom) > 0.0 for a in range(K)], axis=0)
+            overlap = overlap[:, _collision_decision_slice(overlap.shape[1], base_dt * _teacher_eval_stride(cfg), safety)]
+            overlap = _filter_shared_collision_frames(overlap, candidates.valid_mask, safety)
+            min_frames = int(safety.get("collision_min_frames", 2))
+            for a in range(K):
+                if candidates.valid_mask[a]:
+                    out[ei, a] = _sustained_true(overlap[a], min_frames)
+            continue
         for a in range(K):
             if not candidates.valid_mask[a]:
                 continue
