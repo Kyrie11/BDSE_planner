@@ -157,6 +157,7 @@ python -m bdse.experiments.preprocess \
   --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_full_qualityfix \
   --num-workers 4 \
   --scenario-stride 10 \
+  --max-samples-per-log 256 \
   --teacher-cost-eval-stride 1 \
   --include-drivable-polygons \
   --candidate-aware-agent-selection \

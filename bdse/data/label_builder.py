@@ -165,8 +165,12 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
             if name in marks:
                 parts.append(f"{name}={marks[name] - prev:.3f}s")
                 prev = marks[name]
+        rt_profile = getattr(runtime, "metadata", {}).get("profile_runtime", {}) if runtime is not None else {}
+        if rt_profile:
+            rt_parts = ",".join(f"{k}={float(v):.3f}s" for k, v in sorted(rt_profile.items()))
+            parts.append(f"runtime_breakdown=[{rt_parts}]")
         parts.append(f"total={total:.3f}s")
-        # print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
+        print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
     return Sample(token, timestamp_us, runtime, label_future, candidates, evidence, teacher, pairs)
 
 

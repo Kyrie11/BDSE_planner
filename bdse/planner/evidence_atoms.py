@@ -28,12 +28,29 @@ def _has_red_light(runtime: RuntimeFeatures) -> bool:
     return any("red" in str(tl.get("status", "")).lower() for tl in runtime.traffic_lights)
 
 
+def _min_distance_to_points(query_xy: np.ndarray, point_xy: np.ndarray, chunk: int = 8192) -> np.ndarray:
+    queries = np.asarray(query_xy, dtype=np.float32).reshape(-1, 2)
+    pts = np.asarray(point_xy, dtype=np.float32).reshape(-1, 2)
+    if queries.size == 0:
+        return np.zeros((0,), dtype=np.float32)
+    if pts.size == 0:
+        return np.full((queries.shape[0],), 1e6, dtype=np.float32)
+    best2 = np.full((queries.shape[0],), np.inf, dtype=np.float32)
+    chunk = max(256, int(chunk))
+    for start in range(0, pts.shape[0], chunk):
+        block = pts[start : start + chunk]
+        diff = queries[:, None, :] - block[None, :, :]
+        d2 = np.einsum("qbd,qbd->qb", diff, diff, optimize=True)
+        best2 = np.minimum(best2, d2.min(axis=1))
+    return np.sqrt(best2).astype(np.float32)
+
+
 def _min_candidate_distance(candidates: CandidateBank, xy: np.ndarray) -> float:
     valid = candidates.trajectories[candidates.valid_mask]
     if len(valid) == 0:
         return 1e6
     pts = valid[..., :2].reshape(-1, 2)
-    return float(np.linalg.norm(pts - xy[None, :], axis=1).min())
+    return float(_min_distance_to_points(np.asarray(xy, dtype=np.float32).reshape(1, 2), pts)[0])
 
 
 def _relevant_interaction_agent_indices(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> list[tuple[int, float, float]]:
@@ -53,19 +70,24 @@ def _relevant_interaction_agent_indices(runtime: RuntimeFeatures, candidates: Ca
     close_radius = float(ecfg.get("interaction_close_radius_m", 18.0))
     ahead_limit = float(ecfg.get("interaction_ahead_limit_m", 90.0))
 
-    valid_agents = np.flatnonzero(runtime.agent_valid.astype(bool)).tolist()
-    if not valid_agents or max_agents <= 0:
+    valid_agents = np.flatnonzero(runtime.agent_valid.astype(bool)).astype(np.int64)
+    if valid_agents.size == 0 or max_agents <= 0:
         return []
     valid_traj = candidates.trajectories[candidates.valid_mask]
     cand_xy = valid_traj[..., :2].reshape(-1, 2) if len(valid_traj) else np.zeros((0, 2), dtype=np.float32)
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32).reshape(-1, 2)
+    cur_all = np.asarray(runtime.current_agents[valid_agents], dtype=np.float32)
+    xy_all = cur_all[:, :2]
+    ego_dist_all = np.linalg.norm(xy_all, axis=1)
+    min_cand_all = _min_distance_to_points(xy_all, cand_xy) if len(cand_xy) else ego_dist_all.astype(np.float32)
+    route_dist_all = nearest_polyline_distance(xy_all, route) if len(route) >= 2 else np.abs(xy_all[:, 1]).astype(np.float32)
     rows: list[tuple[int, float, float]] = []
-    for j in valid_agents:
-        cur = runtime.current_agents[j]
-        xy = cur[:2]
-        ego_dist = float(np.linalg.norm(xy))
-        min_cand = float(np.linalg.norm(cand_xy - xy[None, :], axis=1).min()) if len(cand_xy) else ego_dist
-        route_dist = float(nearest_polyline_distance(xy[None, :], route)[0]) if len(route) >= 2 else abs(float(xy[1]))
+    for pos, j in enumerate(valid_agents.tolist()):
+        cur = cur_all[pos]
+        xy = xy_all[pos]
+        ego_dist = float(ego_dist_all[pos])
+        min_cand = float(min_cand_all[pos])
+        route_dist = float(route_dist_all[pos])
         ahead = -8.0 <= float(xy[0]) <= ahead_limit
         relevant = (min_cand <= cand_radius) or (ahead and route_dist <= route_radius) or (ego_dist <= close_radius)
         if not relevant:
@@ -87,6 +109,7 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
     max_kin = int(ecfg.get("max_kinematic_atoms", 16))
 
     if ecfg.get("include_interaction", True):
+        interaction_count = 0
         for j, priority_distance, route_dist in _relevant_interaction_agent_indices(runtime, candidates, cfg):
             cur = runtime.current_agents[j]
             d = float(np.linalg.norm(cur[:2]))
@@ -100,12 +123,14 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
                 "ego_distance": d,
             }
             atoms.append(_new_atom(next_id, "occupancy", anchor, "interaction", True, cfg)); next_id += 1
+            interaction_count += 1
             # Soft interaction atoms are useful but should not swamp the teacher;
             # they are emitted only for the same filtered decision-relevant agents.
-            if len([a for a in atoms if a.family == "interaction"]) + 2 <= max_inter:
+            if interaction_count + 2 <= max_inter:
                 atoms.append(_new_atom(next_id, "ttc", anchor, "interaction", False, cfg)); next_id += 1
                 atoms.append(_new_atom(next_id, "gap", anchor, "interaction", False, cfg)); next_id += 1
-            if len([a for a in atoms if a.family == "interaction"]) >= max_inter:
+                interaction_count += 2
+            if interaction_count >= max_inter:
                 break
 
     if ecfg.get("include_rule_map", True):

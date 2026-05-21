@@ -279,6 +279,9 @@ class NuPlanBDSEDataset:
             )
             show_index_progress = total_scenarios >= int(self.cfg.get("preprocess", {}).get("index_progress_threshold", 10000))
             iterator = _maybe_tqdm(scenarios, total_scenarios, f"index:{self.split}", show_index_progress)
+            cap_strategy = str(self.cfg.get("preprocess", {}).get("max_samples_per_log_strategy", "first")).lower()
+            if cap_strategy not in {"first", "uniform"}:
+                raise ValueError(f"Unsupported max_samples_per_log_strategy={cap_strategy!r}; expected 'first' or 'uniform'.")
             per_log_counts: dict[str, int] = {}
             for scenario in iterator:
                 token = _scenario_token(scenario)
@@ -286,7 +289,7 @@ class NuPlanBDSEDataset:
                 folder = folder_lookup.get(log_name, folder_lookup.get(_safe_name(log_name), default_folder))
                 n_iter = _num_iterations(scenario)
                 for iteration in range(0, n_iter, max(self.stride, 1)):
-                    if self.max_samples_per_log is not None and per_log_counts.get(log_name, 0) >= self.max_samples_per_log:
+                    if self.max_samples_per_log is not None and cap_strategy == "first" and per_log_counts.get(log_name, 0) >= self.max_samples_per_log:
                         break
                     out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration))
                     per_log_counts[log_name] = per_log_counts.get(log_name, 0) + 1
@@ -294,6 +297,35 @@ class NuPlanBDSEDataset:
                         self._index = out
                         print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
                         return self._index
+
+            if self.max_samples_per_log is not None and cap_strategy == "uniform":
+                grouped: dict[str, list[DevkitScenarioIndexRecord]] = {}
+                for rec in out:
+                    grouped.setdefault(rec.log_name, []).append(rec)
+                capped: list[DevkitScenarioIndexRecord] = []
+                cap = int(self.max_samples_per_log)
+                for log_name in sorted(grouped):
+                    rows = grouped[log_name]
+                    if len(rows) <= cap:
+                        capped.extend(rows)
+                        continue
+                    # Evenly sample across the whole log. The previous implementation
+                    # kept only the first cap frames, which can overrepresent the beginning
+                    # of every DB file and bias route/traffic-light/interaction coverage.
+                    idx = np.linspace(0, len(rows) - 1, cap).round().astype(np.int64)
+                    idx = np.unique(idx)
+                    if idx.size < cap:
+                        used = set(idx.tolist())
+                        missing = [i for i in range(len(rows)) if i not in used]
+                        idx = np.asarray(sorted(list(idx) + missing[: cap - idx.size]), dtype=np.int64)
+                    capped.extend(rows[int(i)] for i in idx[:cap])
+                out = sorted(capped, key=lambda r: (r.log_name, r.iteration, r.token))
+                print(
+                    f"[bdse] applied uniform per-log cap: split={self.split} "
+                    f"logs={len(grouped)} cap={cap} records={len(out)}",
+                    flush=True,
+                )
+
             self._index = out
             print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
             return self._index
@@ -355,12 +387,12 @@ class NuPlanBDSEDataset:
         save_sample_npz(sample, tmp, compressed=bool(pcfg.get("compress_npz", False)))
         os.replace(tmp, path)
         t_done = time.perf_counter()
-        # if profile and (t_done - t0) >= threshold_s:
-        #     print(
-        #         f"[bdse][profile-write] idx={i} build={t_sample - t0:.3f}s "
-        #         f"save={t_done - t_sample:.3f}s total={t_done - t0:.3f}s path={path}",
-        #         flush=True,
-        #     )
+        if profile and (t_done - t0) >= threshold_s:
+            print(
+                f"[bdse][profile-write] idx={i} build={t_sample - t0:.3f}s "
+                f"save={t_done - t_sample:.3f}s total={t_done - t0:.3f}s path={path}",
+                flush=True,
+            )
         rec = {
             "path": str(path),
             "split": self.split,

@@ -30,6 +30,8 @@ def main() -> None:
     parser.add_argument("--max-scenarios-per-split", type=int, default=None)
     parser.add_argument("--max-samples-per-log", type=int, default=None,
                         help="Cap materialized samples per nuPlan DB/log after stride thinning. Useful for balanced time tests.")
+    parser.add_argument("--max-samples-per-log-strategy", type=str, default=None, choices=["first", "uniform"],
+                        help="How to choose capped samples inside each log. 'uniform' avoids taking only the beginning of long logs.")
     parser.add_argument("--scenario-stride", type=int, default=None)
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--resume", action="store_true", default=None)
@@ -64,6 +66,8 @@ def main() -> None:
         cfg["preprocess"]["scenario_stride"] = int(args.scenario_stride)
     if args.max_samples_per_log is not None:
         cfg["preprocess"]["max_samples_per_log"] = int(args.max_samples_per_log)
+    if args.max_samples_per_log_strategy is not None:
+        cfg["preprocess"]["max_samples_per_log_strategy"] = str(args.max_samples_per_log_strategy)
     if args.num_workers is not None:
         cfg["preprocess"]["num_workers"] = int(args.num_workers)
     if args.use_process_pool:

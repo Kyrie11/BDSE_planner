@@ -12,6 +12,9 @@ preprocess:
   # Leave null for exhaustive generation. Set via --max-samples-per-log for
   # balanced wall-clock tests without taking only the first log.
   max_samples_per_log: null
+  # When capped, select samples uniformly across the log instead of only the
+  # first N timesteps. This keeps per-DB file counts bounded without temporal bias.
+  max_samples_per_log_strategy: uniform
   num_workers: 4
   max_in_flight: 8
   compress_npz: false

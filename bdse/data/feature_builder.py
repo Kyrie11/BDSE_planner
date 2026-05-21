@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -229,14 +230,31 @@ def _obj_id(obj: Any) -> str:
     return str(getattr(obj, "id", getattr(obj, "token", getattr(obj, "lane_connector_id", ""))))
 
 
+_MAP_OBJECT_CACHE: dict[tuple[int, str, tuple[str, ...]], Any | None] = {}
+_MAP_OBJECT_CACHE_MAX = 200_000
+
+
 def _get_map_object(map_api: Any, obj_id: str, layers: Sequence[str]) -> Any | None:
+    # Route roadblock/lane connector lookup is repeated for adjacent samples from
+    # the same DB log. Cache by map-api identity, object id and layer search order.
+    # The returned map object is only read, so this is a no-quality-loss speedup.
+    key = (id(map_api), str(obj_id), tuple(str(x) for x in layers))
+    if key in _MAP_OBJECT_CACHE:
+        return _MAP_OBJECT_CACHE[key]
+    found = None
     for layer_name in layers:
         layer = _layer(layer_name)
         for args in [(obj_id, layer), (layer, obj_id), (obj_id,)]:
             got = _call(map_api, ["get_map_object", "get_map_object_by_id"], *args, default=None)
             if got is not None:
-                return got
-    return None
+                found = got
+                break
+        if found is not None:
+            break
+    if len(_MAP_OBJECT_CACHE) >= _MAP_OBJECT_CACHE_MAX:
+        _MAP_OBJECT_CACHE.clear()
+    _MAP_OBJECT_CACHE[key] = found
+    return found
 
 
 def _proximal_objects(map_api: Any, center_global: np.ndarray, radius_m: float, layer_names: list[str] | None = None) -> dict[Any, list[Any]]:
@@ -746,6 +764,23 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
     return features
 
 
+def _min_distance_to_points(query_xy: np.ndarray, point_xy: np.ndarray, chunk: int = 8192) -> np.ndarray:
+    queries = np.asarray(query_xy, dtype=np.float32).reshape(-1, 2)
+    pts = np.asarray(point_xy, dtype=np.float32).reshape(-1, 2)
+    if queries.size == 0:
+        return np.zeros((0,), dtype=np.float32)
+    if pts.size == 0:
+        return np.full((queries.shape[0],), 1e6, dtype=np.float32)
+    best2 = np.full((queries.shape[0],), np.inf, dtype=np.float32)
+    chunk = max(256, int(chunk))
+    for start in range(0, pts.shape[0], chunk):
+        block = pts[start : start + chunk]
+        diff = queries[:, None, :] - block[None, :, :]
+        d2 = np.einsum("qbd,qbd->qb", diff, diff, optimize=True)
+        best2 = np.minimum(best2, d2.min(axis=1))
+    return np.sqrt(best2).astype(np.float32)
+
+
 def _agent_selection_order(raw_current_agents: np.ndarray, ego_xy: np.ndarray, max_agents: int, radius_m: float, candidate_trajectories: np.ndarray | None = None) -> list[int]:
     if raw_current_agents.size == 0:
         return []
@@ -757,8 +792,7 @@ def _agent_selection_order(raw_current_agents: np.ndarray, ego_xy: np.ndarray, m
     min_cand_dist = np.full(len(cur), 1e6, dtype=np.float32)
     if candidate_trajectories is not None and len(candidate_trajectories):
         cand_xy = np.asarray(candidate_trajectories, dtype=np.float32)[..., :2].reshape(-1, 2)
-        for i in range(len(cur)):
-            min_cand_dist[i] = np.linalg.norm(cand_xy - cur[i, None, :2], axis=1).min()
+        min_cand_dist = _min_distance_to_points(cur[:, :2], cand_xy)
     rel_speed = np.maximum(np.abs(cur[:, 3]) + 1e-3, 1e-3)
     ttc = dist / rel_speed
     return sorted(idxs.tolist(), key=lambda i: (min_cand_dist[i], ttc[i], dist[i], i))[:max_agents]
@@ -842,6 +876,17 @@ def resort_runtime_agents_for_candidates(runtime: RuntimeFeatures, candidates: A
 
 def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dict[str, Any], candidates=None) -> RuntimeFeatures:
     runtime_cfg = cfg.get("runtime", {})
+    profile = bool(cfg.get("preprocess", {}).get("profile", False))
+    profile_parts: dict[str, float] = {}
+    profile_prev = time.perf_counter()
+
+    def mark_profile(name: str) -> None:
+        nonlocal profile_prev
+        if profile:
+            now = time.perf_counter()
+            profile_parts[name] = now - profile_prev
+            profile_prev = now
+
     hist_s = float(runtime_cfg.get("history_s", 2.0))
     hist_hz = int(runtime_cfg.get("history_hz", 10))
     h_steps = int(round(hist_s * hist_hz)) + 1
@@ -858,6 +903,7 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
     ego_states = [_state_to_array(s) for s in (list(past_ego) if past_ego is not None else [])] + [ego_arr_global]
     ego_history_global = pad_array(np.asarray(ego_states[-h_steps:], dtype=np.float32), (h_steps, 5))
     ego_history = transform_states_to_local(ego_history_global, origin_xy, origin_yaw)
+    mark_profile("runtime_ego_history")
 
     current_objects = _call(scenario, ["get_tracked_objects_at_iteration"], iteration, default=[])
     cur_objs = _iter_tracked_objects(current_objects)
@@ -870,6 +916,7 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
         s = math.sin(-origin_yaw)
         rot = np.asarray([[c, -s], [s, c]], dtype=np.float32)
         raw_current[:, 5:7] = raw_current[:, 5:7] @ rot.T
+    mark_profile("runtime_current_agents")
 
     past_objects = _call(scenario, ["get_past_tracked_objects", "get_tracked_objects_past_trajectory"], iteration, time_horizon=hist_s, num_samples=h_steps - 1, default=None)
     raw_hist = np.zeros((len(raw_current), h_steps, 10), dtype=np.float32)
@@ -891,18 +938,24 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
                         rot = np.asarray([[c, -s], [s, c]], dtype=np.float32)
                         arr[5:7] = arr[5:7] @ rot.T
                         raw_hist[token_to_idx[token], start + fi] = arr
+    mark_profile("runtime_agent_history")
     cand_traj = None if candidates is None else getattr(candidates, "trajectories", candidates)
     order = _agent_selection_order(raw_current, np.zeros(2, dtype=np.float32), max_agents, radius, cand_traj)
     agent_hist, current_agents, agent_valid = select_agents_deterministic(raw_current, raw_hist, np.zeros(2, dtype=np.float32), max_agents, radius, cand_traj)
     selected_tokens = [raw_tokens[i] for i in order]
+    mark_profile("runtime_agent_select")
 
     traffic_lights = _traffic_lights_to_list(_call(scenario, ["get_traffic_light_status_at_iteration"], iteration, default=[]))
     route_ids = list(_call(scenario, ["get_route_roadblock_ids", "route_roadblock_ids"], default=[]) or [])
     mission_goal_state = _call(scenario, ["get_mission_goal", "mission_goal"], default=None)
     mission_goal = None if mission_goal_state is None else transform_states_to_local(_state_to_array(mission_goal_state)[None], origin_xy, origin_yaw)[0]
+    mark_profile("runtime_scenario_meta")
     map_features = extract_map_features_from_api(getattr(scenario, "map_api", None), ego_arr_global, map_radius,
                                                  [str(r) for r in route_ids], traffic_lights, cfg)
+    mark_profile("runtime_map_features")
     metadata = {"scenario_token": str(getattr(scenario, "token", getattr(scenario, "scenario_name", ""))), "iteration": int(iteration), "origin_xy": origin_xy, "origin_yaw": origin_yaw, "selected_agent_tokens": selected_tokens, "map_valid": bool(map_features.get("map_valid", False)), "route_source": str(map_features.get("route_source", "unknown"))}
+    if profile:
+        metadata["profile_runtime"] = {k: float(v) for k, v in profile_parts.items()}
     if bool(cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)):
         metadata["_raw_agent_tokens"] = raw_tokens
         metadata["_raw_current_agents"] = raw_current.astype(np.float32)
