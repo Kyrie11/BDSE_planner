@@ -35,7 +35,7 @@ runtime:
   max_route_connection_gap_m: 12.0
   use_future_traffic_lights_for_teacher: false
 candidate:
-  K: 32
+  K: 48
   horizon_s: 8.0
   step_s: 0.1
   # For final labels, mask dynamically impossible rollouts.  The previous
