@@ -130,6 +130,7 @@ class _CachedEgoFrame:
 _TRACKED_FRAME_CACHE: "OrderedDict[tuple[str, int], _CachedTrackedFrame]" = OrderedDict()
 _EGO_FRAME_CACHE: "OrderedDict[tuple[str, int], _CachedEgoFrame]" = OrderedDict()
 _FRAME_CACHE_LOCK = threading.RLock()
+_FRAME_FILL_LOCKS: dict[tuple[str, str, str], threading.RLock] = {}
 
 
 def _cfg_int(cfg: dict[str, Any], path: Sequence[str], default: int) -> int:
@@ -164,7 +165,32 @@ def _temporal_cache_individual_miss_threshold(cfg: dict[str, Any]) -> int:
     label fidelity.  This threshold keeps the tail-fill optimization only for the
     case it was designed for.
     """
-    return max(0, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_individual_miss_threshold"), 8))
+    return max(0, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_individual_miss_threshold"), 12))
+
+
+def _temporal_cache_coalesce_bulk(cfg: dict[str, Any]) -> bool:
+    pcfg = cfg.get("preprocess", {}) if isinstance(cfg, dict) else {}
+    return bool(pcfg.get("temporal_frame_cache_coalesce_bulk", True))
+
+
+def _frame_fill_lock(kind: str, scenario: Any, direction: str) -> threading.RLock:
+    """Return a per-log lock for bulk frame materialization.
+
+    With threaded preprocessing, adjacent scenario windows from the same nuPlan DB
+    often reach a cold overlapping future/history cache miss at the same time. If
+    every thread immediately calls the devkit bulk API, the same frames are
+    reconstructed many times and the cache records zero hits. Serializing only the
+    cache-fill section for one log/direction lets the first thread seed the exact
+    log-time frame cache and lets later threads re-check it before deciding whether
+    another exact bulk call is still necessary.
+    """
+    key = (str(kind), _scenario_log_name_for_cache(scenario), str(direction))
+    with _FRAME_CACHE_LOCK:
+        lock = _FRAME_FILL_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _FRAME_FILL_LOCKS[key] = lock
+        return lock
 
 
 def _scenario_log_name_for_cache(scenario: Any) -> str:
@@ -348,7 +374,7 @@ def cached_tracked_window(
     a miss it falls back to the original bulk API and seeds the cache, preserving
     preprocessing precision and label semantics.
     """
-    stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0}
+    stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0, "coalesced_recheck": 0}
     n = max(0, int(num_samples))
     if n <= 0:
         return [], stats
@@ -360,41 +386,81 @@ def cached_tracked_window(
             wanted_ts = [current_time_us + (k + 1) * dt_us for k in range(n)]
         elif direction == "past":
             wanted_ts = [current_time_us - (n - k) * dt_us for k in range(n)]
+
+    def _read_cached() -> tuple[list[_CachedTrackedFrame | None], dict[str, Any]]:
+        local_stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0, "coalesced_recheck": 0}
+        local_frames: list[_CachedTrackedFrame | None] = []
+        if _temporal_cache_enabled(cfg) and wanted_ts:
+            for ts in wanted_ts:
+                hit = _tracked_frame_from_cache_by_timestamp(scenario, ts, cfg)
+                if hit is None:
+                    local_frames.append(None)
+                    local_stats["cache_miss_frames"] += 1
+                else:
+                    local_frames.append(_CachedTrackedFrame(hit.tokens, hit.boxes.copy()))
+                    local_stats["cache_hit_frames"] += 1
+        return local_frames, local_stats
+
+    def _fill_small_future_misses(frames_in: list[_CachedTrackedFrame | None], stats_in: dict[str, Any]) -> tuple[list[_CachedTrackedFrame] | None, dict[str, Any]]:
+        if not (_temporal_cache_enabled(cfg) and wanted_ts and direction == "future"):
+            return None, stats_in
+        if int(stats_in.get("cache_miss_frames", 0)) > _temporal_cache_individual_miss_threshold(cfg):
+            return None, stats_in
+        filled = True
+        stats_in["individual_frame_calls"] = 0
+        for k, frame in enumerate(frames_in):
+            if frame is not None:
+                continue
+            objects = _call(scenario, ["get_tracked_objects_at_iteration"], int(iteration) + k + 1, default=None)
+            if objects is None:
+                filled = False
+                break
+            new_frame = _frame_from_objects(objects)
+            frames_in[k] = new_frame
+            _put_tracked_frame_timestamp(scenario, wanted_ts[k], new_frame, cfg)
+            stats_in["individual_frame_calls"] += 1
+        if filled and all(f is not None for f in frames_in):
+            return [f for f in frames_in if f is not None], stats_in
+        return None, stats_in
+
     frames: list[_CachedTrackedFrame | None] = []
     if _temporal_cache_enabled(cfg) and wanted_ts:
-        for ts in wanted_ts:
-            hit = _tracked_frame_from_cache_by_timestamp(scenario, ts, cfg)
-            if hit is None:
-                frames.append(None)
-                stats["cache_miss_frames"] += 1
-            else:
-                frames.append(_CachedTrackedFrame(hit.tokens, hit.boxes.copy()))
-                stats["cache_hit_frames"] += 1
+        frames, stats = _read_cached()
         if all(f is not None for f in frames):
             return [f for f in frames if f is not None], stats
+        out, stats = _fill_small_future_misses(frames, stats)
+        if out is not None:
+            return out, stats
 
-        # For future windows, only the newly exposed tail frames are usually
-        # missing when samples are processed in log-time order. Fill just those
-        # frames via get_tracked_objects_at_iteration(iteration+k+1) instead of
-        # reconstructing the full 80-frame get_future_tracked_objects window.
-        # On a cold or highly concurrent miss this would issue one DB call per
-        # timestep, so use the exact bulk API unless the miss count is small.
-        if direction == "future" and stats["cache_miss_frames"] <= _temporal_cache_individual_miss_threshold(cfg):
-            filled = True
-            stats["individual_frame_calls"] = 0
-            for k, frame in enumerate(frames):
-                if frame is not None:
-                    continue
-                objects = _call(scenario, ["get_tracked_objects_at_iteration"], int(iteration) + k + 1, default=None)
-                if objects is None:
-                    filled = False
-                    break
-                new_frame = _frame_from_objects(objects)
-                frames[k] = new_frame
-                _put_tracked_frame_timestamp(scenario, wanted_ts[k], new_frame, cfg)
-                stats["individual_frame_calls"] += 1
-            if filled and all(f is not None for f in frames):
+    # Threaded preprocessing can make many overlapping samples from the same log
+    # cold-miss concurrently.  Serialize only the exact cache-fill path, then
+    # re-check the cache while holding the lock.  This preserves the original nuPlan
+    # data source while preventing duplicate reconstruction of the same frames.
+    if _temporal_cache_enabled(cfg) and wanted_ts and _temporal_cache_coalesce_bulk(cfg):
+        with _frame_fill_lock("tracked", scenario, direction):
+            frames, stats = _read_cached()
+            stats["coalesced_recheck"] = 1
+            if all(f is not None for f in frames):
                 return [f for f in frames if f is not None], stats
+            out, stats = _fill_small_future_misses(frames, stats)
+            if out is not None:
+                return out, stats
+            names = ["get_future_tracked_objects", "get_tracked_objects_future_trajectory"] if direction == "future" else ["get_past_tracked_objects", "get_tracked_objects_past_trajectory"]
+            bulk = _call(scenario, names, int(iteration), time_horizon=float(time_horizon), num_samples=n, default=None)
+            stats["bulk_call"] = 1
+            if bulk is None:
+                return [f for f in frames if f is not None], stats
+            bulk_frames = list(bulk) if isinstance(bulk, Iterable) else []
+            bulk_frames = bulk_frames[:n] if direction == "future" else bulk_frames[-n:]
+            seeded = _seed_tracked_window_from_bulk(
+                scenario,
+                cfg,
+                bulk_frames,
+                current_time_us=current_time_us,
+                step_s=step_s,
+                direction=direction,
+            )
+            return seeded, stats
 
     # Remaining misses are filled by the exact original bulk API. This preserves
     # semantics for past windows at iteration=0, where nuPlan exposes pre-scenario
@@ -415,8 +481,6 @@ def cached_tracked_window(
         step_s=step_s,
         direction=direction,
     )
-    # Return the bulk result directly after a miss. It is the source of truth and
-    # also updates the cache for later overlapping samples.
     return seeded, stats
 
 
@@ -430,7 +494,7 @@ def cached_ego_window(
     num_samples: int,
     step_s: float,
 ) -> tuple[list[np.ndarray], dict[str, Any]]:
-    stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0}
+    stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0, "coalesced_recheck": 0}
     n = max(0, int(num_samples))
     if n <= 0:
         return [], stats
@@ -442,34 +506,76 @@ def cached_ego_window(
             wanted_ts = [current_time_us + (k + 1) * dt_us for k in range(n)]
         elif direction == "past":
             wanted_ts = [current_time_us - (n - k) * dt_us for k in range(n)]
+
+    def _read_cached() -> tuple[list[np.ndarray | None], dict[str, Any]]:
+        local_stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0, "coalesced_recheck": 0}
+        local_states: list[np.ndarray | None] = []
+        if _temporal_cache_enabled(cfg) and wanted_ts:
+            for ts in wanted_ts:
+                hit = _cache_get(_EGO_FRAME_CACHE, _frame_cache_key(scenario, ts))
+                if hit is None:
+                    local_states.append(None)
+                    local_stats["cache_miss_frames"] += 1
+                else:
+                    local_states.append(hit.state.copy())
+                    local_stats["cache_hit_frames"] += 1
+        return local_states, local_stats
+
+    def _fill_small_future_misses(states_in: list[np.ndarray | None], stats_in: dict[str, Any]) -> tuple[list[np.ndarray] | None, dict[str, Any]]:
+        if not (_temporal_cache_enabled(cfg) and wanted_ts and direction == "future"):
+            return None, stats_in
+        if int(stats_in.get("cache_miss_frames", 0)) > _temporal_cache_individual_miss_threshold(cfg):
+            return None, stats_in
+        filled = True
+        stats_in["individual_frame_calls"] = 0
+        for k, state in enumerate(states_in):
+            if state is not None:
+                continue
+            ego_state = _call(scenario, ["get_ego_state_at_iteration"], int(iteration) + k + 1, default=None)
+            if ego_state is None:
+                filled = False
+                break
+            arr = _state_to_array(ego_state)
+            states_in[k] = arr
+            _put_ego_frame_timestamp(scenario, wanted_ts[k], arr, cfg)
+            stats_in["individual_frame_calls"] += 1
+        if filled and all(s is not None for s in states_in):
+            return [s for s in states_in if s is not None], stats_in
+        return None, stats_in
+
     states: list[np.ndarray | None] = []
     if _temporal_cache_enabled(cfg) and wanted_ts:
-        for ts in wanted_ts:
-            hit = _cache_get(_EGO_FRAME_CACHE, _frame_cache_key(scenario, ts))
-            if hit is None:
-                states.append(None)
-                stats["cache_miss_frames"] += 1
-            else:
-                states.append(hit.state.copy())
-                stats["cache_hit_frames"] += 1
+        states, stats = _read_cached()
         if all(s is not None for s in states):
             return [s for s in states if s is not None], stats
-        if direction == "future" and stats["cache_miss_frames"] <= _temporal_cache_individual_miss_threshold(cfg):
-            filled = True
-            stats["individual_frame_calls"] = 0
-            for k, state in enumerate(states):
-                if state is not None:
-                    continue
-                ego_state = _call(scenario, ["get_ego_state_at_iteration"], int(iteration) + k + 1, default=None)
-                if ego_state is None:
-                    filled = False
-                    break
-                arr = _state_to_array(ego_state)
-                states[k] = arr
-                _put_ego_frame_timestamp(scenario, wanted_ts[k], arr, cfg)
-                stats["individual_frame_calls"] += 1
-            if filled and all(s is not None for s in states):
+        out, stats = _fill_small_future_misses(states, stats)
+        if out is not None:
+            return out, stats
+
+    if _temporal_cache_enabled(cfg) and wanted_ts and _temporal_cache_coalesce_bulk(cfg):
+        with _frame_fill_lock("ego", scenario, direction):
+            states, stats = _read_cached()
+            stats["coalesced_recheck"] = 1
+            if all(s is not None for s in states):
                 return [s for s in states if s is not None], stats
+            out, stats = _fill_small_future_misses(states, stats)
+            if out is not None:
+                return out, stats
+            names = ["get_ego_future_trajectory", "get_future_ego_trajectory"] if direction == "future" else ["get_ego_past_trajectory", "get_past_ego_trajectory"]
+            bulk = _call(scenario, names, int(iteration), time_horizon=float(time_horizon), num_samples=n, default=[])
+            stats["bulk_call"] = 1
+            bulk_states = list(bulk) if bulk is not None else []
+            bulk_states = bulk_states[:n] if direction == "future" else bulk_states[-n:]
+            seeded = _seed_ego_window_from_bulk(
+                scenario,
+                cfg,
+                bulk_states,
+                current_time_us=current_time_us,
+                step_s=step_s,
+                direction=direction,
+            )
+            return seeded, stats
+
     names = ["get_ego_future_trajectory", "get_future_ego_trajectory"] if direction == "future" else ["get_ego_past_trajectory", "get_past_ego_trajectory"]
     bulk = _call(scenario, names, int(iteration), time_horizon=float(time_horizon), num_samples=n, default=[])
     stats["bulk_call"] = 1
@@ -617,6 +723,101 @@ def _obj_id(obj: Any) -> str:
 
 _MAP_OBJECT_CACHE: dict[tuple[int, str, tuple[str, ...]], Any | None] = {}
 _MAP_OBJECT_CACHE_MAX = 200_000
+_MAP_GEOMETRY_CACHE: "OrderedDict[tuple[int, str, str, str], np.ndarray]" = OrderedDict()
+_MAP_SCALAR_CACHE: "OrderedDict[tuple[int, str, str, str], float | None]" = OrderedDict()
+_MAP_EDGES_CACHE: "OrderedDict[tuple[int, str, str], tuple[Any, ...]]" = OrderedDict()
+_MAP_GEOMETRY_CACHE_MAX = 300_000
+_MAP_CACHE_LOCK = threading.RLock()
+
+
+def _map_cache_obj_id(obj: Any) -> str:
+    oid = _obj_id(obj)
+    if oid:
+        return oid
+    return f"{type(obj).__name__}:{id(obj)}"
+
+
+def _map_array_cache_get(key: tuple[int, str, str, str]) -> np.ndarray | None:
+    with _MAP_CACHE_LOCK:
+        val = _MAP_GEOMETRY_CACHE.get(key)
+        if val is not None:
+            _MAP_GEOMETRY_CACHE.move_to_end(key)
+            return val.copy()
+        return None
+
+
+def _map_array_cache_put(key: tuple[int, str, str, str], val: np.ndarray) -> None:
+    arr = np.asarray(val, dtype=np.float32).copy()
+    with _MAP_CACHE_LOCK:
+        _MAP_GEOMETRY_CACHE[key] = arr
+        _MAP_GEOMETRY_CACHE.move_to_end(key)
+        while len(_MAP_GEOMETRY_CACHE) > _MAP_GEOMETRY_CACHE_MAX:
+            _MAP_GEOMETRY_CACHE.popitem(last=False)
+
+
+def _cached_baseline_points(map_api: Any, obj: Any) -> np.ndarray:
+    """Return immutable global baseline points cached by map object id.
+
+    The map geometry is static for a map_api.  Caching global coordinates does not
+    alter route extraction; each sample still applies its own exact ego-local
+    transform and route projection/sanitization.
+    """
+    if obj is None:
+        return np.zeros((0, 2), dtype=np.float32)
+    key = (id(map_api), "baseline", type(obj).__name__, _map_cache_obj_id(obj))
+    hit = _map_array_cache_get(key)
+    if hit is not None:
+        return hit
+    arr = _baseline_points(obj)
+    _map_array_cache_put(key, arr)
+    return np.asarray(arr, dtype=np.float32).copy()
+
+
+def _cached_geometry_points(map_api: Any, obj: Any) -> np.ndarray:
+    if obj is None:
+        return np.zeros((0, 2), dtype=np.float32)
+    key = (id(map_api), "geometry", type(obj).__name__, _map_cache_obj_id(obj))
+    hit = _map_array_cache_get(key)
+    if hit is not None:
+        return hit
+    arr = _geometry_points(obj)
+    _map_array_cache_put(key, arr)
+    return np.asarray(arr, dtype=np.float32).copy()
+
+
+def _cached_speed_limit_from_obj(map_api: Any, obj: Any) -> float | None:
+    if obj is None:
+        return None
+    key = (id(map_api), "speed", type(obj).__name__, _map_cache_obj_id(obj))
+    with _MAP_CACHE_LOCK:
+        if key in _MAP_SCALAR_CACHE:
+            _MAP_SCALAR_CACHE.move_to_end(key)
+            return _MAP_SCALAR_CACHE[key]
+    val = _speed_limit_from_obj(obj)
+    with _MAP_CACHE_LOCK:
+        _MAP_SCALAR_CACHE[key] = val
+        _MAP_SCALAR_CACHE.move_to_end(key)
+        while len(_MAP_SCALAR_CACHE) > _MAP_GEOMETRY_CACHE_MAX:
+            _MAP_SCALAR_CACHE.popitem(last=False)
+    return val
+
+
+def _cached_extract_edges(map_api: Any, obj: Any) -> list[Any]:
+    if obj is None:
+        return []
+    key = (id(map_api), type(obj).__name__, _map_cache_obj_id(obj))
+    with _MAP_CACHE_LOCK:
+        hit = _MAP_EDGES_CACHE.get(key)
+        if hit is not None:
+            _MAP_EDGES_CACHE.move_to_end(key)
+            return list(hit)
+    edges = tuple(_extract_edges(obj))
+    with _MAP_CACHE_LOCK:
+        _MAP_EDGES_CACHE[key] = edges
+        _MAP_EDGES_CACHE.move_to_end(key)
+        while len(_MAP_EDGES_CACHE) > _MAP_GEOMETRY_CACHE_MAX:
+            _MAP_EDGES_CACHE.popitem(last=False)
+    return list(edges)
 
 
 def _get_map_object(map_api: Any, obj_id: str, layers: Sequence[str]) -> Any | None:
@@ -995,7 +1196,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
 
     for cid in sorted(red_connector_ids):
         conn = _get_map_object(map_api, cid, ["LANE_CONNECTOR"])
-        pts = _baseline_points(conn) if conn is not None else np.zeros((0, 2), dtype=np.float32)
+        pts = _cached_baseline_points(map_api, conn) if conn is not None else np.zeros((0, 2), dtype=np.float32)
         if len(pts) >= 2:
             conn_xy = _to_local_xy(pts, origin_xy, origin_yaw)
             features["red_lane_connectors"].append({"id": cid, "xy": conn_xy})
@@ -1020,12 +1221,12 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
             continue
         route_objs.append(obj)
         group: list[np.ndarray] = []
-        edges = _extract_edges(obj) or [obj]
+        edges = _cached_extract_edges(map_api, obj) or [obj]
         for edge in edges:
-            pts = _baseline_points(edge)
+            pts = _cached_baseline_points(map_api, edge)
             if len(pts) >= 2:
                 group.append(_to_local_xy(pts, origin_xy, origin_yaw))
-            v = _speed_limit_from_obj(edge)
+            v = _cached_speed_limit_from_obj(map_api, edge)
             if v is not None:
                 features["speed_limits"].append({"id": _obj_id(edge), "speed_limit_mps": v})
         if group:
@@ -1034,7 +1235,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         lanes = _flatten_by_layer(prox, "LANE") + _flatten_by_layer(prox, "LANE_CONNECTOR")
         scored = []
         for obj in lanes:
-            pts = _baseline_points(obj)
+            pts = _cached_baseline_points(map_api, obj)
             if len(pts) < 2:
                 continue
             local = _to_local_xy(pts, origin_xy, origin_yaw)
@@ -1048,7 +1249,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         for _, local, obj in sorted(scored, key=lambda x: x[0])[:8]:
             group.append(local)
             route_objs.append(obj)
-            v = _speed_limit_from_obj(obj)
+            v = _cached_speed_limit_from_obj(map_api, obj)
             if v is not None:
                 features["speed_limits"].append({"id": _obj_id(obj), "speed_limit_mps": v})
         if group:
@@ -1072,7 +1273,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
     if include_drivable:
         scored_polys: list[tuple[float, Any, np.ndarray]] = []
         for obj in _flatten_by_layer(prox, "DRIVABLE_AREA"):
-            pts = _geometry_points(obj)
+            pts = _cached_geometry_points(map_api, obj)
             if len(pts) >= 3:
                 local = _to_local_xy(pts, origin_xy, origin_yaw)
                 # Keep only polygons that are near the ego/candidate corridor; far polygons
@@ -1088,7 +1289,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
         if not scored_polys:
             fallback_objs: list[Any] = []
             for obj in route_objs:
-                fallback_objs.extend(_extract_edges(obj) or [obj])
+                fallback_objs.extend(_cached_extract_edges(map_api, obj) or [obj])
             fallback_objs.extend(_flatten_by_layer(prox, "LANE"))
             fallback_objs.extend(_flatten_by_layer(prox, "LANE_CONNECTOR"))
             seen: set[str] = set()
@@ -1097,7 +1298,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
                 if oid in seen:
                     continue
                 seen.add(oid)
-                pts = _geometry_points(obj)
+                pts = _cached_geometry_points(map_api, obj)
                 if len(pts) >= 3:
                     local = _to_local_xy(pts, origin_xy, origin_yaw)
                     score = float(np.linalg.norm(local, axis=1).min())
@@ -1108,7 +1309,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
                 {"id": _obj_id(obj), "xy": _simplify_polyline(local, max_poly_points)})
     red_connector_polys = [np.asarray(x.get("xy"), dtype=np.float32).reshape(-1, 2) for x in features.get("red_lane_connectors", []) if np.asarray(x.get("xy", [])).size >= 4]
     for obj in _flatten_by_layer(prox, "STOP_LINE"):
-        pts = _geometry_points(obj)
+        pts = _cached_geometry_points(map_api, obj)
         if len(pts) >= 2:
             local = _to_local_xy(pts, origin_xy, origin_yaw)
             centroid = local.mean(axis=0)
@@ -1136,7 +1337,7 @@ def extract_map_features_from_api(map_api: Any, ego_state_global: np.ndarray, ra
                 features["stop_lines"].append({"id": stop_id, "xy": local, "red": is_red})
     if include_crosswalks:
         for obj in _flatten_by_layer(prox, "CROSSWALK"):
-            pts = _geometry_points(obj)
+            pts = _cached_geometry_points(map_api, obj)
             if len(pts) >= 3:
                 features["crosswalks"].append({"id": _obj_id(obj),
                                                "xy": _simplify_polyline(_to_local_xy(pts, origin_xy, origin_yaw),
@@ -1297,7 +1498,10 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
     ego_history = transform_states_to_local(ego_history_global, origin_xy, origin_yaw)
     if profile:
         profile_parts["runtime_ego_history_cache_hit_frames"] = float(past_ego_stats.get("cache_hit_frames", 0))
+        profile_parts["runtime_ego_history_cache_miss_frames"] = float(past_ego_stats.get("cache_miss_frames", 0))
         profile_parts["runtime_ego_history_bulk_call"] = float(past_ego_stats.get("bulk_call", 0))
+        profile_parts["runtime_ego_history_coalesced_recheck"] = float(past_ego_stats.get("coalesced_recheck", 0))
+        profile_parts["runtime_ego_history_individual_calls"] = float(past_ego_stats.get("individual_frame_calls", 0))
     mark_profile("runtime_ego_history")
 
     current_frame = cached_current_tracked_frame(scenario, iteration, cfg)
@@ -1328,7 +1532,10 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
                     raw_hist[idx, start + fi] = boxes_local[j]
     if profile:
         profile_parts["runtime_agent_history_cache_hit_frames"] = float(past_stats.get("cache_hit_frames", 0))
+        profile_parts["runtime_agent_history_cache_miss_frames"] = float(past_stats.get("cache_miss_frames", 0))
         profile_parts["runtime_agent_history_bulk_call"] = float(past_stats.get("bulk_call", 0))
+        profile_parts["runtime_agent_history_coalesced_recheck"] = float(past_stats.get("coalesced_recheck", 0))
+        profile_parts["runtime_agent_history_individual_calls"] = float(past_stats.get("individual_frame_calls", 0))
     mark_profile("runtime_agent_history")
     cand_traj = None if candidates is None else getattr(candidates, "trajectories", candidates)
     order = _agent_selection_order(raw_current, np.zeros(2, dtype=np.float32), max_agents, radius, cand_traj)

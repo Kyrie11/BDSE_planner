@@ -138,9 +138,15 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
                 breakdown[name] = float(marks[name] - prev)
                 prev = marks[name]
         breakdown["future_agent_cache_hit_frames"] = float(future_stats.get("cache_hit_frames", 0))
+        breakdown["future_agent_cache_miss_frames"] = float(future_stats.get("cache_miss_frames", 0))
         breakdown["future_agent_bulk_call"] = float(future_stats.get("bulk_call", 0))
+        breakdown["future_agent_coalesced_recheck"] = float(future_stats.get("coalesced_recheck", 0))
+        breakdown["future_agent_individual_calls"] = float(future_stats.get("individual_frame_calls", 0))
         breakdown["future_ego_cache_hit_frames"] = float(ego_stats.get("cache_hit_frames", 0))
+        breakdown["future_ego_cache_miss_frames"] = float(ego_stats.get("cache_miss_frames", 0))
         breakdown["future_ego_bulk_call"] = float(ego_stats.get("bulk_call", 0))
+        breakdown["future_ego_coalesced_recheck"] = float(ego_stats.get("coalesced_recheck", 0))
+        breakdown["future_ego_individual_calls"] = float(ego_stats.get("individual_frame_calls", 0))
         metadata["profile_label_future"] = breakdown
 
     return LabelOnlyFuture(
