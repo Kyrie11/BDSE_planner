@@ -6,7 +6,7 @@ import time
 import numpy as np
 
 from bdse.data.cache_schema import LabelOnlyFuture, Sample, pad_array
-from bdse.data.feature_builder import _call, _iter_tracked_objects, _state_to_array, _box_to_array, _object_token, build_runtime_features_from_scenario, resort_runtime_agents_for_candidates
+from bdse.data.feature_builder import _call, _state_to_array, _object_token, build_runtime_features_from_scenario, resort_runtime_agents_for_candidates, cached_current_tracked_frame, cached_current_ego_state, cached_ego_window, cached_tracked_window, boxes_global_to_local
 from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.pair_builder import build_pair_labels
@@ -34,69 +34,82 @@ def _future_traffic_lights(scenario: Any, iteration: int, cfg: dict[str, Any]) -
 def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[str, Any], runtime=None) -> LabelOnlyFuture:
     cand_cfg = cfg.get("candidate", {})
     runtime_cfg = cfg.get("runtime", {})
+    pcfg = cfg.get("preprocess", {})
+    profile = bool(pcfg.get("profile", False)) or bool(os.environ.get("BDSE_PROFILE_PREPROCESS"))
+    t0 = time.perf_counter()
+    marks: dict[str, float] = {}
+
+    def mark(name: str) -> None:
+        if profile:
+            marks[name] = time.perf_counter()
+
     horizon = float(cand_cfg.get("horizon_s", 8.0))
     step = float(cand_cfg.get("step_s", 0.1))
     T = int(round(horizon / step))
     max_agents = int(runtime_cfg.get("max_agents", 32))
 
-    current_ego = _call(scenario, ["get_ego_state_at_iteration"], iteration, default=None)
-    cur = _state_to_array(current_ego)
+    cur = cached_current_ego_state(scenario, iteration, cfg)
     origin_xy = cur[:2].copy()
     origin_yaw = float(cur[2])
+    mark("current_ego")
 
-    future_ego = _call(
+    future_ego_states, ego_stats = cached_ego_window(
         scenario,
-        ["get_ego_future_trajectory", "get_future_ego_trajectory"],
         iteration,
+        cfg,
+        direction="future",
         time_horizon=horizon,
         num_samples=T,
-        default=[],
+        step_s=step,
     )
-    ego_arr = np.asarray([_state_to_array(s) for s in (list(future_ego) if future_ego is not None else [])], dtype=np.float32)
+    ego_arr = np.asarray(future_ego_states, dtype=np.float32)
     logged_ego = transform_states_to_local(pad_array(ego_arr, (T, 5)), origin_xy, origin_yaw)
+    mark("future_ego")
 
-    current_objects = _call(scenario, ["get_tracked_objects_at_iteration"], iteration, default=[])
-    cur_objs_all = _iter_tracked_objects(current_objects)
-    token_to_obj = {_object_token(o, i): o for i, o in enumerate(cur_objs_all)}
-    selected_tokens = list(getattr(runtime, "metadata", {}).get("selected_agent_tokens", [])) if runtime is not None else list(token_to_obj)[:max_agents]
-    cur_objs = [token_to_obj[t] for t in selected_tokens if t in token_to_obj][:max_agents]
-    raw_current = np.asarray([_box_to_array(o) for o in cur_objs], dtype=np.float32) if cur_objs else np.zeros((0, 10), dtype=np.float32)
+    current_frame = cached_current_tracked_frame(scenario, iteration, cfg)
+    token_to_row = {str(t): i for i, t in enumerate(current_frame.tokens)}
+    selected_tokens = list(getattr(runtime, "metadata", {}).get("selected_agent_tokens", [])) if runtime is not None else list(current_frame.tokens)[:max_agents]
+    selected_rows = [token_to_row[str(t)] for t in selected_tokens if str(t) in token_to_row][:max_agents]
+    raw_current_global = current_frame.boxes[selected_rows] if selected_rows else np.zeros((0, 10), dtype=np.float32)
+    raw_current = boxes_global_to_local(raw_current_global, origin_xy, origin_yaw)
     n = min(max_agents, len(raw_current))
+    mark("current_agents")
+
     logged_agents = np.zeros((max_agents, T, 5), dtype=np.float32)
     valid = np.zeros((max_agents,), dtype=bool)
     logged_mask = np.zeros((max_agents,), dtype=bool)
     cv_fallback_mask = np.zeros((max_agents,), dtype=bool)
-    future_objects = _call(
+    future_frames, future_stats = cached_tracked_window(
         scenario,
-        ["get_future_tracked_objects", "get_tracked_objects_future_trajectory"],
         iteration,
+        cfg,
+        direction="future",
         time_horizon=horizon,
         num_samples=T,
-        default=None,
+        step_s=step,
     )
-    if future_objects is not None and n > 0:
+    mark("future_agents_fetch")
+    if n > 0:
         # Use the same token canonicalization as runtime agent selection.  Some
         # nuPlan object wrappers expose a present-but-empty token attribute; falling
         # back consistently prevents selected agents from being silently matched to
         # the wrong future row or downgraded to constant-velocity fallback.
-        token_to_local_idx = {_object_token(o, i): i for i, o in enumerate(cur_objs[:n])}
-        frames = list(future_objects) if not isinstance(future_objects, dict) else []
-        for k, frame in enumerate(frames[:T]):
-            for obj in _iter_tracked_objects(frame):
-                token = _object_token(obj)
-                if token in token_to_local_idx:
-                    i = token_to_local_idx[token]
-                    arr = _box_to_array(obj)
-                    st = np.asarray([arr[0], arr[1], arr[2], arr[3], (k + 1) * step], dtype=np.float32)
-                    logged_agents[i, k] = transform_states_to_local(st[None], origin_xy, origin_yaw)[0]
+        token_to_local_idx = {str(tok): i for i, tok in enumerate(selected_tokens[:n])}
+        for k, frame in enumerate(future_frames[:T]):
+            boxes_local = boxes_global_to_local(frame.boxes, origin_xy, origin_yaw)
+            for j, token in enumerate(frame.tokens):
+                i = token_to_local_idx.get(str(token))
+                if i is not None and j < boxes_local.shape[0]:
+                    arr = boxes_local[j]
+                    logged_agents[i, k] = np.asarray([arr[0], arr[1], arr[2], arr[3], (k + 1) * step], dtype=np.float32)
                     valid[i] = True
                     logged_mask[i] = True
+    mark("future_agents_project")
+
+    times = np.arange(1, T + 1, dtype=np.float32) * step
     for i in range(n):
         if not valid[i]:
-            arr = raw_current[i]
-            st = np.asarray([arr[0], arr[1], arr[2], arr[3], 0.0], dtype=np.float32)
-            st_local = transform_states_to_local(st[None], origin_xy, origin_yaw)[0]
-            times = np.arange(1, T + 1, dtype=np.float32) * step
+            st_local = raw_current[i, [0, 1, 2, 3, 4]]
             logged_agents[i, :, 0] = st_local[0] + st_local[3] * np.cos(st_local[2]) * times
             logged_agents[i, :, 1] = st_local[1] + st_local[3] * np.sin(st_local[2]) * times
             logged_agents[i, :, 2] = st_local[2]
@@ -104,20 +117,38 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
             logged_agents[i, :, 4] = times
             valid[i] = True
             cv_fallback_mask[i] = True
+    mark("cv_fallback")
+    future_traffic_lights = _future_traffic_lights(scenario, iteration, cfg)
+    mark("future_traffic_lights")
+
+    metadata = {
+        "iteration": int(iteration),
+        "label_only": True,
+        "selected_agent_count": int(n),
+        "agent_future_logged_mask": logged_mask.tolist(),
+        "agent_future_cv_fallback_mask": cv_fallback_mask.tolist(),
+        "agent_future_logged_count": int(logged_mask.sum()),
+        "agent_future_cv_fallback_count": int(cv_fallback_mask.sum()),
+    }
+    if profile:
+        prev = t0
+        breakdown: dict[str, float] = {}
+        for name in ["current_ego", "future_ego", "current_agents", "future_agents_fetch", "future_agents_project", "cv_fallback", "future_traffic_lights"]:
+            if name in marks:
+                breakdown[name] = float(marks[name] - prev)
+                prev = marks[name]
+        breakdown["future_agent_cache_hit_frames"] = float(future_stats.get("cache_hit_frames", 0))
+        breakdown["future_agent_bulk_call"] = float(future_stats.get("bulk_call", 0))
+        breakdown["future_ego_cache_hit_frames"] = float(ego_stats.get("cache_hit_frames", 0))
+        breakdown["future_ego_bulk_call"] = float(ego_stats.get("bulk_call", 0))
+        metadata["profile_label_future"] = breakdown
+
     return LabelOnlyFuture(
         logged_ego=logged_ego.astype(np.float32),
         logged_agents=logged_agents.astype(np.float32),
         agent_valid=valid,
-        future_traffic_lights=_future_traffic_lights(scenario, iteration, cfg),
-        metadata={
-            "iteration": int(iteration),
-            "label_only": True,
-            "selected_agent_count": int(n),
-            "agent_future_logged_mask": logged_mask.tolist(),
-            "agent_future_cv_fallback_mask": cv_fallback_mask.tolist(),
-            "agent_future_logged_count": int(logged_mask.sum()),
-            "agent_future_cv_fallback_count": int(cv_fallback_mask.sum()),
-        },
+        future_traffic_lights=future_traffic_lights,
+        metadata=metadata,
     )
 
 
@@ -169,6 +200,10 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
         if rt_profile:
             rt_parts = ",".join(f"{k}={float(v):.3f}s" for k, v in sorted(rt_profile.items()))
             parts.append(f"runtime_breakdown=[{rt_parts}]")
+        lf_profile = getattr(label_future, "metadata", {}).get("profile_label_future", {}) if label_future is not None else {}
+        if lf_profile:
+            lf_parts = ",".join(f"{k}={float(v):.3f}s" for k, v in sorted(lf_profile.items()))
+            parts.append(f"label_future_breakdown=[{lf_parts}]")
         parts.append(f"total={total:.3f}s")
         print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
     return Sample(token, timestamp_us, runtime, label_future, candidates, evidence, teacher, pairs)

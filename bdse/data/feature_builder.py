@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import math
 import time
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -111,6 +114,374 @@ def _iter_tracked_objects(container: Any) -> list[Any]:
         return list(container)
     except TypeError:
         return []
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedTrackedFrame:
+    tokens: tuple[str, ...]
+    boxes: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedEgoFrame:
+    state: np.ndarray
+
+
+_TRACKED_FRAME_CACHE: "OrderedDict[tuple[str, int], _CachedTrackedFrame]" = OrderedDict()
+_EGO_FRAME_CACHE: "OrderedDict[tuple[str, int], _CachedEgoFrame]" = OrderedDict()
+_FRAME_CACHE_LOCK = threading.RLock()
+
+
+def _cfg_int(cfg: dict[str, Any], path: Sequence[str], default: int) -> int:
+    cur: Any = cfg
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return int(default)
+        cur = cur[key]
+    try:
+        return int(cur)
+    except Exception:
+        return int(default)
+
+
+def _temporal_cache_enabled(cfg: dict[str, Any]) -> bool:
+    pcfg = cfg.get("preprocess", {}) if isinstance(cfg, dict) else {}
+    return bool(pcfg.get("temporal_frame_cache", True))
+
+
+def _temporal_cache_max_entries(cfg: dict[str, Any]) -> int:
+    return max(128, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_max_entries"), 4096))
+
+
+def _scenario_log_name_for_cache(scenario: Any) -> str:
+    for name in ("log_name", "_log_name", "scenario_name", "_scenario_name", "token"):
+        val = getattr(scenario, name, None)
+        if val is not None and str(val) != "":
+            return str(val)
+    return f"scenario-{id(scenario)}"
+
+
+def _time_us_value(value: Any) -> int | None:
+    if value is None:
+        return None
+    val = getattr(value, "time_us", getattr(value, "timestamp_us", getattr(value, "timestamp", value)))
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        return int(val)
+    return None
+
+
+def _time_us_at_iteration(scenario: Any, iteration: int) -> int | None:
+    # get_time_point() is cheap compared with DB object reconstruction and gives a
+    # stable key across adjacent nuPlan scenario objects from the same log.
+    val = _call(scenario, ["get_time_point", "get_timestamp_at_iteration"], int(iteration), default=None)
+    return _time_us_value(val)
+
+
+def _scenario_current_time_us(scenario: Any, iteration: int) -> int | None:
+    ts = _time_us_at_iteration(scenario, iteration)
+    if ts is not None:
+        return ts
+    return _time_us_value(getattr(scenario, "start_time", None))
+
+
+def _frame_cache_key(scenario: Any, timestamp_us: int | None, iteration: int | None = None) -> tuple[str, int]:
+    if timestamp_us is not None:
+        return (_scenario_log_name_for_cache(scenario), int(timestamp_us))
+    return (f"{_scenario_log_name_for_cache(scenario)}:{id(scenario)}", int(iteration or 0))
+
+
+def _cache_get(cache: OrderedDict, key: tuple[str, int]):
+    with _FRAME_CACHE_LOCK:
+        val = cache.get(key)
+        if val is not None:
+            cache.move_to_end(key)
+        return val
+
+
+def _cache_put(cache: OrderedDict, key: tuple[str, int], val: Any, max_entries: int) -> None:
+    with _FRAME_CACHE_LOCK:
+        cache[key] = val
+        cache.move_to_end(key)
+        while len(cache) > max_entries:
+            cache.popitem(last=False)
+
+
+def _frame_from_objects(objects: Any) -> _CachedTrackedFrame:
+    objs = _iter_tracked_objects(objects)
+    tokens = tuple(_object_token(o, i) for i, o in enumerate(objs))
+    boxes = np.asarray([_box_to_array(o) for o in objs], dtype=np.float32) if objs else np.zeros((0, 10), dtype=np.float32)
+    return _CachedTrackedFrame(tokens=tokens, boxes=boxes)
+
+
+def _tracked_frame_from_cache_by_timestamp(scenario: Any, timestamp_us: int | None, cfg: dict[str, Any]) -> _CachedTrackedFrame | None:
+    if not _temporal_cache_enabled(cfg) or timestamp_us is None:
+        return None
+    return _cache_get(_TRACKED_FRAME_CACHE, _frame_cache_key(scenario, timestamp_us))
+
+
+def _put_tracked_frame_timestamp(scenario: Any, timestamp_us: int | None, frame: _CachedTrackedFrame, cfg: dict[str, Any]) -> None:
+    if not _temporal_cache_enabled(cfg) or timestamp_us is None:
+        return
+    _cache_put(_TRACKED_FRAME_CACHE, _frame_cache_key(scenario, timestamp_us), frame, _temporal_cache_max_entries(cfg))
+
+
+def _put_ego_frame_timestamp(scenario: Any, timestamp_us: int | None, state: np.ndarray, cfg: dict[str, Any]) -> None:
+    if not _temporal_cache_enabled(cfg) or timestamp_us is None:
+        return
+    _cache_put(_EGO_FRAME_CACHE, _frame_cache_key(scenario, timestamp_us), _CachedEgoFrame(np.asarray(state, dtype=np.float32).copy()), _temporal_cache_max_entries(cfg))
+
+
+def cached_current_tracked_frame(scenario: Any, iteration: int, cfg: dict[str, Any]) -> _CachedTrackedFrame:
+    """Return current tracked objects as canonical tokens + global box arrays.
+
+    The cache is keyed by log/timestamp, not by scenario object id, so adjacent
+    nuPlan scenario objects at overlapping times can share reconstructed frames.
+    This does not change label semantics: cache misses still use the same
+    get_tracked_objects_at_iteration() call as the original code.
+    """
+    timestamp_us = _scenario_current_time_us(scenario, iteration)
+    key = _frame_cache_key(scenario, timestamp_us, iteration)
+    if _temporal_cache_enabled(cfg):
+        hit = _cache_get(_TRACKED_FRAME_CACHE, key)
+        if hit is not None:
+            return _CachedTrackedFrame(hit.tokens, hit.boxes.copy())
+    current_objects = _call(scenario, ["get_tracked_objects_at_iteration"], int(iteration), default=[])
+    frame = _frame_from_objects(current_objects)
+    if _temporal_cache_enabled(cfg):
+        _cache_put(_TRACKED_FRAME_CACHE, key, _CachedTrackedFrame(frame.tokens, frame.boxes.copy()), _temporal_cache_max_entries(cfg))
+    return frame
+
+
+def cached_current_ego_state(scenario: Any, iteration: int, cfg: dict[str, Any]) -> np.ndarray:
+    timestamp_us = _scenario_current_time_us(scenario, iteration)
+    key = _frame_cache_key(scenario, timestamp_us, iteration)
+    if _temporal_cache_enabled(cfg):
+        hit = _cache_get(_EGO_FRAME_CACHE, key)
+        if hit is not None:
+            return hit.state.copy()
+    state = _state_to_array(_call(scenario, ["get_ego_state_at_iteration"], int(iteration), default=None))
+    if _temporal_cache_enabled(cfg):
+        _cache_put(_EGO_FRAME_CACHE, key, _CachedEgoFrame(state.copy()), _temporal_cache_max_entries(cfg))
+    return state
+
+
+def _seed_tracked_window_from_bulk(
+    scenario: Any,
+    cfg: dict[str, Any],
+    frames: list[Any],
+    *,
+    current_time_us: int | None,
+    step_s: float,
+    direction: str,
+) -> list[_CachedTrackedFrame]:
+    dt_us = int(round(float(step_s) * 1_000_000.0))
+    out: list[_CachedTrackedFrame] = []
+    n = len(frames)
+    for j, frame_obj in enumerate(frames):
+        if direction == "future":
+            ts = None if current_time_us is None else current_time_us + (j + 1) * dt_us
+        elif direction == "past":
+            # nuPlan returns past frames in chronological order. The last element
+            # is one sample interval before the current frame.
+            ts = None if current_time_us is None else current_time_us - (n - j) * dt_us
+        else:
+            ts = current_time_us
+        frame = _frame_from_objects(frame_obj)
+        _put_tracked_frame_timestamp(scenario, ts, frame, cfg)
+        out.append(frame)
+    return out
+
+
+def _seed_ego_window_from_bulk(
+    scenario: Any,
+    cfg: dict[str, Any],
+    states: list[Any],
+    *,
+    current_time_us: int | None,
+    step_s: float,
+    direction: str,
+) -> list[np.ndarray]:
+    dt_us = int(round(float(step_s) * 1_000_000.0))
+    out: list[np.ndarray] = []
+    n = len(states)
+    for j, state_obj in enumerate(states):
+        if direction == "future":
+            ts = None if current_time_us is None else current_time_us + (j + 1) * dt_us
+        elif direction == "past":
+            ts = None if current_time_us is None else current_time_us - (n - j) * dt_us
+        else:
+            ts = current_time_us
+        state = _state_to_array(state_obj)
+        _put_ego_frame_timestamp(scenario, ts, state, cfg)
+        out.append(state)
+    return out
+
+
+def cached_tracked_window(
+    scenario: Any,
+    iteration: int,
+    cfg: dict[str, Any],
+    *,
+    direction: str,
+    time_horizon: float,
+    num_samples: int,
+    step_s: float,
+) -> tuple[list[_CachedTrackedFrame], dict[str, Any]]:
+    """Return a past/future tracked-object window with log-time cache reuse.
+
+    On a complete cache hit this avoids nuPlan's expensive bulk SQL/object
+    reconstruction for get_past_tracked_objects()/get_future_tracked_objects(). On
+    a miss it falls back to the original bulk API and seeds the cache, preserving
+    preprocessing precision and label semantics.
+    """
+    stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0}
+    n = max(0, int(num_samples))
+    if n <= 0:
+        return [], stats
+    current_time_us = _scenario_current_time_us(scenario, iteration)
+    dt_us = int(round(float(step_s) * 1_000_000.0))
+    wanted_ts: list[int | None] = []
+    if current_time_us is not None:
+        if direction == "future":
+            wanted_ts = [current_time_us + (k + 1) * dt_us for k in range(n)]
+        elif direction == "past":
+            wanted_ts = [current_time_us - (n - k) * dt_us for k in range(n)]
+    frames: list[_CachedTrackedFrame | None] = []
+    if _temporal_cache_enabled(cfg) and wanted_ts:
+        for ts in wanted_ts:
+            hit = _tracked_frame_from_cache_by_timestamp(scenario, ts, cfg)
+            if hit is None:
+                frames.append(None)
+                stats["cache_miss_frames"] += 1
+            else:
+                frames.append(_CachedTrackedFrame(hit.tokens, hit.boxes.copy()))
+                stats["cache_hit_frames"] += 1
+        if all(f is not None for f in frames):
+            return [f for f in frames if f is not None], stats
+
+        # For future windows, only the newly exposed tail frames are usually
+        # missing when samples are processed in log-time order. Fill just those
+        # frames via get_tracked_objects_at_iteration(iteration+k+1) instead of
+        # reconstructing the full 80-frame get_future_tracked_objects window. This
+        # is semantics-preserving for nuPlan's discrete 10 Hz scenario API; if any
+        # individual frame read fails, fall back to the original bulk API below.
+        if direction == "future":
+            filled = True
+            stats["individual_frame_calls"] = 0
+            for k, frame in enumerate(frames):
+                if frame is not None:
+                    continue
+                objects = _call(scenario, ["get_tracked_objects_at_iteration"], int(iteration) + k + 1, default=None)
+                if objects is None:
+                    filled = False
+                    break
+                new_frame = _frame_from_objects(objects)
+                frames[k] = new_frame
+                _put_tracked_frame_timestamp(scenario, wanted_ts[k], new_frame, cfg)
+                stats["individual_frame_calls"] += 1
+            if filled and all(f is not None for f in frames):
+                return [f for f in frames if f is not None], stats
+
+    # Remaining misses are filled by the exact original bulk API. This preserves
+    # semantics for past windows at iteration=0, where nuPlan exposes pre-scenario
+    # history only through get_past_* APIs, and for any devkit implementation that
+    # lacks individual future frame access.
+    names = ["get_future_tracked_objects", "get_tracked_objects_future_trajectory"] if direction == "future" else ["get_past_tracked_objects", "get_tracked_objects_past_trajectory"]
+    bulk = _call(scenario, names, int(iteration), time_horizon=float(time_horizon), num_samples=n, default=None)
+    stats["bulk_call"] = 1
+    if bulk is None:
+        return [f for f in frames if f is not None], stats
+    bulk_frames = list(bulk) if isinstance(bulk, Iterable) else []
+    bulk_frames = bulk_frames[:n] if direction == "future" else bulk_frames[-n:]
+    seeded = _seed_tracked_window_from_bulk(
+        scenario,
+        cfg,
+        bulk_frames,
+        current_time_us=current_time_us,
+        step_s=step_s,
+        direction=direction,
+    )
+    # Return the bulk result directly after a miss. It is the source of truth and
+    # also updates the cache for later overlapping samples.
+    return seeded, stats
+
+
+def cached_ego_window(
+    scenario: Any,
+    iteration: int,
+    cfg: dict[str, Any],
+    *,
+    direction: str,
+    time_horizon: float,
+    num_samples: int,
+    step_s: float,
+) -> tuple[list[np.ndarray], dict[str, Any]]:
+    stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0}
+    n = max(0, int(num_samples))
+    if n <= 0:
+        return [], stats
+    current_time_us = _scenario_current_time_us(scenario, iteration)
+    dt_us = int(round(float(step_s) * 1_000_000.0))
+    wanted_ts: list[int | None] = []
+    if current_time_us is not None:
+        if direction == "future":
+            wanted_ts = [current_time_us + (k + 1) * dt_us for k in range(n)]
+        elif direction == "past":
+            wanted_ts = [current_time_us - (n - k) * dt_us for k in range(n)]
+    states: list[np.ndarray | None] = []
+    if _temporal_cache_enabled(cfg) and wanted_ts:
+        for ts in wanted_ts:
+            hit = _cache_get(_EGO_FRAME_CACHE, _frame_cache_key(scenario, ts))
+            if hit is None:
+                states.append(None)
+                stats["cache_miss_frames"] += 1
+            else:
+                states.append(hit.state.copy())
+                stats["cache_hit_frames"] += 1
+        if all(s is not None for s in states):
+            return [s for s in states if s is not None], stats
+        if direction == "future":
+            filled = True
+            stats["individual_frame_calls"] = 0
+            for k, state in enumerate(states):
+                if state is not None:
+                    continue
+                ego_state = _call(scenario, ["get_ego_state_at_iteration"], int(iteration) + k + 1, default=None)
+                if ego_state is None:
+                    filled = False
+                    break
+                arr = _state_to_array(ego_state)
+                states[k] = arr
+                _put_ego_frame_timestamp(scenario, wanted_ts[k], arr, cfg)
+                stats["individual_frame_calls"] += 1
+            if filled and all(s is not None for s in states):
+                return [s for s in states if s is not None], stats
+    names = ["get_ego_future_trajectory", "get_future_ego_trajectory"] if direction == "future" else ["get_ego_past_trajectory", "get_past_ego_trajectory"]
+    bulk = _call(scenario, names, int(iteration), time_horizon=float(time_horizon), num_samples=n, default=[])
+    stats["bulk_call"] = 1
+    bulk_states = list(bulk) if bulk is not None else []
+    bulk_states = bulk_states[:n] if direction == "future" else bulk_states[-n:]
+    seeded = _seed_ego_window_from_bulk(
+        scenario,
+        cfg,
+        bulk_states,
+        current_time_us=current_time_us,
+        step_s=step_s,
+        direction=direction,
+    )
+    return seeded, stats
+
+
+def boxes_global_to_local(boxes: np.ndarray, origin_xy: np.ndarray, origin_yaw: float) -> np.ndarray:
+    arr = np.asarray(boxes, dtype=np.float32).copy()
+    if arr.size == 0:
+        return arr.reshape(0, 10)
+    arr[:, 0:5] = transform_states_to_local(arr[:, [0, 1, 2, 3, 4]], origin_xy, origin_yaw)
+    c = math.cos(-origin_yaw)
+    s = math.sin(-origin_yaw)
+    rot = np.asarray([[c, -s], [s, c]], dtype=np.float32)
+    arr[:, 5:7] = arr[:, 5:7] @ rot.T
+    return arr
 
 
 def _traffic_lights_to_list(statuses: Any) -> list[dict[str, Any]]:
@@ -894,50 +1265,56 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
     radius = float(runtime_cfg.get("agent_radius_m", 80.0))
     map_radius = float(runtime_cfg.get("map_radius_m", 100.0))
 
-    current_ego = _call(scenario, ["get_ego_state_at_iteration"], iteration, default=None)
-    ego_arr_global = _state_to_array(current_ego)
+    ego_arr_global = cached_current_ego_state(scenario, iteration, cfg)
     origin_xy = ego_arr_global[:2].copy()
     origin_yaw = float(ego_arr_global[2])
 
-    past_ego = _call(scenario, ["get_ego_past_trajectory", "get_past_ego_trajectory"], iteration, time_horizon=hist_s, num_samples=h_steps - 1, default=[])
-    ego_states = [_state_to_array(s) for s in (list(past_ego) if past_ego is not None else [])] + [ego_arr_global]
+    past_ego_states, past_ego_stats = cached_ego_window(
+        scenario,
+        iteration,
+        cfg,
+        direction="past",
+        time_horizon=hist_s,
+        num_samples=h_steps - 1,
+        step_s=1.0 / max(hist_hz, 1),
+    )
+    ego_states = list(past_ego_states) + [ego_arr_global]
     ego_history_global = pad_array(np.asarray(ego_states[-h_steps:], dtype=np.float32), (h_steps, 5))
     ego_history = transform_states_to_local(ego_history_global, origin_xy, origin_yaw)
+    if profile:
+        profile_parts["runtime_ego_history_cache_hit_frames"] = float(past_ego_stats.get("cache_hit_frames", 0))
+        profile_parts["runtime_ego_history_bulk_call"] = float(past_ego_stats.get("bulk_call", 0))
     mark_profile("runtime_ego_history")
 
-    current_objects = _call(scenario, ["get_tracked_objects_at_iteration"], iteration, default=[])
-    cur_objs = _iter_tracked_objects(current_objects)
-    raw_tokens = [_object_token(o, i) for i, o in enumerate(cur_objs)]
-    raw_current = np.asarray([_box_to_array(o) for o in cur_objs], dtype=np.float32) if cur_objs else np.zeros((0, 10), dtype=np.float32)
-    if len(raw_current):
-        local_main = transform_states_to_local(raw_current[:, [0, 1, 2, 3, 4]], origin_xy, origin_yaw)
-        raw_current[:, 0:5] = local_main
-        c = math.cos(-origin_yaw)
-        s = math.sin(-origin_yaw)
-        rot = np.asarray([[c, -s], [s, c]], dtype=np.float32)
-        raw_current[:, 5:7] = raw_current[:, 5:7] @ rot.T
+    current_frame = cached_current_tracked_frame(scenario, iteration, cfg)
+    raw_tokens = list(current_frame.tokens)
+    raw_current = boxes_global_to_local(current_frame.boxes, origin_xy, origin_yaw)
     mark_profile("runtime_current_agents")
 
-    past_objects = _call(scenario, ["get_past_tracked_objects", "get_tracked_objects_past_trajectory"], iteration, time_horizon=hist_s, num_samples=h_steps - 1, default=None)
+    past_frames, past_stats = cached_tracked_window(
+        scenario,
+        iteration,
+        cfg,
+        direction="past",
+        time_horizon=hist_s,
+        num_samples=h_steps - 1,
+        step_s=1.0 / max(hist_hz, 1),
+    )
     raw_hist = np.zeros((len(raw_current), h_steps, 10), dtype=np.float32)
     if len(raw_current):
         raw_hist[:, -1, :] = raw_current
-        if past_objects is not None:
-            frames = list(past_objects) if isinstance(past_objects, Iterable) else []
-            frames = frames[-(h_steps - 1) :]
-            token_to_idx = {raw_tokens[i]: i for i in range(len(raw_tokens))}
-            start = h_steps - 1 - len(frames)
-            for fi, frame in enumerate(frames):
-                for obj in _iter_tracked_objects(frame):
-                    token = _object_token(obj)
-                    if token in token_to_idx:
-                        arr = _box_to_array(obj)
-                        arr[0:5] = transform_states_to_local(arr[[0, 1, 2, 3, 4]], origin_xy, origin_yaw)
-                        c = math.cos(-origin_yaw)
-                        s = math.sin(-origin_yaw)
-                        rot = np.asarray([[c, -s], [s, c]], dtype=np.float32)
-                        arr[5:7] = arr[5:7] @ rot.T
-                        raw_hist[token_to_idx[token], start + fi] = arr
+        frames = past_frames[-(h_steps - 1) :]
+        token_to_idx = {raw_tokens[i]: i for i in range(len(raw_tokens))}
+        start = h_steps - 1 - len(frames)
+        for fi, frame in enumerate(frames):
+            boxes_local = boxes_global_to_local(frame.boxes, origin_xy, origin_yaw)
+            for j, token in enumerate(frame.tokens):
+                idx = token_to_idx.get(token)
+                if idx is not None and j < boxes_local.shape[0]:
+                    raw_hist[idx, start + fi] = boxes_local[j]
+    if profile:
+        profile_parts["runtime_agent_history_cache_hit_frames"] = float(past_stats.get("cache_hit_frames", 0))
+        profile_parts["runtime_agent_history_bulk_call"] = float(past_stats.get("bulk_call", 0))
     mark_profile("runtime_agent_history")
     cand_traj = None if candidates is None else getattr(candidates, "trajectories", candidates)
     order = _agent_selection_order(raw_current, np.zeros(2, dtype=np.float32), max_agents, radius, cand_traj)

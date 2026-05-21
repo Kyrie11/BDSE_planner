@@ -24,6 +24,11 @@ preprocess:
   compress_npz: false
   profile: false
   profile_threshold_s: 2.0
+  # Reuse reconstructed nuPlan tracked-object/ego frames across overlapping
+  # scenario windows. This preserves labels because misses still call the same
+  # nuPlan APIs; hits only avoid repeated DB object reconstruction.
+  temporal_frame_cache: true
+  temporal_frame_cache_max_entries: 8192
   # False keeps preprocessing and closed-loop runtime from extracting DB/map features twice.
   # Turn on only for an ablation that needs candidate-proximity agent reordering.
   candidate_aware_agent_selection: false
