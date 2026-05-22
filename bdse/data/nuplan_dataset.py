@@ -422,6 +422,57 @@ class NuPlanBDSEDataset:
             return Path(*parts) / item.db_path.stem / f"{_safe_name(item.token)}_it{item.iteration:06d}.npz"
         return out / self.split / f"{idx:08d}.npz"
 
+    def cache_path_aliases_for_index(self, idx: int, out_dir: str | Path | None = None) -> list[Path]:
+        """Return canonical plus backward-compatible cache paths for resume.
+
+        Older preprocessing runs may have written concrete train folders either as
+        ``ROOT/train_boston/...`` or as ``ROOT/train/train_boston/...`` depending
+        on whether the CLI used a canonical split plus folders or a concrete
+        sub-split.  Resume should not rebuild a sample whose exact token/iteration
+        file already exists in either layout.
+        """
+        out = Path(out_dir or self.preprocessed_dir)
+        canonical = self.cache_path_for_index(idx, out)
+        aliases: list[Path] = [canonical]
+        item = self.build_index()[idx]
+        if isinstance(item, DevkitScenarioIndexRecord):
+            filename = f"{item.token}_it{item.iteration:06d}.npz"
+            log_part = Path(item.log_name)
+            norm_split = normalize_split_name(str(item.split))
+            for base in [
+                out / norm_split / item.folder,
+                out / item.folder,
+                out / norm_split,
+            ]:
+                aliases.append(Path(base) / log_part / filename)
+        elif isinstance(item, ScenarioIndexRecord):
+            filename = f"{_safe_name(item.token)}_it{item.iteration:06d}.npz"
+            log_part = Path(item.db_path.stem)
+            norm_split = normalize_split_name(str(item.split))
+            for base in [
+                out / norm_split / item.folder,
+                out / item.folder,
+                out / norm_split,
+            ]:
+                aliases.append(Path(base) / log_part / filename)
+        return sorted(dict.fromkeys(aliases), key=lambda p: (p != canonical, str(p)))
+
+    @staticmethod
+    def _link_existing_cache_alias(existing: Path, canonical: Path) -> bool:
+        if canonical.exists() or existing == canonical:
+            return False
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(existing, canonical)
+            return True
+        except OSError:
+            pass
+        try:
+            os.symlink(existing, canonical)
+            return True
+        except OSError:
+            return False
+
     def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None) -> tuple[int, Path, dict[str, Any] | None]:
         pcfg = self.cfg.get("preprocess", {})
         profile = bool(pcfg.get("profile", False))
@@ -477,18 +528,32 @@ class NuPlanBDSEDataset:
         all_paths: list[Path] = [Path()] * total
         pending: list[tuple[int, Path]] = []
         skipped = 0
+        skipped_alias = 0
+        linked_alias = 0
         check_iter = _maybe_tqdm(range(total), total, f"cache-check:{self.split}", show_progress and total >= 10000)
         for i in check_iter:
             p = self.cache_path_for_index(i, out)
             all_paths[i] = p
-            if resume and not overwrite and p.exists():
+            existing: Path | None = None
+            if resume and not overwrite:
+                for candidate_path in self.cache_path_aliases_for_index(i, out):
+                    if candidate_path.exists():
+                        existing = candidate_path
+                        break
+            if existing is not None:
                 skipped += 1
+                if existing != p:
+                    skipped_alias += 1
+                    if self._link_existing_cache_alias(existing, p):
+                        linked_alias += 1
+                    all_paths[i] = p if p.exists() else existing
             else:
                 pending.append((i, p))
 
         print(
             f"[bdse] split={self.split}: records={len(self.records)} scenarios/iterations={total} "
-            f"pending={len(pending)} skipped={skipped} out={out}",
+            f"pending={len(pending)} skipped={skipped} skipped_alias={skipped_alias} "
+            f"linked_alias={linked_alias} out={out}",
             flush=True,
         )
         if not pending:
@@ -671,16 +736,19 @@ class PreprocessedBDSEDataset:
         paths: list[Path] = []
         for mp in self._manifest_paths():
             paths.extend(self._paths_from_manifest(mp))
-        if not paths:
-            search_roots = self._split_search_roots()
-            if not search_roots:
-                search_roots = [self.preprocessed_dir]
-            for search_root in search_roots:
-                if search_root.exists():
-                    paths.extend(
-                        p for p in search_root.rglob("*.npz")
-                        if not p.name.startswith(".") and ".tmp." not in p.name
-                    )
+        # Always union manifest entries with an on-disk scan.  Resumed preprocessing
+        # can legitimately skip already-existing .npz files without appending fresh
+        # manifest rows; relying only on a partial manifest would hide those samples
+        # from training/evaluation.
+        search_roots = self._split_search_roots()
+        if not search_roots:
+            search_roots = [self.preprocessed_dir]
+        for search_root in search_roots:
+            if search_root.exists():
+                paths.extend(
+                    p for p in search_root.rglob("*.npz")
+                    if not p.name.startswith(".") and ".tmp." not in p.name
+                )
         # Manifests may contain duplicates after resumed preprocessing. Keep one
         # copy of each path and sort deterministically.
         paths = sorted(dict.fromkeys(paths), key=lambda p: str(p))

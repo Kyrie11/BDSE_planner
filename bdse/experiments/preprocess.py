@@ -40,6 +40,8 @@ def main() -> None:
     parser.add_argument("--no-tqdm", action="store_true")
     parser.add_argument("--list-splits", action="store_true")
     parser.add_argument("--num-workers", type=int, default=None)
+    parser.add_argument("--max-in-flight", type=int, default=None,
+                        help="Maximum sample-materialization futures submitted at once. Set 1 to preserve strict cache-local order for profiling/resume debugging.")
     parser.add_argument("--use-process-pool", action="store_true")
     parser.add_argument("--profile", action="store_true", help="Print per-sample preprocessing time breakdowns.")
     parser.add_argument("--profile-threshold-s", type=float, default=None,
@@ -70,6 +72,8 @@ def main() -> None:
         cfg["preprocess"]["max_samples_per_log_strategy"] = str(args.max_samples_per_log_strategy)
     if args.num_workers is not None:
         cfg["preprocess"]["num_workers"] = int(args.num_workers)
+    if args.max_in_flight is not None:
+        cfg["preprocess"]["max_in_flight"] = max(1, int(args.max_in_flight))
     if args.use_process_pool:
         cfg["preprocess"]["use_process_pool"] = True
         cfg["preprocess"].setdefault("scenario_builder_use_process_pool", False)
