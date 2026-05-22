@@ -211,7 +211,7 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
             lf_parts = ",".join(f"{k}={float(v):.3f}s" for k, v in sorted(lf_profile.items()))
             parts.append(f"label_future_breakdown=[{lf_parts}]")
         parts.append(f"total={total:.3f}s")
-        # print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
+        print(f"[bdse][profile] token={token} it={iteration} " + " ".join(parts), flush=True)
     return Sample(token, timestamp_us, runtime, label_future, candidates, evidence, teacher, pairs)
 
 
