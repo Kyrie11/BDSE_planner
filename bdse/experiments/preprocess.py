@@ -30,8 +30,10 @@ def main() -> None:
     parser.add_argument("--max-scenarios-per-split", type=int, default=None)
     parser.add_argument("--max-samples-per-log", type=int, default=None,
                         help="Cap materialized samples per nuPlan DB/log after stride thinning. Useful for balanced time tests.")
-    parser.add_argument("--max-samples-per-log-strategy", type=str, default=None, choices=["first", "uniform"],
-                        help="How to choose capped samples inside each log. 'uniform' avoids taking only the beginning of long logs.")
+    parser.add_argument("--max-samples-per-log-strategy", type=str, default=None, choices=["first", "uniform", "uniform_blocks"],
+                        help="How to choose capped samples inside each log. 'uniform_blocks' keeps broad coverage while grouping nearby samples for exact temporal-cache reuse.")
+    parser.add_argument("--max-samples-per-log-block-size", type=int, default=None,
+                        help="For --max-samples-per-log-strategy uniform_blocks, number of consecutive stride-thinned samples per log block.")
     parser.add_argument("--scenario-stride", type=int, default=None)
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--resume", action="store_true", default=None)
@@ -70,6 +72,8 @@ def main() -> None:
         cfg["preprocess"]["max_samples_per_log"] = int(args.max_samples_per_log)
     if args.max_samples_per_log_strategy is not None:
         cfg["preprocess"]["max_samples_per_log_strategy"] = str(args.max_samples_per_log_strategy)
+    if args.max_samples_per_log_block_size is not None:
+        cfg["preprocess"]["max_samples_per_log_block_size"] = max(1, int(args.max_samples_per_log_block_size))
     if args.num_workers is not None:
         cfg["preprocess"]["num_workers"] = int(args.num_workers)
     if args.max_in_flight is not None:

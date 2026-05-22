@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import os
 import re
 import time
@@ -272,6 +273,55 @@ def _sort_devkit_records_for_temporal_cache(records: list[DevkitScenarioIndexRec
     """
     return sorted(records, key=lambda r: (r.log_name, int(r.timestamp_us), r.token, int(r.iteration)))
 
+def _uniform_indices(n: int, cap: int) -> np.ndarray:
+    if n <= 0 or cap <= 0:
+        return np.zeros((0,), dtype=np.int64)
+    if n <= cap:
+        return np.arange(n, dtype=np.int64)
+    idx = np.linspace(0, n - 1, cap).round().astype(np.int64)
+    idx = np.unique(idx)
+    if idx.size < cap:
+        used = set(idx.tolist())
+        missing = [i for i in range(n) if i not in used]
+        idx = np.asarray(sorted(list(idx) + missing[: cap - idx.size]), dtype=np.int64)
+    return idx[:cap]
+
+
+def _uniform_block_indices(n: int, cap: int, block_size: int) -> np.ndarray:
+    """Select a capped set as uniformly placed short temporal blocks.
+    This keeps broad log coverage while making adjacent selected samples share
+    most of their exact 8 s future/history windows. It changes only which frames
+    are selected under a cap; teacher construction for each selected frame is
+    unchanged.
+    """
+    if n <= 0 or cap <= 0:
+        return np.zeros((0,), dtype=np.int64)
+    if n <= cap:
+        return np.arange(n, dtype=np.int64)
+    block = min(max(1, int(block_size)), cap)
+    num_blocks = int(math.ceil(float(cap) / float(block)))
+    max_anchor = max(0, n - block)
+    anchors = np.linspace(0, max_anchor, num_blocks).round().astype(np.int64)
+    picked: list[int] = []
+    seen: set[int] = set()
+    for anchor in anchors.tolist():
+        a = int(max(0, min(max_anchor, anchor)))
+        for j in range(block):
+            idx = a + j
+            if idx >= n:
+                break
+            if idx not in seen:
+                picked.append(idx)
+                seen.add(idx)
+            if len(picked) >= cap:
+                return np.asarray(picked, dtype=np.int64)
+    for idx in _uniform_indices(n, cap).tolist():
+        if idx not in seen:
+            picked.append(int(idx))
+            seen.add(int(idx))
+        if len(picked) >= cap:
+            break
+    return np.asarray(picked[:cap], dtype=np.int64)
 
 class NuPlanBDSEDataset:
     def __init__(
@@ -327,8 +377,13 @@ class NuPlanBDSEDataset:
             show_index_progress = total_scenarios >= int(self.cfg.get("preprocess", {}).get("index_progress_threshold", 10000))
             iterator = _maybe_tqdm(scenarios, total_scenarios, f"index:{self.split}", show_index_progress)
             cap_strategy = str(self.cfg.get("preprocess", {}).get("max_samples_per_log_strategy", "first")).lower()
-            if cap_strategy not in {"first", "uniform"}:
-                raise ValueError(f"Unsupported max_samples_per_log_strategy={cap_strategy!r}; expected 'first' or 'uniform'.")
+            if cap_strategy in {"uniform-blocks", "blocked_uniform", "blocked-uniform"}:
+                cap_strategy = "uniform_blocks"
+            if cap_strategy not in {"first", "uniform", "uniform_blocks"}:
+                raise ValueError(
+                    f"Unsupported max_samples_per_log_strategy={cap_strategy!r}; "
+                    "expected 'first', 'uniform', or 'uniform_blocks'."
+                )
             per_log_counts: dict[str, int] = {}
             for scenario in iterator:
                 token = _scenario_token(scenario)
@@ -339,38 +394,36 @@ class NuPlanBDSEDataset:
                     if self.max_samples_per_log is not None and cap_strategy == "first" and per_log_counts.get(log_name, 0) >= self.max_samples_per_log:
                         break
                     timestamp_us = _scenario_iteration_timestamp_us(scenario, iteration)
-                    out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration, timestamp_us))
+                    out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration,
+                                                         timestamp_us))
                     per_log_counts[log_name] = per_log_counts.get(log_name, 0) + 1
                     if self.max_scenarios is not None and len(out) >= self.max_scenarios:
                         self._index = out
                         print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
                         return self._index
 
-            if self.max_samples_per_log is not None and cap_strategy == "uniform":
+            if self.max_samples_per_log is not None and cap_strategy in {"uniform", "uniform_blocks"}:
                 grouped: dict[str, list[DevkitScenarioIndexRecord]] = {}
                 for rec in out:
                     grouped.setdefault(rec.log_name, []).append(rec)
                 capped: list[DevkitScenarioIndexRecord] = []
                 cap = int(self.max_samples_per_log)
+                block_size = max(1, int(self.cfg.get("preprocess", {}).get("max_samples_per_log_block_size", 8)))
                 for log_name in sorted(grouped):
-                    rows = grouped[log_name]
+                    rows = _sort_devkit_records_for_temporal_cache(grouped[log_name])
                     if len(rows) <= cap:
                         capped.extend(rows)
                         continue
-                    # Evenly sample across the whole log. The previous implementation
-                    # kept only the first cap frames, which can overrepresent the beginning
-                    # of every DB file and bias route/traffic-light/interaction coverage.
-                    idx = np.linspace(0, len(rows) - 1, cap).round().astype(np.int64)
-                    idx = np.unique(idx)
-                    if idx.size < cap:
-                        used = set(idx.tolist())
-                        missing = [i for i in range(len(rows)) if i not in used]
-                        idx = np.asarray(sorted(list(idx) + missing[: cap - idx.size]), dtype=np.int64)
+                    if cap_strategy == "uniform_blocks":
+                        idx = _uniform_block_indices(len(rows), cap, block_size)
+                    else:
+                        idx = _uniform_indices(len(rows), cap)
                     capped.extend(rows[int(i)] for i in idx[:cap])
                 out = _sort_devkit_records_for_temporal_cache(capped)
                 print(
-                    f"[bdse] applied uniform per-log cap: split={self.split} "
-                    f"logs={len(grouped)} cap={cap} records={len(out)}",
+                    f"[bdse] applied {cap_strategy} per-log cap: split={self.split} "
+                    f"logs={len(grouped)} cap={cap} "
+                    f"block_size={block_size if cap_strategy == 'uniform_blocks' else '-'} records={len(out)}",
                     flush=True,
                 )
 
