@@ -36,6 +36,7 @@ class DevkitScenarioIndexRecord:
     log_name: str
     token: str
     iteration: int
+    timestamp_us: int
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -174,6 +175,38 @@ def _scenario_token(scenario: Any) -> str:
     return _safe_name(getattr(scenario, "token", getattr(scenario, "scenario_name", getattr(scenario, "_scenario_name", "scenario"))))
 
 
+def _time_us_value(value: Any) -> int | None:
+    if value is None:
+        return None
+    val = getattr(value, "time_us", getattr(value, "timestamp_us", getattr(value, "timestamp", value)))
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        return int(val)
+    return None
+
+
+def _scenario_iteration_timestamp_us(scenario: Any, iteration: int) -> int:
+    """Best-effort absolute log timestamp for cache-local materialization order.
+
+    The value is used only to order preprocessing jobs.  Sample contents and cache
+    paths remain keyed by the original scenario/token/iteration, so failure to read
+    a timestamp falls back to a stable per-scenario value instead of changing labels.
+    """
+    for name in ["get_time_point", "get_timestamp_at_iteration"]:
+        fn = getattr(scenario, name, None)
+        if callable(fn):
+            try:
+                ts = _time_us_value(fn(int(iteration)))
+                if ts is not None:
+                    return ts
+            except Exception:
+                pass
+    for attr in ["start_time", "start_timestamp", "timestamp_us", "initial_lidar_timestamp"]:
+        ts = _time_us_value(getattr(scenario, attr, None))
+        if ts is not None:
+            return int(ts) + int(iteration)
+    return int(iteration)
+
+
 def _scenario_log_name(scenario: Any) -> str:
     return _safe_name(getattr(scenario, "log_name", getattr(scenario, "_log_name", "log")))
 
@@ -224,6 +257,20 @@ def _num_iterations(scenario: Any) -> int:
         except Exception:
             pass
     return 1
+
+
+def _sort_devkit_records_for_temporal_cache(records: list[DevkitScenarioIndexRecord]) -> list[DevkitScenarioIndexRecord]:
+    """Order sample materialization by absolute log time within each log.
+
+    BDSE label construction caches exact nuPlan frames by ``(log_name,
+    timestamp_us)``.  Adjacent 1 Hz samples share most of their 8 s future
+    windows, but that cache locality is lost if all scenario-local iteration-20
+    records are processed before iteration-30 records from unrelated timestamps.
+    Sorting only the work order preserves the selected sample set and teacher
+    labels while turning repeated 80-frame future bulk reads into mostly cache
+    hits plus a small tail fill.
+    """
+    return sorted(records, key=lambda r: (r.log_name, int(r.timestamp_us), r.token, int(r.iteration)))
 
 
 class NuPlanBDSEDataset:
@@ -291,7 +338,8 @@ class NuPlanBDSEDataset:
                 for iteration in range(0, n_iter, max(self.stride, 1)):
                     if self.max_samples_per_log is not None and cap_strategy == "first" and per_log_counts.get(log_name, 0) >= self.max_samples_per_log:
                         break
-                    out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration))
+                    timestamp_us = _scenario_iteration_timestamp_us(scenario, iteration)
+                    out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration, timestamp_us))
                     per_log_counts[log_name] = per_log_counts.get(log_name, 0) + 1
                     if self.max_scenarios is not None and len(out) >= self.max_scenarios:
                         self._index = out
@@ -319,13 +367,14 @@ class NuPlanBDSEDataset:
                         missing = [i for i in range(len(rows)) if i not in used]
                         idx = np.asarray(sorted(list(idx) + missing[: cap - idx.size]), dtype=np.int64)
                     capped.extend(rows[int(i)] for i in idx[:cap])
-                out = sorted(capped, key=lambda r: (r.log_name, r.iteration, r.token))
+                out = _sort_devkit_records_for_temporal_cache(capped)
                 print(
                     f"[bdse] applied uniform per-log cap: split={self.split} "
                     f"logs={len(grouped)} cap={cap} records={len(out)}",
                     flush=True,
                 )
 
+            out = _sort_devkit_records_for_temporal_cache(out)
             self._index = out
             print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
             return self._index
