@@ -8,6 +8,7 @@ import re
 import time
 import sqlite3
 import sys
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
@@ -204,12 +205,30 @@ def _scenario_iteration_timestamp_us(scenario: Any, iteration: int) -> int:
     for attr in ["start_time", "start_timestamp", "timestamp_us", "initial_lidar_timestamp"]:
         ts = _time_us_value(getattr(scenario, attr, None))
         if ts is not None:
-            return int(ts) + int(iteration)
+            interval = getattr(scenario, "database_interval", getattr(scenario, "_database_interval", None))
+            try:
+                step_us = int(round(float(interval) * 1_000_000.0)) if interval is not None else 1
+            except Exception:
+                step_us = 1
+            return int(ts) + int(iteration) * max(step_us, 1)
     return int(iteration)
 
 
 def _scenario_log_name(scenario: Any) -> str:
-    return _safe_name(getattr(scenario, "log_name", getattr(scenario, "_log_name", "log")))
+    for name in ("log_name", "_log_name", "database_log_name", "_database_log_name", "db_name", "_db_name"):
+        val = getattr(scenario, name, None)
+        if callable(val):
+            try:
+                val = val()
+            except Exception:
+                val = None
+        if val is not None and str(val) != "":
+            return _safe_name(val)
+    for name in ("database_path", "_database_path", "db_file", "_db_file"):
+        val = getattr(scenario, name, None)
+        if val is not None and str(val) != "":
+            return _safe_name(Path(str(val)).stem)
+    return _safe_name(getattr(scenario, "scenario_name", getattr(scenario, "_scenario_name", "log")))
 
 
 def _scenario_folder_for_log(records: list[DBFileRecord], log_name: str, default_split: str) -> str:
@@ -660,30 +679,77 @@ class NuPlanBDSEDataset:
             # futures before reading results can consume huge memory and makes it look
             # like preprocessing has hung.
             max_in_flight = max(workers, int(self.cfg.get("preprocess", {}).get("max_in_flight", workers * 4)))
-            pending_iter = iter(pending)
             completed = 0
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures: dict[Future, tuple[int, Path]] = {}
-                def submit_next() -> bool:
-                    try:
-                        i, path = next(pending_iter)
-                    except StopIteration:
+                cache_local_scheduler = bool(self.cfg.get("preprocess", {}).get("cache_local_scheduler", True)) and self.use_devkit
+                if cache_local_scheduler:
+                    grouped: dict[str, deque[tuple[int, Path]]] = {}
+                    log_order: list[str] = []
+                    for i, path in pending:
+                        item = index[i]
+                        log_name = str(getattr(item, "log_name", "default"))
+                        if log_name not in grouped:
+                            grouped[log_name] = deque()
+                            log_order.append(log_name)
+                        grouped[log_name].append((i, path))
+                    ready_logs: deque[str] = deque(log_order)
+                    active_logs: set[str] = set()
+                    future_logs: dict[Future, str] = {}
+
+                    def submit_from_log(log_name: str) -> bool:
+                        q = grouped.get(log_name)
+                        if not q:
+                            return False
+                        i, path = q.popleft()
+                        active_logs.add(log_name)
+                        fut = ex.submit(self._write_one_preprocessed_index, i, path, manifest_path)
+                        futures[fut] = (i, path)
+                        future_logs[fut] = log_name
+                        return True
+
+                    def submit_next() -> bool:
+                        while ready_logs and len(futures) < max_in_flight:
+                            log_name = ready_logs.popleft()
+                            if log_name in active_logs:
+                                continue
+                            if submit_from_log(log_name):
+                                return True
                         return False
-                    futures[ex.submit(self._write_one_preprocessed_index, i, path, manifest_path)] = (i, path)
-                    return True
+                else:
+                    pending_iter = iter(pending)
+                    future_logs = {}
+
+                    def submit_next() -> bool:
+                        try:
+                            i, path = next(pending_iter)
+                        except StopIteration:
+                            return False
+                        futures[ex.submit(self._write_one_preprocessed_index, i, path, manifest_path)] = (i, path)
+                        return True
 
                 for _ in range(min(max_in_flight, len(pending))):
-                    submit_next()
+                    if not submit_next():
+                        break
                 pbar = _maybe_tqdm(range(len(pending)), len(pending), f"preprocess:{self.split}", show_progress)
                 try:
                     while futures:
                         done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
                         for fut in done:
+                            finished_log = future_logs.pop(fut, None)
                             _handle_result(fut, futures)
+                            if cache_local_scheduler and finished_log is not None:
+                                active_logs.discard(finished_log)
+                                if grouped.get(finished_log):
+                                    # Continue the same log in timestamp order.  This is the
+                                    # critical bit for exact future/history frame cache reuse:
+                                    # only one window from a log is cold-filling at a time.
+                                    ready_logs.appendleft(finished_log)
                             completed += 1
                             if hasattr(pbar, "update"):
                                 pbar.update(1)
-                            submit_next()
+                            while len(futures) < max_in_flight and submit_next():
+                                pass
                             if len(manifest_records) >= 256:
                                 _append_manifest(manifest_records)
                 finally:

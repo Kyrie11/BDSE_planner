@@ -194,8 +194,40 @@ def _frame_fill_lock(kind: str, scenario: Any, direction: str) -> threading.RLoc
 
 
 def _scenario_log_name_for_cache(scenario: Any) -> str:
-    for name in ("log_name", "_log_name", "scenario_name", "_scenario_name", "token"):
+    # Prefer the underlying nuPlan DB/log identity.  Falling back to scenario_name
+    # before checking common private DB attributes makes adjacent scenario windows
+    # from the same log use different cache keys, defeating temporal reuse.
+    for name in (
+        "log_name",
+        "_log_name",
+        "database_log_name",
+        "_database_log_name",
+        "db_name",
+        "_db_name",
+    ):
         val = getattr(scenario, name, None)
+        if callable(val):
+            try:
+                val = val()
+            except Exception:
+                val = None
+        if val is not None and str(val) != "":
+            return str(val)
+    for name in ("database_path", "_database_path", "db_file", "_db_file"):
+        val = getattr(scenario, name, None)
+        if val is not None and str(val) != "":
+            try:
+                from pathlib import Path
+                return Path(str(val)).stem
+            except Exception:
+                return str(val)
+    for name in ("scenario_name", "_scenario_name", "token"):
+        val = getattr(scenario, name, None)
+        if callable(val):
+            try:
+                val = val()
+            except Exception:
+                val = None
         if val is not None and str(val) != "":
             return str(val)
     return f"scenario-{id(scenario)}"

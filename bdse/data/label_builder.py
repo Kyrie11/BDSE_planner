@@ -66,12 +66,19 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
     logged_ego = transform_states_to_local(pad_array(ego_arr, (T, 5)), origin_xy, origin_yaw)
     mark("future_ego")
 
-    current_frame = cached_current_tracked_frame(scenario, iteration, cfg)
-    token_to_row = {str(t): i for i, t in enumerate(current_frame.tokens)}
-    selected_tokens = list(getattr(runtime, "metadata", {}).get("selected_agent_tokens", [])) if runtime is not None else list(current_frame.tokens)[:max_agents]
-    selected_rows = [token_to_row[str(t)] for t in selected_tokens if str(t) in token_to_row][:max_agents]
-    raw_current_global = current_frame.boxes[selected_rows] if selected_rows else np.zeros((0, 10), dtype=np.float32)
-    raw_current = boxes_global_to_local(raw_current_global, origin_xy, origin_yaw)
+    if runtime is not None:
+        selected_tokens = list(getattr(runtime, "metadata", {}).get("selected_agent_tokens", []))
+        valid_rows = np.flatnonzero(np.asarray(runtime.agent_valid, dtype=bool))[:max_agents]
+        raw_current = np.asarray(runtime.current_agents[valid_rows], dtype=np.float32) if valid_rows.size else np.zeros((0, 10), dtype=np.float32)
+        if not selected_tokens:
+            selected_tokens = [str(i) for i in valid_rows.tolist()]
+    else:
+        current_frame = cached_current_tracked_frame(scenario, iteration, cfg)
+        token_to_row = {str(t): i for i, t in enumerate(current_frame.tokens)}
+        selected_tokens = list(current_frame.tokens)[:max_agents]
+        selected_rows = [token_to_row[str(t)] for t in selected_tokens if str(t) in token_to_row][:max_agents]
+        raw_current_global = current_frame.boxes[selected_rows] if selected_rows else np.zeros((0, 10), dtype=np.float32)
+        raw_current = boxes_global_to_local(raw_current_global, origin_xy, origin_yaw)
     n = min(max_agents, len(raw_current))
     mark("current_agents")
 

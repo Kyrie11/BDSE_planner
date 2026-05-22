@@ -240,6 +240,77 @@ def _collision_overlap_series(ego: np.ndarray, agent: np.ndarray, atom: Evidence
     return out
 
 
+def _collision_overlap_batch(ego: np.ndarray, agent: np.ndarray, atom: EvidenceAtom) -> np.ndarray:
+    """Vectorized ego-agent oriented-box overlap for a candidate bank.
+
+    This is algebraically equivalent to the SAT check in
+    :func:`_collision_overlap_series` for rectangles, but avoids constructing box
+    corners and running Python loops over K*T frames.  The returned array has shape
+    ``[K, T]`` and uses the same touching-counts-as-overlap convention as the
+    corner-based SAT implementation.
+    """
+    ego_arr = np.asarray(ego, dtype=np.float32)
+    if ego_arr.ndim != 3 or ego_arr.shape[-1] < 3:
+        return np.zeros((0, 0), dtype=bool)
+    agent_arr = np.asarray(agent, dtype=np.float32)
+    if agent_arr.ndim != 2 or agent_arr.shape[-1] < 3 or agent_arr.shape[0] == 0:
+        return np.zeros(ego_arr.shape[:2], dtype=bool)
+    T = min(ego_arr.shape[1], agent_arr.shape[0])
+    if T <= 0:
+        return np.zeros(ego_arr.shape[:2], dtype=bool)
+    ego_arr = ego_arr[:, :T]
+    agent_arr = agent_arr[:T]
+
+    length_ego, width_ego = 4.8, 2.0
+    length_agent = float(atom.anchor.get("length", 4.8))
+    width_agent = float(atom.anchor.get("width", 2.0))
+    he_l, he_w = 0.5 * length_ego, 0.5 * width_ego
+    ha_l, ha_w = 0.5 * length_agent, 0.5 * width_agent
+
+    dx = agent_arr[None, :, 0] - ego_arr[:, :, 0]
+    dy = agent_arr[None, :, 1] - ego_arr[:, :, 1]
+    ce = np.cos(ego_arr[:, :, 2]); se = np.sin(ego_arr[:, :, 2])
+    ca = np.cos(agent_arr[None, :, 2]); sa = np.sin(agent_arr[None, :, 2])
+
+    # Ego axes u_e=(ce,se), v_e=(-se,ce); agent axes u_a=(ca,sa), v_a=(-sa,ca).
+    d_ue = dx * ce + dy * se
+    d_ve = -dx * se + dy * ce
+    d_ua = dx * ca + dy * sa
+    d_va = -dx * sa + dy * ca
+
+    dot_ua_ue = ca * ce + sa * se
+    dot_va_ue = -sa * ce + ca * se
+    dot_ua_ve = -ca * se + sa * ce
+    dot_va_ve = sa * se + ca * ce
+
+    sep_ue = np.abs(d_ue) > (he_l + ha_l * np.abs(dot_ua_ue) + ha_w * np.abs(dot_va_ue))
+    sep_ve = np.abs(d_ve) > (he_w + ha_l * np.abs(dot_ua_ve) + ha_w * np.abs(dot_va_ve))
+    sep_ua = np.abs(d_ua) > (ha_l + he_l * np.abs(dot_ua_ue) + he_w * np.abs(dot_ua_ve))
+    sep_va = np.abs(d_va) > (ha_w + he_l * np.abs(dot_va_ue) + he_w * np.abs(dot_va_ve))
+    out = ~(sep_ue | sep_ve | sep_ua | sep_va)
+    if T < ego.shape[1]:
+        padded = np.zeros(ego.shape[:2], dtype=bool)
+        padded[:, :T] = out
+        return padded
+    return out.astype(bool, copy=False)
+
+
+def _sustained_true_rows(mask: np.ndarray, min_frames: int) -> np.ndarray:
+    """Row-wise version of _sustained_true for [K,T] boolean masks."""
+    arr = np.asarray(mask, dtype=bool)
+    if arr.ndim == 1:
+        return np.asarray([_sustained_true(arr, min_frames)], dtype=bool)
+    n = max(int(min_frames), 1)
+    if n <= 1:
+        return arr.any(axis=1)
+    run = np.zeros((arr.shape[0],), dtype=np.int16)
+    out = np.zeros((arr.shape[0],), dtype=bool)
+    for k in range(arr.shape[1]):
+        run = np.where(arr[:, k], run + 1, 0)
+        out |= run >= n
+    return out
+
+
 def _point_in_poly(points: np.ndarray, poly: np.ndarray) -> np.ndarray:
     x = points[:, 0]
     y = points[:, 1]
@@ -430,6 +501,15 @@ def raw_local_costs_with_hard_events(atoms: list[EvidenceAtom], candidates: Cand
     # Do not slice every candidate again for every atom.  With E~70, K=32,
     # T=80 this alone removes thousands of repeated Python/Numpy allocations.
     eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
+    eval_traj_arr = np.stack(eval_trajs, axis=0) if K else np.zeros((0, 0, 5), dtype=np.float32)
+    eval_traj_arr = np.stack(eval_trajs, axis=0) if K else np.zeros((0, 0, 5), dtype=np.float32)
+    kinematic_cache: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+    for traj in eval_trajs:
+        v = traj[:, 3]
+        acc = finite_difference(v, dt_eval)
+        jerk = finite_difference(acc, dt_eval)
+        curv = compute_curvature(traj[:, :2])
+        kinematic_cache.append((acc, jerk, curv))
     route_dist_cache: dict[tuple[int, int], np.ndarray] = {}
 
     def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
@@ -441,41 +521,40 @@ def raw_local_costs_with_hard_events(atoms: list[EvidenceAtom], candidates: Cand
         return got
 
     for ei, atom in enumerate(atoms):
-        agent_eval = None
-        collision_decision = None
         if atom.type in {"occupancy", "ttc"}:
             agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, base_dt), cfg)
-        if atom.type == "occupancy" and agent_eval is not None:
-            overlap = np.stack([_collision_overlap_series(eval_trajs[a], agent_eval, atom) > 0.0 for a in range(K)], axis=0)
-            ds = _collision_decision_slice(overlap.shape[1], dt_eval, safety)
-            collision_decision = _filter_shared_collision_frames(overlap[:, ds], candidates.valid_mask, safety)
+            T_eval = min(eval_traj_arr.shape[1], agent_eval.shape[0])
+            traj_block = eval_traj_arr[:, :T_eval]
+            agent_block = agent_eval[:T_eval]
+            if atom.type == "occupancy":
+                dist = np.linalg.norm(traj_block[:, :, :2] - agent_block[None, :, :2], axis=2)
+                near = np.maximum(0.0, d_safe - dist) ** 2
+                overlap = _collision_overlap_batch(traj_block, agent_block, atom)
+                ds = _collision_decision_slice(overlap.shape[1], dt_eval, safety)
+                collision_decision = _filter_shared_collision_frames(overlap[:, ds], candidates.valid_mask, safety)
+                raw[ei] = near.sum(axis=1) + c_col * collision_decision.any(axis=1).astype(np.float32)
+                if atom.is_hard:
+                    hard_events[ei] = _sustained_true_rows(collision_decision, collision_min_frames) & candidates.valid_mask
+            else:
+                dist = np.linalg.norm(traj_block[:, :, :2] - agent_block[None, :, :2], axis=2)
+                rel_speed = np.maximum(np.abs(traj_block[:, :, 3] - agent_block[None, :, 3]), 0.1)
+                ttc = dist / rel_speed
+                raw[ei] = np.maximum(0.0, tau_safe - ttc).max(axis=1) ** 2
+            continue
+        if atom.type == "gap":
+            cur = np.asarray(atom.anchor.get("current_state", np.zeros(10)), dtype=np.float32)
+            dx = cur[0] - eval_traj_arr[:, :, 0]
+            dy = np.abs(cur[1] - eval_traj_arr[:, :, 1])
+            same_corridor = dy < 3.5
+            front = np.where((dx > 0.0) & same_corridor, dx, 1e6)
+            rear = np.where((dx < 0.0) & same_corridor, -dx, 1e6)
+            front_min = front.min(axis=1)
+            rear_min = rear.min(axis=1)
+            raw[ei] = np.maximum(0.0, front_gap - front_min) ** 2 + np.maximum(0.0, rear_gap - rear_min) ** 2
+            continue
         for a in range(K):
             traj = eval_trajs[a]
-            if atom.type == "occupancy":
-                agent = agent_eval
-                dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
-                near = np.maximum(0.0, d_safe - dist) ** 2
-                decision_overlap = collision_decision[a] if collision_decision is not None else np.zeros((0,), dtype=bool)
-                raw[ei, a] = float(near.sum() + c_col * (decision_overlap.max() if decision_overlap.size else 0.0))
-                if atom.is_hard and candidates.valid_mask[a]:
-                    hard_events[ei, a] = _sustained_true(decision_overlap, collision_min_frames)
-            elif atom.type == "ttc":
-                agent = agent_eval
-                dist = np.linalg.norm(traj[:, :2] - agent[:, :2], axis=1)
-                rel_speed = np.maximum(np.abs(traj[:, 3] - agent[:, 3]), 0.1)
-                ttc = dist / rel_speed
-                raw[ei, a] = float(np.maximum(0.0, tau_safe - ttc).max() ** 2)
-            elif atom.type == "gap":
-                cur = np.asarray(atom.anchor.get("current_state", np.zeros(10)), dtype=np.float32)
-                dx = cur[0] - traj[:, 0]
-                dy = np.abs(cur[1] - traj[:, 1])
-                same_corridor = dy < 3.5
-                front_vals = dx[np.logical_and(dx > 0.0, same_corridor)]
-                rear_vals = (-dx)[np.logical_and(dx < 0.0, same_corridor)]
-                front_min = float(front_vals.min()) if front_vals.size else 1e6
-                rear_min = float(rear_vals.min()) if rear_vals.size else 1e6
-                raw[ei, a] = float(np.maximum(0.0, front_gap - front_min) ** 2 + np.maximum(0.0, rear_gap - rear_min) ** 2)
-            elif atom.type == "red_light":
+            if atom.type == "red_light":
                 stop = np.asarray(atom.anchor.get("stop_line_xy", []), dtype=np.float32).reshape(-1, 2)
                 red = bool(atom.anchor.get("red", True))
                 crosses = _crosses_polyline(traj[:, :2], stop)
@@ -523,10 +602,7 @@ def raw_local_costs_with_hard_events(atoms: list[EvidenceAtom], candidates: Cand
                 limit = float(atom.anchor.get("speed_limit_mps", 13.4))
                 raw[ei, a] = float(np.maximum(0.0, traj[:, 3] - limit).max() ** 2)
             elif atom.type.startswith("local_comfort"):
-                v = traj[:, 3]
-                acc = finite_difference(v, dt_eval)
-                jerk = finite_difference(acc, dt_eval)
-                curv = compute_curvature(traj[:, :2])
+                acc, jerk, curv = kinematic_cache[a]
                 if atom.type.endswith("accel"):
                     raw[ei, a] = float(np.maximum(0.0, np.abs(acc) - 3.0).sum())
                 elif atom.type.endswith("jerk"):
@@ -577,13 +653,12 @@ def hard_event_matrix(atoms: list[EvidenceAtom], candidates: CandidateBank, runt
         agent_eval = None
         if atom.type in {"occupancy", "collision"}:
             agent_eval = _eval_traj(_agent_future_for_atom(atom, runtime, label_future, candidates.T, base_dt), cfg)
-            overlap = np.stack([_collision_overlap_series(eval_trajs[a], agent_eval, atom) > 0.0 for a in range(K)], axis=0)
+            T_eval = min(eval_traj_arr.shape[1], agent_eval.shape[0])
+            overlap = _collision_overlap_batch(eval_traj_arr[:, :T_eval], agent_eval[:T_eval], atom)
             overlap = overlap[:, _collision_decision_slice(overlap.shape[1], base_dt * _teacher_eval_stride(cfg), safety)]
             overlap = _filter_shared_collision_frames(overlap, candidates.valid_mask, safety)
             min_frames = int(safety.get("collision_min_frames", 2))
-            for a in range(K):
-                if candidates.valid_mask[a]:
-                    out[ei, a] = _sustained_true(overlap[a], min_frames)
+            out[ei] = _sustained_true_rows(overlap, min_frames) & candidates.valid_mask
             continue
         for a in range(K):
             if not candidates.valid_mask[a]:

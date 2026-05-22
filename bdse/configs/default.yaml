@@ -23,6 +23,10 @@ preprocess:
   max_samples_per_log_block_size: 8
   num_workers: 1
   max_in_flight: 2
+  # With temporal frame caching, run at most one materialization from the same
+  # nuPlan log at a time and parallelize across logs.  This preserves labels but
+  # prevents adjacent windows from all cold-missing and waiting on the same DB fill.
+  cache_local_scheduler: true
   compress_npz: false
   profile: false
   profile_threshold_s: 2.0

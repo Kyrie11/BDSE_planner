@@ -19,6 +19,9 @@ preprocess:
   max_samples_per_log_block_size: 8
   num_workers: 4
   max_in_flight: 8
+  # Keep one in-flight preprocessing job per log while still using workers across
+  # different logs.  This makes the exact 8s future/history frame cache useful.
+  cache_local_scheduler: true
   compress_npz: false
   profile: false
   profile_threshold_s: 2.0
