@@ -48,10 +48,16 @@ def main() -> None:
     parser.add_argument("--profile", action="store_true", help="Print per-sample preprocessing time breakdowns.")
     parser.add_argument("--profile-threshold-s", type=float, default=None,
                         help="Only print profiling rows slower than this many seconds.")
-    parser.add_argument("--candidate-aware-agent-selection", action="store_true",
+    parser.add_argument("--candidate-aware-agent-selection", action="store_true", default=None,
                         help="Do a second runtime extraction after candidate generation to sort agents by candidate proximity. Slower.")
-    parser.add_argument("--include-drivable-polygons", action="store_true",
+    parser.add_argument("--no-candidate-aware-agent-selection", action="store_false", dest="candidate_aware_agent_selection",
+                        help="Disable candidate-aware agent reordering even when the config enables it.")
+    parser.add_argument("--include-drivable-polygons", action="store_true", default=None,
                         help="Extract full drivable-area polygons from map API. Much slower; route-corridor fallback is used otherwise.")
+    parser.add_argument("--no-include-drivable-polygons", action="store_false", dest="include_drivable_polygons",
+                        help="Disable full drivable-area polygon extraction and use the route-corridor fallback.")
+    parser.add_argument("--candidate-k", type=int, default=None,
+                        help="Override the finite candidate-bank size K. Use 32 for the paper/default BDSE setting.")
     parser.add_argument("--teacher-cost-eval-stride", type=int, default=None,
                         help="Evaluate expensive teacher costs every N candidate timesteps; candidates are still saved at full resolution.")
     args = parser.parse_args()
@@ -85,10 +91,12 @@ def main() -> None:
         cfg["preprocess"]["profile"] = True
     if args.profile_threshold_s is not None:
         cfg["preprocess"]["profile_threshold_s"] = float(args.profile_threshold_s)
-    if args.candidate_aware_agent_selection:
-        cfg["preprocess"]["candidate_aware_agent_selection"] = True
-    if args.include_drivable_polygons:
-        cfg.setdefault("runtime", {})["include_drivable_polygons"] = True
+    if args.candidate_aware_agent_selection is not None:
+        cfg["preprocess"]["candidate_aware_agent_selection"] = bool(args.candidate_aware_agent_selection)
+    if args.include_drivable_polygons is not None:
+        cfg.setdefault("runtime", {})["include_drivable_polygons"] = bool(args.include_drivable_polygons)
+    if args.candidate_k is not None:
+        cfg.setdefault("candidate", {})["K"] = max(1, int(args.candidate_k))
     if args.teacher_cost_eval_stride is not None:
         cfg.setdefault("teacher", {})["cost_eval_stride"] = max(1, int(args.teacher_cost_eval_stride))
     if args.list_splits:

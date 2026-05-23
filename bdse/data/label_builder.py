@@ -97,20 +97,33 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
     )
     mark("future_agents_fetch")
     if n > 0:
-        # Use the same token canonicalization as runtime agent selection.  Some
-        # nuPlan object wrappers expose a present-but-empty token attribute; falling
-        # back consistently prevents selected agents from being silently matched to
-        # the wrong future row or downgraded to constant-velocity fallback.
+        # Use the same token canonicalization as runtime agent selection.  Only the
+        # selected agent slots are label-relevant, so transform those rows instead of
+        # converting every tracked object in every future frame.  This preserves the
+        # exact selected-agent labels and avoids O(all_objects*T) local transforms on
+        # dense nuPlan frames.
         token_to_local_idx = {str(tok): i for i, tok in enumerate(selected_tokens[:n])}
         for k, frame in enumerate(future_frames[:T]):
-            boxes_local = boxes_global_to_local(frame.boxes, origin_xy, origin_yaw)
+            if not frame.tokens or frame.boxes.size == 0:
+                continue
+            src_rows: list[int] = []
+            dst_rows: list[int] = []
+            max_box = int(frame.boxes.shape[0])
             for j, token in enumerate(frame.tokens):
+                if j >= max_box:
+                    break
                 i = token_to_local_idx.get(str(token))
-                if i is not None and j < boxes_local.shape[0]:
-                    arr = boxes_local[j]
-                    logged_agents[i, k] = np.asarray([arr[0], arr[1], arr[2], arr[3], (k + 1) * step], dtype=np.float32)
-                    valid[i] = True
-                    logged_mask[i] = True
+                if i is not None:
+                    src_rows.append(j)
+                    dst_rows.append(i)
+            if not src_rows:
+                continue
+            boxes_local = boxes_global_to_local(frame.boxes[np.asarray(src_rows, dtype=np.int64)], origin_xy, origin_yaw)
+            for row, i in enumerate(dst_rows):
+                arr = boxes_local[row]
+                logged_agents[i, k] = np.asarray([arr[0], arr[1], arr[2], arr[3], (k + 1) * step], dtype=np.float32)
+                valid[i] = True
+                logged_mask[i] = True
     mark("future_agents_project")
 
     times = np.arange(1, T + 1, dtype=np.float32) * step

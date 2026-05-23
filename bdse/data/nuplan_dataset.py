@@ -808,6 +808,15 @@ class PreprocessedBDSEDataset:
             direct = root / split
             if direct.exists():
                 roots.append(direct)
+            norm = normalize_split_name(split)
+            # Concrete city/folder selectors such as train_boston can appear either
+            # as ROOT/train_boston/... or as ROOT/train/train_boston/... depending on
+            # whether preprocessing was invoked with --splits train_boston or with
+            # --split train --folders train_boston.  Search both without broadening a
+            # concrete selector to every training folder.
+            nested = root / norm / split
+            if split != norm and nested.exists():
+                roots.append(nested)
             if self._is_canonical_split_name(split) and root.exists():
                 for child in sorted(root.iterdir(), key=lambda p: p.name):
                     if child.is_dir() and normalize_split_name(child.name) == split:

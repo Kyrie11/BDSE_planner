@@ -65,6 +65,67 @@ def oracle_objective_value(
     return float(total)
 
 
+
+
+def _greedy_cover_from_pair_support(
+    atom_support: np.ndarray,
+    base_support: np.ndarray,
+    caps: np.ndarray,
+    pair_weights: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+) -> tuple[list[int], float, float]:
+    """Greedy coverage used by oracle/runtime selectors, vectorized over pairs.
+
+    ``atom_support[i, p]`` is the non-negative margin support contributed by atom
+    ``i`` to pair ``p``.  This is algebraically identical to recomputing
+    ``oracle_objective_value`` / ``runtime_objective_value`` for every candidate
+    atom at every greedy step, but it avoids the Python loop over pairs inside the
+    inner loop.  Tie-breaking intentionally mirrors the old implementation:
+    maximize ``(gain / cost, gain, -atom_index)`` over sorted active atoms.
+    """
+    support = np.asarray(base_support, dtype=np.float32).reshape(-1).copy()
+    caps = np.asarray(caps, dtype=np.float32).reshape(-1)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    atom_support = np.asarray(atom_support, dtype=np.float32)
+    E = int(atom_support.shape[0]) if atom_support.ndim == 2 else int(np.asarray(atom_budget_costs).shape[0])
+    if atom_support.ndim != 2 or atom_support.shape[1] != support.shape[0]:
+        atom_support = np.zeros((E, support.shape[0]), dtype=np.float32)
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).copy()
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    selected: list[int] = []
+    spent = 0.0
+    clipped = np.minimum(caps, support)
+    current = float(np.sum(weights * clipped, dtype=np.float64))
+
+    while bool(active.any()):
+        best: tuple[int, float, float] | None = None
+        best_key = (-np.inf, -np.inf, np.inf)
+        baseline = np.minimum(caps, support)
+        for i in np.flatnonzero(active):
+            idx = int(i)
+            c = float(costs[idx])
+            if spent + c > float(budget) + 1e-6:
+                continue
+            trial = np.minimum(caps, support + atom_support[idx])
+            gain = float(np.sum(weights * (trial - baseline), dtype=np.float64))
+            key = (gain / max(c, 1e-6), gain, -idx)
+            if key > best_key:
+                best_key = key
+                best = (idx, gain, c)
+        if best is None or best_key[1] <= 1e-9:
+            break
+        idx, gain, c = best
+        selected.append(idx)
+        active[idx] = False
+        spent += c
+        support += atom_support[idx]
+        current += float(gain)
+    return selected, float(current), float(spent)
+
 def oracle_greedy_selector(
     J_base: np.ndarray,
     g_true: np.ndarray,
@@ -75,37 +136,36 @@ def oracle_greedy_selector(
     budget: float,
     atom_active_mask: np.ndarray | None = None,
 ) -> SelectionResult:
-    E = int(g_true.shape[0])
-    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool)
-    selected: list[int] = []
-    remaining = {int(i) for i in np.flatnonzero(active)}
-    spent = 0.0
-    current = oracle_objective_value(selected, J_base, g_true, pairs, margins, weights)
-    costs = np.asarray(atom_budget_costs, dtype=np.float32)
-    while remaining:
-        best = None
-        best_key = (-np.inf, np.inf, np.inf)
-        for i in sorted(remaining):
-            c = float(costs[i])
-            if spent + c > budget + 1e-6:
-                continue
-            val = oracle_objective_value(selected + [i], J_base, g_true, pairs, margins, weights)
-            gain = val - current
-            key = (gain / max(c, 1e-6), gain, -i)
-            if key > best_key:
-                best_key = key
-                best = (i, val, c)
-        if best is None or best_key[1] <= 1e-9:
-            break
-        i, val, c = best
-        selected.append(i)
-        remaining.remove(i)
-        spent += c
-        current = float(val)
+    pair_arr = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+    E = int(np.asarray(g_true).shape[0])
+    if pair_arr.size == 0:
+        selected, current, spent = _greedy_cover_from_pair_support(
+            np.zeros((E, 0), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            atom_budget_costs,
+            budget,
+            atom_active_mask,
+        )
+    else:
+        a = pair_arr[:, 0]
+        b = pair_arr[:, 1]
+        base_support = np.maximum(np.asarray(J_base, dtype=np.float32)[b] - np.asarray(J_base, dtype=np.float32)[a], 0.0)
+        atom_support = np.maximum(np.asarray(g_true, dtype=np.float32)[:, b] - np.asarray(g_true, dtype=np.float32)[:, a], 0.0)
+        selected, current, spent = _greedy_cover_from_pair_support(
+            atom_support,
+            base_support,
+            np.asarray(margins, dtype=np.float32).reshape(-1)[: pair_arr.shape[0]],
+            np.asarray(weights, dtype=np.float32).reshape(-1)[: pair_arr.shape[0]],
+            atom_budget_costs,
+            budget,
+            atom_active_mask,
+        )
     return SelectionResult(
         selected=selected,
         objective_value=current,
-        pair_indices=np.asarray(pairs, dtype=np.int64),
+        pair_indices=pair_arr,
         pair_weights=np.asarray(weights, dtype=np.float32),
         diagnostics={"spent_budget": spent, "budget": float(budget), "mode": "oracle_greedy"},
     )
@@ -191,33 +251,27 @@ def runtime_greedy_selector(
             pair_weights[i] += float(lambda_safety) * float(runtime_safety_flags[b])
     else:
         pair_weights = base_weights
+
     E = int(predicted_atom_costs.shape[0])
-    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool)
-    costs = np.asarray(atom_budget_costs, dtype=np.float32)
-    selected: list[int] = []
-    remaining = {int(i) for i in np.flatnonzero(active)}
-    spent = 0.0
-    current = runtime_objective_value(selected, predicted_base_cost, predicted_atom_costs, pairs, pair_weights, gamma_max)
-    while remaining:
-        best = None
-        best_key = (-np.inf, -np.inf, np.inf)
-        for i in sorted(remaining):
-            c = float(costs[i])
-            if spent + c > budget + 1e-6:
-                continue
-            val = runtime_objective_value(selected + [i], predicted_base_cost, predicted_atom_costs, pairs, pair_weights, gamma_max)
-            gain = val - current
-            key = (gain / max(c, 1e-6), gain, -i)
-            if key > best_key:
-                best_key = key
-                best = (i, val, c)
-        if best is None or best_key[1] <= 1e-9:
-            break
-        i, val, c = best
-        selected.append(i)
-        remaining.remove(i)
-        spent += c
-        current = float(val)
+    if len(pairs):
+        a = pairs[:, 0]
+        b = pairs[:, 1]
+        base_support = np.maximum(np.asarray(predicted_base_cost, dtype=np.float32)[b] - np.asarray(predicted_base_cost, dtype=np.float32)[a], 0.0)
+        atom_support = np.maximum(np.asarray(predicted_atom_costs, dtype=np.float32)[:, b] - np.asarray(predicted_atom_costs, dtype=np.float32)[:, a], 0.0)
+        caps = np.minimum(np.maximum(M[a, b], 0.0), float(gamma_max)).astype(np.float32)
+    else:
+        base_support = np.zeros((0,), dtype=np.float32)
+        atom_support = np.zeros((E, 0), dtype=np.float32)
+        caps = np.zeros((0,), dtype=np.float32)
+    selected, current, spent = _greedy_cover_from_pair_support(
+        atom_support,
+        base_support,
+        caps,
+        pair_weights,
+        atom_budget_costs,
+        budget,
+        atom_active_mask,
+    )
     return SelectionResult(
         selected=selected,
         objective_value=current,

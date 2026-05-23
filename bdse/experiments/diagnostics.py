@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -131,7 +132,7 @@ def _safe_absence_type_flags(s, hard_events: np.ndarray, valid: np.ndarray) -> d
     return out
 
 
-def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
+def _teacher_sample_metrics(s, cfg: dict[str, Any], recompute_hard_events: bool = False) -> dict[str, float]:
     log_nearest, log_costs = _log_nearest(s)
     valid = s.candidates.valid_mask.astype(bool)
     a_star = int(s.teacher.a_star)
@@ -139,10 +140,18 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
     map_valid = float(bool(s.runtime.map_features.get("map_valid", False)))
     route_source = str(s.runtime.map_features.get("route_source", ""))
     route_fallback = float(route_source.startswith("fallback"))
-    hard_events = hard_event_matrix(s.evidence_bank.atoms, s.candidates, s.runtime, s.label_future, cfg)
+    hard_events = None
     hard_valid = s.teacher.hard_violation_mask[valid]
     safe_mask = valid & (~s.teacher.hard_violation_mask.astype(bool))
-    hard_candidate_mask_from_atoms = hard_events[s.evidence_bank.hard_mask()][:, valid].any(axis=0) if valid.any() and s.evidence_bank.hard_mask().any() else np.zeros((int(valid.sum()),), dtype=bool)
+    if recompute_hard_events:
+        hard_events = hard_event_matrix(s.evidence_bank.atoms, s.candidates, s.runtime, s.label_future, cfg)
+        hard_candidate_mask_from_atoms = hard_events[s.evidence_bank.hard_mask()][:, valid].any(axis=0) if valid.any() and s.evidence_bank.hard_mask().any() else np.zeros((int(valid.sum()),), dtype=bool)
+    else:
+        # The exact per-type hard-event matrix is expensive to reconstruct from
+        # trajectories and agents.  For fast diagnostics, use the already saved
+        # teacher hard-violation label for aggregate rates, and omit only the
+        # per-hard-type decomposition metrics.
+        hard_candidate_mask_from_atoms = hard_valid
     teacher_vs_log = float(log_nearest >= 0 and log_nearest != a_star)
     teacher_regret_to_log = float(s.teacher.J_T[log_nearest] - s.teacher.J_T[a_star]) if log_nearest >= 0 and np.isfinite(s.teacher.J_T[log_nearest]) else float("nan")
     family_counts = Counter(a.family for a in s.evidence_bank.atoms)
@@ -208,12 +217,13 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any]) -> dict[str, float]:
         "partition_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_T[valid] - (s.teacher.J_base[valid] + s.teacher.J_evid[valid])))) if valid.any() else float("nan"),
         "evidence_sum_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_evid[valid] - s.teacher.g_evid[:, valid].sum(axis=0)))) if valid.any() else float("nan"),
     }
-    out.update(_hard_event_type_counts(s, hard_events, valid))
+    if hard_events is not None:
+        out.update(_hard_event_type_counts(s, hard_events, valid))
+        out.update(_hard_event_type_flags(s, hard_events, a_star, "teacher_hard_type"))
+        out.update(_hard_event_type_flags(s, hard_events, log_nearest, "log_nearest_hard_type"))
+        if not bool(safe_mask.any()):
+            out.update(_safe_absence_type_flags(s, hard_events, valid))
     out.update(_atom_saturation_metrics(s, valid, cfg))
-    out.update(_hard_event_type_flags(s, hard_events, a_star, "teacher_hard_type"))
-    out.update(_hard_event_type_flags(s, hard_events, log_nearest, "log_nearest_hard_type"))
-    if not bool(safe_mask.any()):
-        out.update(_safe_absence_type_flags(s, hard_events, valid))
     return out
 
 
@@ -238,7 +248,39 @@ def _summarize_lists(acc: dict[str, list[float]]) -> dict[str, float]:
     return out
 
 
-def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, max_files: int | None, max_scenarios: int | None, scenario_stride: int | None, preprocessed_dir: str | None = None) -> dict[str, Any]:
+def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: list[float], recompute_hard_events: bool):
+    s = dataset[i]
+    if s.teacher is None or s.label_future is None or s.pairs is None:
+        return None
+    teacher_metrics = _teacher_sample_metrics(s, cfg, recompute_hard_events=recompute_hard_events)
+    J0 = s.teacher.J_base.copy()
+    g = s.teacher.g_evid.copy()
+    flags = runtime_safety_flags_from_runtime(s.runtime, s.candidates, cfg)
+    runtime_sel = runtime_greedy_selector(J0, g, s.evidence_bank.budget_costs(), s.candidates.valid_mask, flags, float(cfg["evidence"]["budget"]), atom_active_mask=s.evidence_bank.active_mask)
+    oracle_sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(cfg["evidence"]["budget"]), s.evidence_bank.active_mask)
+    tour = run_tournament(J0, g, runtime_sel.selected, s.candidates.valid_mask, flags, cfg)
+    bdse_result = compute_bdse_diagnostics(s.candidates, s.evidence_bank, s.teacher, s.pairs, J0, g, runtime_sel.selected, tour.action_index, runtime_sel.selected, oracle_sel.selected, cfg)
+    budget_metrics: dict[str, float] = {}
+    hard = set(np.flatnonzero(s.evidence_bank.hard_mask() & s.evidence_bank.active_mask).astype(int).tolist())
+    for B in budgets:
+        sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(B), s.evidence_bank.active_mask)
+        t = run_tournament(J0, g, sel.selected, s.candidates.valid_mask, flags, cfg)
+        budget_metrics[f"B{int(B)}_decision_sufficiency"] = float(t.action_index == s.teacher.a_star)
+        budget_metrics[f"B{int(B)}_hard_recall"] = float(len(hard & set(sel.selected)) / max(len(hard), 1))
+    return teacher_metrics, bdse_result, budget_metrics
+
+
+def run_diagnostics(
+    cfg: dict[str, Any],
+    split: str,
+    folders: list[str] | None,
+    max_files: int | None,
+    max_scenarios: int | None,
+    scenario_stride: int | None,
+    preprocessed_dir: str | None = None,
+    num_workers: int = 1,
+    recompute_hard_events: bool | None = None,
+) -> dict[str, Any]:
     if preprocessed_dir:
         dataset = PreprocessedBDSEDataset(preprocessed_dir, split=split, max_scenarios=max_scenarios)
     else:
@@ -246,32 +288,39 @@ def run_diagnostics(cfg: dict[str, Any], split: str, folders: list[str] | None, 
     teacher_acc: dict[str, list[float]] = defaultdict(list)
     bdse_results = []
     budget_acc: dict[str, list[float]] = defaultdict(list)
-    budgets = cfg.get("diagnostics", {}).get("budget_sweep", [4, 8, 16, 24, 32])
-    iterator = tqdm(range(len(dataset)), total=len(dataset), desc=f"diagnostics:{split}")
+    budgets = [float(x) for x in cfg.get("diagnostics", {}).get("budget_sweep", [4, 8, 16, 24, 32])]
+    if recompute_hard_events is None:
+        recompute_hard_events = bool(cfg.get("diagnostics", {}).get("recompute_hard_events", False))
+    workers = max(1, int(num_workers or 1))
+    # Threaded diagnostics is intended for preprocessed .npz caches.  Raw nuPlan
+    # scenario objects may share DB/map handles, so keep those sequential.
+    workers = workers if preprocessed_dir else 1
     skipped_missing = 0
-    for i in iterator:
-        s = dataset[i]
-        if s.teacher is None or s.label_future is None:
+
+    def consume(res) -> None:
+        nonlocal skipped_missing
+        if res is None:
             skipped_missing += 1
-            continue
-        _update_lists(teacher_acc, _teacher_sample_metrics(s, cfg))
-        J0 = s.teacher.J_base.copy()
-        g = s.teacher.g_evid.copy()
-        flags = runtime_safety_flags_from_runtime(s.runtime, s.candidates, cfg)
-        runtime_sel = runtime_greedy_selector(J0, g, s.evidence_bank.budget_costs(), s.candidates.valid_mask, flags, float(cfg["evidence"]["budget"]), atom_active_mask=s.evidence_bank.active_mask)
-        oracle_sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(cfg["evidence"]["budget"]), s.evidence_bank.active_mask)
-        tour = run_tournament(J0, g, runtime_sel.selected, s.candidates.valid_mask, flags, cfg)
-        bdse_results.append(compute_bdse_diagnostics(s.candidates, s.evidence_bank, s.teacher, s.pairs, J0, g, runtime_sel.selected, tour.action_index, runtime_sel.selected, oracle_sel.selected, cfg))
-        for B in budgets:
-            sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(B), s.evidence_bank.active_mask)
-            t = run_tournament(J0, g, sel.selected, s.candidates.valid_mask, flags, cfg)
-            budget_acc[f"B{int(B)}_decision_sufficiency"].append(float(t.action_index == s.teacher.a_star))
-            hard = set(np.flatnonzero(s.evidence_bank.hard_mask() & s.evidence_bank.active_mask).astype(int).tolist())
-            budget_acc[f"B{int(B)}_hard_recall"].append(float(len(hard & set(sel.selected)) / max(len(hard), 1)))
+            return
+        teacher_metrics, bdse_result, budget_metrics = res
+        _update_lists(teacher_acc, teacher_metrics)
+        bdse_results.append(bdse_result)
+        _update_lists(budget_acc, budget_metrics)
+
+    n = len(dataset)
+    if workers <= 1:
+        for i in tqdm(range(n), total=n, desc=f"diagnostics:{split}"):
+            consume(_diagnose_one_sample(dataset, i, cfg, budgets, bool(recompute_hard_events)))
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_diagnose_one_sample, dataset, i, cfg, budgets, bool(recompute_hard_events)): i for i in range(n)}
+            for fut in tqdm(as_completed(futures), total=n, desc=f"diagnostics:{split}"):
+                consume(fut.result())
     return {
         "num_loaded": int(len(dataset)),
         "num_samples": int(len(next(iter(teacher_acc.values()))) if teacher_acc else 0),
         "num_skipped_missing_labels": int(skipped_missing),
+        "recomputed_hard_event_matrix": bool(recompute_hard_events),
         "E1_teacher_sanity_and_candidate_coverage": _summarize_lists(teacher_acc),
         "E2_evidence_sufficiency_oracle_teacher_interface": aggregate_metric_results(bdse_results),
         "E4_budget_sweep_oracle_teacher_interface": _summarize_lists(budget_acc),
@@ -290,6 +339,8 @@ def main() -> None:
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--scenario-stride", type=int, default=None)
     parser.add_argument("--preprocessed-dir", type=str, default=None, help="Load generated .npz cache instead of rebuilding samples through nuPlan devkit.")
+    parser.add_argument("--num-workers", type=int, default=1, help="Parallel workers for preprocessed-cache diagnostics.")
+    parser.add_argument("--recompute-hard-events", action="store_true", help="Recompute exact per-hard-type event matrices. Slower; fast mode uses saved teacher hard-violation labels for aggregate metrics.")
     parser.add_argument("--output", type=str, default="outputs/diagnostics.json")
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -301,12 +352,12 @@ def main() -> None:
     if len(splits) == 1:
         split = splits[0]
         folders = args.folders or cfg.get("data", {}).get("split_folders", {}).get(split)
-        metrics = run_diagnostics(cfg, split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir)
+        metrics = run_diagnostics(cfg, split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir, num_workers=args.num_workers, recompute_hard_events=args.recompute_hard_events)
     else:
         metrics = {}
         for split in splits:
             folders = args.folders or cfg.get("data", {}).get("split_folders", {}).get(split)
-            metrics[split] = run_diagnostics(cfg, split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir)
+            metrics[split] = run_diagnostics(cfg, split, folders, args.max_files, args.max_scenarios, args.scenario_stride, args.preprocessed_dir, num_workers=args.num_workers, recompute_hard_events=args.recompute_hard_events)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
