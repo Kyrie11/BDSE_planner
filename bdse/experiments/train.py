@@ -14,6 +14,7 @@ from bdse.data.cache_schema import Sample
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.model.bdse_model import BDSEModel, EVIDENCE_TYPE_TO_ID, FAMILY_TO_ID
 from bdse.model.losses import compute_bdse_losses
+from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
 
 
@@ -79,7 +80,7 @@ def sample_to_tensors(sample: Sample, cfg: dict[str, Any]) -> dict[str, torch.Te
     oracle = oracle_greedy_selector(J_base, g, pairs[:n], margins[:n], weights[:n], budget_costs, float(cfg.get("evidence", {}).get("budget", 16)), active)
     oracle_mask = np.zeros((Emax,), dtype=bool)
     oracle_mask[oracle.selected] = True
-    runtime_flags = sample.teacher.hard_violation_mask.copy()
+    runtime_flags = runtime_safety_flags_from_runtime(sample.runtime, sample.candidates, cfg)
     runtime = runtime_greedy_selector(J_base, g, budget_costs, sample.candidates.valid_mask, runtime_flags, float(cfg.get("evidence", {}).get("budget", 16)), atom_active_mask=active)
     runtime_mask = np.zeros((Emax,), dtype=bool)
     runtime_mask[runtime.selected] = True

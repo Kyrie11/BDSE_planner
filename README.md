@@ -158,7 +158,7 @@ python -m bdse.experiments.preprocess \
   --num-workers 4 \
   --scenario-stride 10 \
   --max-samples-per-log 256 \
-  --teacher-cost-eval-stride 1 \
+  --teacher-cost-eval-strid[diff12.patch](../diff12.patch)e 1 \
   --include-drivable-polygons \
   --candidate-aware-agent-selection \
   --profile \
@@ -179,8 +179,9 @@ Run a small smoke training job:
 
 ```bash
 python -m bdse.experiments.train \
+  --config bdse/configs/full_preprocess.yaml \
   --split train \
-  --max-files 1 \
+  --preprocessed-dir /data0/senzeyu2/dataset/nuplan/data/cache/full_train \
   --max-scenarios 256 \
   --output outputs/bdse_model.pt
 ```

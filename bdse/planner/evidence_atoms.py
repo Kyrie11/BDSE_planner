@@ -511,13 +511,13 @@ def raw_local_costs_with_hard_events(atoms: list[EvidenceAtom], candidates: Cand
         kinematic_cache.append((acc, jerk, curv))
     route_dist_cache: dict[tuple[int, int], np.ndarray] = {}
 
-def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
-    key = (id(route_arr), a)
-    got = route_dist_cache.get(key)
-    if got is None:
-        got = nearest_polyline_distance(eval_trajs[a][:, :2], route_arr)
-        route_dist_cache[key] = got
-    return got
+    def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
+        key = (id(route_arr), a)
+        got = route_dist_cache.get(key)
+        if got is None:
+            got = nearest_polyline_distance(eval_trajs[a][:, :2], route_arr)
+            route_dist_cache[key] = got
+        return got
 
     for ei, atom in enumerate(atoms):
         if atom.type in {"occupancy", "ttc"}:
@@ -636,6 +636,7 @@ def hard_event_matrix(atoms: list[EvidenceAtom], candidates: CandidateBank, runt
     c_route_width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
     base_dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
     eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
+    eval_traj_arr = np.stack(eval_trajs, axis=0) if K else np.zeros((0, 0, 5), dtype=np.float32)
     route_dist_cache: dict[tuple[int, int], np.ndarray] = {}
 
     def cached_route_dist(route_arr: np.ndarray, a: int) -> np.ndarray:
