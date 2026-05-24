@@ -44,6 +44,20 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--max-in-flight", type=int, default=None,
                         help="Maximum sample-materialization futures submitted at once. Set 1 to preserve strict cache-local order for profiling/resume debugging.")
+    parser.add_argument("--scenario-builder-workers", type=int, default=None,
+                        help="Override nuPlan ScenarioBuilder worker count used during scenario discovery/index construction.")
+    parser.add_argument("--temporal-frame-cache-max-entries", type=int, default=None,
+                        help="Override exact ego/tracked-frame cache size. Larger values help high-worker preprocessing reuse warm frames across logs.")
+    parser.add_argument("--temporal-frame-cache-individual-miss-threshold", type=int, default=None,
+                        help="Max future-frame misses to fill by individual iteration calls before falling back to exact bulk nuPlan APIs.")
+    parser.add_argument("--cache-local-scheduler", action="store_true", default=None,
+                        help="Keep at most one in-flight materialization per nuPlan log to preserve temporal cache locality.")
+    parser.add_argument("--no-cache-local-scheduler", action="store_false", dest="cache_local_scheduler",
+                        help="Disable per-log cache-local scheduling. This is rarely faster for nuPlan exact labels.")
+    parser.add_argument("--temporal-frame-cache-coalesce-bulk", action="store_true", default=None,
+                        help="Serialize exact bulk frame-cache fills per log/direction so overlapping windows do not duplicate nuPlan DB work.")
+    parser.add_argument("--no-temporal-frame-cache-coalesce-bulk", action="store_false", dest="temporal_frame_cache_coalesce_bulk",
+                        help="Disable per-log coalescing of exact bulk cache fills. This is mainly for debugging contention.")
     parser.add_argument("--use-process-pool", action="store_true")
     parser.add_argument("--profile", action="store_true", help="Print per-sample preprocessing time breakdowns.")
     parser.add_argument("--profile-threshold-s", type=float, default=None,
@@ -84,6 +98,16 @@ def main() -> None:
         cfg["preprocess"]["num_workers"] = int(args.num_workers)
     if args.max_in_flight is not None:
         cfg["preprocess"]["max_in_flight"] = max(1, int(args.max_in_flight))
+    if args.scenario_builder_workers is not None:
+        cfg["preprocess"]["scenario_builder_workers"] = max(1, int(args.scenario_builder_workers))
+    if args.temporal_frame_cache_max_entries is not None:
+        cfg["preprocess"]["temporal_frame_cache_max_entries"] = max(128, int(args.temporal_frame_cache_max_entries))
+    if args.temporal_frame_cache_individual_miss_threshold is not None:
+        cfg["preprocess"]["temporal_frame_cache_individual_miss_threshold"] = max(0, int(args.temporal_frame_cache_individual_miss_threshold))
+    if args.cache_local_scheduler is not None:
+        cfg["preprocess"]["cache_local_scheduler"] = bool(args.cache_local_scheduler)
+    if args.temporal_frame_cache_coalesce_bulk is not None:
+        cfg["preprocess"]["temporal_frame_cache_coalesce_bulk"] = bool(args.temporal_frame_cache_coalesce_bulk)
     if args.use_process_pool:
         cfg["preprocess"]["use_process_pool"] = True
         cfg["preprocess"].setdefault("scenario_builder_use_process_pool", False)

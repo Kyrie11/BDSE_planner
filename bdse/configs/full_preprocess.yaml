@@ -17,8 +17,13 @@ preprocess:
   # selected frames share exact 8 s future/history windows for cache reuse.
   max_samples_per_log_strategy: uniform_blocks
   max_samples_per_log_block_size: 32
-  num_workers: 4
-  max_in_flight: 8
+  # The paper-faithful pipeline is dominated by exact nuPlan DB/map I/O on cold
+  # temporal windows.  On a 48C/96T workstation, 12 materialization threads keeps
+  # enough independent logs active to hide cold-cache latency without overwhelming
+  # SQLite/map APIs.  For smaller machines, override with --num-workers.
+  num_workers: 12
+  max_in_flight: 12
+  scenario_builder_workers: 8
   # Keep one in-flight preprocessing job per log while still using workers across
   # different logs.  This makes the exact 8s future/history frame cache useful.
   cache_local_scheduler: true
@@ -29,7 +34,9 @@ preprocess:
   # scenario windows. This preserves labels because misses still call the same
   # nuPlan APIs; hits only avoid repeated DB object reconstruction.
   temporal_frame_cache: true
-  temporal_frame_cache_max_entries: 8192
+  # Large enough for multiple active logs plus their 2s history / 8s future
+  # windows; otherwise high-worker runs evict warm frames before reuse.
+  temporal_frame_cache_max_entries: 65536
   # With 1 Hz samples and 10 Hz futures, adjacent 8s windows differ by ~10 tail frames.
   temporal_frame_cache_individual_miss_threshold: 12
   # In threaded preprocessing, coalesce exact bulk cache fills per log/direction so
