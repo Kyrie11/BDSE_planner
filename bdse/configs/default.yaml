@@ -20,7 +20,7 @@ preprocess:
   manifest_name: manifest.jsonl
   scenario_stride: 10
   max_samples_per_log_strategy: uniform_blocks
-  max_samples_per_log_block_size: 8
+  max_samples_per_log_block_size: 32
   num_workers: 1
   max_in_flight: 2
   # With temporal frame caching, run at most one materialization from the same

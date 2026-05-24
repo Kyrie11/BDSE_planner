@@ -545,6 +545,80 @@ class NuPlanBDSEDataset:
         except OSError:
             return False
 
+    def _cache_filename_for_index(self, idx: int) -> str:
+        item = self.build_index()[idx]
+        if isinstance(item, DevkitScenarioIndexRecord):
+            return f"{item.token}_it{item.iteration:06d}.npz"
+        if isinstance(item, ScenarioIndexRecord):
+            return f"{_safe_name(item.token)}_it{item.iteration:06d}.npz"
+        return f"{idx:08d}.npz"
+
+    def _resume_scan_roots_for_index(self, idx: int, out_dir: str | Path | None = None) -> list[Path]:
+        """Split-scoped roots used for robust filename-based resume lookup.
+
+        Exact alias checks cover the normal layouts, but older runs sometimes used
+        a slightly different nuPlan log-name/folder prefix while keeping the same
+        globally unique lidar token and iteration filename.  Scanning only these
+        split/folder roots lets resume find those files without accidentally
+        treating another split as complete.
+        """
+        out = Path(out_dir or self.preprocessed_dir)
+        item = self.build_index()[idx]
+        roots: list[Path] = []
+        if isinstance(item, (DevkitScenarioIndexRecord, ScenarioIndexRecord)):
+            split = str(item.split)
+            folder = str(item.folder) if getattr(item, "folder", None) else split
+            norm = normalize_split_name(split)
+            for root in (
+                out / split,
+                out / norm / folder,
+                out / folder,
+                out / norm,
+            ):
+                if root.exists():
+                    roots.append(root)
+        else:
+            root = out / self.split
+            if root.exists():
+                roots.append(root)
+        return sorted(dict.fromkeys(roots), key=lambda p: str(p))
+
+    def _build_resume_filename_index(self, out_dir: str | Path | None = None) -> dict[str, Path | None]:
+        """Return filename -> existing path for resume, scoped to this split.
+
+        A value of None means the filename is duplicated in the scoped roots.  The
+        caller then falls back to exact alias checks rather than risking a wrong
+        hard-link.  In nuPlan lidar tokens are expected to be unique, so duplicates
+        should be very rare and are surfaced as non-resumable rather than hidden.
+        """
+        out = Path(out_dir or self.preprocessed_dir)
+        roots: list[Path] = []
+        index = self.build_index()
+        # Gather roots from a bounded prefix and suffix so this remains cheap even
+        # for million-sample indexes while still covering every split/folder layout
+        # present in the current run.
+        probe_indices = list(range(min(len(index), 256)))
+        if len(index) > 256:
+            probe_indices.extend(range(max(0, len(index) - 256), len(index)))
+        for i in probe_indices:
+            roots.extend(self._resume_scan_roots_for_index(i, out))
+        roots = sorted(dict.fromkeys(roots), key=lambda p: str(p))
+        by_name: dict[str, Path | None] = {}
+        for root in roots:
+            if not root.exists():
+                continue
+            for p in root.rglob("*.npz"):
+                if p.name.startswith(".") or ".tmp." in p.name:
+                    continue
+                prev = by_name.get(p.name)
+                if prev is None and p.name in by_name:
+                    continue
+                if prev is not None and prev != p:
+                    by_name[p.name] = None
+                else:
+                    by_name[p.name] = p
+        return by_name
+
     def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None) -> tuple[int, Path, dict[str, Any] | None]:
         pcfg = self.cfg.get("preprocess", {})
         profile = bool(pcfg.get("profile", False))
@@ -601,7 +675,16 @@ class NuPlanBDSEDataset:
         pending: list[tuple[int, Path]] = []
         skipped = 0
         skipped_alias = 0
+        skipped_filename = 0
         linked_alias = 0
+        resume_by_filename: dict[str, Path | None] = {}
+        if resume and not overwrite:
+            resume_by_filename = self._build_resume_filename_index(out)
+            if resume_by_filename:
+                print(
+                    f"[bdse] resume filename index: split={self.split} existing_filenames={len(resume_by_filename)}",
+                    flush=True,
+                )
         check_iter = _maybe_tqdm(range(total), total, f"cache-check:{self.split}", show_progress and total >= 10000)
         for i in check_iter:
             p = self.cache_path_for_index(i, out)
@@ -612,6 +695,11 @@ class NuPlanBDSEDataset:
                     if candidate_path.exists():
                         existing = candidate_path
                         break
+                if existing is None and resume_by_filename:
+                    by_name = resume_by_filename.get(self._cache_filename_for_index(i))
+                    if by_name is not None and by_name.exists():
+                        existing = by_name
+                        skipped_filename += 1
             if existing is not None:
                 skipped += 1
                 if existing != p:
@@ -625,7 +713,7 @@ class NuPlanBDSEDataset:
         print(
             f"[bdse] split={self.split}: records={len(self.records)} scenarios/iterations={total} "
             f"pending={len(pending)} skipped={skipped} skipped_alias={skipped_alias} "
-            f"linked_alias={linked_alias} out={out}",
+            f"skipped_filename={skipped_filename} linked_alias={linked_alias} out={out}",
             flush=True,
         )
         if not pending:
@@ -799,12 +887,28 @@ class PreprocessedBDSEDataset:
                 return True
         return False
 
+    def _root_matches_requested_split(self, split: str) -> bool:
+        """Whether preprocessed_dir itself can be treated as the requested split.
+
+        This supports calls such as PreprocessedBDSEDataset('/cache/train_boston',
+        split='train_boston') without falling back to broad ROOT scans for missing
+        concrete splits like train_pittsburgh.
+        """
+        root_name = self.preprocessed_dir.name
+        if root_name == split:
+            return True
+        if self._is_canonical_split_name(split) and normalize_split_name(root_name) == split:
+            return True
+        return False
+
     def _split_search_roots(self) -> list[Path]:
         root = self.preprocessed_dir
         if self.splits is None:
             return [root]
         roots: list[Path] = []
         for split in self.splits:
+            if root.exists() and self._root_matches_requested_split(split):
+                roots.append(root)
             direct = root / split
             if direct.exists():
                 roots.append(direct)
@@ -869,8 +973,6 @@ class PreprocessedBDSEDataset:
         # manifest rows; relying only on a partial manifest would hide those samples
         # from training/evaluation.
         search_roots = self._split_search_roots()
-        if not search_roots:
-            search_roots = [self.preprocessed_dir]
         for search_root in search_roots:
             if search_root.exists():
                 paths.extend(
