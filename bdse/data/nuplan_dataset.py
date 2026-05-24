@@ -767,10 +767,17 @@ class NuPlanBDSEDataset:
             # futures before reading results can consume huge memory and makes it look
             # like preprocessing has hung.
             max_in_flight = max(workers, int(self.cfg.get("preprocess", {}).get("max_in_flight", workers * 4)))
+            cache_local_scheduler = bool(
+                self.cfg.get("preprocess", {}).get("cache_local_scheduler", True)) and self.use_devkit
+            cache_local_log_parallelism = max(1,
+                                              int(self.cfg.get("preprocess", {}).get("cache_local_log_parallelism", 1)))
+            print(f"[bdse] materialization scheduler: split={self.split} workers={workers} "
+                f"max_in_flight={max_in_flight} cache_local={cache_local_scheduler} "
+                f"per_log_parallelism={cache_local_log_parallelism if cache_local_scheduler else '-'}",
+                flush = True,)
             completed = 0
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures: dict[Future, tuple[int, Path]] = {}
-                cache_local_scheduler = bool(self.cfg.get("preprocess", {}).get("cache_local_scheduler", True)) and self.use_devkit
                 if cache_local_scheduler:
                     grouped: dict[str, deque[tuple[int, Path]]] = {}
                     log_order: list[str] = []
@@ -782,24 +789,48 @@ class NuPlanBDSEDataset:
                             log_order.append(log_name)
                         grouped[log_name].append((i, path))
                     ready_logs: deque[str] = deque(log_order)
-                    active_logs: set[str] = set()
+                    ready_log_set: set[str] = set(log_order)
+                    active_log_counts: dict[str, int] = {}
                     future_logs: dict[Future, str] = {}
+
+                    def enqueue_log(log_name: str, *, left: bool = False) -> None:
+                        q = grouped.get(log_name)
+                        if not q:
+                           return
+                        if active_log_counts.get(log_name, 0) >= cache_local_log_parallelism:
+                            return
+                        if log_name in ready_log_set:
+                            return
+                        if left:
+                            ready_logs.appendleft(log_name)
+                        else:
+                            ready_logs.append(log_name)
+                        ready_log_set.add(log_name)
 
                     def submit_from_log(log_name: str) -> bool:
                         q = grouped.get(log_name)
                         if not q:
                             return False
                         i, path = q.popleft()
-                        active_logs.add(log_name)
+                        active_log_counts[log_name] = active_log_counts.get(log_name, 0) + 1
                         fut = ex.submit(self._write_one_preprocessed_index, i, path, manifest_path)
                         futures[fut] = (i, path)
                         future_logs[fut] = log_name
+                        # If the machine still has idle workers and this log has more
+                        # adjacent work, it is safe to submit another job from the same
+                        # log up to cache_local_log_parallelism.  Overlapping exact
+                        # nuPlan frame fills are still serialized inside the frame-cache
+                        # layer; later jobs re-check the cache after the first fill and
+                        # usually become cheap tail fills.  This preserves sample bytes
+                        # and only changes scheduling.
+                        enqueue_log(log_name)
                         return True
 
                     def submit_next() -> bool:
                         while ready_logs and len(futures) < max_in_flight:
                             log_name = ready_logs.popleft()
-                            if log_name in active_logs:
+                            ready_log_set.discard(log_name)
+                            if active_log_counts.get(log_name, 0) >= cache_local_log_parallelism:
                                 continue
                             if submit_from_log(log_name):
                                 return True
@@ -827,12 +858,17 @@ class NuPlanBDSEDataset:
                             finished_log = future_logs.pop(fut, None)
                             _handle_result(fut, futures)
                             if cache_local_scheduler and finished_log is not None:
-                                active_logs.discard(finished_log)
+                                current = active_log_counts.get(finished_log, 0) - 1
+                                if current > 0:
+                                    active_log_counts[finished_log] = current
+                                else:
+                                    active_log_counts.pop(finished_log, None)
                                 if grouped.get(finished_log):
                                     # Continue the same log in timestamp order.  This is the
                                     # critical bit for exact future/history frame cache reuse:
-                                    # only one window from a log is cold-filling at a time.
-                                    ready_logs.appendleft(finished_log)
+                                    # only a bounded number of windows from a log are allowed
+                                    # to wait on/cache-fill at a time.
+                                    enqueue_log(finished_log, left=True)
                             completed += 1
                             if hasattr(pbar, "update"):
                                 pbar.update(1)

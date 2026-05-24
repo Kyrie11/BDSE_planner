@@ -54,6 +54,10 @@ def main() -> None:
                         help="Keep at most one in-flight materialization per nuPlan log to preserve temporal cache locality.")
     parser.add_argument("--no-cache-local-scheduler", action="store_false", dest="cache_local_scheduler",
                         help="Disable per-log cache-local scheduling. This is rarely faster for nuPlan exact labels.")
+    parser.add_argument("--cache-local-log-parallelism", type=int, default=None,
+                        help = ("Maximum in-flight materializations per nuPlan log when the cache-local scheduler is enabled. "
+                        "Use 1 for strict sequential locality, or 2 on high-core machines to let adjacent samples wait "
+                        "behind one exact bulk fill and then reuse the warmed frame cache."))
     parser.add_argument("--temporal-frame-cache-coalesce-bulk", action="store_true", default=None,
                         help="Serialize exact bulk frame-cache fills per log/direction so overlapping windows do not duplicate nuPlan DB work.")
     parser.add_argument("--no-temporal-frame-cache-coalesce-bulk", action="store_false", dest="temporal_frame_cache_coalesce_bulk",
@@ -106,6 +110,8 @@ def main() -> None:
         cfg["preprocess"]["temporal_frame_cache_individual_miss_threshold"] = max(0, int(args.temporal_frame_cache_individual_miss_threshold))
     if args.cache_local_scheduler is not None:
         cfg["preprocess"]["cache_local_scheduler"] = bool(args.cache_local_scheduler)
+    if args.cache_local_log_parallelism is not None:
+        cfg["preprocess"]["cache_local_log_parallelism"] = max(1, int(args.cache_local_log_parallelism))
     if args.temporal_frame_cache_coalesce_bulk is not None:
         cfg["preprocess"]["temporal_frame_cache_coalesce_bulk"] = bool(args.temporal_frame_cache_coalesce_bulk)
     if args.use_process_pool:

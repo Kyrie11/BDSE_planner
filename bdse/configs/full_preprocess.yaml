@@ -27,6 +27,7 @@ preprocess:
   # Keep one in-flight preprocessing job per log while still using workers across
   # different logs.  This makes the exact 8s future/history frame cache useful.
   cache_local_scheduler: true
+  cache_local_log_parallelism: 1
   compress_npz: false
   profile: false
   profile_threshold_s: 2.0
