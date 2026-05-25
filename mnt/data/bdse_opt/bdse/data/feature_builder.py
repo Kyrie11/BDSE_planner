@@ -82,6 +82,27 @@ def _object_token(obj: Any, fallback: int | str = "") -> str:
     return str(fallback)
 
 
+def _stable_log_name(text: Any) -> str:
+    """Best-effort nuPlan DB/log id from a scenario/log/scenario-name string.
+
+    Some nuPlanScenario objects do not expose ``log_name`` in all devkit
+    versions, and their ``scenario_name`` often appends a temporal crop such as
+    ``_00718_00912``.  Using that full crop name as the temporal-cache key makes
+    adjacent windows from the same DB look unrelated and produces zero cache
+    hits.  Stripping only this well-known numeric crop suffix recovers the
+    DB-level identity while preserving normal log names unchanged.
+    """
+    import re
+
+    name = str(text) if text is not None else ""
+    if not name:
+        return name
+    name = name.rsplit("/", 1)[-1]
+    if name.endswith(".db"):
+        name = name[:-3]
+    return re.sub(r"_\d{5,6}_\d{5,6}$", "", name)
+
+
 def _iter_tracked_objects(container: Any) -> list[Any]:
     if container is None:
         return []
@@ -212,15 +233,15 @@ def _scenario_log_name_for_cache(scenario: Any) -> str:
             except Exception:
                 val = None
         if val is not None and str(val) != "":
-            return str(val)
+            return _stable_log_name(val)
     for name in ("database_path", "_database_path", "db_file", "_db_file"):
         val = getattr(scenario, name, None)
         if val is not None and str(val) != "":
             try:
                 from pathlib import Path
-                return Path(str(val)).stem
+                return _stable_log_name(Path(str(val)).stem)
             except Exception:
-                return str(val)
+                return _stable_log_name(val)
     for name in ("scenario_name", "_scenario_name", "token"):
         val = getattr(scenario, name, None)
         if callable(val):
@@ -229,8 +250,45 @@ def _scenario_log_name_for_cache(scenario: Any) -> str:
             except Exception:
                 val = None
         if val is not None and str(val) != "":
-            return str(val)
+            return _stable_log_name(val)
     return f"scenario-{id(scenario)}"
+
+
+def _window_timestamps(
+    scenario: Any,
+    iteration: int,
+    n: int,
+    step_s: float,
+    direction: str,
+) -> list[int | None]:
+    """Timestamp keys for temporal frame caches.
+
+    Prefer the devkit's actual iteration timestamps when available.  The older
+    synthetic ``current_time + k * step`` keys can miss when nuPlan timestamps
+    are not exactly on the requested floating-point cadence or when scenario
+    objects expose local crop offsets.  Falling back to synthetic keys preserves
+    compatibility for devkit methods that do not expose arbitrary iteration
+    timestamps, especially past frames before iteration 0.
+    """
+    n = max(0, int(n))
+    if n <= 0:
+        return []
+    current_time_us = _scenario_current_time_us(scenario, iteration)
+    dt_us = int(round(float(step_s) * 1_000_000.0))
+    out: list[int | None] = []
+    for k in range(n):
+        if direction == "future":
+            it = int(iteration) + k + 1
+            fallback = None if current_time_us is None else current_time_us + (k + 1) * dt_us
+        elif direction == "past":
+            it = int(iteration) - (n - k)
+            fallback = None if current_time_us is None else current_time_us - (n - k) * dt_us
+        else:
+            it = int(iteration)
+            fallback = current_time_us
+        ts = _time_us_at_iteration(scenario, it) if it >= 0 else None
+        out.append(ts if ts is not None else fallback)
+    return out
 
 
 def _time_us_value(value: Any) -> int | None:
@@ -342,22 +400,12 @@ def _seed_tracked_window_from_bulk(
     cfg: dict[str, Any],
     frames: list[Any],
     *,
-    current_time_us: int | None,
-    step_s: float,
-    direction: str,
+    timestamps: Sequence[int | None] | None = None,
 ) -> list[_CachedTrackedFrame]:
-    dt_us = int(round(float(step_s) * 1_000_000.0))
     out: list[_CachedTrackedFrame] = []
-    n = len(frames)
+    ts_list = list(timestamps or [])
     for j, frame_obj in enumerate(frames):
-        if direction == "future":
-            ts = None if current_time_us is None else current_time_us + (j + 1) * dt_us
-        elif direction == "past":
-            # nuPlan returns past frames in chronological order. The last element
-            # is one sample interval before the current frame.
-            ts = None if current_time_us is None else current_time_us - (n - j) * dt_us
-        else:
-            ts = current_time_us
+        ts = ts_list[j] if j < len(ts_list) else None
         frame = _frame_from_objects(frame_obj)
         _put_tracked_frame_timestamp(scenario, ts, frame, cfg)
         out.append(frame)
@@ -369,20 +417,12 @@ def _seed_ego_window_from_bulk(
     cfg: dict[str, Any],
     states: list[Any],
     *,
-    current_time_us: int | None,
-    step_s: float,
-    direction: str,
+    timestamps: Sequence[int | None] | None = None,
 ) -> list[np.ndarray]:
-    dt_us = int(round(float(step_s) * 1_000_000.0))
     out: list[np.ndarray] = []
-    n = len(states)
+    ts_list = list(timestamps or [])
     for j, state_obj in enumerate(states):
-        if direction == "future":
-            ts = None if current_time_us is None else current_time_us + (j + 1) * dt_us
-        elif direction == "past":
-            ts = None if current_time_us is None else current_time_us - (n - j) * dt_us
-        else:
-            ts = current_time_us
+        ts = ts_list[j] if j < len(ts_list) else None
         state = _state_to_array(state_obj)
         _put_ego_frame_timestamp(scenario, ts, state, cfg)
         out.append(state)
@@ -410,14 +450,7 @@ def cached_tracked_window(
     n = max(0, int(num_samples))
     if n <= 0:
         return [], stats
-    current_time_us = _scenario_current_time_us(scenario, iteration)
-    dt_us = int(round(float(step_s) * 1_000_000.0))
-    wanted_ts: list[int | None] = []
-    if current_time_us is not None:
-        if direction == "future":
-            wanted_ts = [current_time_us + (k + 1) * dt_us for k in range(n)]
-        elif direction == "past":
-            wanted_ts = [current_time_us - (n - k) * dt_us for k in range(n)]
+    wanted_ts = _window_timestamps(scenario, iteration, n, step_s, direction)
 
     def _read_cached() -> tuple[list[_CachedTrackedFrame | None], dict[str, Any]]:
         local_stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0, "coalesced_recheck": 0}
@@ -488,9 +521,7 @@ def cached_tracked_window(
                 scenario,
                 cfg,
                 bulk_frames,
-                current_time_us=current_time_us,
-                step_s=step_s,
-                direction=direction,
+                timestamps=wanted_ts[: len(bulk_frames)],
             )
             return seeded, stats
 
@@ -509,9 +540,7 @@ def cached_tracked_window(
         scenario,
         cfg,
         bulk_frames,
-        current_time_us=current_time_us,
-        step_s=step_s,
-        direction=direction,
+        timestamps=wanted_ts[: len(bulk_frames)],
     )
     return seeded, stats
 
@@ -530,14 +559,7 @@ def cached_ego_window(
     n = max(0, int(num_samples))
     if n <= 0:
         return [], stats
-    current_time_us = _scenario_current_time_us(scenario, iteration)
-    dt_us = int(round(float(step_s) * 1_000_000.0))
-    wanted_ts: list[int | None] = []
-    if current_time_us is not None:
-        if direction == "future":
-            wanted_ts = [current_time_us + (k + 1) * dt_us for k in range(n)]
-        elif direction == "past":
-            wanted_ts = [current_time_us - (n - k) * dt_us for k in range(n)]
+    wanted_ts = _window_timestamps(scenario, iteration, n, step_s, direction)
 
     def _read_cached() -> tuple[list[np.ndarray | None], dict[str, Any]]:
         local_stats = {"cache_hit_frames": 0, "cache_miss_frames": 0, "bulk_call": 0, "coalesced_recheck": 0}
@@ -602,9 +624,7 @@ def cached_ego_window(
                 scenario,
                 cfg,
                 bulk_states,
-                current_time_us=current_time_us,
-                step_s=step_s,
-                direction=direction,
+                timestamps=wanted_ts[: len(bulk_states)],
             )
             return seeded, stats
 
@@ -617,9 +637,7 @@ def cached_ego_window(
         scenario,
         cfg,
         bulk_states,
-        current_time_us=current_time_us,
-        step_s=step_s,
-        direction=direction,
+        timestamps=wanted_ts[: len(bulk_states)],
     )
     return seeded, stats
 

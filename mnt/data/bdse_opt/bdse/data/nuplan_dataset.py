@@ -173,6 +173,16 @@ def _safe_name(text: Any) -> str:
     return s[:180] if len(s) > 180 else s
 
 
+def _stable_log_name(text: Any) -> str:
+    """Recover the DB/log identity from nuPlan scenario names when needed."""
+    s = str(text) if text is not None else ""
+    if s.endswith(".db"):
+        s = Path(s).stem
+    else:
+        s = Path(s).name
+    return _safe_name(re.sub(r"_\d{5,6}_\d{5,6}$", "", s))
+
+
 def _scenario_token(scenario: Any) -> str:
     return _safe_name(getattr(scenario, "token", getattr(scenario, "scenario_name", getattr(scenario, "_scenario_name", "scenario"))))
 
@@ -223,12 +233,12 @@ def _scenario_log_name(scenario: Any) -> str:
             except Exception:
                 val = None
         if val is not None and str(val) != "":
-            return _safe_name(val)
+            return _stable_log_name(val)
     for name in ("database_path", "_database_path", "db_file", "_db_file"):
         val = getattr(scenario, name, None)
         if val is not None and str(val) != "":
-            return _safe_name(Path(str(val)).stem)
-    return _safe_name(getattr(scenario, "scenario_name", getattr(scenario, "_scenario_name", "log")))
+            return _stable_log_name(Path(str(val)).stem)
+    return _stable_log_name(getattr(scenario, "scenario_name", getattr(scenario, "_scenario_name", "log")))
 
 
 def _scenario_folder_for_log(records: list[DBFileRecord], log_name: str, default_split: str) -> str:
