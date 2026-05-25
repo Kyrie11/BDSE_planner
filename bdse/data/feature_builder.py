@@ -412,6 +412,61 @@ def _seed_tracked_window_from_bulk(
     return out
 
 
+def _materialize_bulk_frames(bulk: Any, stats: dict[str, Any]) -> list[Any] | None:
+    """Safely materialize a nuPlan bulk tracked-object iterator.
+
+    Some nuPlan DB rows have ``lidar_pc.next_token`` set to NULL near the end of
+    a log/scenario.  In affected devkit versions, ``get_future_tracked_objects``
+    returns a lazy generator successfully, then fails while the generator is
+    consumed because ``LidarPc.from_db_row`` calls ``None.hex()``.  The exception
+    therefore happens outside ``_call`` and used to abort preprocessing.
+    """
+    if bulk is None or not isinstance(bulk, Iterable):
+        return None
+    try:
+        return list(bulk)
+    except Exception as exc:
+        stats["bulk_iteration_error"] = f"{type(exc).__name__}: {exc}"
+        return None
+
+
+def _fill_future_tracked_window_by_iteration(
+    scenario: Any,
+    iteration: int,
+    cfg: dict[str, Any],
+    n: int,
+    wanted_ts: Sequence[int | None],
+    frames_in: Sequence[_CachedTrackedFrame | None] | None,
+    stats: dict[str, Any],
+) -> list[_CachedTrackedFrame]:
+    """Fill a future tracked-object window with per-iteration calls.
+
+    This is slower than nuPlan's bulk future API, but it avoids the devkit code
+    path that walks ``lidar_pc.next_token`` and can crash on NULL next_token
+    values.  It also preserves frame order: if the future window runs past the
+    available scenario/log horizon, we stop at the first missing frame instead of
+    compacting later frames into earlier time steps.
+    """
+    out: list[_CachedTrackedFrame] = []
+    stats["individual_frame_calls"] = int(stats.get("individual_frame_calls", 0))
+    stats["individual_frame_missing"] = int(stats.get("individual_frame_missing", 0))
+    for k in range(max(0, int(n))):
+        cached = frames_in[k] if frames_in is not None and k < len(frames_in) else None
+        if cached is not None:
+            out.append(_CachedTrackedFrame(cached.tokens, cached.boxes.copy()))
+            continue
+        objects = _call(scenario, ["get_tracked_objects_at_iteration"], int(iteration) + k + 1, default=None)
+        if objects is None:
+            stats["individual_frame_missing"] += 1
+            break
+        frame = _frame_from_objects(objects)
+        ts = wanted_ts[k] if k < len(wanted_ts) else None
+        _put_tracked_frame_timestamp(scenario, ts, frame, cfg)
+        stats["individual_frame_calls"] += 1
+        out.append(frame)
+    return out
+
+
 def _seed_ego_window_from_bulk(
     scenario: Any,
     cfg: dict[str, Any],
@@ -471,21 +526,17 @@ def cached_tracked_window(
             return None, stats_in
         if int(stats_in.get("cache_miss_frames", 0)) > _temporal_cache_individual_miss_threshold(cfg):
             return None, stats_in
-        filled = True
-        stats_in["individual_frame_calls"] = 0
-        for k, frame in enumerate(frames_in):
-            if frame is not None:
-                continue
-            objects = _call(scenario, ["get_tracked_objects_at_iteration"], int(iteration) + k + 1, default=None)
-            if objects is None:
-                filled = False
-                break
-            new_frame = _frame_from_objects(objects)
-            frames_in[k] = new_frame
-            _put_tracked_frame_timestamp(scenario, wanted_ts[k], new_frame, cfg)
-            stats_in["individual_frame_calls"] += 1
-        if filled and all(f is not None for f in frames_in):
-            return [f for f in frames_in if f is not None], stats_in
+        filled = _fill_future_tracked_window_by_iteration(
+            scenario,
+            int(iteration),
+            cfg,
+            n,
+            wanted_ts,
+            frames_in,
+            stats_in,
+        )
+        if len(filled) == n:
+            return filled, stats_in
         return None, stats_in
 
     frames: list[_CachedTrackedFrame | None] = []
@@ -513,9 +564,20 @@ def cached_tracked_window(
             names = ["get_future_tracked_objects", "get_tracked_objects_future_trajectory"] if direction == "future" else ["get_past_tracked_objects", "get_tracked_objects_past_trajectory"]
             bulk = _call(scenario, names, int(iteration), time_horizon=float(time_horizon), num_samples=n, default=None)
             stats["bulk_call"] = 1
-            if bulk is None:
+            bulk_frames = _materialize_bulk_frames(bulk, stats)
+            if bulk_frames is None:
+                if direction == "future":
+                    stats["bulk_individual_fallback"] = 1
+                    return _fill_future_tracked_window_by_iteration(
+                        scenario,
+                        int(iteration),
+                        cfg,
+                        n,
+                        wanted_ts,
+                        frames,
+                        stats,
+                    ), stats
                 return [f for f in frames if f is not None], stats
-            bulk_frames = list(bulk) if isinstance(bulk, Iterable) else []
             bulk_frames = bulk_frames[:n] if direction == "future" else bulk_frames[-n:]
             seeded = _seed_tracked_window_from_bulk(
                 scenario,
@@ -532,9 +594,20 @@ def cached_tracked_window(
     names = ["get_future_tracked_objects", "get_tracked_objects_future_trajectory"] if direction == "future" else ["get_past_tracked_objects", "get_tracked_objects_past_trajectory"]
     bulk = _call(scenario, names, int(iteration), time_horizon=float(time_horizon), num_samples=n, default=None)
     stats["bulk_call"] = 1
-    if bulk is None:
+    bulk_frames = _materialize_bulk_frames(bulk, stats)
+    if bulk_frames is None:
+        if direction == "future":
+            stats["bulk_individual_fallback"] = 1
+            return _fill_future_tracked_window_by_iteration(
+                scenario,
+                int(iteration),
+                cfg,
+                n,
+                wanted_ts,
+                frames,
+                stats,
+            ), stats
         return [f for f in frames if f is not None], stats
-    bulk_frames = list(bulk) if isinstance(bulk, Iterable) else []
     bulk_frames = bulk_frames[:n] if direction == "future" else bulk_frames[-n:]
     seeded = _seed_tracked_window_from_bulk(
         scenario,
