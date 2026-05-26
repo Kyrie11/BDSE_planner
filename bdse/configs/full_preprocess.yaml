@@ -110,11 +110,13 @@ evidence:
     collision_shared_frame_fraction: 0.98
     collision_shared_min_candidates: 4
 teacher:
+  robust:
+    enabled: true
   demo_weight: 10.0
   demo_scale: 100.0
   atom_normalization_first: true
   separate_hard_gate: false
-  use_reactive_proxy: false
+  use_reactive_proxy: true
   # Full 10 Hz teacher evidence evaluation. Do not raise this for final labels.
   cost_eval_stride: 1
 pairs:
@@ -127,3 +129,6 @@ selector:
   mode: runtime_predicted
 tournament:
   L_infer: 16
+
+calibration:
+  epsilon_cal: 0.0

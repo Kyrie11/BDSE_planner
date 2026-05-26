@@ -12,10 +12,9 @@ from tqdm import tqdm
 from bdse.config import load_config
 from bdse.data.cache_schema import Sample
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
-from bdse.model.bdse_model import BDSEModel, EVIDENCE_TYPE_TO_ID, FAMILY_TO_ID
+from bdse.data.tensorizer import sample_to_model_inputs
+from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import compute_bdse_losses
-from bdse.planner.fallback import runtime_safety_flags_from_runtime
-from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
 
 
 class OnTheFlyDataset(Dataset):
@@ -30,85 +29,11 @@ class OnTheFlyDataset(Dataset):
 
 
 def sample_to_tensors(sample: Sample, cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
-    Emax = int(cfg.get("evidence", {}).get("max_atoms", 128))
-    K = int(cfg.get("candidate", {}).get("K", sample.candidates.K))
-    if sample.candidates.K != K:
-        raise ValueError(
-            f"Candidate count mismatch: cache has K={sample.candidates.K}, config expects K={K}. "
-            "Use the same --config for preprocessing, diagnostics, and training, or regenerate the cache."
-        )
-    efd = int(cfg.get("model", {}).get("evidence_feature_dim", 24))
-    qfd = int(cfg.get("model", {}).get("query_feature_dim", 12))
-    Pmax = int(cfg.get("pairs", {}).get("target_max", 256))
-    E = min(Emax, sample.evidence_bank.E)
-    evidence_features = np.zeros((Emax, efd), dtype=np.float32)
-    type_ids = np.zeros((Emax,), dtype=np.int64)
-    family_ids = np.zeros((Emax,), dtype=np.int64)
-    active = np.zeros((Emax,), dtype=bool)
-    budget_costs = np.ones((Emax,), dtype=np.float32)
-    for i, atom in enumerate(sample.evidence_bank.atoms[:E]):
-        active[i] = bool(atom.active_mask)
-        budget_costs[i] = float(atom.budget_cost)
-        type_ids[i] = EVIDENCE_TYPE_TO_ID.get(atom.type, 0)
-        family_ids[i] = FAMILY_TO_ID.get(atom.family, 0)
-        evidence_features[i, 0] = float(atom.is_hard)
-        evidence_features[i, 1] = float(atom.budget_cost)
-        if "current_state" in atom.anchor:
-            st = np.asarray(atom.anchor["current_state"], dtype=np.float32)
-            evidence_features[i, 2 : 2 + min(10, len(st))] = st[: min(10, len(st))]
-    query = np.zeros((Emax, K, qfd), dtype=np.float32)
-    q = sample.evidence_bank.query_features[:E, :K, :qfd]
-    query[: q.shape[0], : q.shape[1], : q.shape[2]] = q
-    if sample.teacher is None or sample.pairs is None:
-        raise ValueError("Training sample requires teacher and pair labels")
-    J_base = sample.teacher.J_base.astype(np.float32)
-    g = np.zeros((Emax, K), dtype=np.float32)
-    g[: sample.teacher.g_evid.shape[0], : sample.teacher.g_evid.shape[1]] = sample.teacher.g_evid[:Emax, :K]
-    JT = sample.teacher.J_T.astype(np.float32)
-    pairs = np.zeros((Pmax, 2), dtype=np.int64)
-    pair_valid = np.zeros((Pmax,), dtype=bool)
-    margins = np.zeros((Pmax,), dtype=np.float32)
-    weights = np.zeros((Pmax,), dtype=np.float32)
-    residuals = np.zeros((Pmax,), dtype=np.float32)
-    p = sample.pairs.pairs[:Pmax]
-    n = len(p)
-    pairs[:n] = p
-    pair_valid[:n] = sample.pairs.valid_mask[:n]
-    margins[:n] = sample.pairs.margins[:n]
-    weights[:n] = sample.pairs.weights[:n]
-    residuals[:n] = sample.pairs.residuals[:n]
-    oracle = oracle_greedy_selector(J_base, g, pairs[:n], margins[:n], weights[:n], budget_costs, float(cfg.get("evidence", {}).get("budget", 16)), active)
-    oracle_mask = np.zeros((Emax,), dtype=bool)
-    oracle_mask[oracle.selected] = True
-    runtime_flags = runtime_safety_flags_from_runtime(sample.runtime, sample.candidates, cfg)
-    runtime = runtime_greedy_selector(J_base, g, budget_costs, sample.candidates.valid_mask, runtime_flags, float(cfg.get("evidence", {}).get("budget", 16)), atom_active_mask=active)
-    runtime_mask = np.zeros((Emax,), dtype=bool)
-    runtime_mask[runtime.selected] = True
-    return {
-        "ego_history": torch.from_numpy(sample.runtime.ego_history).float(),
-        "agent_history": torch.from_numpy(sample.runtime.agent_history).float(),
-        "agent_valid": torch.from_numpy(sample.runtime.agent_valid),
-        "candidate_trajectories": torch.from_numpy(sample.candidates.trajectories).float(),
-        "candidate_valid": torch.from_numpy(sample.candidates.valid_mask),
-        "candidate_maneuver_ids": torch.from_numpy(sample.candidates.maneuver_ids),
-        "evidence_features": torch.from_numpy(evidence_features).float(),
-        "evidence_query_features": torch.from_numpy(query).float(),
-        "evidence_active": torch.from_numpy(active),
-        "evidence_type_ids": torch.from_numpy(type_ids),
-        "evidence_family_ids": torch.from_numpy(family_ids),
-        "teacher_J_base": torch.from_numpy(J_base).float(),
-        "teacher_g_evid": torch.from_numpy(g).float(),
-        "teacher_J_T": torch.from_numpy(JT).float(),
-        "teacher_a_star": torch.tensor(sample.teacher.a_star, dtype=torch.long),
-        "pair_indices": torch.from_numpy(pairs),
-        "pair_valid": torch.from_numpy(pair_valid),
-        "pair_margins": torch.from_numpy(margins).float(),
-        "pair_weights": torch.from_numpy(weights).float(),
-        "pair_residuals": torch.from_numpy(residuals).float(),
-        "oracle_selected_mask": torch.from_numpy(oracle_mask),
-        "runtime_selected_mask": torch.from_numpy(runtime_mask),
-    }
-
+    # Unified tensorizer is shared by training and deployment to avoid train/deploy
+    # feature skew.  It intentionally does not create a teacher-derived
+    # runtime_selected_mask; L_act builds its certificate through predicted
+    # proposal/greedy/tournament inside the loss.
+    return sample_to_model_inputs(sample, cfg, include_teacher=True, include_dense_query=True)
 
 def collate(samples: list[Sample], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     items = [sample_to_tensors(s, cfg) for s in samples]

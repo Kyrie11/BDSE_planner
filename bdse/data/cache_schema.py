@@ -73,6 +73,13 @@ class EvidenceAtom:
     is_hard: bool
     family: str
     active_mask: bool
+    # New paper-aligned local-certificate metadata.  Defaults keep old caches/tests
+    # readable while allowing atoms to store (tau,r,phi,Omega,D,lambda,c).
+    validity_domain: dict[str, Any] = field(default_factory=dict)
+    response_modes: list[str] = field(default_factory=list)
+    aggregator: str = "mean"
+    lambda_weight: float = 1.0
+    cheap_features: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -80,6 +87,13 @@ class EvidenceBank:
     atoms: list[EvidenceAtom]
     query_features: np.ndarray
     active_mask: np.ndarray
+    proposal_features: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        if self.proposal_features is None:
+            self.proposal_features = np.zeros((len(self.atoms), 16), dtype=np.float32)
+        else:
+            self.proposal_features = np.asarray(self.proposal_features, dtype=np.float32)
 
     @property
     def E(self) -> int:
@@ -230,12 +244,18 @@ def save_sample_npz(sample: Sample, path: str | Path, compressed: bool = False) 
         candidate_dynamic_flags_json=_json_dumps(sample.candidates.dynamic_flags),
         candidate_metadata_json=_json_dumps(sample.candidates.metadata),
         evidence_query_features=sample.evidence_bank.query_features,
+        evidence_proposal_features=np.asarray(sample.evidence_bank.proposal_features if sample.evidence_bank.proposal_features is not None else np.zeros((sample.evidence_bank.E, 16), dtype=np.float32)),
         evidence_active=sample.evidence_bank.active_mask,
         evidence_types=np.asarray([a.type for a in sample.evidence_bank.atoms], dtype=str),
         evidence_families=np.asarray([a.family for a in sample.evidence_bank.atoms], dtype=str),
         evidence_is_hard=np.asarray([a.is_hard for a in sample.evidence_bank.atoms], dtype=bool),
         evidence_budget_costs=sample.evidence_bank.budget_costs(),
         evidence_anchors_json=_json_dumps([a.anchor for a in sample.evidence_bank.atoms]),
+        evidence_validity_domains_json=_json_dumps([a.validity_domain for a in sample.evidence_bank.atoms]),
+        evidence_response_modes_json=_json_dumps([a.response_modes for a in sample.evidence_bank.atoms]),
+        evidence_aggregators=np.asarray([a.aggregator for a in sample.evidence_bank.atoms], dtype=str),
+        evidence_lambda_weights=np.asarray([a.lambda_weight for a in sample.evidence_bank.atoms], dtype=np.float32),
+        evidence_cheap_features_json=_json_dumps([a.cheap_features for a in sample.evidence_bank.atoms]),
         teacher_J_base=np.asarray([] if sample.teacher is None else sample.teacher.J_base),
         teacher_g_evid=np.asarray([] if sample.teacher is None else sample.teacher.g_evid),
         teacher_J_evid=np.asarray([] if sample.teacher is None else sample.teacher.J_evid),
@@ -303,11 +323,26 @@ def load_sample_npz(path: str | Path) -> Sample:
         anchors = _json_loads_npz(z, "evidence_anchors_json", [{} for _ in types])
         if not isinstance(anchors, list) or len(anchors) != len(types):
             anchors = [{} for _ in types]
+        domains = _json_loads_npz(z, "evidence_validity_domains_json", [{} for _ in types])
+        modes = _json_loads_npz(z, "evidence_response_modes_json", [[] for _ in types])
+        cheap = _json_loads_npz(z, "evidence_cheap_features_json", [{} for _ in types])
+        aggs = _string_list(np.asarray(z["evidence_aggregators"])) if "evidence_aggregators" in z.files else ["mean" for _ in types]
+        lambdas = np.asarray(z["evidence_lambda_weights"], dtype=np.float32) if "evidence_lambda_weights" in z.files else np.ones((len(types),), dtype=np.float32)
+        def _take(seq, i, default):
+            return seq[i] if isinstance(seq, list) and i < len(seq) else default
         atoms = [
-            EvidenceAtom(int(i), str(types[i]), dict(anchors[i] or {}), float(costs[i]), bool(hard[i]), str(families[i]), bool(active[i]))
+            EvidenceAtom(
+                int(i), str(types[i]), dict(anchors[i] or {}), float(costs[i]), bool(hard[i]), str(families[i]), bool(active[i]),
+                validity_domain=dict(_take(domains, i, {}) or {}),
+                response_modes=list(_take(modes, i, []) or []),
+                aggregator=str(aggs[i] if i < len(aggs) else "mean"),
+                lambda_weight=float(lambdas[i]) if i < len(lambdas) else 1.0,
+                cheap_features=dict(_take(cheap, i, {}) or {}),
+            )
             for i in range(len(types))
         ]
-        evidence_bank = EvidenceBank(atoms=atoms, query_features=np.asarray(z["evidence_query_features"], dtype=np.float32), active_mask=active)
+        proposal = np.asarray(z["evidence_proposal_features"], dtype=np.float32) if "evidence_proposal_features" in z.files else None
+        evidence_bank = EvidenceBank(atoms=atoms, query_features=np.asarray(z["evidence_query_features"], dtype=np.float32), active_mask=active, proposal_features=proposal)
         if np.asarray(z["teacher_J_T"]).size:
             teacher = TeacherLabels(
                 J_base=np.asarray(z["teacher_J_base"], dtype=np.float64),

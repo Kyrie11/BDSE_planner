@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, EvidenceAtom, EvidenceBank, LabelOnlyFuture, RuntimeFeatures
+from bdse.planner.evidence_queries import certificate_family, compute_proposal_features
 from bdse.utils import angle_wrap, compute_curvature, finite_difference, nearest_polyline_distance, oriented_box_corners, polygons_overlap_sat, route_progress_along_polyline
 
 ATOM_QUERY_DIM = 12
@@ -15,13 +16,34 @@ def _unit_cost(cfg: dict[str, Any], atom_type: str, family: str) -> float:
         return 1.0
     if atom_type in {"occupancy", "collision"}:
         return 3.0
-    if family == "interaction":
+    if family in {"interaction", "reachability_interaction"}:
         return 2.0
     return 1.0
 
 
 def _new_atom(atom_id: int, atom_type: str, anchor: dict[str, Any], family: str, is_hard: bool, cfg: dict[str, Any]) -> EvidenceAtom:
-    return EvidenceAtom(atom_id=atom_id, type=atom_type, anchor=anchor, budget_cost=_unit_cost(cfg, atom_type, family), is_hard=is_hard, family=family, active_mask=True)
+    cert_family = certificate_family(atom_type, family)
+    cheap = {
+        "is_hard": float(is_hard),
+        "budget_cost": float(_unit_cost(cfg, atom_type, cert_family)),
+        "ego_distance": float(anchor.get("ego_distance", 0.0)) if isinstance(anchor, dict) else 0.0,
+        "route_distance": float(anchor.get("route_distance", 0.0)) if isinstance(anchor, dict) else 0.0,
+        "route_progress": float(anchor.get("route_progress", 0.0)) if isinstance(anchor, dict) else 0.0,
+    }
+    return EvidenceAtom(
+        atom_id=atom_id,
+        type=atom_type,
+        anchor=anchor,
+        budget_cost=_unit_cost(cfg, atom_type, cert_family),
+        is_hard=is_hard,
+        family=cert_family,
+        active_mask=True,
+        validity_domain={"runtime_only": True},
+        response_modes=list(cfg.get("teacher", {}).get("robust_modes", {}).keys()) or ["logged", "cv"],
+        aggregator=str(cfg.get("teacher", {}).get("risk_aggregation", {}).get("type", "mean")),
+        lambda_weight=float(cfg.get("evidence", {}).get("weights", {}).get(atom_type, 1.0)),
+        cheap_features=cheap,
+    )
 
 
 def _has_red_light(runtime: RuntimeFeatures) -> bool:
@@ -178,9 +200,13 @@ def enumerate_evidence_atoms(runtime: RuntimeFeatures, candidates: CandidateBank
             atoms.append(_new_atom(next_id, atom_type, {}, "kinematic", False, cfg)); next_id += 1
 
     atoms = cap_evidence_atoms(atoms, candidates, runtime, cfg)
-    q = compute_query_features(atoms, candidates, runtime, cfg)
     active = np.asarray([a.active_mask for a in atoms], dtype=bool)
-    return EvidenceBank(atoms=atoms, query_features=q, active_mask=active)
+    proposal = compute_proposal_features(atoms, candidates, runtime, cfg)
+    if bool(cfg.get("evidence", {}).get("precompute_dense_query_features", False)):
+        q = compute_query_features(atoms, candidates, runtime, cfg)
+    else:
+        q = np.zeros((len(atoms), candidates.K, ATOM_QUERY_DIM), dtype=np.float32)
+    return EvidenceBank(atoms=atoms, query_features=q, active_mask=active, proposal_features=proposal)
 
 
 def cap_evidence_atoms(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, cfg: dict[str, Any]) -> list[EvidenceAtom]:
@@ -610,12 +636,53 @@ def raw_local_costs_with_hard_events(atoms: list[EvidenceAtom], candidates: Cand
                     raw[ei, a] = float(np.maximum(0.0, np.abs(curv) - 0.25).sum())
                 elif atom.type.endswith("brake"):
                     raw[ei, a] = float(np.maximum(0.0, -acc - 5.0).sum())
+    # Encode lexicographic hard-feasibility priorities inside the owning hard
+    # atoms before normalization.  This preserves J_T = J_base + sum_i g_i and
+    # makes raw_local_costs() + normalize_atom_costs() exactly reproduce the
+    # teacher evidence partition used for labels.
+    fcfg = cfg.get("teacher", {}).get("feasibility", {})
+    if bool(fcfg.get("inject_hard_priority_costs", True)):
+        H = float(fcfg.get("hard_priority_scale", cfg.get("teacher", {}).get("hard_priority_scale", 10000.0)))
+        eps = float(cfg.get("evidence", {}).get("eps", 1e-6))
+        priority = {"occupancy": 4.0, "collision": 4.0, "drivable_area": 3.0, "wrong_way": 2.0, "red_light": 1.0}
+        weights = cfg.get("evidence", {}).get("weights", {})
+        scales = cfg.get("evidence", {}).get("scales", {})
+        for ei, atom in enumerate(atoms):
+            if not atom.is_hard or ei >= hard_events.shape[0]:
+                continue
+            base_type = atom.type.replace("local_comfort_accel", "local_comfort").replace("local_comfort_jerk", "local_comfort").replace("local_comfort_curvature", "local_comfort").replace("local_comfort_brake", "local_comfort")
+            w = float(weights.get(base_type, weights.get(atom.type, 1.0)))
+            sc = float(scales.get(base_type, scales.get(atom.type, 1.0)))
+            raw[ei] += (H * priority.get(atom.type, 1.0)) * (sc + eps) / max(w, 1e-6) * hard_events[ei].astype(np.float32)
     raw[:, ~candidates.valid_mask] = 0.0
     hard_events[:, ~candidates.valid_mask] = False
     return raw, hard_events
 
 
 def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, label_future: LabelOnlyFuture | None, cfg: dict[str, Any]) -> np.ndarray:
+    if bool(cfg.get("teacher", {}).get("robust", {}).get("enabled", False)):
+        try:
+            from bdse.planner.response_modes import build_response_modes, mode_to_label_future
+            from bdse.planner.robust_teacher import weighted_cvar
+
+            modes = build_response_modes(runtime, label_future, cfg)
+            raws = []
+            probs = []
+            for mode in modes:
+                lf = mode_to_label_future(mode, label_future, runtime)
+                r, _ = raw_local_costs_with_hard_events(atoms, candidates, runtime, lf, cfg)
+                raws.append(r)
+                probs.append(mode.probability)
+            raw_stack = np.stack(raws, axis=0) if raws else np.zeros((1, len(atoms), candidates.K), dtype=np.float32)
+            probs_arr = np.asarray(probs, dtype=np.float32)
+            probs_arr = probs_arr / max(float(probs_arr.sum()), 1e-6)
+            mean = np.tensordot(probs_arr, raw_stack, axes=(0, 0)).astype(np.float32)
+            rcfg = cfg.get("teacher", {}).get("risk_aggregation", {})
+            cvar = weighted_cvar(raw_stack, probs_arr, float(rcfg.get("cvar_alpha", 0.9)))
+            w = float(rcfg.get("cvar_weight", 0.4))
+            return ((1.0 - w) * mean + w * cvar).astype(np.float32)
+        except Exception:
+            pass
     raw, _ = raw_local_costs_with_hard_events(atoms, candidates, runtime, label_future, cfg)
     return raw
 
@@ -702,9 +769,13 @@ def atom_weight_scale_cap(atom: EvidenceAtom, cfg: dict[str, Any]) -> tuple[floa
     caps = ecfg.get("caps", {})
     if atom.is_hard:
         cap = float(caps.get("hard", 100.0))
-    elif atom.family == "interaction":
+        fcfg = cfg.get("teacher", {}).get("feasibility", {})
+        if bool(fcfg.get("inject_hard_priority_costs", True)):
+            H = float(fcfg.get("hard_priority_scale", cfg.get("teacher", {}).get("hard_priority_scale", 10000.0)))
+            cap = max(cap, H * 4.0 + cap)
+    elif atom.family in {"interaction", "reachability_interaction", "precedence"}:
         cap = float(caps.get("inter", 20.0))
-    elif atom.family == "rule_map":
+    elif atom.family in {"rule_map", "feasibility"}:
         cap = float(caps.get("rule", caps.get("map", 20.0)))
     else:
         cap = float(caps.get("kin", 10.0))

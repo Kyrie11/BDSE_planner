@@ -52,9 +52,9 @@ runtime:
   max_map_polylines: 128
   # Full drivable-area polygon extraction is expensive on nuPlan.  The teacher still
   # has an off-route/off-drivable hard atom via the route-corridor fallback.
-  include_drivable_polygons: false
-  max_drivable_polygons: 12
-  max_polygon_points: 64
+  include_drivable_polygons: true
+  max_drivable_polygons: 24
+  max_polygon_points: 128
   max_route_points: 256
   use_future_traffic_lights_for_teacher: false
 candidate:
@@ -63,7 +63,7 @@ candidate:
   step_s: 0.1
   # Keep candidates in the bank even if they slightly exceed dynamic comfort;
   # comfort/evidence costs, not the mask, should rank them down.
-  valid_requires_dynamic: false
+  valid_requires_dynamic: true
   include_history_priors: true
   conflict_stop_count: 6
   conflict_route_radius_m: 8.0
@@ -167,14 +167,30 @@ evidence:
     red_light_min_progress_m: -2.0
     red_light_max_progress_m: 120.0
 teacher:
+  robust:
+    enabled: true
+  robust_modes:
+    logged: {enabled: true, prob: 0.35}
+    cv: {enabled: true, prob: 0.20}
+    ca: {enabled: true, prob: 0.10}
+    brake: {enabled: true, prob: 0.15}
+    yield: {enabled: true, prob: 0.10}
+    nonyield: {enabled: true, prob: 0.10}
+  risk_aggregation:
+    type: mean_cvar
+    cvar_alpha: 0.9
+    cvar_weight: 0.4
+  feasibility:
+    hard_priority_scale: 10000.0
+    inject_hard_priority_costs: true
   route_weight: 50.0
   progress_weight: 5.0
   comfort_global_weight: 1.0
-  demo_weight: 8.0
+  demo_weight: 1.0
   atom_normalization_first: true
   separate_hard_gate: false
-  use_reactive_proxy: false
-  cost_eval_stride: 2
+  use_reactive_proxy: true
+  cost_eval_stride: 1
   demo_scale: 120.0
   route_scale: 1.0
   progress_scale: 10.0
@@ -188,6 +204,7 @@ pairs:
   random_seed: 17
 selector:
   mode: runtime_predicted
+  proposal_top_m: 32
   gamma_cap_percentile: 95
   gamma_max_default: 100.0
   lambda_near: 1.0
@@ -205,12 +222,24 @@ fallback:
   expand_budget: true
   rule_rerank_top_k: 5
   tau_delta: 0.1
+  safety_lcb_min: 0.0
+  proposal_multiplier: 3.0
+  rival_stages: [16, 31]
+  budget_stages: [16, 32]
+  rule_switch_margin: 0.0
 model:
   hidden_dim: 256
   transformer_layers: 4
   attention_heads: 8
   evidence_feature_dim: 24
+  proposal_feature_dim: 24
   query_feature_dim: 12
+  map_feature_dim: 8
+  route_feature_dim: 8
+  traffic_feature_dim: 12
+  goal_feature_dim: 4
+  max_polyline_points: 64
+  max_traffic_tokens: 32
   dropout: 0.1
 training:
   lr: 1.0e-4
@@ -219,10 +248,16 @@ training:
   epochs: 20
   grad_clip: 5.0
   num_workers: 4
+  teacher_soft_target_tau: 1.0
   loss_weights:
     base: 1.0
     residual: 1.0
-    rank: 1.0
-    selection: 0.5
+    full_interface_rank_aux: 0.1
+    proposal: 1.0
     action: 1.0
+    calibration: 0.0
   rank_margin: 1.0
+  rank_tau: 1.0
+
+calibration:
+  epsilon_cal: 0.0

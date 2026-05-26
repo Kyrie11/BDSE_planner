@@ -1,0 +1,7 @@
+# Paper-faithful default BDSE v2 certificate config.
+# load_config() already starts from default.yaml, so this file is an explicit alias.
+experiment:
+  profile: paper
+
+calibration:
+  epsilon_cal: 0.0

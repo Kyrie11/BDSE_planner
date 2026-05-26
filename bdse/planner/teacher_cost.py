@@ -81,6 +81,12 @@ def evaluate_teacher_costs(
 ) -> TeacherLabels:
     if cfg.get("teacher", {}).get("separate_hard_gate", False):
         raise ValueError("BDSE teacher cost has exactly J_base_T + sum_i g_i_T; no separate hard gate is allowed.")
+    if bool(cfg.get("teacher", {}).get("robust", {}).get("enabled", True)):
+        from bdse.planner.robust_teacher import evaluate_robust_teacher_costs
+
+        return evaluate_robust_teacher_costs(runtime, label_future, candidates, evidence_bank, cfg, evaluate_base_costs)
+
+    # Legacy one-world teacher kept only when teacher.robust.enabled=false.
     J_base = evaluate_base_costs(runtime, label_future, candidates, cfg)
     raw, hard_events = raw_local_costs_with_hard_events(evidence_bank.atoms, candidates, runtime, label_future, cfg)
     raw = np.nan_to_num(raw, nan=1e6, posinf=1e6, neginf=1e6)

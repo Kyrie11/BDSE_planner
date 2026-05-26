@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from bdse.planner.pair_screen import build_runtime_pairs_from_base
+
 
 @dataclass(slots=True)
 class SelectionResult:
@@ -228,7 +230,7 @@ def runtime_objective_value(
     return float(total)
 
 
-def runtime_greedy_selector(
+def full_prescore_greedy_selector(
     predicted_base_cost: np.ndarray,
     predicted_atom_costs: np.ndarray,
     atom_budget_costs: np.ndarray,
@@ -242,6 +244,7 @@ def runtime_greedy_selector(
     lambda_safety: float = 2.0,
     atom_active_mask: np.ndarray | None = None,
 ) -> SelectionResult:
+    """Legacy full-interface selector kept only for ablations."""
     M = full_interface_margin(predicted_base_cost, predicted_atom_costs)
     pairs, base_weights = build_predicted_pairs(M, valid_mask, runtime_safety_flags, L_infer, eta_pred)
     if len(base_weights):
@@ -264,6 +267,65 @@ def runtime_greedy_selector(
         atom_support = np.zeros((E, 0), dtype=np.float32)
         caps = np.zeros((0,), dtype=np.float32)
     selected, current, spent = _greedy_cover_from_pair_support(
+        atom_support, base_support, caps, pair_weights, atom_budget_costs, budget, atom_active_mask
+    )
+    return SelectionResult(
+        selected=selected,
+        objective_value=current,
+        pair_indices=pairs,
+        pair_weights=pair_weights,
+        diagnostics={"spent_budget": spent, "budget": float(budget), "mode": "legacy_full_prescore", "pair_count": int(len(pairs))},
+    )
+
+
+def runtime_greedy_selector(
+    predicted_base_cost: np.ndarray,
+    predicted_atom_costs: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    budget: float,
+    L_infer: int = 16,
+    gamma_max: float = 100.0,
+    eta_pred: float = 1.0,
+    lambda_near: float = 1.0,
+    lambda_safety: float = 2.0,
+    atom_active_mask: np.ndarray | None = None,
+) -> SelectionResult:
+    """Two-stage runtime selector using base/cheap pair screening only.
+
+    Unlike the legacy implementation, this function does not construct
+    full_interface_margin before selecting evidence.  It assumes
+    ``predicted_atom_costs`` contains only already-queried sparse values (zeros
+    elsewhere) and restricts the active atoms through ``atom_active_mask``.
+    """
+    pairs, pair_weights = build_runtime_pairs_from_base(
+        predicted_base_cost,
+        valid_mask,
+        runtime_safety_flags,
+        L0=L_infer,
+        eta0=eta_pred,
+        lambda_near=lambda_near,
+        lambda_safety=lambda_safety,
+    )
+    E = int(predicted_atom_costs.shape[0])
+    if len(pairs):
+        a = pairs[:, 0]
+        b = pairs[:, 1]
+        base_delta = np.asarray(predicted_base_cost, dtype=np.float32)[b] - np.asarray(predicted_base_cost, dtype=np.float32)[a]
+        base_support = np.maximum(base_delta, 0.0)
+        atom_support = np.maximum(np.asarray(predicted_atom_costs, dtype=np.float32)[:, b] - np.asarray(predicted_atom_costs, dtype=np.float32)[:, a], 0.0)
+        safety_b = np.asarray(runtime_safety_flags, dtype=bool)[b] if np.asarray(runtime_safety_flags).shape[0] > int(np.max(b, initial=0)) else np.zeros_like(base_delta, dtype=bool)
+        caps = np.where(
+            safety_b,
+            float(gamma_max),
+            np.minimum(np.maximum(np.abs(base_delta) + float(eta_pred), 1e-3), float(gamma_max)),
+        ).astype(np.float32)
+    else:
+        base_support = np.zeros((0,), dtype=np.float32)
+        atom_support = np.zeros((E, 0), dtype=np.float32)
+        caps = np.zeros((0,), dtype=np.float32)
+    selected, current, spent = _greedy_cover_from_pair_support(
         atom_support,
         base_support,
         caps,
@@ -277,9 +339,8 @@ def runtime_greedy_selector(
         objective_value=current,
         pair_indices=pairs,
         pair_weights=pair_weights,
-        diagnostics={"spent_budget": spent, "budget": float(budget), "mode": "runtime_predicted", "pair_count": int(len(pairs))},
+        diagnostics={"spent_budget": spent, "budget": float(budget), "mode": "runtime_base_screen_sparse", "pair_count": int(len(pairs))},
     )
-
 
 def select_by_mode(
     mode: str,
@@ -296,6 +357,16 @@ def select_by_mode(
     E = int(predicted_atom_costs.shape[0])
     costs = np.asarray(atom_budget_costs, dtype=np.float32)
     max_count = int(budget) if np.allclose(costs, 1.0) else E
+    if mode == "full_prescore_ablation":
+        return full_prescore_greedy_selector(
+            predicted_base_cost,
+            predicted_atom_costs,
+            atom_budget_costs,
+            valid_mask,
+            runtime_safety_flags,
+            budget,
+            **kwargs,
+        )
     if mode == "runtime_predicted":
         return runtime_greedy_selector(
             predicted_base_cost,

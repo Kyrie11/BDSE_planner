@@ -1,29 +1,52 @@
 # BDSE nuPlan implementation
 
-This repository implements **Budgeted Decision-Sufficient Evidence (BDSE)** for nuPlan-style DB planning data. The implementation follows the paper and the landing guide: candidate-set teacher supervision, additive atom-level evidence costs, runtime/label-only separation, runtime predicted greedy selection, and pairwise tournament action choice.
+This repository implements **Budgeted Decision-Sufficient Evidence (BDSE)** for nuPlan-style candidate-set planning.  The code in this package has been aligned with the paper's deployment constraint: the runtime planner may use current observations, route/map context, candidate rollouts, cheap atom features, Top-M proposal, sparse action-atom queries, greedy budgeted certificate selection, and a budgeted tournament.  It must not access logged future ego/agent labels inside `compute_trajectory()`.
 
-## 1. Repository layout
+## What was fixed in this version
+
+The implementation now addresses the main paper/code mismatches that existed in the earlier package:
+
+- **Strict teacher feasibility:** robust teacher labels use lexicographic hard feasibility through owned hard evidence atoms. Collision, off-drivable, wrong-way, and red-light events are no longer collapsed into one soft boolean.
+- **Partition-preserving hard costs:** hard priorities are injected into the unique owning hard atom before normalization, so `J_T = J_base_T + sum_i g_i_T` still holds and residual margin labels remain closed.
+- **Runtime sparse path:** deployment uses Top-M evidence proposal, base/cheap rival pair screening, sparse `q_i(a)` queries only for Top-M atoms and screened actions, greedy certificate selection, and tournament scoring.
+- **No dense leakage into `L_act`:** training may still use dense offline query features for residual supervision, but the action loss masks unqueried atom-action entries and follows the same sparse pathway as deployment.
+- **Proposal head includes `u(A_t)`:** atom proposal now receives a candidate-bank summary containing score entropy, top gap, near-tie fraction, progress/lateral/speed summaries, and maneuver coverage.
+- **Oracle proposal targets:** proposal supervision now uses greedy marginal certificate gain rather than mean positive support.
+- **Padding-safe scene encoder:** invalid agent/map/route/traffic/goal tokens are passed through a transformer key-padding mask, so padded token values do not affect the scene embedding.
+- **Richer action/evidence features:** action encoding includes route-relative proxy progress, lateral offset, lateral envelope, and heading change; evidence tensors encode anchor geometry, lambda, budget, type/family, and cheap proposal features.
+- **Fallback re-queries:** low-confidence or unsafe-certificate stages rerun proposal/query/selection/tournament with expanded rival size, proposal size, and budget before rule reranking or conservative fallback.
+- **LCB diagnostics and calibration hook:** tournament diagnostics include `safety_lcb_min`; `bdse.experiments.calibrate` estimates validation-set `epsilon_cal` for one-sided certificate checks.
+- **nuPlan trajectory conversion:** `BDSEnuPlanPlanner` now builds `InterpolatedTrajectory` using global pose, `StateVector2D` velocity, and acceleration instead of silently returning a numpy array in nuPlan environments.
+- **Regression tests:** tests now cover sparse runtime behavior, Top-M selection limits, padding invariance, hard-priority teacher behavior, and fallback re-query expansion.
+
+## Repository layout
 
 ```text
 bdse/
   configs/
-    default.yaml          # main experiment configuration
-    ablations.yaml        # budget, rival, selector and fallback sweeps
+    default.yaml          # paper-oriented default runtime/training config
+    paper.yaml            # alias/overrides for paper experiments
+    smoke.yaml            # fast debugging only
+    full_preprocess.yaml  # nuPlan preprocessing overrides
+    ablations.yaml
   data/
-    nuplan_dataset.py     # DB discovery and nuPlan ScenarioBuilder wrapper
-    scenario_sampler.py   # split/folder-aware .db discovery under /data0/nuplan/data/cache
-    feature_builder.py    # runtime-only feature extraction
-    label_builder.py      # offline label-only future and teacher sample construction
-    cache_schema.py       # sample/candidate/evidence/teacher/pair dataclasses
+    cache_schema.py
+    state_schema.py               # canonical state-vector indices
+    tensorizer.py                 # shared train/runtime tensorization
+    feature_builder.py            # offline scenario/cache feature extraction
+    label_builder.py              # label-only future and teacher sample construction
+    nuplan_runtime_adapter.py     # PlannerInput -> RuntimeFeatures
   planner/
-    candidate_generator.py
-    evidence_atoms.py
-    teacher_cost.py
-    pair_builder.py
-    selector.py
-    tournament.py
-    fallback.py
-    nuplan_planner.py
+    response_modes.py             # logged/CV/CA/brake/yield/non-yield modes
+    robust_teacher.py             # mean+CVaR robust candidate teacher with hard hierarchy
+    evidence_atoms.py             # evidence atoms, hard ownership, raw local costs
+    evidence_queries.py           # cheap proposal and sparse q_i(a) query features
+    pair_screen.py                # runtime base/cheap rival screen
+    selector.py                   # oracle and runtime greedy certificate selection
+    certificate_selector.py       # sparse selector helper
+    tournament.py                 # LCB-aware budgeted tournament
+    fallback.py                   # runtime cheap safety flags and rule reranker
+    nuplan_planner.py             # runtime planner core and nuPlan adapter
   model/
     scene_encoder.py
     action_encoder.py
@@ -34,286 +57,227 @@ bdse/
     preprocess.py
     train.py
     evaluate_open_loop.py
-    evaluate_closed_loop.py
+    evaluate_closed_loop.py       # wrapper notes for external nuPlan Hydra integration
+    calibrate.py                  # estimate epsilon_cal on validation data
     diagnostics.py
-    ablations.py
-  metrics/
-    bdse_metrics.py
-    nuplan_metrics.py
   tests/
-    pytest unit tests for the required BDSE invariants
 ```
 
-## 2. Environment
-
-Recommended base environment:
+## Environment
 
 ```bash
 pip install -U pip
 pip install -r requirements.txt
 pip install -e .
+pip install -e '.[test]'
 ```
 
-For real nuPlan training and closed-loop simulation, install the official nuPlan devkit in the same environment and make it importable. The code calls `NuPlanScenarioBuilder` when `use_devkit=True`.
+For real nuPlan preprocessing or closed-loop simulation, install the official nuPlan devkit in the same environment:
+
+```bash
+pip install -e '.[nuplan]'
+```
 
 Set dataset paths before preprocessing/training:
 
 ```bash
-export NUPLAN_DATA_ROOT=/data0/nuplan/data/cache
-export NUPLAN_MAPS_ROOT=/data0/nuplan/dataset/maps
-export NUPLAN_EXP_ROOT=/data0/nuplan/exp
+export NUPLAN_DATA_ROOT=/path/to/nuplan/data/cache
+export NUPLAN_MAPS_ROOT=/path/to/nuplan/maps
+export NUPLAN_EXP_ROOT=/path/to/nuplan/exp
 ```
 
-The default config already points to the user-provided DB cache root:
+## Quick validation
 
-```yaml
-paths:
-  data_cache_root: /data0/nuplan/data/cache
-  maps_root: /data0/nuplan/dataset/maps
-  exp_root: /data0/nuplan/exp/bdse
-```
-
-## 3. Expected nuPlan DB organization
-
-The loader treats each direct subfolder under `/data0/nuplan/data/cache` as a split/folder bucket and recursively discovers `.db` files:
-
-```text
-/data0/nuplan/data/cache/
-  val/
-    *.db
-  train_boston/
-    *.db
-  train_singapore/
-    *.db
-  train_las_vegas/
-    *.db
-  train_pittsburgh/
-    *.db
-```
-
-Folder names starting with `train` are normalized to split `train`; folder names starting with `val`, `valid`, or `validation` are normalized to split `val`. You can still select a specific folder with `--folders train_boston train_singapore`.
-
-Check discovered splits:
+Run the regression suite first:
 
 ```bash
-python -m bdse.experiments.preprocess --list-splits
+pytest -q
 ```
 
-## 4. Core implementation guarantees
+Expected result in this package revision:
 
-The code enforces the following BDSE invariants:
-
-1. `compute_trajectory()` accepts only runtime planner input. It does not accept `label_future`, `future_agents`, logged future ego, teacher margins, or teacher action labels.
-2. Teacher margin sign is fixed: `M_T(a,b) = J_T(b) - J_T(a)`. Positive means the first action is better.
-3. Teacher cost has exactly two parts: `J_T = J_base_T + J_evid_T`, and `J_evid_T = sum_i g_i_T`.
-4. Evidence is normalized atom by atom before summation: `g_i_T = w_tau * clip(r_i / (s_tau + eps), 0, gmax_tau)`.
-5. Hard collision, red light, off-drivable, and wrong-way events are evidence atoms, not a separate hard gate.
-6. Invalid padded candidates are excluded from teacher argmin, pair construction, selector objectives, tournament argmax, and metric denominators.
-7. Runtime selector uses only predicted full-interface margins, predicted positive pairs, predicted caps, predicted weights, runtime safety flags, and candidate/evidence valid masks.
-
-## 5. Preprocessing labels and teacher data
-
-Preprocessing builds each sample as:
-
-```python
-Sample = {
-    "runtime": RuntimeFeatures,
-    "label_future": LabelOnlyFuture,
-    "candidates": CandidateBank,
-    "evidence_bank": EvidenceBank,
-    "teacher": TeacherLabels,
-    "pairs": PairLabels,
-}
+```text
+23 passed
 ```
 
-Run a small validation preprocessing job:
+## Preprocessing
+
+Use `full_preprocess.yaml` or `paper.yaml` for data used in experiments. `smoke.yaml` is only for fast debugging.
+
+Small validation preprocessing:
 
 ```bash
 python -m bdse.experiments.preprocess \
   --config bdse/configs/full_preprocess.yaml \
-  --data-root /data0/senzeyu2/dataset/nuplan/data/cache \
-  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
+  --data-root "$NUPLAN_DATA_ROOT" \
+  --maps-root "$NUPLAN_MAPS_ROOT" \
   --map-version nuplan-maps-v1.0 \
   --splits val \
-  --output-dir /data0/senzeyu2/d[preprocess_v3.patch](../preprocess_v3.patch)ataset/nuplan/data/cache/val_set \
+  --output-dir /path/to/bdse_cache/val \
   --num-workers 4 \
   --scenario-stride 10 \
   --teacher-cost-eval-stride 1 \
   --include-drivable-polygons \
   --candidate-aware-agent-selection \
   --profile \
-  --profile-threshold-s 0.2
+  --profile-threshold-s 1.0
 ```
 
-Run training preprocessing on selected train folders:
+Training preprocessing:
 
 ```bash
 python -m bdse.experiments.preprocess \
   --config bdse/configs/full_preprocess.yaml \
-  --data-root /data0/senzeyu2/dataset/nuplan/data/cache \
-  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
+  --data-root "$NUPLAN_DATA_ROOT" \
+  --maps-root "$NUPLAN_MAPS_ROOT" \
   --map-version nuplan-maps-v1.0 \
   --splits train \
-  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_full_qualityfix \
-  --num-workers 4 \
+  --output-dir /path/to/bdse_cache/train \
+  --num-workers 8 \
   --scenario-stride 10 \
   --max-samples-per-log 256 \
-  --teacher-cost-eval-strid[diff12.patch](../diff12.patch)e 1 \
+  --teacher-cost-eval-stride 1 \
   --include-drivable-polygons \
   --candidate-aware-agent-selection \
   --profile \
-  --profile-threshold-s 1.0
+  --profile-threshold-s 2.0
 ```
 
-During preprocessing:
+Preprocessing stores runtime-only features, label-only futures, candidates, evidence atoms, proposal features, teacher labels, and pair labels. Runtime code only consumes runtime features, candidate bank, evidence atoms, proposal features, and sparse queries.
 
-- runtime features use past/current ego, past/current agents, current traffic lights, HD map, route roadblock ids, and mission goal;
-- label futures use logged future ego and logged future agents for the offline teacher only;
-- candidate bank uses the default `K=32`, `T=80`, horizon `8s`, step `0.1s` route-conditioned semantic lattice;
-- evidence bank is capped by `N_inter<=64`, `N_map<=32`, `N_kin<=16`, `N_E<=128`;
-- pair labels store better action first and validate residual closure.
-
-## 6. Training
-
-Run a small smoke training job:
+## Training
 
 ```bash
 python -m bdse.experiments.train \
   --config bdse/configs/full_preprocess.yaml \
   --split train \
-  --preprocessed-dir /data0/senzeyu2/dataset/nuplan/data/cache/full_train \
-  --max-scenarios 256 \
+  --preprocessed-dir /path/to/bdse_cache \
   --output outputs/bdse_model.pt
 ```
 
-Full training uses the same command without `--max-*` limits. Main hyperparameters are in `bdse/configs/default.yaml`:
+For a short sanity run:
 
-- hidden dim: `256`
-- transformer layers: `4`
-- heads: `8`
-- candidates: `32`
-- evidence atoms: `128`
-- pair batch per scene: `128`
-- optimizer: `AdamW`
-- learning rate: `1e-4`
-- weight decay: `1e-2`
-- batch size: `64`
-- epochs: `20`
-- grad clip: `5.0`
-
-Training loss:
-
-```text
-L_total = L_base + L_res + L_rank + 0.5 * L_sel + L_act
+```bash
+python -m bdse.experiments.train \
+  --config bdse/configs/smoke.yaml \
+  --split train \
+  --preprocessed-dir /path/to/bdse_cache \
+  --max-scenarios 128 \
+  --output outputs/bdse_smoke.pt
 ```
 
-`L_rank` uses the full-interface predicted margin. `L_act` uses runtime-style selected evidence.
+Training losses:
 
-## 7. Open-loop diagnostics
+- `L_base`: regress predicted base cost to `J_base_T`.
+- `L_res`: offline residual-margin supervision over full evidence bank.
+- `L_rank`: logistic rank loss over positive teacher pairs.
+- `L_prop`: BCE/listwise proposal loss from oracle marginal certificate gain.
+- `L_act`: deployment-consistent sparse proposal/query/greedy/tournament action loss.
+- `L_cal`: optional margin calibration surrogate when `training.loss_weights.calibration > 0`.
 
-Run BDSE-specific diagnostics with an already trained checkpoint:
+## Post-hoc calibration
+
+Estimate a validation-set one-sided margin residual quantile:
+
+```bash
+python -m bdse.experiments.calibrate \
+  --config bdse/configs/full_preprocess.yaml \
+  --checkpoint outputs/bdse_model.pt \
+  --split val \
+  --preprocessed-dir /path/to/bdse_cache \
+  --delta 0.1 \
+  --output outputs/calibration.json
+```
+
+Then copy the reported value into your runtime config:
+
+```yaml
+tournament:
+  epsilon_cal: <epsilon_cal from calibration.json>
+fallback:
+  safety_lcb_min: 0.0
+```
+
+This is the deployment-oriented substitute for an unimplemented learned uncertainty head. It is cheaper and easier to validate in a real-time planner: it uses a scalar validation quantile instead of expanding the runtime network output.
+
+## Open-loop diagnostics
 
 ```bash
 python -m bdse.experiments.evaluate_open_loop \
+  --config bdse/configs/full_preprocess.yaml \
   --checkpoint outputs/bdse_model.pt \
   --split val \
-  --max-files 1 \
-  --max-scenarios 100 \
+  --max-scenarios 500 \
   --output outputs/open_loop_bdse_metrics.json
 ```
 
-Run teacher/evidence diagnostics using teacher costs as the predictor oracle:
+Teacher/evidence diagnostics:
 
 ```bash
 python -m bdse.experiments.diagnostics \
   --config bdse/configs/full_preprocess.yaml \
   --split val \
-  --preprocessed-dir /data0/senzeyu2/dataset/nuplan/data/cache/val_set \
-  --max-scenarios 200 \
-  --output outputs/diagnostics_val_200.json
+  --preprocessed-dir /path/to/bdse_cache \
+  --max-scenarios 500 \
+  --output outputs/diagnostics_val.json
 ```
 
-Reported BDSE metrics include:
+## Runtime planner path
 
-- teacher regret
-- teacher action match
-- full-interface match
-- budget-vs-full match
-- preserved margin error
-- evidence sufficiency
-- decision sufficiency
-- selector value ratio
-- hard-evidence recall
-- effective query count
-- fallback rate when running through the planner core
+Use the planner core directly for runtime-feature tests:
 
-## 8. Closed-loop nuPlan integration
+```python
+from bdse.config import load_config
+from bdse.planner.nuplan_planner import BDSEPlannerCore
 
-`BDSEnuPlanPlanner` implements the runtime planning path:
+cfg = load_config("bdse/configs/full_preprocess.yaml")
+core = BDSEPlannerCore(model=model, cfg=cfg)
+action_index, local_trajectory, diagnostics = core.plan_from_runtime(runtime_features)
+```
+
+Runtime sequence:
+
+```text
+RuntimeFeatures
+  -> generate_candidate_bank
+  -> enumerate_evidence_atoms and cheap proposal features
+  -> model/base scorer and proposal logits
+  -> Top-M atoms
+  -> base/cheap runtime pair screen
+  -> sparse q_i(a) for Top-M atoms and screened actions
+  -> local action-atom scores only for queried entries
+  -> greedy certificate under budget B
+  -> LCB-aware tournament
+  -> fallback re-query stages if low confidence / unsafe certificate
+  -> rule rerank or conservative fallback only if needed
+```
+
+`compute_trajectory()` never calls scenario future APIs and never reads logged future ego/agent states.
+
+## nuPlan closed-loop integration
+
+Instantiate the planner:
 
 ```python
 from bdse.planner.nuplan_planner import BDSEnuPlanPlanner
 planner = BDSEnuPlanPlanner(model=model, cfg=cfg)
 ```
 
-The planner returns an 8-second trajectory at 10 Hz. In a nuPlan Hydra simulation entrypoint, pass the planner instance as a pre-built planner. The implementation keeps logged futures out of `compute_trajectory()`.
+The included `bdse.experiments.evaluate_closed_loop` script only verifies planner construction and prints integration instructions. Full nuPlan closed-loop evaluation still needs your project’s Hydra `run_simulation` entrypoint to pass the constructed planner instance as a pre-built planner. This repository does not bundle a full Hydra simulation config.
 
-The closed-loop script is a lightweight entrypoint check:
+Inside a nuPlan environment, `BDSEnuPlanPlanner.compute_trajectory()` returns `InterpolatedTrajectory` built from global `EgoState` objects with velocity and acceleration vectors. Outside a nuPlan environment, the converter returns the local numpy trajectory for unit tests and lightweight debugging.
 
-```bash
-python -m bdse.experiments.evaluate_closed_loop \
-  --checkpoint outputs/bdse_model.pt \
-  --challenge closed_loop_nonreactive_agents \
-  --output-dir outputs/closed_loop
-```
+## Important deployment notes
 
-For full official metrics, run the planner through nuPlan devkit's simulation pipeline and aggregate nuPlan metrics: overall planning score, no at-fault collision, drivable-area compliance, route progress, speed-limit compliance, TTC, comfort, and latency.
+1. Keep `candidate.K`, `evidence.max_atoms`, model feature dimensions, and preprocessing config identical between cache generation and training.
+2. Keep `evidence.precompute_dense_query_features: false` for runtime; dense query tensors are only for offline supervision and diagnostics.
+3. Use validation calibration before trusting LCB-based fallback thresholds.
+4. Treat `smoke.yaml` as a speed test, not a paper-quality setting.
+5. If maps expose incomplete drivable polygons, keep the route-corridor fallback enabled; otherwise teacher labels may mark all candidates off-drivable.
+6. Closed-loop results should always report fallback trigger rate, expanded budget/query count, latency, selected evidence count, and safety-LCB diagnostics together with nuPlan metrics.
 
-## 9. Ablation plan
+## Known limits
 
-Generate the configured ablation plan:
-
-```bash
-python -m bdse.experiments.ablations --output outputs/ablation_plan.json
-```
-
-Supported switches are config-only:
-
-- selector modes: runtime predicted, random, top magnitude, diversity, interaction-only, rule/map-only;
-- budget sweep: `B in {4,8,16,24,32}`;
-- rival sweep: `L_infer in {4,8,16,24,K-1}`;
-- fallback modes: no fallback, rival expansion only, budget expansion only, rule top-K rerank, full fallback.
-
-`teacher.separate_hard_gate=true` raises an error unless placed under an explicit debug-only invalid ablation block.
-
-## 10. Tests
-
-Run all required invariant tests:
-
-```bash
-pytest -q bdse/tests
-```
-
-The included tests cover:
-
-1. runtime/label-only separation
-2. margin sign and antisymmetry
-3. teacher cost partition
-4. atom-level additivity
-5. hard event ownership
-6. residual closure
-7. invalid padding masks
-8. oracle-vs-runtime selector input separation
-9. selector monotonicity
-10. tournament antisymmetry
-
-## 11. Notes on planner-interface budget accounting
-
-The main BDSE budget is the post-selection planner-interface atom budget `|S_B|`. The runtime selector may score all predicted atom costs to build `S_B`; diagnostics should report both:
-
-```text
-pre-selection scoring cost = N_E * K or N_E * |P_hat_plus|
-post-selection query cost  = |S_B| * K or |S_B| * |P_infer|
-```
-
-This avoids conflating neural preselection compute with the deployed planner-interface query budget.
+- The repository provides the planner and scripts, but not a full nuPlan Hydra experiment bundle.
+- Learned uncertainty heads are not implemented; the recommended runtime-safe option is validation quantile calibration through `bdse.experiments.calibrate`.
+- Sparse query geometry is vectorized over the requested Top-M atoms and selected action ids. It avoids full `E × K` runtime scoring, but individual atom helpers may reuse candidate-level geometry internally for speed and numerical consistency.

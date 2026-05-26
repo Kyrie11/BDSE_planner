@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from bdse.planner.pair_screen import build_rival_sets_from_base
 from bdse.planner.selector import budgeted_margin, full_interface_margin
 from bdse.utils import softmin_np
 
@@ -86,17 +87,18 @@ def run_tournament(
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
-    M_full = full_interface_margin(predicted_base_cost, predicted_atom_costs)
-    rivals = build_rival_sets(
-        M_full,
+    rivals = build_rival_sets_from_base(
+        predicted_base_cost,
         valid_mask,
         runtime_safety_flags,
         L_infer=int(tc.get("L_infer", 16)),
-        eta_pred=float(sc.get("eta_pred", 1.0)),
+        eta0=float(sc.get("eta_pred", 1.0)),
     )
     M_B = budgeted_margin(predicted_base_cost, predicted_atom_costs, selected_atoms)
+    epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
+    M_eval = M_B - epsilon_cal
     scores = tournament_scores(
-        M_B,
+        M_eval,
         np.asarray(valid_mask, dtype=bool),
         rivals,
         use_softmin=bool(tc.get("use_softmin", True)),
@@ -107,14 +109,28 @@ def run_tournament(
     action = int(np.argmax(scores))
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")
+    safety_idx = np.flatnonzero(np.asarray(runtime_safety_flags, dtype=bool) & np.asarray(valid_mask, dtype=bool))
+    if safety_idx.size and action not in safety_idx:
+        safety_lcb_min = float(np.min(M_eval[action, safety_idx]))
+    elif action in safety_idx:
+        safety_lcb_min = -float("inf")
+    else:
+        safety_lcb_min = float("inf")
     return TournamentResult(
         action_index=action,
         scores=scores,
-        margins=M_B,
+        margins=M_eval,
         rival_sets=rivals,
-        diagnostics={"delta_hat_B": delta, "selected_atoms": list(map(int, selected_atoms)), "valid_actions": int(np.asarray(valid_mask).sum())},
+        diagnostics={
+            "delta_hat_B": delta,
+            "selected_atoms": list(map(int, selected_atoms)),
+            "valid_actions": int(np.asarray(valid_mask).sum()),
+            "rival_source": "base_score_cheap_flags",
+            "epsilon_cal": epsilon_cal,
+            "safety_lcb_min": safety_lcb_min,
+            "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
+        },
     )
-
 
 def full_interface_action(
     predicted_base_cost: np.ndarray,
