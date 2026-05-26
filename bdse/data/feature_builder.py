@@ -453,7 +453,10 @@ def _fill_future_tracked_window_by_iteration(
     for k in range(max(0, int(n))):
         cached = frames_in[k] if frames_in is not None and k < len(frames_in) else None
         if cached is not None:
-            out.append(_CachedTrackedFrame(cached.tokens, cached.boxes.copy()))
+            # Treat cached frames as immutable. Callers convert boxes through
+            # boxes_global_to_local(), which copies before writing, so avoiding this
+            # full-frame copy is a no-label-change speedup for 8s future windows.
+            out.append(cached)
             continue
         objects = _call(scenario, ["get_tracked_objects_at_iteration"], int(iteration) + k + 1, default=None)
         if objects is None:
@@ -517,7 +520,10 @@ def cached_tracked_window(
                     local_frames.append(None)
                     local_stats["cache_miss_frames"] += 1
                 else:
-                    local_frames.append(_CachedTrackedFrame(hit.tokens, hit.boxes.copy()))
+                    # Keep a shared immutable reference. Copying 80 dense nuPlan
+                    # tracked-object frames per sample dominated label_future even
+                    # when every frame was a cache hit.
+                    local_frames.append(hit)
                     local_stats["cache_hit_frames"] += 1
         return local_frames, local_stats
 

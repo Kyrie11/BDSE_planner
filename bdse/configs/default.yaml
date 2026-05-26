@@ -19,6 +19,11 @@ preprocess:
   atomic_write: true
   manifest_name: manifest.jsonl
   scenario_stride: 10
+  # nuPlan ScenarioBuilder already applies scenario_stride via timestamp_threshold_s.
+  # Keep one BDSE sample per timestamp-filtered builder scenario by default.
+  # Use 'expanded' only for dense-window ablations; it can multiply val/train by
+  # 10x--100x and creates highly overlapping labels.
+  scenario_iteration_policy: initial
   max_samples_per_log_strategy: uniform_blocks
   max_samples_per_log_block_size: 32
   num_workers: 1
@@ -52,7 +57,7 @@ runtime:
   max_map_polylines: 128
   # Full drivable-area polygon extraction is expensive on nuPlan.  The teacher still
   # has an off-route/off-drivable hard atom via the route-corridor fallback.
-  include_drivable_polygons: true
+  include_drivable_polygons: false
   max_drivable_polygons: 24
   max_polygon_points: 128
   max_route_points: 256

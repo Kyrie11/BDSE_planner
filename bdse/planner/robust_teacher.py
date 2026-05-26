@@ -23,6 +23,25 @@ class RobustTeacherComponents:
     mode_costs: dict[str, np.ndarray]
 
 
+def _mode_dependent_atom(atom: Any) -> bool:
+    """Whether an atom's raw cost changes with the response-mode future.
+
+    In the current executable teacher, only occupancy/collision and TTC atoms read
+    label_future.agent trajectories.  Route, drivable-area, red-light, speed-limit,
+    gap, and kinematic atoms depend only on runtime map/current state and candidate
+    trajectories.  Reusing their raw costs across robust modes preserves the exact
+    teacher partition while avoiding 5--6 repeated static passes per sample.
+    """
+    return str(getattr(atom, "type", "")) in {"occupancy", "collision", "ttc"}
+
+
+def _scatter_subset(values: np.ndarray, indices: list[int], shape: tuple[int, int], dtype: Any) -> np.ndarray:
+    out = np.zeros(shape, dtype=dtype)
+    if indices:
+        out[np.asarray(indices, dtype=np.int64)] = values.astype(dtype, copy=False)
+    return out
+
+
 def weighted_cvar(values: np.ndarray, probs: np.ndarray, alpha: float) -> np.ndarray:
     vals = np.asarray(values, dtype=np.float32)
     probs = np.asarray(probs, dtype=np.float32).reshape(-1)
@@ -125,9 +144,28 @@ def evaluate_robust_teacher_costs(
     raw_by_mode: list[np.ndarray] = []
     hard_by_mode: list[np.ndarray] = []
     mode_costs: dict[str, np.ndarray] = {}
+
+    atoms = list(evidence_bank.atoms)
+    E, K = evidence_bank.E, candidates.K
+    dynamic_idx = [i for i, atom in enumerate(atoms) if _mode_dependent_atom(atom)]
+    static_idx = [i for i in range(E) if i not in set(dynamic_idx)]
+    static_raw_full = np.zeros((E, K), dtype=np.float32)
+    static_hard_full = np.zeros((E, K), dtype=bool)
+    if static_idx:
+        static_atoms = [atoms[i] for i in static_idx]
+        static_raw, static_hard = raw_local_costs_with_hard_events(static_atoms, candidates, runtime, label_future, cfg)
+        static_raw_full = _scatter_subset(static_raw, static_idx, (E, K), np.float32)
+        static_hard_full = _scatter_subset(static_hard, static_idx, (E, K), bool)
+
     for mode in modes:
         lf = mode_to_label_future(mode, label_future, runtime)
-        raw_m, hard_m = raw_local_costs_with_hard_events(evidence_bank.atoms, candidates, runtime, lf, cfg)
+        raw_m = static_raw_full.copy()
+        hard_m = static_hard_full.copy()
+        if dynamic_idx:
+            dyn_atoms = [atoms[i] for i in dynamic_idx]
+            dyn_raw, dyn_hard = raw_local_costs_with_hard_events(dyn_atoms, candidates, runtime, lf, cfg)
+            raw_m[np.asarray(dynamic_idx, dtype=np.int64)] = dyn_raw
+            hard_m[np.asarray(dynamic_idx, dtype=np.int64)] = dyn_hard
         raw_m = np.nan_to_num(raw_m, nan=1e6, posinf=1e6, neginf=1e6)
         raw_by_mode.append(raw_m)
         hard_by_mode.append(hard_m)

@@ -377,6 +377,17 @@ class NuPlanBDSEDataset:
         self.stride = int(stride if stride is not None else self.cfg.get("preprocess", {}).get("scenario_stride", 10))
         max_per_log = self.cfg.get("preprocess", {}).get("max_samples_per_log", None)
         self.max_samples_per_log = None if max_per_log is None else max(1, int(max_per_log))
+        iteration_policy = str(self.cfg.get("preprocess", {}).get("scenario_iteration_policy", "initial")).lower()
+        if iteration_policy in {"start", "starts", "one", "once", "scenario"}:
+            iteration_policy = "initial"
+        if iteration_policy in {"all", "all_iterations", "expand", "expanded"}:
+            iteration_policy = "expanded"
+        if iteration_policy not in {"initial", "expanded"}:
+            raise ValueError(
+                f"Unsupported preprocess.scenario_iteration_policy={iteration_policy!r}; "
+                "expected 'initial' or 'expanded'."
+            )
+        self.scenario_iteration_policy = iteration_policy
         self._index: list[Any] | None = None
         self.num_workers = int(num_workers if num_workers is not None else self.cfg.get("preprocess", {}).get("num_workers", 1) or 1)
         self.use_process_pool = bool(use_process_pool if use_process_pool is not None else self.cfg.get("preprocess", {}).get("use_process_pool", False))
@@ -401,6 +412,7 @@ class NuPlanBDSEDataset:
             print(
                 f"[bdse] expanding scenario index: split={self.split} "
                 f"scenario_objects={total_scenarios} stride={self.stride} "
+                f"iteration_policy={self.scenario_iteration_policy} "
                 f"max_scenarios={self.max_scenarios} max_samples_per_log={self.max_samples_per_log}",
                 flush=True,
             )
@@ -419,8 +431,18 @@ class NuPlanBDSEDataset:
                 token = _scenario_token(scenario)
                 log_name = _scenario_log_name(scenario)
                 folder = folder_lookup.get(log_name, folder_lookup.get(_safe_name(log_name), default_folder))
-                n_iter = _num_iterations(scenario)
-                for iteration in range(0, n_iter, max(self.stride, 1)):
+                if self.scenario_iteration_policy == "initial":
+                    # nuPlan ScenarioBuilder already emits timestamp-filtered planning
+                    # scenarios. Expanding every scenario-local iteration here creates
+                    # many highly overlapping labels, duplicates actual log timesteps
+                    # under different scenario tokens, and defeats the requested
+                    # --scenario-stride. Keep one planning sample per builder scenario;
+                    # use 'expanded' only for an explicit dense-window ablation.
+                    iterations = (0,)
+                else:
+                    n_iter = _num_iterations(scenario)
+                    iterations = range(0, n_iter, max(self.stride, 1))
+                for iteration in iterations:
                     if self.max_samples_per_log is not None and cap_strategy == "first" and per_log_counts.get(log_name, 0) >= self.max_samples_per_log:
                         break
                     timestamp_us = _scenario_iteration_timestamp_us(scenario, iteration)

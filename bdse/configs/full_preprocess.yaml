@@ -9,6 +9,9 @@ preprocess:
   # 10 lidar frames at the paper's 10 Hz feature cadence gives 1 Hz training
   # timesteps. Use 5 for 2 Hz if you need denser samples for an ablation.
   scenario_stride: 10
+  # ScenarioBuilder is already timestamp-thinned by scenario_stride.  Do not expand
+  # every scenario-local iteration unless running a dense-window ablation.
+  scenario_iteration_policy: initial
   # Leave null for exhaustive generation. Set via --max-samples-per-log for
   # balanced wall-clock tests without taking only the first log.
   max_samples_per_log: null
@@ -51,7 +54,7 @@ runtime:
   agent_radius_m: 80.0
   max_agents: 32
   max_map_polylines: 128
-  include_drivable_polygons: true
+  include_drivable_polygons: false
   include_crosswalks: true
   max_drivable_polygons: 24
   max_polygon_points: 128

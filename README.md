@@ -109,11 +109,11 @@ Small validation preprocessing:
 ```bash
 python -m bdse.experiments.preprocess \
   --config bdse/configs/full_preprocess.yaml \
-  --data-root "$NUPLAN_DATA_ROOT" \
-  --maps-root "$NUPLAN_MAPS_ROOT" \
+  --data-root /data0/senzeyu2/dataset/nuplan/data/cache \
+  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
   --map-version nuplan-maps-v1.0 \
   --splits val \
-  --output-dir /path/to/bdse_cache/val \
+  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_val \
   --num-workers 4 \
   --scenario-stride 10 \
   --teacher-cost-eval-stride 1 \

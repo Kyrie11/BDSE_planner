@@ -35,6 +35,10 @@ def main() -> None:
     parser.add_argument("--max-samples-per-log-block-size", type=int, default=None,
                         help="For --max-samples-per-log-strategy uniform_blocks, number of consecutive stride-thinned samples per log block.")
     parser.add_argument("--scenario-stride", type=int, default=None)
+    parser.add_argument("--scenario-iteration-policy", type=str, default=None, choices=["initial", "expanded"],
+                        help=("How to turn nuPlan ScenarioBuilder outputs into BDSE samples. "
+                              "'initial' keeps one sample per timestamp-filtered scenario; "
+                              "'expanded' additionally samples every scenario-local iteration and is much denser/slower."))
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--resume", action="store_true", default=None)
     parser.add_argument("--no-resume", action="store_false", dest="resume")
@@ -95,6 +99,8 @@ def main() -> None:
         cfg["paths"]["preprocessed_cache"] = args.output_dir
     if args.scenario_stride is not None:
         cfg["preprocess"]["scenario_stride"] = int(args.scenario_stride)
+    if args.scenario_iteration_policy is not None:
+        cfg["preprocess"]["scenario_iteration_policy"] = str(args.scenario_iteration_policy)
     if args.max_samples_per_log is not None:
         cfg["preprocess"]["max_samples_per_log"] = int(args.max_samples_per_log)
     if args.max_samples_per_log_strategy is not None:
