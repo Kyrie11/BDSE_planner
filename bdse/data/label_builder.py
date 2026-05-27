@@ -86,44 +86,55 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
     valid = np.zeros((max_agents,), dtype=bool)
     logged_mask = np.zeros((max_agents,), dtype=bool)
     cv_fallback_mask = np.zeros((max_agents,), dtype=bool)
-    future_frames, future_stats = cached_tracked_window(
-        scenario,
-        iteration,
-        cfg,
-        direction="future",
-        time_horizon=horizon,
-        num_samples=T,
-        step_s=step,
-    )
-    mark("future_agents_fetch")
-    if n > 0:
-        # Use the same token canonicalization as runtime agent selection.  Only the
-        # selected agent slots are label-relevant, so transform those rows instead of
-        # converting every tracked object in every future frame.  This preserves the
-        # exact selected-agent labels and avoids O(all_objects*T) local transforms on
-        # dense nuPlan frames.
-        token_to_local_idx = {str(tok): i for i, tok in enumerate(selected_tokens[:n])}
-        for k, frame in enumerate(future_frames[:T]):
-            if not frame.tokens or frame.boxes.size == 0:
-                continue
-            src_rows: list[int] = []
-            dst_rows: list[int] = []
-            max_box = int(frame.boxes.shape[0])
-            for j, token in enumerate(frame.tokens):
-                if j >= max_box:
-                    break
-                i = token_to_local_idx.get(str(token))
-                if i is not None:
-                    src_rows.append(j)
-                    dst_rows.append(i)
-            if not src_rows:
-                continue
-            boxes_local = boxes_global_to_local(frame.boxes[np.asarray(src_rows, dtype=np.int64)], origin_xy, origin_yaw)
-            for row, i in enumerate(dst_rows):
-                arr = boxes_local[row]
-                logged_agents[i, k] = np.asarray([arr[0], arr[1], arr[2], arr[3], (k + 1) * step], dtype=np.float32)
-                valid[i] = True
-                logged_mask[i] = True
+    future_stats: dict[str, float] = {"cache_hit_frames": 0.0, "cache_miss_frames": 0.0, "bulk_call": 0.0, "coalesced_recheck": 0.0, "individual_frame_calls": 0.0}
+    agent_future_mode = str(pcfg.get("label_agent_future_mode", "logged")).lower()
+
+    if agent_future_mode not in {"cv", "constant_velocity", "current_cv", "proxy", "skip_logged"}:
+        future_frames, future_stats = cached_tracked_window(
+            scenario,
+            iteration,
+            cfg,
+            direction="future",
+            time_horizon=horizon,
+            num_samples=T,
+            step_s=step,
+        )
+        mark("future_agents_fetch")
+        if n > 0:
+            # Use the same token canonicalization as runtime agent selection.  Only the
+            # selected agent slots are label-relevant, so transform those rows instead of
+            # converting every tracked object in every future frame.  This preserves the
+            # exact selected-agent labels and avoids O(all_objects*T) local transforms on
+            # dense nuPlan frames.
+            token_to_local_idx = {str(tok): i for i, tok in enumerate(selected_tokens[:n])}
+            for k, frame in enumerate(future_frames[:T]):
+                if not frame.tokens or frame.boxes.size == 0:
+                    continue
+                src_rows: list[int] = []
+                dst_rows: list[int] = []
+                max_box = int(frame.boxes.shape[0])
+                for j, token in enumerate(frame.tokens):
+                    if j >= max_box:
+                        break
+                    i = token_to_local_idx.get(str(token))
+                    if i is not None:
+                        src_rows.append(j)
+                        dst_rows.append(i)
+                if not src_rows:
+                    continue
+                boxes_local = boxes_global_to_local(frame.boxes[np.asarray(src_rows, dtype=np.int64)], origin_xy, origin_yaw)
+                for row, i in enumerate(dst_rows):
+                    arr = boxes_local[row]
+                    logged_agents[i, k] = np.asarray([arr[0], arr[1], arr[2], arr[3], (k + 1) * step], dtype=np.float32)
+                    valid[i] = True
+                    logged_mask[i] = True
+    else:
+        # Fast verification mode: keep logged ego imitation exact, but avoid the
+        # expensive nuPlan future tracked-object window.  Interaction atoms then use
+        # the same constant-velocity selected-agent proxy already used as the runtime
+        # fallback/response mode, so runtime/label separation remains intact.
+        future_stats["cv_proxy"] = 1.0
+        mark("future_agents_fetch")
     mark("future_agents_project")
 
     times = np.arange(1, T + 1, dtype=np.float32) * step
@@ -149,6 +160,7 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
         "agent_future_cv_fallback_mask": cv_fallback_mask.tolist(),
         "agent_future_logged_count": int(logged_mask.sum()),
         "agent_future_cv_fallback_count": int(cv_fallback_mask.sum()),
+        "agent_future_mode": agent_future_mode,
     }
     if profile:
         prev = t0
@@ -162,6 +174,7 @@ def build_label_future_from_scenario(scenario: Any, iteration: int, cfg: dict[st
         breakdown["future_agent_bulk_call"] = float(future_stats.get("bulk_call", 0))
         breakdown["future_agent_coalesced_recheck"] = float(future_stats.get("coalesced_recheck", 0))
         breakdown["future_agent_individual_calls"] = float(future_stats.get("individual_frame_calls", 0))
+        breakdown["future_agent_cv_proxy"] = float(future_stats.get("cv_proxy", 0))
         breakdown["future_ego_cache_hit_frames"] = float(ego_stats.get("cache_hit_frames", 0))
         breakdown["future_ego_cache_miss_frames"] = float(ego_stats.get("cache_miss_frames", 0))
         breakdown["future_ego_bulk_call"] = float(ego_stats.get("bulk_call", 0))

@@ -51,6 +51,13 @@ preprocess:
   # Keep past history behavior conservative for now: past bulk windows are short,
   # and exact past-by-iteration support varies more across devkit versions.
   temporal_frame_cache_past_individual_miss_threshold: 0
+  # logged = paper-faithful exact future tracked-object labels.  cv skips the
+  # expensive future tracked-object DB window and uses selected-agent CV proxies;
+  # use cv only for fast pipeline/model-validation runs, not final paper labels.
+  label_agent_future_mode: logged
+  # logged = exact past tracked-object history. current_repeat/none avoid the
+  # expensive past tracked-object DB window and are useful for fast verification.
+  runtime_agent_history_mode: logged
   # False keeps preprocessing and closed-loop runtime from extracting DB/map features twice.
   # Turn on only for an ablation that needs candidate-proximity agent reordering.
   candidate_aware_agent_selection: false

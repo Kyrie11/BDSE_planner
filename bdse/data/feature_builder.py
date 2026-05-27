@@ -1674,33 +1674,45 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
     raw_current = boxes_global_to_local(current_frame.boxes, origin_xy, origin_yaw)
     mark_profile("runtime_current_agents")
 
-    past_frames, past_stats = cached_tracked_window(
-        scenario,
-        iteration,
-        cfg,
-        direction="past",
-        time_horizon=hist_s,
-        num_samples=h_steps - 1,
-        step_s=1.0 / max(hist_hz, 1),
-    )
+    agent_history_mode = str(cfg.get("preprocess", {}).get("runtime_agent_history_mode", runtime_cfg.get("agent_history_mode", "logged"))).lower()
+    past_stats: dict[str, float] = {"cache_hit_frames": 0.0, "cache_miss_frames": 0.0, "bulk_call": 0.0, "coalesced_recheck": 0.0, "individual_frame_calls": 0.0}
     raw_hist = np.zeros((len(raw_current), h_steps, 10), dtype=np.float32)
     if len(raw_current):
         raw_hist[:, -1, :] = raw_current
-        frames = past_frames[-(h_steps - 1) :]
-        token_to_idx = {raw_tokens[i]: i for i in range(len(raw_tokens))}
-        start = h_steps - 1 - len(frames)
-        for fi, frame in enumerate(frames):
-            boxes_local = boxes_global_to_local(frame.boxes, origin_xy, origin_yaw)
-            for j, token in enumerate(frame.tokens):
-                idx = token_to_idx.get(token)
-                if idx is not None and j < boxes_local.shape[0]:
-                    raw_hist[idx, start + fi] = boxes_local[j]
+    if agent_history_mode in {"current_repeat", "repeat", "cv", "constant_velocity"}:
+        if len(raw_current):
+            raw_hist[:, :, :] = raw_current[:, None, :]
+        past_stats["current_repeat"] = 1.0
+    elif agent_history_mode in {"none", "current_only", "skip"}:
+        past_stats["current_only"] = 1.0
+    else:
+        past_frames, past_stats = cached_tracked_window(
+            scenario,
+            iteration,
+            cfg,
+            direction="past",
+            time_horizon=hist_s,
+            num_samples=h_steps - 1,
+            step_s=1.0 / max(hist_hz, 1),
+        )
+        if len(raw_current):
+            frames = past_frames[-(h_steps - 1) :]
+            token_to_idx = {raw_tokens[i]: i for i in range(len(raw_tokens))}
+            start = h_steps - 1 - len(frames)
+            for fi, frame in enumerate(frames):
+                boxes_local = boxes_global_to_local(frame.boxes, origin_xy, origin_yaw)
+                for j, token in enumerate(frame.tokens):
+                    idx = token_to_idx.get(token)
+                    if idx is not None and j < boxes_local.shape[0]:
+                        raw_hist[idx, start + fi] = boxes_local[j]
     if profile:
         profile_parts["runtime_agent_history_cache_hit_frames"] = float(past_stats.get("cache_hit_frames", 0))
         profile_parts["runtime_agent_history_cache_miss_frames"] = float(past_stats.get("cache_miss_frames", 0))
         profile_parts["runtime_agent_history_bulk_call"] = float(past_stats.get("bulk_call", 0))
         profile_parts["runtime_agent_history_coalesced_recheck"] = float(past_stats.get("coalesced_recheck", 0))
         profile_parts["runtime_agent_history_individual_calls"] = float(past_stats.get("individual_frame_calls", 0))
+        profile_parts["runtime_agent_history_current_repeat"] = float(past_stats.get("current_repeat", 0))
+        profile_parts["runtime_agent_history_current_only"] = float(past_stats.get("current_only", 0))
     mark_profile("runtime_agent_history")
     cand_traj = None if candidates is None else getattr(candidates, "trajectories", candidates)
     order = _agent_selection_order(raw_current, np.zeros(2, dtype=np.float32), max_agents, radius, cand_traj)
@@ -1716,7 +1728,7 @@ def build_runtime_features_from_scenario(scenario: Any, iteration: int, cfg: dic
     map_features = extract_map_features_from_api(getattr(scenario, "map_api", None), ego_arr_global, map_radius,
                                                  [str(r) for r in route_ids], traffic_lights, cfg)
     mark_profile("runtime_map_features")
-    metadata = {"scenario_token": str(getattr(scenario, "token", getattr(scenario, "scenario_name", ""))), "iteration": int(iteration), "origin_xy": origin_xy, "origin_yaw": origin_yaw, "selected_agent_tokens": selected_tokens, "map_valid": bool(map_features.get("map_valid", False)), "route_source": str(map_features.get("route_source", "unknown"))}
+    metadata = {"scenario_token": str(getattr(scenario, "token", getattr(scenario, "scenario_name", ""))), "iteration": int(iteration), "origin_xy": origin_xy, "origin_yaw": origin_yaw, "selected_agent_tokens": selected_tokens, "map_valid": bool(map_features.get("map_valid", False)), "route_source": str(map_features.get("route_source", "unknown")), "agent_history_mode": agent_history_mode}
     if profile:
         metadata["profile_runtime"] = {k: float(v) for k, v in profile_parts.items()}
     if bool(cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)):

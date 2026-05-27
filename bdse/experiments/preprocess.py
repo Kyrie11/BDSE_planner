@@ -59,6 +59,10 @@ def main() -> None:
                         help="Override exact ego/tracked-frame cache size. Larger values help high-worker preprocessing reuse warm frames across logs.")
     parser.add_argument("--temporal-frame-cache-individual-miss-threshold", type=int, default=None,
                         help="Max future-frame misses to fill by individual iteration calls before falling back to exact bulk nuPlan APIs.")
+    parser.add_argument("--label-agent-future-mode", type=str, default=None, choices=["logged", "cv"],
+                        help="Use exact logged future tracked objects, or a fast constant-velocity proxy for selected agents. 'cv' is for fast verification, not final paper labels.")
+    parser.add_argument("--runtime-agent-history-mode", type=str, default=None, choices=["logged", "current_repeat", "none"],
+                        help="Use exact logged past tracked-object history, repeat current agents across history, or keep only current agents. Fast modes reduce preprocessing I/O.")
     parser.add_argument("--cache-local-scheduler", action="store_true", default=None,
                         help="Keep at most one in-flight materialization per nuPlan log to preserve temporal cache locality.")
     parser.add_argument("--no-cache-local-scheduler", action="store_false", dest="cache_local_scheduler",
@@ -90,6 +94,18 @@ def main() -> None:
                         help="Extract crosswalk polygons. Only enable when downstream features/evidence consume them.")
     parser.add_argument("--no-include-crosswalks", action="store_false", dest="include_crosswalks",
                         help="Skip crosswalk polygon extraction. This is faster and preserves current BDSE teacher labels because no crosswalk atom consumes them.")
+    parser.add_argument("--map-radius", type=float, default=None,
+                        help="Override runtime map query radius in meters. Smaller values speed up map extraction when route ids are reliable.")
+    parser.add_argument("--agent-radius", type=float, default=None,
+                        help="Override runtime agent selection radius in meters.")
+    parser.add_argument("--max-agents", type=int, default=None,
+                        help="Override number of selected agent slots saved in runtime/label tensors.")
+    parser.add_argument("--max-route-points", type=int, default=None,
+                        help="Override max route centerline points stored per sample.")
+    parser.add_argument("--max-interaction-agents", type=int, default=None,
+                        help="Override number of agents used when enumerating interaction evidence atoms.")
+    parser.add_argument("--max-interaction-atoms", type=int, default=None,
+                        help="Override max number of interaction evidence atoms.")
     parser.add_argument("--candidate-k", type=int, default=None,
                         help="Override the finite candidate-bank size K. Use 32 for the paper/default BDSE setting.")
     parser.add_argument("--teacher-cost-eval-stride", type=int, default=None,
@@ -130,6 +146,10 @@ def main() -> None:
         cfg["preprocess"]["temporal_frame_cache_max_entries"] = max(128, int(args.temporal_frame_cache_max_entries))
     if args.temporal_frame_cache_individual_miss_threshold is not None:
         cfg["preprocess"]["temporal_frame_cache_individual_miss_threshold"] = max(0, int(args.temporal_frame_cache_individual_miss_threshold))
+    if args.label_agent_future_mode is not None:
+        cfg["preprocess"]["label_agent_future_mode"] = str(args.label_agent_future_mode)
+    if args.runtime_agent_history_mode is not None:
+        cfg["preprocess"]["runtime_agent_history_mode"] = str(args.runtime_agent_history_mode)
     if args.cache_local_scheduler is not None:
         cfg["preprocess"]["cache_local_scheduler"] = bool(args.cache_local_scheduler)
     if args.cache_local_log_parallelism is not None:
@@ -151,6 +171,18 @@ def main() -> None:
         cfg.setdefault("runtime", {})["include_drivable_polygons"] = bool(args.include_drivable_polygons)
     if args.include_crosswalks is not None:
         cfg.setdefault("runtime", {})["include_crosswalks"] = bool(args.include_crosswalks)
+    if args.map_radius is not None:
+        cfg.setdefault("runtime", {})["map_radius_m"] = float(args.map_radius)
+    if args.agent_radius is not None:
+        cfg.setdefault("runtime", {})["agent_radius_m"] = float(args.agent_radius)
+    if args.max_agents is not None:
+        cfg.setdefault("runtime", {})["max_agents"] = max(1, int(args.max_agents))
+    if args.max_route_points is not None:
+        cfg.setdefault("runtime", {})["max_route_points"] = max(2, int(args.max_route_points))
+    if args.max_interaction_agents is not None:
+        cfg.setdefault("evidence", {})["max_interaction_agents"] = max(0, int(args.max_interaction_agents))
+    if args.max_interaction_atoms is not None:
+        cfg.setdefault("evidence", {})["max_interaction_atoms"] = max(0, int(args.max_interaction_atoms))
     if args.candidate_k is not None:
         cfg.setdefault("candidate", {})["K"] = max(1, int(args.candidate_k))
     if args.teacher_cost_eval_stride is not None:

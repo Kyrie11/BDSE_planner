@@ -90,3 +90,117 @@ def test_static_map_cache_uses_stable_map_name_across_wrappers():
     fb._cached_baseline_points(a, obj)
     after_same = len(fb._MAP_GEOMETRY_CACHE)
     assert after_same == before + 1
+
+
+def test_label_future_cv_mode_skips_future_tracked_window():
+    from bdse.data.label_builder import build_label_future_from_scenario
+    from bdse.data.feature_builder import build_runtime_features_from_arrays
+
+    class Ego:
+        x = 0.0
+        y = 0.0
+        heading = 0.0
+        velocity = 0.0
+
+    class Box:
+        length = 4.0
+        width = 2.0
+        velocity = None
+        center = type("Center", (), {"x": 10.0, "y": 0.0, "heading": 0.0})()
+
+    class Obj:
+        track_token = "agent-1"
+        box = Box()
+        velocity = type("Vel", (), {"x": 1.0, "y": 0.0})()
+
+    class Scenario:
+        token = "s"
+        start_time = type("T", (), {"time_us": 0})()
+        database_interval = 0.1
+
+        def get_ego_state_at_iteration(self, iteration):
+            e = Ego()
+            e.x = float(iteration) * 0.1
+            return e
+
+        def get_tracked_objects_at_iteration(self, iteration):
+            return [Obj()]
+
+        def get_ego_future_trajectory(self, iteration, time_horizon, num_samples):
+            return [self.get_ego_state_at_iteration(iteration + k + 1) for k in range(num_samples)]
+
+        def get_future_tracked_objects(self, *args, **kwargs):
+            raise AssertionError("cv label mode must not fetch logged future tracked objects")
+
+    cfg = {
+        "preprocess": {"label_agent_future_mode": "cv", "temporal_frame_cache": False},
+        "runtime": {"max_agents": 1, "history_s": 0.1, "history_hz": 10},
+        "candidate": {"horizon_s": 0.3, "step_s": 0.1},
+    }
+    runtime = build_runtime_features_from_arrays(
+        ego_history=np.zeros((2, 5), dtype=np.float32),
+        agent_history=np.zeros((1, 2, 10), dtype=np.float32),
+        current_agents=np.asarray([[10.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 4.0, 2.0, 0.0]], dtype=np.float32),
+        cfg=cfg,
+    )
+    runtime.metadata["selected_agent_tokens"] = ["agent-1"]
+    lf = build_label_future_from_scenario(Scenario(), 0, cfg, runtime=runtime)
+    assert lf.metadata["agent_future_mode"] == "cv"
+    assert lf.metadata["agent_future_logged_count"] == 0
+    assert lf.metadata["agent_future_cv_fallback_count"] == 1
+    assert lf.logged_agents[0, -1, 0] > lf.logged_agents[0, 0, 0]
+
+
+def test_runtime_current_repeat_history_mode_skips_past_tracked_window():
+    from bdse.data.feature_builder import build_runtime_features_from_scenario
+
+    class Ego:
+        x = 0.0
+        y = 0.0
+        heading = 0.0
+        velocity = 0.0
+
+    class Box:
+        length = 4.0
+        width = 2.0
+        velocity = None
+        center = type("Center", (), {"x": 5.0, "y": 0.0, "heading": 0.0})()
+
+    class Obj:
+        track_token = "agent-1"
+        box = Box()
+        velocity = type("Vel", (), {"x": 0.0, "y": 0.0})()
+
+    class Scenario:
+        token = "s"
+        map_api = None
+        start_time = type("T", (), {"time_us": 0})()
+        database_interval = 0.1
+
+        def get_ego_state_at_iteration(self, iteration):
+            return Ego()
+
+        def get_ego_past_trajectory(self, *args, **kwargs):
+            return [Ego()]
+
+        def get_tracked_objects_at_iteration(self, iteration):
+            return [Obj()]
+
+        def get_past_tracked_objects(self, *args, **kwargs):
+            raise AssertionError("current_repeat mode must not fetch logged past tracked objects")
+
+        def get_traffic_light_status_at_iteration(self, iteration):
+            return []
+
+        def get_route_roadblock_ids(self):
+            return []
+
+    cfg = {
+        "preprocess": {"runtime_agent_history_mode": "current_repeat", "temporal_frame_cache": False, "profile": True},
+        "runtime": {"max_agents": 1, "history_s": 0.2, "history_hz": 10},
+        "candidate": {"horizon_s": 0.3, "step_s": 0.1},
+    }
+    rt = build_runtime_features_from_scenario(Scenario(), 0, cfg)
+    assert rt.metadata["agent_history_mode"] == "current_repeat"
+    assert rt.metadata["profile_runtime"]["runtime_agent_history_current_repeat"] == 1.0
+    assert np.allclose(rt.agent_history[0, 0], rt.current_agents[0])
