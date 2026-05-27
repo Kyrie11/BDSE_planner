@@ -42,6 +42,11 @@ def main() -> None:
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--resume", action="store_true", default=None)
     parser.add_argument("--no-resume", action="store_false", dest="resume")
+    parser.add_argument("--resume-validate-existing", action="store_true", default=None,
+                        help="Open matching .npz files during resume and verify the minimal BDSE schema. Slower, useful after interrupted/corrupt runs.")
+    parser.add_argument("--no-resume-validate-existing", action="store_false", dest="resume_validate_existing")
+    parser.add_argument("--resume-min-file-bytes", type=int, default=None,
+                        help="Minimum .npz size accepted by the cheap resume skip check.")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-tqdm", action="store_true")
     parser.add_argument("--list-splits", action="store_true")
@@ -81,6 +86,10 @@ def main() -> None:
                         help="Extract full drivable-area polygons from map API. Much slower; route-corridor fallback is used otherwise.")
     parser.add_argument("--no-include-drivable-polygons", action="store_false", dest="include_drivable_polygons",
                         help="Disable full drivable-area polygon extraction and use the route-corridor fallback.")
+    parser.add_argument("--include-crosswalks", action="store_true", default=None,
+                        help="Extract crosswalk polygons. Only enable when downstream features/evidence consume them.")
+    parser.add_argument("--no-include-crosswalks", action="store_false", dest="include_crosswalks",
+                        help="Skip crosswalk polygon extraction. This is faster and preserves current BDSE teacher labels because no crosswalk atom consumes them.")
     parser.add_argument("--candidate-k", type=int, default=None,
                         help="Override the finite candidate-bank size K. Use 32 for the paper/default BDSE setting.")
     parser.add_argument("--teacher-cost-eval-stride", type=int, default=None,
@@ -97,6 +106,10 @@ def main() -> None:
         cfg["paths"]["map_version"] = args.map_version
     if args.output_dir:
         cfg["paths"]["preprocessed_cache"] = args.output_dir
+    if args.resume_validate_existing is not None:
+        cfg["preprocess"]["resume_validate_existing"] = bool(args.resume_validate_existing)
+    if args.resume_min_file_bytes is not None:
+        cfg["preprocess"]["resume_min_file_bytes"] = max(1, int(args.resume_min_file_bytes))
     if args.scenario_stride is not None:
         cfg["preprocess"]["scenario_stride"] = int(args.scenario_stride)
     if args.scenario_iteration_policy is not None:
@@ -136,6 +149,8 @@ def main() -> None:
         cfg["preprocess"]["candidate_aware_agent_selection"] = bool(args.candidate_aware_agent_selection)
     if args.include_drivable_polygons is not None:
         cfg.setdefault("runtime", {})["include_drivable_polygons"] = bool(args.include_drivable_polygons)
+    if args.include_crosswalks is not None:
+        cfg.setdefault("runtime", {})["include_crosswalks"] = bool(args.include_crosswalks)
     if args.candidate_k is not None:
         cfg.setdefault("candidate", {})["K"] = max(1, int(args.candidate_k))
     if args.teacher_cost_eval_stride is not None:

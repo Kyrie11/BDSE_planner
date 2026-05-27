@@ -616,6 +616,56 @@ class NuPlanBDSEDataset:
                 roots.append(root)
         return sorted(dict.fromkeys(roots), key=lambda p: str(p))
 
+    @staticmethod
+    def _cache_file_looks_complete(path: str | Path, cfg: dict[str, Any] | None = None) -> bool:
+        """Cheap resume guard for already materialized ``.npz`` samples.
+
+        ``Path.exists()`` is too optimistic for long preprocessing jobs: an
+        interrupted atomic write can leave dot/tmp files, a failed manual copy can
+        leave a tiny placeholder, and a second concurrent run can materialize the
+        same sample after the pre-submit cache check.  The default check stays
+        O(1) per file (stat only) so resume over tens of thousands of samples is
+        fast.  Set ``preprocess.resume_validate_existing=true`` for a one-time
+        audit that opens matching ``.npz`` files and verifies the minimal schema.
+        """
+        p = Path(path)
+        if p.name.startswith(".") or ".tmp." in p.name or p.suffix != ".npz":
+            return False
+        try:
+            st = p.stat()
+        except OSError:
+            return False
+        if not p.is_file():
+            return False
+        pcfg = (cfg or {}).get("preprocess", {}) if isinstance(cfg, dict) else {}
+        min_bytes = max(1, int(pcfg.get("resume_min_file_bytes", 512)))
+        if int(st.st_size) < min_bytes:
+            return False
+        if not bool(pcfg.get("resume_validate_existing", False)):
+            return True
+        required = {
+            "scenario_token",
+            "timestamp_us",
+            "runtime_ego_history",
+            "candidate_trajectories",
+            "candidate_valid",
+            "teacher_J_T",
+            "teacher_a_star",
+        }
+        try:
+            with np.load(p, allow_pickle=False) as z:
+                if not required.issubset(set(z.files)):
+                    return False
+                if np.asarray(z["candidate_valid"]).size == 0:
+                    return False
+                if np.asarray(z["teacher_J_T"]).size == 0:
+                    return False
+                if int(np.asarray(z["teacher_a_star"]).reshape(-1)[0]) < 0:
+                    return False
+        except Exception:
+            return False
+        return True
+
     def _build_resume_filename_index(self, out_dir: str | Path | None = None) -> dict[str, Path | None]:
         """Return filename -> existing path for resume, scoped to this split.
 
@@ -641,7 +691,7 @@ class NuPlanBDSEDataset:
             if not root.exists():
                 continue
             for p in root.rglob("*.npz"):
-                if p.name.startswith(".") or ".tmp." in p.name:
+                if not self._cache_file_looks_complete(p, self.cfg):
                     continue
                 prev = by_name.get(p.name)
                 if prev is None and p.name in by_name:
@@ -652,8 +702,10 @@ class NuPlanBDSEDataset:
                     by_name[p.name] = p
         return by_name
 
-    def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None) -> tuple[int, Path, dict[str, Any] | None]:
+    def _write_one_preprocessed_index(self, i: int, path: Path, manifest_path: Path | None, *, skip_existing: bool = False) -> tuple[int, Path, dict[str, Any] | None]:
         pcfg = self.cfg.get("preprocess", {})
+        if skip_existing and self._cache_file_looks_complete(path, self.cfg):
+            return i, path, None
         profile = bool(pcfg.get("profile", False))
         threshold_s = float(pcfg.get("profile_threshold_s", 2.0))
         t0 = time.perf_counter()
@@ -725,12 +777,12 @@ class NuPlanBDSEDataset:
             existing: Path | None = None
             if resume and not overwrite:
                 for candidate_path in self.cache_path_aliases_for_index(i, out):
-                    if candidate_path.exists():
+                    if self._cache_file_looks_complete(candidate_path, self.cfg):
                         existing = candidate_path
                         break
                 if existing is None and resume_by_filename:
                     by_name = resume_by_filename.get(self._cache_filename_for_index(i))
-                    if by_name is not None and by_name.exists():
+                    if by_name is not None and self._cache_file_looks_complete(by_name, self.cfg):
                         existing = by_name
                         skipped_filename += 1
             if existing is not None:
@@ -739,7 +791,7 @@ class NuPlanBDSEDataset:
                     skipped_alias += 1
                     if self._link_existing_cache_alias(existing, p):
                         linked_alias += 1
-                    all_paths[i] = p if p.exists() else existing
+                    all_paths[i] = p if self._cache_file_looks_complete(p, self.cfg) else existing
             else:
                 pending.append((i, p))
 
@@ -833,7 +885,7 @@ class NuPlanBDSEDataset:
         if workers <= 1:
             iterator = _maybe_tqdm(pending, len(pending), f"preprocess:{self.split}", show_progress)
             for i, path in iterator:
-                _, written, rec = self._write_one_preprocessed_index(i, path, manifest_path)
+                _, written, rec = self._write_one_preprocessed_index(i, path, manifest_path, skip_existing=resume and not overwrite)
                 paths[i] = written
                 if rec is not None:
                     manifest_records.append(rec)
@@ -891,7 +943,7 @@ class NuPlanBDSEDataset:
                             return False
                         i, path = q.popleft()
                         active_log_counts[log_name] = active_log_counts.get(log_name, 0) + 1
-                        fut = ex.submit(self._write_one_preprocessed_index, i, path, manifest_path)
+                        fut = ex.submit(self._write_one_preprocessed_index, i, path, manifest_path, skip_existing=resume and not overwrite)
                         futures[fut] = (i, path)
                         future_logs[fut] = log_name
                         # If the machine still has idle workers and this log has more
@@ -922,7 +974,7 @@ class NuPlanBDSEDataset:
                             i, path = next(pending_iter)
                         except StopIteration:
                             return False
-                        futures[ex.submit(self._write_one_preprocessed_index, i, path, manifest_path)] = (i, path)
+                        futures[ex.submit(self._write_one_preprocessed_index, i, path, manifest_path, skip_existing=resume and not overwrite)] = (i, path)
                         return True
 
                 for _ in range(min(max_in_flight, len(pending))):

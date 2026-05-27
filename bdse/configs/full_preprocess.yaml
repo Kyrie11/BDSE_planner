@@ -6,6 +6,12 @@ preprocess:
   overwrite: false
   atomic_write: true
   manifest_name: manifest.jsonl
+  # Resume should be fast on large generated caches: by default we reject only
+  # dot/tmp files and tiny placeholders via stat().  Turn on
+  # --resume-validate-existing for a one-time schema audit after an interrupted
+  # or manually edited run.
+  resume_min_file_bytes: 512
+  resume_validate_existing: false
   # 10 lidar frames at the paper's 10 Hz feature cadence gives 1 Hz training
   # timesteps. Use 5 for 2 Hz if you need denser samples for an ablation.
   scenario_stride: 10
@@ -55,7 +61,9 @@ runtime:
   max_agents: 32
   max_map_polylines: 128
   include_drivable_polygons: false
-  include_crosswalks: true
+  # No current BDSE evidence atom consumes crosswalk polygons. Keeping this off
+  # preserves teacher labels while avoiding expensive nuPlan map scans.
+  include_crosswalks: false
   max_drivable_polygons: 24
   max_polygon_points: 128
   max_route_points: 512
