@@ -175,18 +175,20 @@ def _temporal_cache_max_entries(cfg: dict[str, Any]) -> int:
     return max(128, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_max_entries"), 4096))
 
 
-def _temporal_cache_individual_miss_threshold(cfg: dict[str, Any]) -> int:
-    """Maximum number of future-frame cache misses to fill one-by-one.
+def _temporal_cache_individual_miss_threshold(cfg: dict[str, Any], direction: str = "future") -> int:
+    """Maximum frame-cache misses to fill one-by-one.
 
-    Adjacent BDSE samples often share most of an 8 s future window, so reading a
-    handful of newly exposed tail frames by iteration is cheaper than rebuilding
-    the full nuPlan future trajectory.  On a cold miss, however, the previous
-    implementation made 80 independent DB/object reconstruction calls at 10 Hz;
-    that is much slower than nuPlan's exact bulk future API and does not improve
-    label fidelity.  This threshold keeps the tail-fill optimization only for the
-    case it was designed for.
+    Adjacent BDSE samples under a 1--2 Hz builder cadence often differ by 10--20
+    future frames.  For those partial misses, exact per-iteration tail fills are
+    much cheaper than rebuilding a full 80-frame nuPlan bulk future.  A cold miss
+    should still use the bulk API, so the threshold remains below the full window.
+    Past windows are shorter (20 frames by default) and are also safe to fill
+    exactly by iteration when configured.
     """
-    return max(0, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_individual_miss_threshold"), 12))
+    pcfg = cfg.get("preprocess", {}) if isinstance(cfg, dict) else {}
+    if str(direction).lower() == "past" and "temporal_frame_cache_past_individual_miss_threshold" in pcfg:
+        return max(0, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_past_individual_miss_threshold"), 20))
+    return max(0, _cfg_int(cfg, ("preprocess", "temporal_frame_cache_individual_miss_threshold"), 32))
 
 
 def _temporal_cache_coalesce_bulk(cfg: dict[str, Any]) -> bool:
@@ -530,7 +532,7 @@ def cached_tracked_window(
     def _fill_small_future_misses(frames_in: list[_CachedTrackedFrame | None], stats_in: dict[str, Any]) -> tuple[list[_CachedTrackedFrame] | None, dict[str, Any]]:
         if not (_temporal_cache_enabled(cfg) and wanted_ts and direction == "future"):
             return None, stats_in
-        if int(stats_in.get("cache_miss_frames", 0)) > _temporal_cache_individual_miss_threshold(cfg):
+        if int(stats_in.get("cache_miss_frames", 0)) > _temporal_cache_individual_miss_threshold(cfg, direction):
             return None, stats_in
         filled = _fill_future_tracked_window_by_iteration(
             scenario,
@@ -657,7 +659,7 @@ def cached_ego_window(
     def _fill_small_future_misses(states_in: list[np.ndarray | None], stats_in: dict[str, Any]) -> tuple[list[np.ndarray] | None, dict[str, Any]]:
         if not (_temporal_cache_enabled(cfg) and wanted_ts and direction == "future"):
             return None, stats_in
-        if int(stats_in.get("cache_miss_frames", 0)) > _temporal_cache_individual_miss_threshold(cfg):
+        if int(stats_in.get("cache_miss_frames", 0)) > _temporal_cache_individual_miss_threshold(cfg, direction):
             return None, stats_in
         filled = True
         stats_in["individual_frame_calls"] = 0
@@ -853,13 +855,38 @@ def _obj_id(obj: Any) -> str:
     return str(getattr(obj, "id", getattr(obj, "token", getattr(obj, "lane_connector_id", ""))))
 
 
-_MAP_OBJECT_CACHE: dict[tuple[int, str, tuple[str, ...]], Any | None] = {}
+_MAP_OBJECT_CACHE: dict[tuple[tuple[str, str], str, tuple[str, ...]], Any | None] = {}
 _MAP_OBJECT_CACHE_MAX = 200_000
-_MAP_GEOMETRY_CACHE: "OrderedDict[tuple[int, str, str, str], np.ndarray]" = OrderedDict()
-_MAP_SCALAR_CACHE: "OrderedDict[tuple[int, str, str, str], float | None]" = OrderedDict()
-_MAP_EDGES_CACHE: "OrderedDict[tuple[int, str, str], tuple[Any, ...]]" = OrderedDict()
+_MAP_GEOMETRY_CACHE: "OrderedDict[tuple[tuple[str, str], str, str, str], np.ndarray]" = OrderedDict()
+_MAP_SCALAR_CACHE: "OrderedDict[tuple[tuple[str, str], str, str, str], float | None]" = OrderedDict()
+_MAP_EDGES_CACHE: "OrderedDict[tuple[tuple[str, str], str, str], tuple[Any, ...]]" = OrderedDict()
 _MAP_GEOMETRY_CACHE_MAX = 300_000
 _MAP_CACHE_LOCK = threading.RLock()
+
+
+def _map_cache_identity(map_api: Any) -> tuple[str, str]:
+    """Stable cache key for static nuPlan map APIs.
+
+    nuPlan scenario objects often expose distinct Python map_api wrappers for the
+    same physical map.  Keying static route/map-object geometry by ``id(map_api)``
+    prevents reuse across adjacent scenarios and leaves preprocessing dominated by
+    repeated map-object lookups.  Map geometry is immutable for a map name/version,
+    so use the exposed map name when available and fall back to object identity
+    only for unknown custom map APIs.
+    """
+    if map_api is None:
+        return ("none", "none")
+    for name in ("map_name", "_map_name", "name", "_name"):
+        val = getattr(map_api, name, None)
+        if callable(val):
+            try:
+                val = val()
+            except Exception:
+                val = None
+        if val is not None and str(val):
+            version = getattr(map_api, "map_version", getattr(map_api, "_map_version", ""))
+            return (type(map_api).__name__, f"{val}:{version}")
+    return (type(map_api).__name__, f"id:{id(map_api)}")
 
 
 def _map_cache_obj_id(obj: Any) -> str:
@@ -896,7 +923,7 @@ def _cached_baseline_points(map_api: Any, obj: Any) -> np.ndarray:
     """
     if obj is None:
         return np.zeros((0, 2), dtype=np.float32)
-    key = (id(map_api), "baseline", type(obj).__name__, _map_cache_obj_id(obj))
+    key = (_map_cache_identity(map_api), "baseline", type(obj).__name__, _map_cache_obj_id(obj))
     hit = _map_array_cache_get(key)
     if hit is not None:
         return hit
@@ -908,7 +935,7 @@ def _cached_baseline_points(map_api: Any, obj: Any) -> np.ndarray:
 def _cached_geometry_points(map_api: Any, obj: Any) -> np.ndarray:
     if obj is None:
         return np.zeros((0, 2), dtype=np.float32)
-    key = (id(map_api), "geometry", type(obj).__name__, _map_cache_obj_id(obj))
+    key = (_map_cache_identity(map_api), "geometry", type(obj).__name__, _map_cache_obj_id(obj))
     hit = _map_array_cache_get(key)
     if hit is not None:
         return hit
@@ -920,7 +947,7 @@ def _cached_geometry_points(map_api: Any, obj: Any) -> np.ndarray:
 def _cached_speed_limit_from_obj(map_api: Any, obj: Any) -> float | None:
     if obj is None:
         return None
-    key = (id(map_api), "speed", type(obj).__name__, _map_cache_obj_id(obj))
+    key = (_map_cache_identity(map_api), "speed", type(obj).__name__, _map_cache_obj_id(obj))
     with _MAP_CACHE_LOCK:
         if key in _MAP_SCALAR_CACHE:
             _MAP_SCALAR_CACHE.move_to_end(key)
@@ -937,7 +964,7 @@ def _cached_speed_limit_from_obj(map_api: Any, obj: Any) -> float | None:
 def _cached_extract_edges(map_api: Any, obj: Any) -> list[Any]:
     if obj is None:
         return []
-    key = (id(map_api), type(obj).__name__, _map_cache_obj_id(obj))
+    key = (_map_cache_identity(map_api), type(obj).__name__, _map_cache_obj_id(obj))
     with _MAP_CACHE_LOCK:
         hit = _MAP_EDGES_CACHE.get(key)
         if hit is not None:
@@ -956,9 +983,10 @@ def _get_map_object(map_api: Any, obj_id: str, layers: Sequence[str]) -> Any | N
     # Route roadblock/lane connector lookup is repeated for adjacent samples from
     # the same DB log. Cache by map-api identity, object id and layer search order.
     # The returned map object is only read, so this is a no-quality-loss speedup.
-    key = (id(map_api), str(obj_id), tuple(str(x) for x in layers))
-    if key in _MAP_OBJECT_CACHE:
-        return _MAP_OBJECT_CACHE[key]
+    key = (_map_cache_identity(map_api), str(obj_id), tuple(str(x) for x in layers))
+    with _MAP_CACHE_LOCK:
+        if key in _MAP_OBJECT_CACHE:
+            return _MAP_OBJECT_CACHE[key]
     found = None
     for layer_name in layers:
         layer = _layer(layer_name)
@@ -969,9 +997,10 @@ def _get_map_object(map_api: Any, obj_id: str, layers: Sequence[str]) -> Any | N
                 break
         if found is not None:
             break
-    if len(_MAP_OBJECT_CACHE) >= _MAP_OBJECT_CACHE_MAX:
-        _MAP_OBJECT_CACHE.clear()
-    _MAP_OBJECT_CACHE[key] = found
+    with _MAP_CACHE_LOCK:
+        if len(_MAP_OBJECT_CACHE) >= _MAP_OBJECT_CACHE_MAX:
+            _MAP_OBJECT_CACHE.clear()
+        _MAP_OBJECT_CACHE[key] = found
     return found
 
 

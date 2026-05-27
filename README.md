@@ -97,7 +97,7 @@ pytest -q
 Expected result in this package revision:
 
 ```text
-23 passed
+24 passed
 ```
 
 ## Preprocessing
@@ -114,13 +114,27 @@ python -m bdse.experiments.preprocess \
   --map-version nuplan-maps-v1.0 \
   --splits val \
   --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_val \
-  --num-workers 4 \
   --scenario-stride 10 \
+  --scenario-iteration-policy initial \
+  --max-samples-per-log 512 \
+  --max-samples-per-log-strategy uniform_blocks \
+  --max-samples-per-log-block-size 64 \
+  --num-workers 6 \
+  --max-in-flight 6 \
+  --scenario-builder-workers 8 \
   --teacher-cost-eval-stride 1 \
-  --include-drivable-polygons \
+  --resume \
   --candidate-aware-agent-selection \
+  --no-include-drivable-polygons \
+  --no-include-crosswalks \
+  --cache-local-scheduler \
+  --cache-local-log-parallelism 1 \
+  --temporal-frame-cache-max-entries 262144 \
+  --temporal-frame-cache-individual-miss-threshold 32 \
+  --temporal-frame-cache-coalesce-bulk \
+  --skip-failed-samples \
   --profile \
-  --profile-threshold-s 1.0
+  --profile-threshold-s 10.0
 ```
 
 Training preprocessing:
@@ -133,14 +147,27 @@ python -m bdse.experiments.preprocess \
   --map-version nuplan-maps-v1.0 \
   --splits train \
   --output-dir /path/to/bdse_cache/train \
-  --num-workers 8 \
   --scenario-stride 10 \
-  --max-samples-per-log 256 \
+  --scenario-iteration-policy initial \
+  --max-samples-per-log 512 \
+  --max-samples-per-log-strategy uniform_blocks \
+  --max-samples-per-log-block-size 64 \
+  --num-workers 6 \
+  --max-in-flight 6 \
+  --scenario-builder-workers 8 \
   --teacher-cost-eval-stride 1 \
-  --include-drivable-polygons \
+  --resume \
   --candidate-aware-agent-selection \
+  --no-include-drivable-polygons \
+  --no-include-crosswalks \
+  --cache-local-scheduler \
+  --cache-local-log-parallelism 1 \
+  --temporal-frame-cache-max-entries 262144 \
+  --temporal-frame-cache-individual-miss-threshold 32 \
+  --temporal-frame-cache-coalesce-bulk \
+  --skip-failed-samples \
   --profile \
-  --profile-threshold-s 2.0
+  --profile-threshold-s 10.0
 ```
 
 Preprocessing stores runtime-only features, label-only futures, candidates, evidence atoms, proposal features, teacher labels, and pair labels. Runtime code only consumes runtime features, candidate bank, evidence atoms, proposal features, and sparse queries.

@@ -48,10 +48,16 @@ preprocess:
   # windows; otherwise high-worker runs evict warm frames before reuse.
   temporal_frame_cache_max_entries: 65536
   # With 1 Hz samples and 10 Hz futures, adjacent 8s windows differ by ~10 tail frames.
-  temporal_frame_cache_individual_miss_threshold: 12
+  # 1--2 Hz selected samples differ by ~10--20 future frames.  Exact tail fills
+  # are far cheaper than rebuilding the full 80-frame nuPlan bulk future, while
+  # cold 80-frame misses still use the bulk API.
+  temporal_frame_cache_individual_miss_threshold: 32
   # In threaded preprocessing, coalesce exact bulk cache fills per log/direction so
   # overlapping windows do not reconstruct the same nuPlan frames simultaneously.
   temporal_frame_cache_coalesce_bulk: true
+  # Keep past history behavior conservative for now: past bulk windows are short,
+  # and exact past-by-iteration support varies more across devkit versions.
+  temporal_frame_cache_past_individual_miss_threshold: 0
   candidate_aware_agent_selection: true
 runtime:
   history_s: 2.0

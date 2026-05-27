@@ -64,3 +64,29 @@ def test_fallback_expands_budget_and_requeries_when_confidence_low(synthetic_sam
     assert len(records) >= 2
     assert max(len(r["top_m_atoms"]) for r in records) >= len(records[0]["top_m_atoms"])
     assert max(r["sparse_query_count"] for r in records) >= records[0]["sparse_query_count"]
+
+
+def test_static_map_cache_uses_stable_map_name_across_wrappers():
+    from bdse.data import feature_builder as fb
+
+    class MapA:
+        map_name = "us-ma-boston"
+
+    class MapB:
+        map_name = "us-ma-boston"
+
+    class Obj:
+        id = "lane-1"
+        baseline_path = [(0.0, 0.0), (10.0, 0.0)]
+
+    a = MapA()
+    b = MapB()
+    obj = Obj()
+    # Type is part of the key, so same map name but different wrapper class should
+    # not collide.  Same class/name wrappers should share static geometry cache.
+    assert fb._map_cache_identity(a)[1] == fb._map_cache_identity(b)[1]
+    before = len(fb._MAP_GEOMETRY_CACHE)
+    fb._cached_baseline_points(a, obj)
+    fb._cached_baseline_points(a, obj)
+    after_same = len(fb._MAP_GEOMETRY_CACHE)
+    assert after_same == before + 1

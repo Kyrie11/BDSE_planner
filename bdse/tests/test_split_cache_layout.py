@@ -67,6 +67,6 @@ def test_resume_filename_index_finds_old_log_layout(tmp_path):
     ds._index = [DevkitScenarioIndexRecord(None, "train_boston", "train_boston", "new_log", "tok123", 70, 0)]
     old = tmp_path / "train_boston" / "old_log" / "tok123_it000070.npz"
     old.parent.mkdir(parents=True, exist_ok=True)
-    old.write_bytes(b"placeholder")
+    old.write_bytes(b"placeholder" * 64)
     by_name = ds._build_resume_filename_index(tmp_path)
     assert by_name["tok123_it000070.npz"] == old
