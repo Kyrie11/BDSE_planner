@@ -67,7 +67,9 @@ def main() -> None:
         for batch in tqdm(loader, desc=f"epoch {epoch}"):
             batch = {k: v.to(device) for k, v in batch.items()}
             out = model(batch)
-            losses = compute_bdse_losses(out, batch, cfg)
+            epoch_cfg = dict(cfg)
+            epoch_cfg["training"] = {**cfg.get("training", {}), "current_epoch": epoch}
+            losses = compute_bdse_losses(out, batch, epoch_cfg)
             opt.zero_grad(set_to_none=True)
             losses["loss"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg["training"]["grad_clip"]))

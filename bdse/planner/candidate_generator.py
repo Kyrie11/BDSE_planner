@@ -739,9 +739,12 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
         metadata[0] = {"maneuver": "safe_fallback", "filled_by": "forced_safe_after_nan"}
     for i in range(K):
         if not valid_arr[i]:
-            src = int(np.flatnonzero(valid_arr)[0])
-            traj_arr[i] = traj_arr[src]
-            metadata[i]["duplicate_padding_from"] = src
+            # Keep padded slots numerically benign instead of duplicating a valid
+            # rollout.  Downstream code should respect valid_mask, but zeroed
+            # padding prevents visualization/debug/coverage utilities from
+            # accidentally interpreting invalid slots as extra valid maneuvers.
+            traj_arr[i] = 0.0
+            metadata[i]["padding_zeroed"] = True
             maneuver_ids[i] = MANEUVER_IDS["padding"]
     progress = route_progress_along_polyline(traj_arr[:, -1, :2], route)
     for i, p in enumerate(progress):

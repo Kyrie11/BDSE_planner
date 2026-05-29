@@ -76,9 +76,11 @@ class BDSEModel(nn.Module):
         prog_max = progress.masked_fill(~valid, -1e6).max(dim=1, keepdim=True).values.clamp_min(0.0)
         lat_mean = lateral.sum(dim=1, keepdim=True) / valid_count
         speed_mean = speed.sum(dim=1, keepdim=True) / valid_count
-        # Compact maneuver coverage histogram for ids [0..5].
+        # Compact maneuver coverage histogram for ids [0..6].  ID 6 is the
+        # conservative/safe-fallback family; exposing it in u(A_t) helps the
+        # proposal head distinguish "has a fallback" from "all candidates risky".
         hists = []
-        for m in range(6):
+        for m in range(7):
             hists.append(((maneuver_ids == m) & valid).float().sum(dim=1, keepdim=True) / valid_count)
         raw = torch.cat([valid_count / max(float(K), 1.0), entropy, gap12 / 100.0, near_count, prog_mean / 100.0, prog_max / 100.0, lat_mean / 10.0, speed_mean / 30.0, *hists], dim=1)
         if raw.shape[1] < 16:
@@ -228,6 +230,24 @@ class BDSEModel(nn.Module):
             "runtime_pairs": pairs,
             "runtime_pair_weights": pair_weights,
         }
+
+
+    def predict_dense_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """Return base costs and dense E x K atom scores for offline diagnostics.
+
+        This is intentionally not used by the runtime planner.  It requires dense
+        query tensors and is meant for full-interface open-loop metrics only.
+        """
+        cfg = cfg or self.cfg
+        batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=True)
+        self.eval()
+        with torch.no_grad():
+            out = self.forward(batch)
+        J0 = out["J0"][0].detach().cpu().numpy().astype(np.float32)
+        g = out["g"][0].detach().cpu().numpy().astype(np.float32)
+        E = evidence_bank.E
+        K = candidates.K
+        return J0[:K], g[:E, :K]
 
     def predict_numpy(self, runtime, candidates, evidence_bank):
         # Legacy API: return only base and sparse-scored local costs.  The runtime

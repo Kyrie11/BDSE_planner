@@ -1,7 +1,54 @@
-# Paper-faithful default BDSE v2 certificate config.
-# load_config() already starts from default.yaml, so this file is an explicit alias.
+# Paper-faithful BDSE v2 certificate config.
+# load_config() starts from default.yaml and applies these overrides.
 experiment:
   profile: paper
+
+runtime:
+  include_drivable_polygons: true
+  include_crosswalks: false
+  max_drivable_polygons: 48
+  max_route_points: 512
+  route_horizon_m: 220.0
+
+preprocess:
+  runtime_agent_history_mode: logged
+  label_agent_future_mode: logged
+  candidate_aware_agent_selection: true
+
+evidence:
+  max_interaction_atoms: 48
+  max_interaction_agents: 16
+  max_map_atoms: 40
+  budget: 16
+  safety:
+    collision_grace_s: 0.3
+    collision_shared_frame_fraction: 0.98
+
+teacher:
+  robust:
+    enabled: true
+    hard_fail: true
+  demo_weight: 1.0
+  demo_scale: 120.0
+  cost_eval_stride: 1
+
+selector:
+  mode: runtime_predicted
+  proposal_top_m: 48
+
+tournament:
+  L_infer: 16
+  use_softmin: true
+  softmin_tau: 0.5
+
+fallback:
+  enabled: true
+  tau_delta: 0.1
+  safety_lcb_min: 0.0
+  rival_stages: [16, 31]
+  budget_stages: [16, 32]
+  proposal_multiplier: 3.0
+  rule_rerank_top_k: 5
 
 calibration:
   epsilon_cal: 0.0

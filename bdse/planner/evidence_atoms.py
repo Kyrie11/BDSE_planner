@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
 import numpy as np
+
+_LOGGER = logging.getLogger(__name__)
 
 from bdse.data.cache_schema import CandidateBank, EvidenceAtom, EvidenceBank, LabelOnlyFuture, RuntimeFeatures
 from bdse.planner.evidence_queries import certificate_family, compute_proposal_features
@@ -681,8 +684,10 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
             cvar = weighted_cvar(raw_stack, probs_arr, float(rcfg.get("cvar_alpha", 0.9)))
             w = float(rcfg.get("cvar_weight", 0.4))
             return ((1.0 - w) * mean + w * cvar).astype(np.float32)
-        except Exception:
-            pass
+        except Exception as exc:
+            if bool(cfg.get("teacher", {}).get("robust", {}).get("hard_fail", False)) or bool(cfg.get("teacher", {}).get("robust", {}).get("strict", False)):
+                raise RuntimeError("Robust teacher response-mode aggregation failed") from exc
+            _LOGGER.warning("Robust teacher response-mode aggregation failed; falling back to single-world local costs: %r", exc)
     raw, _ = raw_local_costs_with_hard_events(atoms, candidates, runtime, label_future, cfg)
     return raw
 

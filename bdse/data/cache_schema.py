@@ -138,9 +138,39 @@ class PairLabels:
     residuals: np.ndarray
     valid_mask: np.ndarray
 
-    def validate_positive_direction(self) -> None:
-        if len(self.pairs) and np.any(self.margins[self.valid_mask] <= 0):
-            raise AssertionError("Every valid pair must store the better action first with positive M_T(a,b)")
+    def validate_positive_direction(self, atol: float = 1e-6) -> None:
+        """Validate pair-label invariants used by the BDSE margin losses.
+
+        The pair builder stores each pair as ``(a, b)`` where ``a`` is the
+        teacher-preferred action and ``b`` is the rival.  Therefore teacher
+        margins ``J_T(b) - J_T(a)`` must be non-negative on valid pairs.  This
+        helper intentionally checks shapes as well as the sign convention so a
+        corrupt cache fails close to its source instead of surfacing later as a
+        silent training/evaluation error.
+        """
+        pairs = np.asarray(self.pairs)
+        margins = np.asarray(self.margins)
+        weights = np.asarray(self.weights)
+        residuals = np.asarray(self.residuals)
+        valid_mask = np.asarray(self.valid_mask, dtype=bool)
+
+        if pairs.ndim != 2 or pairs.shape[1] != 2:
+            raise AssertionError("pairs must have shape [P,2]")
+        n = int(pairs.shape[0])
+        for name, arr in (("margins", margins), ("weights", weights), ("residuals", residuals), ("valid_mask", valid_mask)):
+            if arr.shape[0] != n:
+                raise AssertionError(f"{name} must have length {n}, got shape {arr.shape}")
+        if n == 0:
+            return
+        if np.any(pairs < 0):
+            raise AssertionError("pair action indices must be non-negative")
+        active_margins = margins[valid_mask] if valid_mask.shape[0] == n else margins
+        if active_margins.size and np.nanmin(active_margins) < -float(atol):
+            raise AssertionError("PairLabels margins must be non-negative: pairs should be ordered as (teacher-preferred, rival)")
+        for name, arr in (("margins", margins), ("weights", weights), ("residuals", residuals)):
+            active = arr[valid_mask] if valid_mask.shape[0] == n else arr
+            if active.size and not np.all(np.isfinite(active)):
+                raise AssertionError(f"{name} contains non-finite values")
 
 
 @dataclass(slots=True)

@@ -82,7 +82,6 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
         pairs, weights = build_runtime_pairs_from_base(J0[bidx], valid[bidx], flag_np, L0=L0, eta0=eta)
         if len(pairs):
             action_ids = np.unique(pairs.reshape(-1))
-            query_mask[bidx, atom_active, :][:, action_ids] = False  # no-op due to numpy copy; set below
             for ei in np.flatnonzero(atom_active):
                 query_mask[bidx, ei, action_ids] = True
             a = pairs[:, 0]
@@ -102,6 +101,37 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
     device = outputs["J0"].device
     return torch.from_numpy(selected_mask).to(device), torch.from_numpy(query_mask).to(device)
 
+
+
+def _oracle_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor] | None:
+    target_sel = batch.get("oracle_selected_mask")
+    if target_sel is None:
+        return None
+    valid = batch["candidate_valid"].bool()
+    e_mask = batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()).bool()
+    selected = target_sel.bool() & e_mask
+    # Teacher-forced certificates are an offline training stabilizer.  They may
+    # query dense scores for oracle-selected atoms over valid actions, and are
+    # annealed away so deployment remains sparse/predicted-only.
+    query = selected[:, :, None] & valid[:, None, :]
+    return selected, query
+
+
+def _certificate_oracle_probability(cfg: dict[str, Any]) -> float:
+    tc = cfg.get("training", {})
+    sched = tc.get("certificate_schedule", {})
+    if not bool(sched.get("enabled", False)):
+        return 0.0
+    epochs = max(int(tc.get("epochs", 1)), 1)
+    epoch = int(tc.get("current_epoch", epochs))
+    start = float(sched.get("oracle_start_prob", 1.0))
+    end = float(sched.get("oracle_end_prob", 0.0))
+    warmup = max(int(sched.get("warmup_epochs", 0)), 0)
+    anneal = int(sched.get("anneal_epochs", max(epochs - warmup, 1)))
+    if epoch < warmup:
+        return float(np.clip(start, 0.0, 1.0))
+    progress = min(max((epoch - warmup) / max(float(anneal), 1.0), 0.0), 1.0)
+    return float(np.clip(start + (end - start) * progress, 0.0, 1.0))
 
 def _softmin(vals: torch.Tensor, tau: float, dim: int) -> torch.Tensor:
     if tau <= 0:
@@ -172,6 +202,16 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     L_prop = L_prop_bce + 0.25 * L_prop_rank
 
     selected_mask, query_mask = _predicted_certificate_masks(outputs, batch, cfg)
+    p_oracle = _certificate_oracle_probability(cfg)
+    oracle_masks = _oracle_certificate_masks(outputs, batch) if p_oracle > 0.0 else None
+    if oracle_masks is not None:
+        oracle_selected, oracle_query = oracle_masks
+        if p_oracle >= 1.0:
+            selected_mask, query_mask = oracle_selected, oracle_query
+        else:
+            mix = (torch.rand((J0.shape[0],), device=J0.device) < p_oracle)
+            selected_mask = torch.where(mix[:, None], oracle_selected, selected_mask)
+            query_mask = torch.where(mix[:, None, None], oracle_query, query_mask)
     g_runtime = g * query_mask.float()
     budgeted_cost = finite_J0 + (g_runtime * selected_mask[:, :, None].float()).sum(dim=1)
     tau_q = float(cfg.get("tournament", {}).get("softmin_tau", 1.0))

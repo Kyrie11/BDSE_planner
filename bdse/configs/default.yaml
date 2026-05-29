@@ -276,6 +276,12 @@ training:
     calibration: 0.0
   rank_margin: 1.0
   rank_tau: 1.0
+  certificate_schedule:
+    enabled: true
+    oracle_start_prob: 1.0
+    oracle_end_prob: 0.0
+    warmup_epochs: 1
+    anneal_epochs: 10
 
 calibration:
   epsilon_cal: 0.0
