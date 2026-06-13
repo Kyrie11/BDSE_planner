@@ -78,7 +78,11 @@ def main() -> None:
         for (a, b), valid in zip(sample.pairs.pairs, sample.pairs.valid_mask):
             if not valid:
                 continue
-            err = abs(float((sample.teacher.J_T[b] - sample.teacher.J_T[a]) - M_pred[a, b]))
+            true_margin = float(sample.teacher.J_T[b] - sample.teacher.J_T[a])
+            pred_margin = float(M_pred[a, b])
+            # One-sided certificate calibration: epsilon covers over-confident
+            # margins.  Underestimation is conservative and should not inflate eps.
+            err = max(0.0, pred_margin - true_margin)
             residuals.append(err)
             if bool(sample.teacher.hard_violation_mask[b]) and not bool(sample.teacher.hard_violation_mask[a]):
                 safety_residuals.append(err)
@@ -94,7 +98,7 @@ def main() -> None:
         "delta": float(args.delta),
         "pair_count": int(len(residuals)),
         "safety_pair_count": int(len(safety_residuals)),
-        "recommendation": "Set tournament.epsilon_cal to epsilon_cal and fallback.safety_lcb_min to 0.0 for one-sided certificate checks.",
+        "recommendation": "Set tournament.epsilon_cal to epsilon_cal. This is a one-sided over-confidence quantile, not an absolute residual.",
     }
     path = Path(args.output)
     path.parent.mkdir(parents=True, exist_ok=True)

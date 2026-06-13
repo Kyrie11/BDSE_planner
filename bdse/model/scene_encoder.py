@@ -16,6 +16,9 @@ class SceneEncoder(nn.Module):
         route_feature_dim: int = 8,
         traffic_feature_dim: int = 12,
         goal_feature_dim: int = 4,
+        map_token_dropout: float = 0.0,
+        route_token_dropout: float = 0.0,
+        traffic_token_dropout: float = 0.0,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -25,6 +28,9 @@ class SceneEncoder(nn.Module):
         self.route_proj = nn.Linear(route_feature_dim, hidden_dim)
         self.traffic_proj = nn.Linear(traffic_feature_dim, hidden_dim)
         self.goal_proj = nn.Linear(goal_feature_dim, hidden_dim)
+        self.map_token_dropout = float(map_token_dropout)
+        self.route_token_dropout = float(route_token_dropout)
+        self.traffic_token_dropout = float(traffic_token_dropout)
         self.type_emb = nn.Embedding(6, hidden_dim)
         enc_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
@@ -49,6 +55,20 @@ class SceneEncoder(nn.Module):
     def _add_type(self, x: torch.Tensor, type_id: int) -> torch.Tensor:
         emb = self.type_emb(torch.full((x.shape[0], x.shape[1]), type_id, dtype=torch.long, device=x.device))
         return x + emb
+
+    def _drop_valid_tokens(self, valid: torch.Tensor, p: float) -> torch.Tensor:
+        if not self.training or p <= 0.0 or valid.numel() == 0:
+            return valid
+        keep = torch.rand(valid.shape, device=valid.device) >= float(p)
+        dropped = valid & keep
+        # Keep at least one token per batch item when that modality was present,
+        # avoiding all-padding attention rows while still regularizing map reliance.
+        present = valid.any(dim=1)
+        empty = present & (~dropped.any(dim=1))
+        if empty.any():
+            first = valid.float().argmax(dim=1)
+            dropped[empty, first[empty]] = True
+        return dropped
 
     @staticmethod
     def _polyline_nonempty(poly: torch.Tensor) -> torch.Tensor:
@@ -86,6 +106,7 @@ class SceneEncoder(nn.Module):
             mp = self._fit_last_dim(batch["map_polylines"].float(), self.map_proj.in_features)
             map_tokens = self._add_type(self.map_proj(mp.mean(dim=2)), 3)
             valid = batch.get("map_polyline_valid", self._polyline_nonempty(mp)).bool()
+            valid = self._drop_valid_tokens(valid, self.map_token_dropout)
             tokens.append(map_tokens)
             pad_masks.append(~valid)
 
@@ -93,6 +114,7 @@ class SceneEncoder(nn.Module):
             rt = self._fit_last_dim(batch["route_polylines"].float(), self.route_proj.in_features)
             route_tokens = self._add_type(self.route_proj(rt.mean(dim=2)), 4)
             valid = batch.get("route_token_valid", self._polyline_nonempty(rt)).bool()
+            valid = self._drop_valid_tokens(valid, self.route_token_dropout)
             tokens.append(route_tokens)
             pad_masks.append(~valid)
 
@@ -100,6 +122,7 @@ class SceneEncoder(nn.Module):
             tl = self._fit_last_dim(batch["traffic_control_tokens"].float(), self.traffic_proj.in_features)
             tl_tokens = self._add_type(self.traffic_proj(tl), 5)
             valid = batch.get("traffic_token_valid", tl.abs().sum(dim=-1) > 0).bool()
+            valid = self._drop_valid_tokens(valid, self.traffic_token_dropout)
             tokens.append(tl_tokens)
             pad_masks.append(~valid)
 

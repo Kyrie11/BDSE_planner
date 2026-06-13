@@ -3,6 +3,15 @@
 # not for smoke tests or quick pipeline checks.
 preprocess:
   resume: true
+  quality_filter:
+    # Dataset-quality gates are stored into teacher diagnostics.  Keep disabled
+    # for materialization by default; use training.quality_filter to drop/downselect
+    # old caches without rerunning preprocessing.
+    require_safe_candidate: false
+    min_valid_candidates: 12
+    max_candidate_log_ade_min: 8.0
+    max_logged_route_p95: 5.0
+    exclude_teacher_hard: false
   overwrite: false
   atomic_write: true
   manifest_name: manifest.jsonl

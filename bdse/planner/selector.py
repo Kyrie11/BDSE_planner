@@ -551,6 +551,118 @@ def runtime_greedy_selector(
         diagnostics={"spent_budget": spent, "budget": float(budget), "mode": mode, "pair_count": int(len(pairs)), **extra_diag},
     )
 
+
+def runtime_greedy_selector_pair_conditioned(
+    predicted_base_cost: np.ndarray,
+    pair_atom_delta: np.ndarray,
+    pair_indices: np.ndarray,
+    pair_weights: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    budget: float,
+    gamma_max: float = 100.0,
+    eta_pred: float = 1.0,
+    atom_active_mask: np.ndarray | None = None,
+    pair_atom_variance: np.ndarray | None = None,
+    beta_uncertainty: float = 0.0,
+    epsilon_cal: float = 0.0,
+    lambda_info: float = 0.0,
+    prior_atom_variance: float | np.ndarray | None = None,
+    family_ids: np.ndarray | None = None,
+    family_budget_caps: np.ndarray | None = None,
+) -> SelectionResult:
+    """Runtime greedy selector over pair-conditioned atom deltas.
+
+    ``pair_atom_delta[i,p]`` is the signed evidence margin contribution
+    d_i(a,b) for ``pair_indices[p] = (a,b)``.  This implements the paper's
+    pair-conditioned scorer while keeping the same greedy coverage objective.
+    """
+    pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    if weights.shape[0] < pair_arr.shape[0]:
+        weights = np.pad(weights, (0, pair_arr.shape[0] - weights.shape[0]), constant_values=1.0)
+    weights = weights[: pair_arr.shape[0]]
+    E = int(np.asarray(pair_atom_delta).shape[0]) if np.asarray(pair_atom_delta).ndim == 2 else int(np.asarray(atom_budget_costs).shape[0])
+    if pair_arr.size == 0:
+        selected, current, spent = _greedy_cover_from_pair_support(
+            np.zeros((E, 0), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            np.zeros((0,), dtype=np.float32),
+            atom_budget_costs,
+            budget,
+            atom_active_mask,
+        )
+        return SelectionResult(selected, current, pair_arr, weights, {"spent_budget": spent, "budget": float(budget), "mode": "runtime_pair_conditioned_empty", "pair_count": 0})
+    a = pair_arr[:, 0]
+    b = pair_arr[:, 1]
+    J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    base_delta = J0[b] - J0[a]
+    flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    safety_b = flags[b] if flags.shape[0] > int(np.max(b, initial=0)) else np.zeros_like(base_delta, dtype=bool)
+    caps = np.where(
+        safety_b,
+        float(gamma_max),
+        np.minimum(np.maximum(np.abs(base_delta) + float(eta_pred), 1e-3), float(gamma_max)),
+    ).astype(np.float32)
+    delta = np.asarray(pair_atom_delta, dtype=np.float32)
+    if delta.ndim != 2 or delta.shape[1] != pair_arr.shape[0]:
+        delta = np.zeros((E, pair_arr.shape[0]), dtype=np.float32)
+    base_support = np.maximum(base_delta, 0.0).astype(np.float32)
+    atom_support = np.maximum(delta, 0.0).astype(np.float32)
+
+    use_uncertainty_objective = (
+        pair_atom_variance is not None
+        or abs(float(beta_uncertainty)) > 0.0
+        or abs(float(epsilon_cal)) > 0.0
+        or abs(float(lambda_info)) > 0.0
+        or family_budget_caps is not None
+    )
+    if use_uncertainty_objective:
+        pair_var = np.asarray(pair_atom_variance, dtype=np.float32) if pair_atom_variance is not None else np.zeros_like(delta, dtype=np.float32)
+        if pair_var.shape != delta.shape:
+            pair_var = np.zeros_like(delta, dtype=np.float32)
+        base_var = np.zeros((pair_arr.shape[0],), dtype=np.float32)
+        if isinstance(prior_atom_variance, np.ndarray):
+            prior = np.asarray(prior_atom_variance, dtype=np.float32)
+            prior_pair = prior if prior.shape == delta.shape else None
+        elif prior_atom_variance is not None:
+            prior_pair = np.full_like(delta, float(prior_atom_variance), dtype=np.float32)
+        else:
+            prior_pair = None
+        selected, current, spent, extra_diag = _uncertainty_aware_greedy_from_pair_delta(
+            delta,
+            base_delta,
+            pair_var,
+            base_var,
+            caps,
+            weights,
+            atom_budget_costs,
+            budget,
+            atom_active_mask,
+            beta_uncertainty=beta_uncertainty,
+            epsilon_cal=epsilon_cal,
+            lambda_info=lambda_info,
+            info_caps=np.where(safety_b, float(gamma_max), np.maximum(float(eta_pred), np.abs(base_delta))).astype(np.float32),
+            prior_atom_pair_var=prior_pair,
+            family_ids=family_ids,
+            family_budget_caps=family_budget_caps,
+        )
+        mode = "runtime_pair_conditioned_lcb_uncertainty"
+    else:
+        selected, current, spent = _greedy_cover_from_pair_support(atom_support, base_support, caps, weights, atom_budget_costs, budget, atom_active_mask)
+        extra_diag = {}
+        mode = "runtime_pair_conditioned"
+    return SelectionResult(
+        selected=selected,
+        objective_value=current,
+        pair_indices=pair_arr,
+        pair_weights=weights,
+        diagnostics={"spent_budget": float(spent), "budget": float(budget), "mode": mode, "pair_count": int(len(pair_arr)), **extra_diag},
+    )
+
+
 def select_by_mode(
     mode: str,
     predicted_base_cost: np.ndarray,

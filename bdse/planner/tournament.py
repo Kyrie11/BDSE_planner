@@ -166,6 +166,116 @@ def run_tournament(
         },
     )
 
+
+def _pair_delta_margin_matrix(
+    predicted_base_cost: np.ndarray,
+    pair_indices: np.ndarray,
+    pair_atom_delta: np.ndarray,
+    selected_atoms: list[int] | np.ndarray,
+    valid_mask: np.ndarray,
+) -> np.ndarray:
+    J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    K = J0.shape[0]
+    M = J0[None, :] - J0[:, None]
+    pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    delta = np.asarray(pair_atom_delta, dtype=np.float32)
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    selected = selected[(selected >= 0) & (selected < delta.shape[0])] if delta.ndim == 2 else np.zeros((0,), dtype=np.int64)
+    if pair_arr.size and delta.ndim == 2 and delta.shape[1] >= pair_arr.shape[0] and selected.size:
+        support = delta[selected, : pair_arr.shape[0]].sum(axis=0)
+        for pidx, (a, b) in enumerate(pair_arr.tolist()):
+            if 0 <= int(a) < K and 0 <= int(b) < K:
+                M[int(a), int(b)] = J0[int(b)] - J0[int(a)] + float(support[pidx])
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    M[~valid, :] = -1e9
+    M[:, ~valid] = -1e9
+    return M.astype(np.float32)
+
+
+def _pair_sigma_matrix(
+    pair_indices: np.ndarray,
+    pair_atom_variance: np.ndarray | None,
+    selected_atoms: list[int] | np.ndarray,
+    K: int,
+) -> np.ndarray | None:
+    if pair_atom_variance is None:
+        return None
+    var = np.asarray(pair_atom_variance, dtype=np.float32)
+    pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    selected = selected[(selected >= 0) & (selected < var.shape[0])] if var.ndim == 2 else np.zeros((0,), dtype=np.int64)
+    if var.ndim != 2 or not pair_arr.size or not selected.size:
+        return None
+    sigma = np.zeros((K, K), dtype=np.float32)
+    support = np.maximum(var[selected, : pair_arr.shape[0]], 0.0).sum(axis=0)
+    for pidx, (a, b) in enumerate(pair_arr.tolist()):
+        if 0 <= int(a) < K and 0 <= int(b) < K:
+            sigma[int(a), int(b)] = float(np.sqrt(max(float(support[pidx]), 0.0)))
+    return sigma
+
+
+def run_pair_conditioned_tournament(
+    predicted_base_cost: np.ndarray,
+    pair_atom_delta: np.ndarray,
+    pair_indices: np.ndarray,
+    selected_atoms: list[int] | np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    cfg: dict[str, Any],
+    pair_atom_variance: np.ndarray | None = None,
+) -> TournamentResult:
+    tc = cfg.get("tournament", {})
+    sc = cfg.get("selector", {})
+    rivals = build_rival_sets_from_base(
+        predicted_base_cost,
+        valid_mask,
+        runtime_safety_flags,
+        L_infer=int(tc.get("L_infer", 16)),
+        eta0=float(sc.get("eta_pred", 1.0)),
+    )
+    M_B = _pair_delta_margin_matrix(predicted_base_cost, pair_indices, pair_atom_delta, selected_atoms, valid_mask)
+    epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
+    M_eval = M_B - epsilon_cal
+    sigma = _pair_sigma_matrix(pair_indices, pair_atom_variance, selected_atoms, M_B.shape[0])
+    scores = tournament_scores(
+        M_eval,
+        np.asarray(valid_mask, dtype=bool),
+        rivals,
+        use_softmin=bool(tc.get("use_softmin", True)),
+        softmin_tau=float(tc.get("softmin_tau", 1.0)),
+        beta_uncertainty=float(tc.get("beta_uncertainty", 0.0)),
+        sigma=sigma,
+    )
+    action = int(np.argmax(scores))
+    sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
+    delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")
+    safety_idx = np.flatnonzero(np.asarray(runtime_safety_flags, dtype=bool) & np.asarray(valid_mask, dtype=bool))
+    if safety_idx.size and action not in safety_idx:
+        safety_lcb_min = float(np.min(M_eval[action, safety_idx]))
+    elif action in safety_idx:
+        safety_lcb_min = -float("inf")
+    else:
+        safety_lcb_min = float("inf")
+    return TournamentResult(
+        action_index=action,
+        scores=scores,
+        margins=M_eval,
+        rival_sets=rivals,
+        diagnostics={
+            "delta_hat_B": delta,
+            "selected_atoms": list(map(int, selected_atoms)),
+            "valid_actions": int(np.asarray(valid_mask).sum()),
+            "rival_source": "base_score_cheap_flags_pair_conditioned",
+            "epsilon_cal": epsilon_cal,
+            "beta_uncertainty": float(tc.get("beta_uncertainty", 0.0)),
+            "sigma_used": bool(sigma is not None),
+            "safety_lcb_min": safety_lcb_min,
+            "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
+            "pair_conditioned": True,
+        },
+    )
+
+
 def full_interface_cost(
     predicted_base_cost: np.ndarray,
     predicted_atom_costs: np.ndarray,

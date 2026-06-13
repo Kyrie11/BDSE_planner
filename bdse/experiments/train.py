@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+import json
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -13,6 +14,7 @@ from bdse.config import load_config
 from bdse.data.cache_schema import Sample
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.data.tensorizer import sample_to_model_inputs
+from bdse.data.quality import quality_decision
 from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import compute_bdse_losses
 
@@ -40,6 +42,67 @@ def collate(samples: list[Sample], cfg: dict[str, Any]) -> dict[str, torch.Tenso
     return {k: torch.stack([it[k] for it in items], dim=0) for k in items[0]}
 
 
+
+def _json_loads_npz_scalar(z: Any, key: str, default: Any) -> Any:
+    if key not in z.files:
+        return default
+    try:
+        raw = z[key]
+        text = str(raw.item()) if raw.shape == () else str(raw.tolist())
+        return json.loads(text)
+    except Exception:
+        return default
+
+
+def _quality_metrics_from_npz(path: Path) -> dict[str, Any]:
+    with np.load(path, allow_pickle=False) as z:
+        diag = _json_loads_npz_scalar(z, "teacher_diagnostics_json", {})
+        if not isinstance(diag, dict):
+            diag = {}
+        out: dict[str, Any] = {}
+        for k, v in diag.items():
+            if str(k).startswith("quality_"):
+                out[str(k)[len("quality_"):]] = v
+        # Backward compatibility for old caches that do not contain quality_ keys.
+        if "safe_candidate_exists" not in out and "teacher_hard_violation" in z.files and "candidate_valid" in z.files:
+            valid = np.asarray(z["candidate_valid"], dtype=bool)
+            hard = np.asarray(z["teacher_hard_violation"], dtype=bool)
+            out["valid_candidate_count"] = int(valid.sum())
+            out["safe_candidate_count"] = int((valid & ~hard).sum()) if hard.shape == valid.shape else 0
+            out["safe_candidate_exists"] = bool(out["safe_candidate_count"] > 0)
+        return out
+
+
+def _apply_training_quality_filter(dataset: Any, cfg: dict[str, Any]) -> None:
+    qcfg = cfg.get("training", {}).get("quality_filter", {})
+    if not bool(qcfg.get("enabled", False)):
+        return
+    if not isinstance(dataset, PreprocessedBDSEDataset):
+        print("[bdse] training quality_filter is enabled but only applies to preprocessed caches; continuing without filtering.", flush=True)
+        return
+    paths = list(dataset.build_index())
+    kept: list[Path] = []
+    dropped: dict[str, int] = {}
+    for p in paths:
+        try:
+            metrics = _quality_metrics_from_npz(Path(p))
+            dec = quality_decision(metrics, cfg)
+        except Exception as exc:
+            if bool(qcfg.get("drop_unreadable", True)):
+                dropped[type(exc).__name__] = dropped.get(type(exc).__name__, 0) + 1
+                continue
+            kept.append(Path(p)); continue
+        if dec.keep:
+            kept.append(Path(p))
+        else:
+            for r in dec.reasons:
+                dropped[r] = dropped.get(r, 0) + 1
+    if not kept:
+        raise RuntimeError(f"training quality_filter dropped all {len(paths)} samples; relax thresholds. dropped={dropped}")
+    dataset._paths = kept
+    print(f"[bdse] training quality_filter: kept={len(kept)} dropped={len(paths)-len(kept)} reasons={dropped}", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
@@ -53,6 +116,7 @@ def main() -> None:
     splits = args.split
     if args.preprocessed_dir:
         dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=splits, max_scenarios=args.max_scenarios)
+        _apply_training_quality_filter(dataset, cfg)
     else:
         if len(splits) != 1:
             raise ValueError("On-the-fly training supports one split at a time; preprocess first to train from multiple split folders.")

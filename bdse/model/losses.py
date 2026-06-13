@@ -209,7 +209,10 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     L_base = robust_loss(finite_J0, J_base_T, valid)
 
     g_a, g_b = pair_gather(g, pairs)
-    pred_atom_delta = g_b - g_a  # [B,E,P], antisymmetric pair contribution d_i(a,b)
+    # Prefer the paper-faithful pair-conditioned scorer d_i(a,b) when present.
+    # The factorized g_i(b)-g_i(a) path remains for ablations/backward-compatible
+    # checkpoints and for dense action-cost diagnostics.
+    pred_atom_delta = outputs.get("pair_atom_delta", g_b - g_a)
     res_pred = pred_atom_delta.sum(dim=1)
     pair_mask = pair_valid & torch.isfinite(residual_T)
     if pair_mask.sum() > 0:
@@ -237,16 +240,21 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_pair = J0.new_tensor(0.0)
 
     # Heteroscedastic uncertainty: predict variance for each pair atom delta.
-    if g_var is not None and true_atom_delta is not None and atom_pair_mask is not None and atom_weights is not None:
-        v_a, v_b = pair_gather(g_var, pairs)
-        pair_var = (v_a + v_b).clamp_min(1e-6)
+    pair_var_pred = outputs.get("pair_atom_var")
+    if true_atom_delta is not None and atom_pair_mask is not None and atom_weights is not None and (pair_var_pred is not None or g_var is not None):
+        if pair_var_pred is not None:
+            pair_var = pair_var_pred.clamp_min(1e-6)
+        else:
+            v_a, v_b = pair_gather(g_var, pairs)
+            pair_var = (v_a + v_b).clamp_min(1e-6)
         err2 = (pred_atom_delta - true_atom_delta).pow(2)
         nll = 0.5 * (err2 / pair_var + torch.log(pair_var))
         L_unc = _weighted_mean(nll, atom_weights, atom_pair_mask)
     else:
         L_unc = J0.new_tensor(0.0)
 
-    M_hat_E = full_interface_predicted_margin(finite_J0, g, pairs)
+    J_a_pair, J_b_pair = pair_gather(finite_J0, pairs)
+    M_hat_E = (J_b_pair - J_a_pair) + pred_atom_delta.sum(dim=1)
     tau_rank = float(train_cfg.get("rank_tau", train_cfg.get("rank_margin", 1.0)))
     if pair_mask.sum() > 0:
         rank_terms = F.softplus(-M_hat_E[pair_mask] / max(tau_rank, 1e-6))

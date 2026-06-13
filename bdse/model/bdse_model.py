@@ -40,7 +40,13 @@ class BDSEModel(nn.Module):
         h = int(mcfg.get("hidden_dim", 256))
         self.cfg = cfg
         self.hidden_dim = h
-        self.num_families = int(mcfg.get("num_families", int(mcfg.get("max_family_id", max_family_id())) + 1))
+        configured_families = int(mcfg.get("num_families", int(mcfg.get("max_family_id", max_family_id())) + 1))
+        # Do not trust the yaml value alone: FAMILY_NAMES currently uses ids
+        # 0..5.  A too-small embedding silently collapses family 5 into 4 after
+        # clamp(), which mixes dynamic_regularity with decision_boundary.
+        self.num_families = max(configured_families, int(max_family_id()) + 1)
+        self.pair_conditioned = bool(mcfg.get("pair_conditioned", True))
+        self.pair_delta_scale = float(mcfg.get("pair_delta_scale", 1.0))
         self.var_floor = float(mcfg.get("variance_floor", 1e-4))
         self.scene = SceneEncoder(
             h,
@@ -51,9 +57,12 @@ class BDSEModel(nn.Module):
             int(mcfg.get("route_feature_dim", 8)),
             int(mcfg.get("traffic_feature_dim", 12)),
             int(mcfg.get("goal_feature_dim", 4)),
+            float(mcfg.get("map_token_dropout", 0.0)),
+            float(mcfg.get("route_token_dropout", 0.0)),
+            float(mcfg.get("traffic_token_dropout", 0.0)),
         )
         self.action = ActionEncoder(h)
-        self.evidence = EvidenceEncoder(h, int(mcfg.get("evidence_feature_dim", 24)))
+        self.evidence = EvidenceEncoder(h, int(mcfg.get("evidence_feature_dim", 24)), num_families=self.num_families)
         self.proposal_feature_proj = nn.Sequential(
             nn.Linear(int(mcfg.get("proposal_feature_dim", 24)), h), nn.ReLU(), nn.Linear(h, h)
         )
@@ -66,6 +75,13 @@ class BDSEModel(nn.Module):
         self.local_head = nn.Sequential(nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1), nn.Softplus())
         # Heteroscedastic epistemic/aleatoric uncertainty head for the same query.
         self.local_var_head = nn.Sequential(nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1))
+
+        # Pair-conditioned margin scorer f_d(h_x, h_a, h_b, h_i, q_i(a), q_i(b)).
+        # It predicts signed atom-level deltas d_i(a,b) directly and enforces
+        # antisymmetry by scoring both orders and subtracting.  The non-negative
+        # local g_i(a) head remains for backward-compatible cost diagnostics.
+        self.pair_head = nn.Sequential(nn.LayerNorm(h * 6), nn.Linear(h * 6, h), nn.ReLU(), nn.Linear(h, 1))
+        self.pair_var_head = nn.Sequential(nn.LayerNorm(h * 6), nn.Linear(h * 6, h), nn.ReLU(), nn.Linear(h, 1))
 
         # Hierarchical Atom Builder (HAB): family gate pi_tau followed by an
         # atom proposal conditioned on family embedding and candidate-set summary.
@@ -243,6 +259,51 @@ class BDSEModel(nn.Module):
             "action_set_summary": u_A,
         }
 
+    def _sparse_pair_features(
+        self,
+        context: dict[str, torch.Tensor],
+        atom_indices: torch.Tensor,
+        action_a_indices: torch.Tensor,
+        action_b_indices: torch.Tensor,
+        query_a_features: torch.Tensor,
+        query_b_features: torch.Tensor,
+    ) -> torch.Tensor:
+        action_h = context["action_h"]
+        evid_h = context["evidence_h"]
+        scene = context["scene"]
+        B, Q = atom_indices.shape
+        H = action_h.shape[-1]
+        a_idx = action_a_indices.long().clamp_min(0).clamp_max(action_h.shape[1] - 1)
+        b_idx = action_b_indices.long().clamp_min(0).clamp_max(action_h.shape[1] - 1)
+        e_idx = atom_indices.long().clamp_min(0).clamp_max(evid_h.shape[1] - 1)
+        a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, Q, H))
+        b_h = torch.gather(action_h, 1, b_idx[..., None].expand(B, Q, H))
+        e_h = torch.gather(evid_h, 1, e_idx[..., None].expand(B, Q, H))
+        q_a = self.query_proj(self._fit_last_dim(query_a_features.float(), self.query_proj[0].in_features))
+        q_b = self.query_proj(self._fit_last_dim(query_b_features.float(), self.query_proj[0].in_features))
+        s_h = scene[:, None, :].expand(B, Q, H)
+        return torch.cat([a_h, b_h, e_h, q_a, q_b, s_h], dim=-1)
+
+    def score_sparse_pairs(
+        self,
+        context: dict[str, torch.Tensor],
+        atom_indices: torch.Tensor,
+        action_a_indices: torch.Tensor,
+        action_b_indices: torch.Tensor,
+        query_a_features: torch.Tensor,
+        query_b_features: torch.Tensor,
+        return_uncertainty: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        z_ab = self._sparse_pair_features(context, atom_indices, action_a_indices, action_b_indices, query_a_features, query_b_features)
+        z_ba = self._sparse_pair_features(context, atom_indices, action_b_indices, action_a_indices, query_b_features, query_a_features)
+        delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
+        if not return_uncertainty:
+            return delta
+        # Variance is symmetric for the ordered comparison.
+        var = self._positive_variance(self.pair_var_head(z_ab).squeeze(-1), self.var_floor)
+        var = var + self._positive_variance(self.pair_var_head(z_ba).squeeze(-1), self.var_floor)
+        return delta, var
+
     def _sparse_query_features(
         self,
         context: dict[str, torch.Tensor],
@@ -284,6 +345,42 @@ class BDSEModel(nn.Module):
         k = min(max(int(M), 1), logits.shape[1])
         return torch.topk(logits, k=k, dim=1).indices
 
+    def _dense_pair_delta_from_batch(self, context: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], q_h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if not self.pair_conditioned or "pair_indices" not in batch:
+            return None
+        pairs = batch["pair_indices"].long()
+        action_h = context["action_h"]
+        evid_h = context["evidence_h"]
+        scene = context["scene"]
+        B, P, _ = pairs.shape
+        E = evid_h.shape[1]
+        H = action_h.shape[-1]
+        K = action_h.shape[1]
+        a_idx = pairs[..., 0].clamp_min(0).clamp_max(K - 1)
+        b_idx = pairs[..., 1].clamp_min(0).clamp_max(K - 1)
+        a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, P, H))[:, None, :, :].expand(B, E, P, H)
+        b_h = torch.gather(action_h, 1, b_idx[..., None].expand(B, P, H))[:, None, :, :].expand(B, E, P, H)
+        e_h = evid_h[:, :, None, :].expand(B, E, P, H)
+        idx_a = a_idx[:, None, :, None].expand(B, E, P, H)
+        idx_b = b_idx[:, None, :, None].expand(B, E, P, H)
+        q_a = torch.gather(q_h, 2, idx_a)
+        q_b = torch.gather(q_h, 2, idx_b)
+        s_h = scene[:, None, None, :].expand(B, E, P, H)
+        z_ab = torch.cat([a_h, b_h, e_h, q_a, q_b, s_h], dim=-1)
+        z_ba = torch.cat([b_h, a_h, e_h, q_b, q_a, s_h], dim=-1)
+        delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
+        var = self._positive_variance(self.pair_var_head(z_ab).squeeze(-1), self.var_floor)
+        var = var + self._positive_variance(self.pair_var_head(z_ba).squeeze(-1), self.var_floor)
+        pair_valid = batch.get("pair_valid")
+        e_valid = context.get("evidence_valid")
+        if pair_valid is not None:
+            delta = delta.masked_fill(~pair_valid[:, None, :].bool(), 0.0)
+            var = var.masked_fill(~pair_valid[:, None, :].bool(), 0.0)
+        if e_valid is not None:
+            delta = delta.masked_fill(~e_valid[:, :, None].bool(), 0.0)
+            var = var.masked_fill(~e_valid[:, :, None].bool(), 0.0)
+        return delta, var
+
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         ctx = self.encode_context(batch)
         J0 = ctx["J0"]
@@ -304,9 +401,11 @@ class BDSEModel(nn.Module):
             local_var = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
             local = local.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, :, None], 0.0)
             local_var = local_var.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, :, None], 0.0)
+            pair_out = self._dense_pair_delta_from_batch(ctx, batch, q_h)
         else:
             local = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
             local_var = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
+            pair_out = None
         out = {
             "J0": J0,
             "g": local,
@@ -320,6 +419,8 @@ class BDSEModel(nn.Module):
             "action_h": action_h,
             "evidence_h": evid_h,
         }
+        if pair_out is not None:
+            out["pair_atom_delta"], out["pair_atom_var"] = pair_out
         return out
 
     def _make_batch(self, runtime, candidates, evidence_bank, include_dense_query: bool = False) -> dict[str, torch.Tensor]:
@@ -336,6 +437,65 @@ class BDSEModel(nn.Module):
             batch[k] = t
         device = next(self.parameters()).device
         return {k: v.to(device) for k, v in batch.items()}
+
+    def _score_pair_indices_numpy(
+        self,
+        context: dict[str, torch.Tensor],
+        runtime,
+        candidates,
+        evidence_bank,
+        atom_indices: np.ndarray,
+        pair_indices: np.ndarray,
+        cfg: dict[str, Any],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        atom_indices = np.asarray(atom_indices, dtype=np.int64).reshape(-1)
+        pair_indices = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+        E = evidence_bank.E
+        P = int(pair_indices.shape[0])
+        out = np.zeros((E, P), dtype=np.float32)
+        var_out = np.zeros((E, P), dtype=np.float32)
+        atom_indices = atom_indices[(atom_indices >= 0) & (atom_indices < E)]
+        if atom_indices.size == 0 or P == 0:
+            return out, var_out
+        action_ids = np.unique(pair_indices.reshape(-1))
+        action_ids = action_ids[(action_ids >= 0) & (action_ids < candidates.K)]
+        atom_ids_flat, action_ids_rep, q = compute_query_features_for_pairs(evidence_bank.atoms, candidates, runtime, atom_indices, action_ids, cfg)
+        qfd = int(self.cfg.get("model", {}).get("query_feature_dim", 12))
+        q_dense = np.zeros((E, candidates.K, qfd), dtype=np.float32)
+        for row, (ei, ai) in enumerate(zip(atom_ids_flat.tolist(), action_ids_rep.tolist())):
+            q_dense[int(ei), int(ai), : min(qfd, q.shape[1])] = q[row, : min(qfd, q.shape[1])]
+        flat_atoms = []
+        flat_a = []
+        flat_b = []
+        flat_q_a = []
+        flat_q_b = []
+        flat_pos = []
+        for pidx, (a, b) in enumerate(pair_indices.tolist()):
+            if not (0 <= int(a) < candidates.K and 0 <= int(b) < candidates.K):
+                continue
+            for ei in atom_indices.tolist():
+                flat_atoms.append(int(ei))
+                flat_a.append(int(a))
+                flat_b.append(int(b))
+                flat_q_a.append(q_dense[int(ei), int(a)])
+                flat_q_b.append(q_dense[int(ei), int(b)])
+                flat_pos.append((int(ei), int(pidx)))
+        if not flat_atoms:
+            return out, var_out
+        device = next(self.parameters()).device
+        atom_t = torch.as_tensor(np.asarray(flat_atoms, dtype=np.int64)[None], device=device)
+        a_t = torch.as_tensor(np.asarray(flat_a, dtype=np.int64)[None], device=device)
+        b_t = torch.as_tensor(np.asarray(flat_b, dtype=np.int64)[None], device=device)
+        qa_t = torch.as_tensor(np.asarray(flat_q_a, dtype=np.float32)[None], device=device)
+        qb_t = torch.as_tensor(np.asarray(flat_q_b, dtype=np.float32)[None], device=device)
+        with torch.no_grad():
+            vals, variances = self.score_sparse_pairs(context, atom_t, a_t, b_t, qa_t, qb_t, return_uncertainty=True)
+            vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
+            var_np = variances[0].detach().cpu().numpy().astype(np.float32)
+        for row, (ei, pidx) in enumerate(flat_pos):
+            out[ei, pidx] = vals_np[row]
+            var_out[ei, pidx] = var_np[row]
+        return out, var_out
 
     def predict_certificate_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = cfg or self.cfg
@@ -385,11 +545,15 @@ class BDSEModel(nn.Module):
             eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
         )
         action_set: set[int] = set()
+        rival_pair_list: list[tuple[int, int]] = []
         for a_idx, rivals in enumerate(rival_sets):
             if not bool(candidates.valid_mask[a_idx]) or not rivals:
                 continue
             action_set.add(int(a_idx))
             action_set.update(int(r) for r in rivals)
+            for r in rivals:
+                rival_pair_list.append((int(a_idx), int(r)))
+        rival_pairs = np.asarray(rival_pair_list, dtype=np.int64).reshape(-1, 2) if rival_pair_list else np.zeros((0, 2), dtype=np.int64)
         if action_set:
             action_ids = np.asarray(sorted(action_set), dtype=np.int64)
         elif len(pairs):
@@ -409,6 +573,8 @@ class BDSEModel(nn.Module):
                 var_np = var[0].detach().cpu().numpy().astype(np.float32)
             g_sparse[atom_ids, action_ids_rep] = vals_np
             g_var_sparse[atom_ids, action_ids_rep] = var_np
+        selector_pair_delta, selector_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, pairs, cfg)
+        rival_pair_delta, rival_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, rival_pairs, cfg)
         valid_mask = np.asarray(candidates.valid_mask, dtype=bool)
         g_sparse[:, ~valid_mask] = 0.0
         g_var_sparse[:, ~valid_mask] = 0.0
@@ -426,6 +592,12 @@ class BDSEModel(nn.Module):
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
             "queried_pair_count": int(len(atom_ids)),
+            "pair_atom_delta": selector_pair_delta,
+            "pair_atom_var": selector_pair_var,
+            "pair_indices": pairs,
+            "rival_pair_atom_delta": rival_pair_delta,
+            "rival_pair_atom_var": rival_pair_var,
+            "rival_pair_indices": rival_pairs,
             "runtime_pairs": pairs,
             "runtime_pair_weights": pair_weights,
         }

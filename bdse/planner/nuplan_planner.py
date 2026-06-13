@@ -14,8 +14,8 @@ from bdse.planner.evidence_queries import compute_query_features_for_pairs
 from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
-from bdse.planner.selector import runtime_greedy_selector
-from bdse.planner.tournament import run_tournament, selected_pair_sigma_from_action_variance
+from bdse.planner.selector import runtime_greedy_selector, runtime_greedy_selector_pair_conditioned
+from bdse.planner.tournament import run_tournament, run_pair_conditioned_tournament, selected_pair_sigma_from_action_variance
 
 
 class BDSEPlannerCore:
@@ -147,25 +147,58 @@ class BDSEPlannerCore:
         atom_active &= evidence_bank.active_mask
         family_ids = np.asarray(pred.get("family_ids", family_ids_from_atoms(evidence_bank.atoms, max_atoms=evidence_bank.E)), dtype=np.int64)
         family_caps = pred.get("family_budget_caps", None)
-        selection = runtime_greedy_selector(
-            J0, g, evidence_bank.budget_costs(), candidates.valid_mask, runtime_flags,
-            budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
-            L_infer=int(tour_cfg.get("L_infer", 16)),
-            gamma_max=float(sel_cfg.get("gamma_max_default", 100.0)),
-            eta_pred=float(sel_cfg.get("eta_pred", 1.0)),
-            lambda_near=float(sel_cfg.get("lambda_near", 1.0)),
-            lambda_safety=float(sel_cfg.get("lambda_safety", 2.0)),
-            atom_active_mask=atom_active,
-            predicted_atom_variance=g_var,
-            beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
-            epsilon_cal=float(tour_cfg.get("epsilon_cal", stage_cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
-            lambda_info=float(sel_cfg.get("lambda_info", 0.0)),
-            prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
-            family_ids=family_ids,
-            family_budget_caps=family_caps,
-        )
-        sigma = selected_pair_sigma_from_action_variance(g_var, selection.selected, candidates.valid_mask)
-        tournament = run_tournament(J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg, sigma=sigma)
+        use_pair_conditioned = bool(stage_cfg.get("runtime", {}).get("use_pair_conditioned_margins", stage_cfg.get("model", {}).get("pair_conditioned", True)))
+        if use_pair_conditioned and "pair_atom_delta" in pred and "pair_indices" in pred:
+            selection = runtime_greedy_selector_pair_conditioned(
+                J0,
+                pred["pair_atom_delta"],
+                pred["pair_indices"],
+                pred.get("runtime_pair_weights", np.ones((np.asarray(pred["pair_indices"]).reshape(-1, 2).shape[0],), dtype=np.float32)),
+                evidence_bank.budget_costs(),
+                candidates.valid_mask,
+                runtime_flags,
+                budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
+                gamma_max=float(sel_cfg.get("gamma_max_default", 100.0)),
+                eta_pred=float(sel_cfg.get("eta_pred", 1.0)),
+                atom_active_mask=atom_active,
+                pair_atom_variance=pred.get("pair_atom_var", None),
+                beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
+                epsilon_cal=float(tour_cfg.get("epsilon_cal", stage_cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
+                lambda_info=float(sel_cfg.get("lambda_info", 0.0)),
+                prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
+                family_ids=family_ids,
+                family_budget_caps=family_caps,
+            )
+            tournament = run_pair_conditioned_tournament(
+                J0,
+                pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
+                pred.get("rival_pair_indices", pred["pair_indices"]),
+                selection.selected,
+                candidates.valid_mask,
+                runtime_flags,
+                stage_cfg,
+                pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+            )
+        else:
+            selection = runtime_greedy_selector(
+                J0, g, evidence_bank.budget_costs(), candidates.valid_mask, runtime_flags,
+                budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
+                L_infer=int(tour_cfg.get("L_infer", 16)),
+                gamma_max=float(sel_cfg.get("gamma_max_default", 100.0)),
+                eta_pred=float(sel_cfg.get("eta_pred", 1.0)),
+                lambda_near=float(sel_cfg.get("lambda_near", 1.0)),
+                lambda_safety=float(sel_cfg.get("lambda_safety", 2.0)),
+                atom_active_mask=atom_active,
+                predicted_atom_variance=g_var,
+                beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
+                epsilon_cal=float(tour_cfg.get("epsilon_cal", stage_cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
+                lambda_info=float(sel_cfg.get("lambda_info", 0.0)),
+                prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
+                family_ids=family_ids,
+                family_budget_caps=family_caps,
+            )
+            sigma = selected_pair_sigma_from_action_variance(g_var, selection.selected, candidates.valid_mask)
+            tournament = run_tournament(J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg, sigma=sigma)
         return pred, selection, tournament, atom_active
 
     def _needs_fallback(self, tournament, candidates, cfg: dict[str, Any]) -> bool:
@@ -257,12 +290,40 @@ class BDSEPlannerCore:
 
 
 class BDSEnuPlanPlanner:
-    def __init__(self, model: Any | None = None, cfg: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        model: Any | None = None,
+        cfg: dict[str, Any] | None = None,
+        checkpoint: str | None = None,
+        config_path: str | None = None,
+        device: str = "cpu",
+    ):
+        cfg = cfg or load_config(config_path)
+        if model is None and checkpoint:
+            import torch
+            from bdse.model.bdse_model import BDSEModel
+
+            model = BDSEModel(cfg)
+            ckpt = torch.load(checkpoint, map_location=device)
+            state = ckpt.get("model", ckpt)
+            current = model.state_dict()
+            compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
+            model.load_state_dict(compatible, strict=False)
+            model.to(torch.device(device if device == "cpu" or torch.cuda.is_available() else "cpu"))
+            model.eval()
         self.core = BDSEPlannerCore(model=model, cfg=cfg)
         self._name = "BDSEPlanner"
 
     def name(self) -> str:
         return self._name
+
+    def observation_type(self):
+        try:
+            from nuplan.planning.simulation.observation.observation_type import DetectionsTracks
+
+            return DetectionsTracks
+        except Exception:
+            return None
 
     def initialize(self, initialization: Any) -> None:
         self.initialization = initialization

@@ -15,6 +15,15 @@ data:
       - val
 preprocess:
   resume: true
+  quality_filter:
+    # Dataset-quality gates are stored into teacher diagnostics.  Keep disabled
+    # for materialization by default; use training.quality_filter to drop/downselect
+    # old caches without rerunning preprocessing.
+    require_safe_candidate: false
+    min_valid_candidates: 12
+    max_candidate_log_ade_min: 8.0
+    max_logged_route_p95: 5.0
+    exclude_teacher_hard: false
   overwrite: false
   atomic_write: true
   manifest_name: manifest.jsonl
@@ -75,8 +84,19 @@ runtime:
   max_polygon_points: 128
   max_route_points: 256
   use_future_traffic_lights_for_teacher: false
+  use_pair_conditioned_margins: true
 candidate:
   K: 32
+  # Generate a larger cheap runtime-only candidate pool, then prune back to K.
+  # This improves safe/logged-action coverage without increasing the model tensor
+  # size or teacher evidence cost.
+  pool_K: 64
+  prune_pool_to_K: true
+  include_terminal_progress_priors: true
+  terminal_progress_count: 12
+  prune_preserve_safe: 4
+  prune_preserve_conflict: 4
+  prune_preserve_history: 4
   horizon_s: 8.0
   step_s: 0.1
   # Keep candidates in the bank even if they slightly exceed dynamic comfort;
@@ -227,6 +247,7 @@ selector:
   gamma_max_default: 100.0
   lambda_near: 1.0
   lambda_safety: 2.0
+  preserve_safety_pairs: true
   eta_pred: 1.0
   hab_enabled: true
   hab_reserve_fraction: 0.2
@@ -239,6 +260,7 @@ selector:
 tournament:
   L_infer: 16
   beta_uncertainty: 1.0
+  epsilon_cal: 0.0
   use_softmin: true
   softmin_tau: 1.0
 fallback:
@@ -266,9 +288,24 @@ model:
   max_polyline_points: 64
   max_traffic_tokens: 32
   dropout: 0.1
-  num_families: 5
+  # Families are indexed 0..5: padding, feasibility, reachability_interaction,
+  # precedence, decision_boundary, dynamic_regularity.  Keep this in sync
+  # with bdse.planner.evidence_queries.FAMILY_NAMES.
+  num_families: 6
   variance_floor: 1.0e-4
+  pair_conditioned: true
+  pair_delta_scale: 1.0
+  map_token_dropout: 0.25
+  route_token_dropout: 0.05
+  traffic_token_dropout: 0.05
 training:
+  quality_filter:
+    enabled: false
+    require_safe_candidate: true
+    min_valid_candidates: 12
+    max_candidate_log_ade_min: 8.0
+    max_logged_route_p95: 5.0
+    exclude_teacher_hard: false
   lr: 1.0e-4
   weight_decay: 1.0e-2
   batch_size: 64

@@ -292,7 +292,7 @@ def sample_to_model_inputs(sample: Sample, cfg: dict[str, Any], include_teacher:
         # marginal gains used for atom proposals into certificate families, so
         # the family gate learns which evidence family deserves budget in this
         # scene/candidate set.
-        num_families = int(cfg.get("model", {}).get("num_families", max(FAMILY_NAMES.values()) + 1))
+        num_families = max(int(cfg.get("model", {}).get("num_families", 0) or 0), max(FAMILY_NAMES.values()) + 1)
         family_gain = np.zeros((num_families,), dtype=np.float32)
         family_active = np.zeros((num_families,), dtype=bool)
         fam_ids = np.asarray(arrays["evidence_family_ids"], dtype=np.int64)[:Emax]

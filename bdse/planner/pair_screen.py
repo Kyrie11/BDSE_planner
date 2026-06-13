@@ -11,6 +11,7 @@ def build_runtime_pairs_from_base(
     eta0: float = 1.0,
     lambda_near: float = 1.0,
     lambda_safety: float = 2.0,
+    preserve_safety_pairs: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Runtime pair screen using only base scores and cheap safety flags.
 
@@ -27,6 +28,7 @@ def build_runtime_pairs_from_base(
         return np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32)
     top = valid_idx[np.argsort(J0[valid_idx])[: min(max(int(L0), 1), valid_idx.size)]]
     pair_set: dict[tuple[int, int], float] = {}
+    safety_pair_set: dict[tuple[int, int], float] = {}
 
     def add(a: int, b: int, w: float) -> None:
         if a == b or not valid[a] or not valid[b]:
@@ -49,17 +51,27 @@ def build_runtime_pairs_from_base(
     unsafe_idx = valid_idx[safety[valid_idx]]
     if safe_idx.size and unsafe_idx.size:
         safe_top = safe_idx[np.argsort(J0[safe_idx])[: min(max(int(L0), 1), safe_idx.size)]]
+        # Safety pairs are not evidence budget; they only decide which rival
+        # comparisons are considered.  Keep them outside the ordinary pair cap so
+        # a near/base pair screen cannot drop the only safe-vs-unsafe certificate.
         for a in safe_top.tolist():
             for b in unsafe_idx.tolist():
-                # Preserve safe-vs-unsafe orientation when possible.
-                key = (int(a), int(b)) if a != b else None
-                if key is not None:
-                    pair_set[key] = max(1.0 + float(lambda_safety), pair_set.get(key, 0.0))
+                if a == b:
+                    continue
+                key = (int(a), int(b))
+                safety_pair_set[key] = max(1.0 + float(lambda_safety), safety_pair_set.get(key, 0.0))
+                pair_set[key] = max(1.0 + float(lambda_safety), pair_set.get(key, 0.0))
     if not pair_set:
         return np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32)
     items = sorted(pair_set.items(), key=lambda kv: (abs(float(J0[kv[0][1]] - J0[kv[0][0]])), kv[0][0], kv[0][1]))
     max_pairs = max(int(L0) * max(int(L0), 1), int(L0))
-    items = items[: max_pairs]
+    if preserve_safety_pairs and safety_pair_set:
+        safety_items = sorted(safety_pair_set.items(), key=lambda kv: (float(J0[kv[0][0]]), float(J0[kv[0][1]]), kv[0][0], kv[0][1]))
+        safety_keys = {k for k, _ in safety_items}
+        regular_items = [kv for kv in items if kv[0] not in safety_keys]
+        items = safety_items + regular_items[:max_pairs]
+    else:
+        items = items[: max_pairs]
     pairs = np.asarray([k for k, _ in items], dtype=np.int64)
     weights = np.asarray([w for _, w in items], dtype=np.float32)
     return pairs, weights
@@ -71,6 +83,7 @@ def build_rival_sets_from_base(
     cheap_safety_flags: np.ndarray,
     L_infer: int = 16,
     eta0: float = 1.0,
+    preserve_safety_pairs: bool = True,
 ) -> list[list[int]]:
     J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
     valid = np.asarray(valid_mask, dtype=bool).reshape(-1)

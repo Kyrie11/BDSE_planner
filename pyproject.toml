@@ -22,3 +22,6 @@ test = ["pytest>=7.0"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bdse*"]
+
+[tool.setuptools.package-data]
+bdse = ["nuplan_config/**/*.yaml", "configs/*.yaml"]

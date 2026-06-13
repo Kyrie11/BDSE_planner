@@ -106,6 +106,144 @@ def _rollout_on_route(
     return np.stack([xy[:, 0], xy[:, 1], yaw, v, times], axis=1).astype(np.float32)
 
 
+
+
+def _scaled_candidate_count(counts: dict[str, Any], key: str, default: int, K_target: int, K_pool: int) -> int:
+    base = int(counts.get(key, default))
+    if K_pool <= K_target:
+        return base
+    # Keep the public K fixed but build a larger cheap candidate pool before
+    # runtime-only pruning.  This increases coverage without multiplying the
+    # expensive teacher/evidence tensors.
+    return max(base, int(np.ceil(base * float(K_pool) / max(float(K_target), 1.0))))
+
+
+def _rollout_to_terminal_distance(
+    route: np.ndarray,
+    v0: float,
+    times: np.ndarray,
+    terminal_distance: float,
+    lateral_offset: float = 0.0,
+) -> np.ndarray:
+    T = float(times[-1])
+    dt = float(times[0]) if len(times) else 0.1
+    D = max(float(terminal_distance), 0.0)
+    # Constant-acceleration distance target; clamp speeds and integrate again so
+    # the resulting trajectory is dynamically well-behaved.  These are runtime-only
+    # progress priors, not logged-future candidates.
+    a = 2.0 * (D - float(v0) * T) / max(T * T, 1e-3)
+    v = np.maximum(float(v0) + a * times, 0.0).astype(np.float32)
+    s = np.cumsum(v) * dt
+    if s[-1] > 1e-3:
+        s *= D / max(float(s[-1]), 1e-3)
+    xy, yaw = sample_polyline(route, s.astype(np.float32))
+    if abs(lateral_offset) > 1e-4:
+        profile = _smoothstep(times / max(0.65 * T, 1e-3)) * float(lateral_offset)
+        normals = np.stack([-np.sin(yaw), np.cos(yaw)], axis=1)
+        xy = xy + normals * profile[:, None]
+        dxy = np.gradient(xy, axis=0)
+        yaw = np.arctan2(dxy[:, 1], dxy[:, 0]).astype(np.float32)
+    return np.stack([xy[:, 0], xy[:, 1], yaw, v, times], axis=1).astype(np.float32)
+
+
+def _prune_candidate_pool(
+    trajectories: list[np.ndarray],
+    valid: list[bool],
+    maneuver_ids: list[int],
+    theta: list[dict[str, Any]],
+    flags: list[dict[str, bool]],
+    metadata: list[dict[str, Any]],
+    route: np.ndarray,
+    K_target: int,
+    cfg: dict[str, Any],
+) -> tuple[list[np.ndarray], list[bool], list[int], list[dict[str, Any]], list[dict[str, bool]], list[dict[str, Any]]]:
+    if len(trajectories) <= K_target:
+        return trajectories, valid, maneuver_ids, theta, flags, metadata
+    ccfg = cfg.get("candidate", {})
+    preserve_safe = int(ccfg.get("prune_preserve_safe", 4))
+    preserve_history = int(ccfg.get("prune_preserve_history", 4))
+    preserve_conflict = int(ccfg.get("prune_preserve_conflict", 4))
+    progress_gap = float(ccfg.get("prune_progress_gap_m", 4.0))
+
+    traj_arr = np.stack(trajectories, axis=0).astype(np.float32)
+    term_progress = route_progress_along_polyline(traj_arr[:, -1, :2], route) if len(route) >= 2 else np.arange(len(trajectories), dtype=np.float32)
+    route_dev = np.zeros((len(trajectories),), dtype=np.float32)
+    if len(route) >= 2:
+        for i, tr in enumerate(trajectories):
+            route_dev[i] = float(np.square(nearest_polyline_distance(tr[:, :2], route)).mean())
+    speeds = np.asarray([float(tr[-1, 3]) for tr in trajectories], dtype=np.float32)
+    v_med = float(np.nanmedian(speeds[np.isfinite(speeds)])) if speeds.size else 0.0
+
+    def score(i: int) -> float:
+        m = metadata[i]
+        invalid_pen = 1e5 if not bool(valid[i]) else 0.0
+        # Prefer valid, route-consistent, non-duplicate, reasonably progressive
+        # candidates; do not over-penalize stop/yield families because they are
+        # exactly what creates safe alternatives at red lights and cut-ins.
+        dup_pen = 1000.0 if "duplicate_padding_from" in m else 0.0
+        stop_bonus = -5.0 if m.get("maneuver") in {"safe_fallback", "decelerate_stop", "yield_creep"} else 0.0
+        hist_bonus = -4.0 if m.get("history_prior", False) else 0.0
+        conflict_bonus = -8.0 if m.get("conflict_stop", False) else 0.0
+        progress_pen = 0.01 * max(0.0, float(np.nanmax(term_progress) - term_progress[i]))
+        speed_pen = 0.03 * abs(float(speeds[i]) - v_med)
+        return invalid_pen + dup_pen + float(route_dev[i]) + progress_pen + speed_pen + stop_bonus + hist_bonus + conflict_bonus
+
+    selected: list[int] = []
+    selected_set: set[int] = set()
+
+    def add(i: int) -> None:
+        if i not in selected_set and len(selected) < K_target:
+            selected.append(int(i)); selected_set.add(int(i))
+
+    # 1) Preserve safety-critical families before generic pruning.
+    for pred, cap in [
+        (lambda m: m.get("maneuver") == "safe_fallback", preserve_safe),
+        (lambda m: bool(m.get("conflict_stop", False)), preserve_conflict),
+        (lambda m: bool(m.get("history_prior", False)), preserve_history),
+    ]:
+        rows = [i for i, m in enumerate(metadata) if pred(m) and bool(valid[i])]
+        for i in sorted(rows, key=score)[: max(0, cap)]:
+            add(i)
+
+    # 2) Ensure maneuver diversity when the pool is large.
+    maneuvers = sorted({str(m.get("maneuver", "")) for m in metadata})
+    for man in maneuvers:
+        rows = [i for i, m in enumerate(metadata) if str(m.get("maneuver", "")) == man and bool(valid[i]) and i not in selected_set]
+        if rows:
+            add(sorted(rows, key=score)[0])
+
+    # 3) Add route-progress diverse valid candidates.
+    last_by_man: dict[str, list[float]] = {}
+    for i in sorted(range(len(trajectories)), key=score):
+        if len(selected) >= K_target:
+            break
+        if i in selected_set or not bool(valid[i]):
+            continue
+        man = str(metadata[i].get("maneuver", ""))
+        used = last_by_man.setdefault(man, [])
+        p = float(term_progress[i])
+        if used and all(abs(p - prev) < progress_gap for prev in used):
+            continue
+        add(i)
+        used.append(p)
+
+    # 4) Fill any remaining slots with best valid, then invalid/padding if needed.
+    for i in sorted(range(len(trajectories)), key=score):
+        if len(selected) >= K_target:
+            break
+        if i not in selected_set:
+            add(i)
+
+    selected = selected[:K_target]
+    return (
+        [trajectories[i] for i in selected],
+        [valid[i] for i in selected],
+        [maneuver_ids[i] for i in selected],
+        [theta[i] for i in selected],
+        [flags[i] for i in selected],
+        [metadata[i] | {"pool_pruned_from": int(len(trajectories)), "pool_original_index": int(i)} for i in selected],
+    )
+
 def _rollout_straight(v0: float, times: np.ndarray, target_speed: float, stop_distance: float | None = None) -> np.ndarray:
     """Ego-frame straight fallback rollout using only runtime current speed.
 
@@ -585,8 +723,9 @@ def _repair_low_valid_count(
 
 def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> CandidateBank:
     cand_cfg = cfg.get("candidate", {})
-    K = int(cand_cfg.get("K", 32))
-    counts = cand_cfg.get("counts", {})
+    K_target = int(cand_cfg.get("K", 32))
+    K = max(K_target, int(cand_cfg.get("pool_K", cand_cfg.get("K_pool", K_target))))
+    counts = cand_cfg.get("pool_counts", cand_cfg.get("counts", {}))
     times = _times(cfg)
     route = _route_centerline(runtime, cfg)
     v0 = float(max(runtime.ego_history[-1, 3], 0.0)) if runtime.ego_history.size else 0.0
@@ -602,27 +741,47 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
     metadata: list[dict[str, Any]] = []
 
     keep_params = [
-        (0.5 * v_ref, -0.1),
-        (0.8 * v_ref, -0.05),
-        (1.0 * v_ref, 0.0),
-        (1.2 * v_ref, 0.0),
-        (0.6 * v_ref, -0.2),
-        (0.9 * v_ref, 0.05),
-        (1.1 * v_ref, 0.05),
-        (min(speed_limit, 1.3 * v_ref), 0.0),
+        (0.25 * v_ref, -0.35),
         (0.35 * v_ref, -0.25),
+        (0.45 * v_ref, -0.15),
+        (0.5 * v_ref, -0.1),
+        (0.6 * v_ref, -0.2),
+        (0.7 * v_ref, -0.1),
+        (0.8 * v_ref, -0.05),
+        (0.9 * v_ref, 0.0),
+        (1.0 * v_ref, 0.0),
+        (1.1 * v_ref, 0.05),
+        (1.2 * v_ref, 0.0),
+        (min(speed_limit, 1.3 * v_ref), 0.0),
         (min(speed_limit, 1.45 * v_ref), 0.05),
+        (min(speed_limit, 1.6 * v_ref), 0.05),
     ]
-    for target, accel_bias in keep_params[: int(counts.get("keep_follow", 8))]:
+    for target, accel_bias in keep_params[: _scaled_candidate_count(counts, "keep_follow", 8, K_target, K)]:
         traj = _rollout_on_route(route, v0, times, target, accel_bias=accel_bias)
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "keep_follow", {"target_speed": target, "accel_bias": accel_bias}, cfg)
 
-    for sd in _candidate_stop_grid(v0, times, cfg)[: int(counts.get("decelerate_stop", 6))]:
+    if bool(cand_cfg.get("include_terminal_progress_priors", True)):
+        T = float(times[-1])
+        base_D = max(float(v0) * T, 4.0)
+        progress_grid = cand_cfg.get("terminal_progress_grid_m", None)
+        if progress_grid is None:
+            progress_grid = sorted(set(round(x, 3) for x in [
+                0.35 * base_D, 0.50 * base_D, 0.65 * base_D, 0.80 * base_D,
+                0.95 * base_D, 1.10 * base_D, 1.25 * base_D,
+                max(8.0, 0.25 * float(speed_limit) * T),
+                max(16.0, 0.50 * float(speed_limit) * T),
+                max(24.0, 0.75 * float(speed_limit) * T),
+            ]))
+        for D in list(progress_grid)[: int(cand_cfg.get("terminal_progress_count", max(0, K - len(trajectories))))]:
+            traj = _rollout_to_terminal_distance(route, v0, times, float(D))
+            _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "keep_follow", {"terminal_distance": float(D), "filled_by": "terminal_progress_prior"}, cfg)
+
+    for sd in _candidate_stop_grid(v0, times, cfg)[: _scaled_candidate_count(counts, "decelerate_stop", 6, K_target, K)]:
         traj = _rollout_on_route(route, v0, times, 0.0, stop_distance=float(sd))
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "decelerate_stop", {"stop_distance": float(sd)}, cfg)
 
-    yield_profiles = [(0.8, 0.0), (0.5, 0.0), (0.3, 5.0), (0.2, 10.0), (0.15, 15.0), (0.1, 20.0)]
-    for frac, delay in yield_profiles[: int(counts.get("yield_creep", 4))]:
+    yield_profiles = [(0.9, 0.0), (0.8, 0.0), (0.65, 0.0), (0.5, 0.0), (0.4, 4.0), (0.3, 5.0), (0.25, 8.0), (0.2, 10.0), (0.15, 15.0), (0.1, 20.0)]
+    for frac, delay in yield_profiles[: _scaled_candidate_count(counts, "yield_creep", 4, K_target, K)]:
         stop_dist = None if delay <= 0 else delay
         traj = _rollout_on_route(route, v0, times, frac * v_ref, stop_distance=stop_dist)
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "yield_creep", {"target_speed": frac * v_ref, "delay_stop_distance": delay}, cfg)
@@ -632,9 +791,9 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
         ("right", -1.0, "lane_change_right", "lane_change_right"),
     ]:
         legal = _legal_lane_change(runtime, side)
-        offsets = [sign * lane_width, sign * lane_width, sign * 0.5 * lane_width, sign * lane_width]
-        speeds = [0.8 * v_ref, 1.0 * v_ref, 0.6 * v_ref, 1.1 * v_ref]
-        for off, target in list(zip(offsets, speeds))[: int(counts.get(count_key, 4))]:
+        offsets = [sign * 0.35 * lane_width, sign * 0.5 * lane_width, sign * lane_width, sign * lane_width, sign * 1.2 * lane_width, sign * lane_width]
+        speeds = [0.55 * v_ref, 0.7 * v_ref, 0.8 * v_ref, 1.0 * v_ref, 1.05 * v_ref, 1.2 * v_ref]
+        for off, target in list(zip(offsets, speeds))[: _scaled_candidate_count(counts, count_key, 4, K_target, K)]:
             traj = _rollout_on_route(route, v0, times, target, lateral_offset=off)
             _append_candidate(
                 trajectories,
@@ -650,11 +809,11 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
                 force_valid=legal,
             )
 
-    for target in [0.5 * v_ref, 0.7 * v_ref, 0.9 * v_ref, 1.0 * v_ref][: int(counts.get("route_turn_connector", 4))]:
+    for target in [0.35 * v_ref, 0.5 * v_ref, 0.65 * v_ref, 0.8 * v_ref, 0.95 * v_ref, 1.1 * v_ref][: _scaled_candidate_count(counts, "route_turn_connector", 4, K_target, K)]:
         traj = _rollout_on_route(route, v0, times, target)
         _append_candidate(trajectories, valid, maneuver_ids, theta, flags, metadata, traj, "route_turn_connector", {"target_speed": target}, cfg)
 
-    safe_count = int(counts.get("safe_fallback", 2))
+    safe_count = _scaled_candidate_count(counts, "safe_fallback", 2, K_target, K)
     min_safe_stop = _min_dynamic_stop_distance(v0, cfg)
     horizon_dist = max(float(v0) * float(times[-1]), 10.0)
     safe_stop_grid = _unique_distances([
@@ -708,13 +867,18 @@ def generate_candidate_bank(runtime: RuntimeFeatures, cfg: dict[str, Any]) -> Ca
         cfg,
     )
 
-    if len(trajectories) > K:
-        trajectories = trajectories[:K]
-        valid = valid[:K]
-        maneuver_ids = maneuver_ids[:K]
-        theta = theta[:K]
-        flags = flags[:K]
-        metadata = metadata[:K]
+    if bool(cand_cfg.get("prune_pool_to_K", True)) and len(trajectories) > K_target:
+        trajectories, valid, maneuver_ids, theta, flags, metadata = _prune_candidate_pool(
+            trajectories, valid, maneuver_ids, theta, flags, metadata, route, K_target, cfg
+        )
+    elif len(trajectories) > K_target:
+        trajectories = trajectories[:K_target]
+        valid = valid[:K_target]
+        maneuver_ids = maneuver_ids[:K_target]
+        theta = theta[:K_target]
+        flags = flags[:K_target]
+        metadata = metadata[:K_target]
+    K = K_target
 
     if not any(valid):
         safe_traj = _rollout_on_route(route, v0, times, 0.0, stop_distance=max(2.0, v0))
