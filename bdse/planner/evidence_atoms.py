@@ -367,20 +367,45 @@ def _outside_drivable(points: np.ndarray, polygons: list[np.ndarray], route: np.
     dist_route = nearest_polyline_distance(points, route)
     route_inside = dist_route <= width
     if polygons:
-        inside_any = np.zeros(points.shape[0], dtype=bool)
-        boundary = np.full(points.shape[0], 1e6, dtype=np.float32)
-        for poly in polygons:
-            if len(poly) < 3:
-                continue
-            inside_any |= _point_in_poly(points, poly)
-            boundary = np.minimum(boundary, _poly_boundary_distance(points, poly))
-        # The extracted polygon set is intentionally capped for preprocessing speed
-        # and memory.  Treat the route corridor as a conservative drivable fallback
-        # for route-following candidates; otherwise a partial polygon crop can mark
-        # every candidate as off-drivable and destroy teacher labels.
-        inside = inside_any | route_inside
-        dist_back = np.minimum(boundary, np.maximum(0.0, dist_route - width))
-        return ~inside, dist_back.astype(np.float32)
+        # Most BDSE candidates are route-following; the route corridor is already
+        # treated as a conservative drivable fallback below.  Do not spend Python
+        # polygon point-inclusion/boundary work on frames that are inside that
+        # corridor.  This preserves the previous semantics (inside polygon OR
+        # inside route corridor) while making --include-drivable-polygons much
+        # cheaper during teacher/evidence evaluation.
+        inside_any = route_inside.copy()
+        dist_back = np.maximum(0.0, dist_route - width).astype(np.float32)
+        need = ~route_inside
+        if np.any(need):
+            pts = np.asarray(points[need], dtype=np.float32).reshape(-1, 2)
+            inside_sub = np.zeros((pts.shape[0],), dtype=bool)
+            boundary_sub = np.full((pts.shape[0],), 1e6, dtype=np.float32)
+            # A small padding keeps near-boundary points eligible for accurate
+            # boundary distance while skipping far-away polygons.
+            bbox_pad = 3.0
+            for poly in polygons:
+                poly = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
+                if len(poly) < 3:
+                    continue
+                lo = np.nanmin(poly, axis=0) - bbox_pad
+                hi = np.nanmax(poly, axis=0) + bbox_pad
+                maybe = (pts[:, 0] >= lo[0]) & (pts[:, 0] <= hi[0]) & (pts[:, 1] >= lo[1]) & (pts[:, 1] <= hi[1])
+                if not np.any(maybe):
+                    continue
+                sub_pts = pts[maybe]
+                inside_local = _point_in_poly(sub_pts, poly)
+                tmp_inside = inside_sub[maybe]
+                tmp_inside |= inside_local
+                inside_sub[maybe] = tmp_inside
+                bdist = _poly_boundary_distance(sub_pts, poly)
+                tmp_boundary = boundary_sub[maybe]
+                boundary_sub[maybe] = np.minimum(tmp_boundary, bdist)
+            need_idx = np.flatnonzero(need)
+            inside_any[need_idx] = inside_sub
+            # Keep the old capped-polygon fallback: if exact polygons are absent
+            # or far away, route-corridor excess remains the conservative distance.
+            dist_back[need_idx] = np.minimum(boundary_sub, dist_back[need_idx])
+        return ~inside_any, dist_back.astype(np.float32)
     return ~route_inside, np.maximum(0.0, dist_route - width)
 
 

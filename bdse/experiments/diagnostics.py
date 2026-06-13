@@ -212,6 +212,17 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any], recompute_hard_events: bool 
     logged_mask = np.asarray(label_meta.get("agent_future_logged_mask", []), dtype=bool)
     cv_mask = np.asarray(label_meta.get("agent_future_cv_fallback_mask", []), dtype=bool)
     selected_agent_count = int(label_meta.get("selected_agent_count", int(s.runtime.agent_valid.sum())))
+    teacher_diag = dict(getattr(s.teacher, "diagnostics", {}) or {})
+    quality_reasons = {str(x) for x in teacher_diag.get("quality_reasons", []) or []}
+    known_quality_reasons = [
+        "no_safe_candidate",
+        "too_few_valid_candidates",
+        "poor_candidate_log_ade",
+        "poor_teacher_log_ade",
+        "teacher_far_from_log_nearest",
+        "logged_ego_far_from_route",
+        "teacher_hard_violation",
+    ]
     out = {
         "teacher_vs_log_disagreement": teacher_vs_log,
         "teacher_regret_to_log_nearest": teacher_regret_to_log,
@@ -257,7 +268,13 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any], recompute_hard_events: bool 
         "teacher_evidence_share_at_star": float(s.teacher.J_evid[a_star] / max(abs(s.teacher.J_T[a_star]), 1e-6)),
         "partition_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_T[valid] - (s.teacher.J_base[valid] + s.teacher.J_evid[valid])))) if valid.any() else float("nan"),
         "evidence_sum_max_abs_error": float(np.nanmax(np.abs(s.teacher.J_evid[valid] - s.teacher.g_evid[:, valid].sum(axis=0)))) if valid.any() else float("nan"),
+        "quality_keep_rate": float(bool(teacher_diag.get("quality_keep", True))),
+        "quality_candidate_log_ade_min": float(teacher_diag.get("quality_candidate_log_ade_min", log_costs[log_nearest] if log_nearest >= 0 else float("nan"))),
+        "quality_candidate_log_ade_teacher": float(teacher_diag.get("quality_candidate_log_ade_teacher", log_costs[a_star] if log_nearest >= 0 else float("nan"))),
+        "quality_teacher_to_nearest_log_ade_gap": float(teacher_diag.get("quality_teacher_to_nearest_log_ade_gap", (log_costs[a_star] - log_costs[log_nearest]) if log_nearest >= 0 else float("nan"))),
     }
+    for reason in known_quality_reasons:
+        out[f"quality_reject_{reason}_rate"] = float(reason in quality_reasons)
     if hard_events is not None:
         out.update(_hard_event_type_counts(s, hard_events, valid))
         out.update(_hard_event_type_flags(s, hard_events, a_star, "teacher_hard_type"))

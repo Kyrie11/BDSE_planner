@@ -87,7 +87,14 @@ def summarize_sample_quality(sample: Sample) -> dict[str, float | bool | int]:
             gt = np.asarray(sample.label_future.logged_ego, dtype=np.float32)
             tr = np.asarray(sample.candidates.trajectories[a], dtype=np.float32)
             n = min(len(gt), len(tr))
-            metrics["candidate_log_ade_teacher"] = float(np.linalg.norm(tr[:n, :2] - gt[:n, :2], axis=1).mean()) if n else float("nan")
+            if n:
+                metrics["candidate_log_ade_teacher"] = float(np.linalg.norm(tr[:n, :2] - gt[:n, :2], axis=1).mean())
+                nearest = float(metrics.get("candidate_log_ade_min", float("nan")))
+                if np.isfinite(nearest):
+                    metrics["teacher_to_nearest_log_ade_gap"] = float(metrics["candidate_log_ade_teacher"] - nearest)
+            else:
+                metrics["candidate_log_ade_teacher"] = float("nan")
+                metrics["teacher_to_nearest_log_ade_gap"] = float("nan")
     return metrics
 
 
@@ -108,6 +115,16 @@ def quality_decision(metrics: dict[str, Any], cfg: dict[str, Any]) -> QualityDec
         val = float(metrics.get("candidate_log_ade_min", float("nan")))
         if np.isfinite(val) and val > float(max_ade):
             reasons.append("poor_candidate_log_ade")
+    max_teacher_ade = qcfg.get("max_candidate_log_ade_teacher", None)
+    if max_teacher_ade is not None:
+        val = float(metrics.get("candidate_log_ade_teacher", float("nan")))
+        if np.isfinite(val) and val > float(max_teacher_ade):
+            reasons.append("poor_teacher_log_ade")
+    max_gap = qcfg.get("max_teacher_to_nearest_log_ade_gap", None)
+    if max_gap is not None:
+        val = float(metrics.get("teacher_to_nearest_log_ade_gap", float("nan")))
+        if np.isfinite(val) and val > float(max_gap):
+            reasons.append("teacher_far_from_log_nearest")
     max_route_p95 = qcfg.get("max_logged_route_p95", None)
     if max_route_p95 is not None:
         val = float(metrics.get("logged_ego_route_dist_p95", float("nan")))

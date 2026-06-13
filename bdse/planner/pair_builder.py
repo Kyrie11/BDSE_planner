@@ -15,16 +15,22 @@ def margin_matrix(J: np.ndarray) -> np.ndarray:
     return M
 
 
-def add_positive_pair(pair_set: set[tuple[int, int]], J_T: np.ndarray, a: int, b: int, valid_mask: np.ndarray) -> None:
+def oriented_positive_pair(J_T: np.ndarray, a: int, b: int, valid_mask: np.ndarray) -> tuple[int, int] | None:
     if a == b or not (valid_mask[a] and valid_mask[b]):
-        return
+        return None
     m_ab = float(J_T[b] - J_T[a])
     if m_ab > 0:
-        pair_set.add((int(a), int(b)))
-        return
+        return int(a), int(b)
     m_ba = float(J_T[a] - J_T[b])
     if m_ba > 0:
-        pair_set.add((int(b), int(a)))
+        return int(b), int(a)
+    return None
+
+
+def add_positive_pair(pair_set: set[tuple[int, int]], J_T: np.ndarray, a: int, b: int, valid_mask: np.ndarray) -> None:
+    pair = oriented_positive_pair(J_T, a, b, valid_mask)
+    if pair is not None:
+        pair_set.add(pair)
 
 
 def build_pair_labels(candidates: CandidateBank, teacher: TeacherLabels, cfg: dict[str, Any]) -> PairLabels:
@@ -33,13 +39,22 @@ def build_pair_labels(candidates: CandidateBank, teacher: TeacherLabels, cfg: di
     valid_idx = np.flatnonzero(valid)
     J = teacher.J_T
     pair_set: set[tuple[int, int]] = set()
+    must_keep_pairs: set[tuple[int, int]] = set()
+
+    def add_pair(a: int, b: int, must_keep: bool = False) -> None:
+        pair = oriented_positive_pair(J, int(a), int(b), valid)
+        if pair is None:
+            return
+        pair_set.add(pair)
+        if must_keep:
+            must_keep_pairs.add(pair)
 
     a_star = int(teacher.a_star)
     non_teacher = [i for i in valid_idx.tolist() if i != a_star]
     top_l = int(pcfg.get("winner_top_l", 16))
     top_by_cost = sorted(non_teacher, key=lambda i: (float(J[i]), int(i)))[:top_l]
     for b in top_by_cost:
-        add_positive_pair(pair_set, J, a_star, b, valid)
+        add_pair(a_star, b, must_keep=True)
 
     M = margin_matrix(J)
     pos = M[np.isfinite(M) & (M > 0)]
@@ -51,9 +66,10 @@ def build_pair_labels(candidates: CandidateBank, teacher: TeacherLabels, cfg: di
 
     safe = valid & (~teacher.hard_violation_mask.astype(bool))
     unsafe = valid & teacher.hard_violation_mask.astype(bool)
+    preserve_safe_unsafe = bool(pcfg.get("preserve_safe_unsafe_pairs", True))
     for a in np.flatnonzero(safe):
         for b in np.flatnonzero(unsafe):
-            add_positive_pair(pair_set, J, int(a), int(b), valid)
+            add_pair(int(a), int(b), must_keep=preserve_safe_unsafe)
 
     all_pos = [(int(a), int(b)) for a in valid_idx for b in valid_idx if a != b and M[a, b] > 0]
     rng = np.random.default_rng(int(pcfg.get("random_seed", 17)))
@@ -65,8 +81,19 @@ def build_pair_labels(candidates: CandidateBank, teacher: TeacherLabels, cfg: di
             break
         pair_set.add(p)
     if len(pair_set) > target_max:
-        ordered = sorted(pair_set, key=lambda p: (0 if p[0] == a_star else 1, float(J[p[1]]), p[0], p[1]))
-        pair_list = ordered[:target_max]
+        # Preserve pairs that define the paper's decision boundary: teacher-vs-top
+        # rivals and safe-vs-unsafe comparisons.  Without this, random/near-tie
+        # fill can truncate the exact hard-evidence pairs that BDSE is supposed to
+        # learn under the evidence budget.
+        must_ordered = sorted(
+            must_keep_pairs,
+            key=lambda p: (0 if p[0] == a_star else 1, 0 if teacher.hard_violation_mask[p[1]] and not teacher.hard_violation_mask[p[0]] else 1, float(J[p[1]]), p[0], p[1]),
+        )
+        fill_ordered = sorted(
+            pair_set - set(must_ordered),
+            key=lambda p: (0 if p[0] == a_star else 1, float(J[p[1]]), p[0], p[1]),
+        )
+        pair_list = (must_ordered + fill_ordered)[:target_max]
     else:
         pair_list = sorted(pair_set, key=lambda p: (p[0], p[1]))
 
@@ -85,7 +112,7 @@ def build_pair_labels(candidates: CandidateBank, teacher: TeacherLabels, cfg: di
             if a == a_star:
                 weights[i] += 1.0
             if teacher.hard_violation_mask[b] and not teacher.hard_violation_mask[a]:
-                weights[i] += 2.0
+                weights[i] += float(pcfg.get("safe_unsafe_weight", 2.0))
             if margins[i] < eta:
                 weights[i] += 1.0
         pair_valid = np.ones((len(pairs),), dtype=bool)
