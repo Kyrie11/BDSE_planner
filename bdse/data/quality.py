@@ -113,23 +113,6 @@ def quality_decision(metrics: dict[str, Any], cfg: dict[str, Any]) -> QualityDec
         val = float(metrics.get("logged_ego_route_dist_p95", float("nan")))
         if np.isfinite(val) and val > float(max_route_p95):
             reasons.append("logged_ego_far_from_route")
-
-    # A logged-like candidate may exist while the teacher still chooses a far-away
-    # hard-avoidance or route-artifact trajectory.  Those samples are dangerous for
-    # BDSE training because they teach the model that sparse evidence should always
-    # prefer conservative motion, instead of preserving decisive margins.
-    max_teacher_ade = qcfg.get("max_candidate_log_ade_teacher", None)
-    if max_teacher_ade is not None:
-        val = float(metrics.get("candidate_log_ade_teacher", float("nan")))
-        if np.isfinite(val) and val > float(max_teacher_ade):
-            reasons.append("teacher_far_from_logged_ego")
-    max_teacher_gap = qcfg.get("max_teacher_to_nearest_log_ade_gap", None)
-    if max_teacher_gap is not None:
-        teacher_ade = float(metrics.get("candidate_log_ade_teacher", float("nan")))
-        nearest_ade = float(metrics.get("candidate_log_ade_min", float("nan")))
-        if np.isfinite(teacher_ade) and np.isfinite(nearest_ade) and teacher_ade - nearest_ade > float(max_teacher_gap):
-            reasons.append("teacher_much_worse_than_nearest_logged_candidate")
-
     if bool(qcfg.get("exclude_teacher_hard", False)) and bool(metrics.get("teacher_hard_violation", False)):
         reasons.append("teacher_hard_violation")
     return QualityDecision(keep=not reasons, reasons=tuple(reasons), metrics=metrics)

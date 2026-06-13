@@ -41,14 +41,16 @@ candidate:
   prune_preserve_history: 4
   repair_low_valid_count: true
   min_valid_candidates: 24
+  # These counts describe the final K=32 composition.  pool_K expands this
+  # table internally before pruning back to K, so the sum must remain 32.
   counts:
-    keep_follow: 10
-    decelerate_stop: 10
-    yield_creep: 8
-    lane_change_left: 4
-    lane_change_right: 4
-    route_turn_connector: 4
-    safe_fallback: 8
+    keep_follow: 8
+    decelerate_stop: 7
+    yield_creep: 5
+    lane_change_left: 3
+    lane_change_right: 3
+    route_turn_connector: 2
+    safe_fallback: 4
 
 evidence:
   max_atoms: 160

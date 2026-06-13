@@ -39,8 +39,24 @@ def validate_config(cfg: Mapping[str, Any]) -> None:
                 "BDSE forbids teacher.separate_hard_gate in main experiments; hard events must be evidence atoms."
             )
     cand = cfg.get("candidate", {})
+    K = int(cand.get("K", 32))
+    pool_K = int(cand.get("pool_K", cand.get("K_pool", K)))
+    if pool_K < K:
+        raise ValueError(f"candidate.pool_K must be >= candidate.K; got pool_K={pool_K}, K={K}")
     counts = cand.get("counts", {})
-    if counts and sum(int(v) for v in counts.values()) != int(cand.get("K", 32)):
-        raise ValueError("candidate.counts must sum to candidate.K")
+    if counts:
+        count_sum = sum(int(v) for v in counts.values())
+        if count_sum != K:
+            raise ValueError(
+                f"candidate.counts must sum to candidate.K; got sum={count_sum}, K={K}. "
+                "Use candidate.pool_K for a larger pre-pruning proposal pool while keeping candidate.K fixed."
+            )
+    pool_counts = cand.get("pool_counts", {})
+    if pool_counts:
+        pool_count_sum = sum(int(v) for v in pool_counts.values())
+        if pool_count_sum != pool_K:
+            raise ValueError(
+                f"candidate.pool_counts must sum to candidate.pool_K; got sum={pool_count_sum}, pool_K={pool_K}."
+            )
     if not cfg.get("teacher", {}).get("atom_normalization_first", True):
         raise ValueError("BDSE requires atom-level normalization before evidence summation.")

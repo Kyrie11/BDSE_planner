@@ -107,7 +107,9 @@ def main() -> None:
     parser.add_argument("--max-interaction-atoms", type=int, default=None,
                         help="Override max number of interaction evidence atoms.")
     parser.add_argument("--candidate-k", type=int, default=None,
-                        help="Override the finite candidate-bank size K. Use 32 for the paper/default BDSE setting.")
+                        help="Override the final finite candidate-bank size K. Use 32 for the paper/default BDSE setting.")
+    parser.add_argument("--candidate-pool-k", type=int, default=None,
+                        help="Override the larger runtime proposal pool size before pruning back to candidate.K. This does not change the final teacher/evidence tensor K.")
     parser.add_argument("--teacher-cost-eval-stride", type=int, default=None,
                         help="Evaluate expensive teacher costs every N candidate timesteps; candidates are still saved at full resolution.")
     args = parser.parse_args()
@@ -185,6 +187,9 @@ def main() -> None:
         cfg.setdefault("evidence", {})["max_interaction_atoms"] = max(0, int(args.max_interaction_atoms))
     if args.candidate_k is not None:
         cfg.setdefault("candidate", {})["K"] = max(1, int(args.candidate_k))
+    if args.candidate_pool_k is not None:
+        cand_cfg = cfg.setdefault("candidate", {})
+        cand_cfg["pool_K"] = max(int(cand_cfg.get("K", 1)), int(args.candidate_pool_k))
     if args.teacher_cost_eval_stride is not None:
         cfg.setdefault("teacher", {})["cost_eval_stride"] = max(1, int(args.teacher_cost_eval_stride))
     if args.list_splits:

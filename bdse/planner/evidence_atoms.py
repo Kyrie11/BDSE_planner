@@ -759,10 +759,24 @@ def hard_event_matrix(atoms: list[EvidenceAtom], candidates: CandidateBank, runt
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 width = float(atom.anchor.get("width", c_route_width))
                 polygons = [np.asarray(p, dtype=np.float32).reshape(-1, 2) for p in atom.anchor.get("drivable_polygons", [])]
-                outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
                 slack = float(safety.get("off_drivable_slack_m", 0.75))
                 min_frames = int(safety.get("off_drivable_min_frames", 3))
-                out[ei, a] = _sustained_true(np.logical_and(outside, dist > slack), min_frames)
+                if polygons:
+                    outside, dist = _outside_drivable(traj[:, :2], polygons, route, width)
+                    hard_mask = np.logical_and(outside, dist > slack)
+                else:
+                    # Keep diagnostics/recomputed hard-event semantics identical to
+                    # raw_local_costs_with_hard_events(): without exact drivable
+                    # polygons, the route corridor is only a fallback proxy, so use
+                    # the wider configured hard fallback corridor instead of the
+                    # lane-width-scale soft route-adherence corridor.
+                    fallback_width = float(safety.get("route_corridor_fallback_width_m", width))
+                    hard_width = max(width, fallback_width)
+                    hard_slack = float(safety.get("route_corridor_fallback_hard_slack_m", slack))
+                    dist = cached_route_dist(route, a)
+                    outside = dist > hard_width
+                    hard_mask = np.logical_and(outside, np.maximum(0.0, dist - hard_width) > hard_slack)
+                out[ei, a] = _sustained_true(hard_mask, min_frames)
             elif atom.type == "wrong_way":
                 route = np.asarray(atom.anchor.get("route_centerline"), dtype=np.float32)
                 route_dist = cached_route_dist(route, a)
