@@ -605,10 +605,21 @@ def raw_local_costs_with_hard_events(atoms: list[EvidenceAtom], candidates: Cand
                     raw[ei, a] = float(c_off * float(outside.max()) + outside_dist + near_boundary)
                     hard_mask = np.logical_and(outside, dist > off_slack)
                 else:
+                    # Fast preprocessing often disables exact drivable polygons.  A
+                    # narrow route-centerline corridor is then only a proxy for
+                    # drivable area, not the true drivable surface.  Using the same
+                    # lane-width-scale corridor as a hard off-drivable label makes
+                    # valid adjacent-lane / intersection rollouts look illegal and
+                    # produces no-safe-candidate scenes.  Keep the soft route
+                    # adherence signal, but allow a wider configurable hard fallback
+                    # corridor when polygons are unavailable.
+                    fallback_width = float(safety.get("route_corridor_fallback_width_m", width))
+                    hard_width = max(width, fallback_width)
+                    hard_slack = float(safety.get("route_corridor_fallback_hard_slack_m", off_slack))
                     dist = cached_route_dist(route, a)
-                    outside = dist > width
-                    raw[ei, a] = float(c_off * float(outside.max()) + np.maximum(0.0, dist - width).sum())
-                    hard_mask = np.logical_and(outside, np.maximum(0.0, dist - width) > off_slack)
+                    outside = dist > hard_width
+                    raw[ei, a] = float(c_off * float(outside.max()) + np.maximum(0.0, dist - hard_width).sum())
+                    hard_mask = np.logical_and(outside, np.maximum(0.0, dist - hard_width) > hard_slack)
                 if atom.is_hard and candidates.valid_mask[a]:
                     hard_events[ei, a] = _sustained_true(hard_mask, off_min_frames)
             elif atom.type == "wrong_way":
