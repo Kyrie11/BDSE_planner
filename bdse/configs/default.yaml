@@ -228,10 +228,17 @@ selector:
   lambda_near: 1.0
   lambda_safety: 2.0
   eta_pred: 1.0
+  hab_enabled: true
+  hab_reserve_fraction: 0.2
+  hab_free_budget: null
+  # Information bonus and prior variance used by the uncertainty-aware HAB
+  # selector before an atom-action evidence query has been made.
+  lambda_info: 0.1
+  unqueried_atom_variance: 1.0
   stop_gradient: true
 tournament:
   L_infer: 16
-  beta_uncertainty: 0.0
+  beta_uncertainty: 1.0
   use_softmin: true
   softmin_tau: 1.0
 fallback:
@@ -259,6 +266,8 @@ model:
   max_polyline_points: 64
   max_traffic_tokens: 32
   dropout: 0.1
+  num_families: 5
+  variance_floor: 1.0e-4
 training:
   lr: 1.0e-4
   weight_decay: 1.0e-2
@@ -269,19 +278,17 @@ training:
   teacher_soft_target_tau: 1.0
   loss_weights:
     base: 1.0
+    pair: 1.0
     residual: 1.0
+    uncertainty: 0.1
     full_interface_rank_aux: 0.1
+    family: 0.5
     proposal: 1.0
     action: 1.0
     calibration: 0.0
   rank_margin: 1.0
   rank_tau: 1.0
-  certificate_schedule:
-    enabled: true
-    oracle_start_prob: 1.0
-    oracle_end_prob: 0.0
-    warmup_epochs: 1
-    anneal_epochs: 10
+  pair_zero_weight: 0.1
 
 calibration:
   epsilon_cal: 0.0

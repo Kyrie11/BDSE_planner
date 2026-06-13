@@ -288,8 +288,27 @@ def sample_to_model_inputs(sample: Sample, cfg: dict[str, Any], include_teacher:
                 current = np.minimum(caps, support)
                 spent += float(e_cost[idx])
                 remaining.discard(idx)
+        # Family-level oracle target for HAB.  It aggregates the same greedy
+        # marginal gains used for atom proposals into certificate families, so
+        # the family gate learns which evidence family deserves budget in this
+        # scene/candidate set.
+        num_families = int(cfg.get("model", {}).get("num_families", max(FAMILY_NAMES.values()) + 1))
+        family_gain = np.zeros((num_families,), dtype=np.float32)
+        family_active = np.zeros((num_families,), dtype=bool)
+        fam_ids = np.asarray(arrays["evidence_family_ids"], dtype=np.int64)[:Emax]
+        e_active_all = np.asarray(arrays["evidence_active"], dtype=bool)[:Emax]
+        for i in np.flatnonzero(e_active_all):
+            f = int(np.clip(fam_ids[i], 0, num_families - 1))
+            family_active[f] = True
+            family_gain[f] += float(crit[i])
+        if family_active[1:].any():
+            family_active[0] = False
+        if not family_active.any():
+            family_active[0] = True
         arrays["oracle_selected_mask"] = oracle
         arrays["proposal_target_gain"] = crit
+        arrays["family_target_gain"] = family_gain
+        arrays["family_target_active"] = family_active
     tensors: dict[str, torch.Tensor] = {}
     for k, v in arrays.items():
         if np.asarray(v).dtype == np.bool_:

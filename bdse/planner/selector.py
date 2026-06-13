@@ -128,6 +128,138 @@ def _greedy_cover_from_pair_support(
         current += float(gain)
     return selected, float(current), float(spent)
 
+
+def _family_constraint_ok(
+    idx: int,
+    cost: float,
+    spent_by_family: dict[int, float],
+    family_ids: np.ndarray | None,
+    family_budget_caps: np.ndarray | None,
+) -> bool:
+    if family_ids is None or family_budget_caps is None:
+        return True
+    fam = np.asarray(family_ids, dtype=np.int64).reshape(-1)
+    if idx >= fam.shape[0]:
+        return True
+    f = int(fam[idx])
+    caps = np.asarray(family_budget_caps, dtype=np.float32).reshape(-1)
+    if f < 0 or f >= caps.shape[0] or not np.isfinite(caps[f]) or caps[f] <= 0.0:
+        return True
+    return spent_by_family.get(f, 0.0) + float(cost) <= float(caps[f]) + 1e-6
+
+
+def _uncertainty_aware_greedy_from_pair_delta(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    atom_pair_var: np.ndarray,
+    base_pair_var: np.ndarray,
+    caps: np.ndarray,
+    pair_weights: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+    beta_uncertainty: float = 0.0,
+    epsilon_cal: float = 0.0,
+    lambda_info: float = 0.0,
+    info_caps: np.ndarray | None = None,
+    prior_atom_pair_var: np.ndarray | None = None,
+    family_ids: np.ndarray | None = None,
+    family_budget_caps: np.ndarray | None = None,
+) -> tuple[list[int], float, float, dict[str, Any]]:
+    """Greedy Eq. (HAB objective) over signed margins and uncertainty."""
+    delta = np.asarray(atom_delta, dtype=np.float32)
+    mu = np.asarray(base_margin, dtype=np.float32).reshape(-1).copy()
+    var = np.asarray(base_pair_var, dtype=np.float32).reshape(-1).copy()
+    if delta.ndim != 2 or delta.shape[1] != mu.shape[0]:
+        E = int(np.asarray(atom_budget_costs).shape[0])
+        delta = np.zeros((E, mu.shape[0]), dtype=np.float32)
+    else:
+        E = int(delta.shape[0])
+    atom_var = np.asarray(atom_pair_var, dtype=np.float32)
+    if atom_var.ndim != 2 or atom_var.shape != delta.shape:
+        atom_var = np.zeros_like(delta, dtype=np.float32)
+    caps = np.asarray(caps, dtype=np.float32).reshape(-1)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    if caps.shape[0] != mu.shape[0]:
+        caps = np.zeros((mu.shape[0],), dtype=np.float32)
+    if weights.shape[0] != mu.shape[0]:
+        weights = np.ones((mu.shape[0],), dtype=np.float32)
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).reshape(-1).copy()
+    if active.shape[0] < E:
+        active = np.pad(active, (0, E - active.shape[0]), constant_values=False)
+    active = active[:E]
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+
+    beta = max(float(beta_uncertainty), 0.0)
+    eps_cal = max(float(epsilon_cal), 0.0)
+    lam_info = max(float(lambda_info), 0.0)
+    if info_caps is None:
+        info_caps_arr = np.ones_like(mu, dtype=np.float32)
+    else:
+        info_caps_arr = np.asarray(info_caps, dtype=np.float32).reshape(-1)
+        if info_caps_arr.shape[0] != mu.shape[0]:
+            info_caps_arr = np.ones_like(mu, dtype=np.float32)
+    prior_var = np.asarray(prior_atom_pair_var, dtype=np.float32) if prior_atom_pair_var is not None else None
+    if prior_var is None or prior_var.shape != atom_var.shape:
+        prior_var = (np.maximum(atom_var, 0.0) + 1.0).astype(np.float32)
+
+    def objective(m: np.ndarray, u: np.ndarray, info_accum: np.ndarray) -> float:
+        lcb = m - beta * np.sqrt(np.maximum(u, 0.0)) - eps_cal
+        cert = np.minimum(caps, np.maximum(lcb, 0.0))
+        if lam_info > 0:
+            info = np.minimum(info_caps_arr, np.maximum(info_accum, 0.0))
+            val = cert + lam_info * info
+        else:
+            val = cert
+        return float(np.sum(weights * val, dtype=np.float64))
+
+    info_state = np.zeros_like(mu, dtype=np.float32)
+    current = objective(mu, var, info_state)
+    selected: list[int] = []
+    spent = 0.0
+    spent_by_family: dict[int, float] = {}
+    family_arr = np.asarray(family_ids, dtype=np.int64).reshape(-1) if family_ids is not None else None
+    while bool(active.any()):
+        best: tuple[int, float, float, np.ndarray, np.ndarray, np.ndarray] | None = None
+        best_key = (-np.inf, -np.inf, np.inf)
+        for i in np.flatnonzero(active):
+            idx = int(i)
+            c = float(costs[idx])
+            if not np.isfinite(c) or spent + c > float(budget) + 1e-6:
+                continue
+            if not _family_constraint_ok(idx, c, spent_by_family, family_arr, family_budget_caps):
+                continue
+            new_mu = mu + delta[idx]
+            new_var = var + np.maximum(atom_var[idx], 0.0)
+            new_info = info_state + np.maximum(0.0, prior_var[idx] - atom_var[idx])
+            val = objective(new_mu, new_var, new_info)
+            gain = float(val - current)
+            key = (gain / max(c, 1e-6), gain, -idx)
+            if key > best_key:
+                best_key = key
+                best = (idx, gain, c, new_mu, new_var, new_info)
+        if best is None or best_key[1] <= 1e-9:
+            break
+        idx, gain, c, mu, var, info_state = best
+        selected.append(idx)
+        active[idx] = False
+        spent += c
+        if family_arr is not None and idx < family_arr.shape[0]:
+            f = int(family_arr[idx])
+            spent_by_family[f] = spent_by_family.get(f, 0.0) + c
+        current += float(gain)
+    diagnostics = {
+        "spent_budget": float(spent),
+        "family_spent": {int(k): float(v) for k, v in spent_by_family.items()},
+        "beta_uncertainty": float(beta),
+        "epsilon_cal": float(eps_cal),
+        "lambda_info": float(lam_info),
+    }
+    return selected, float(current), float(spent), diagnostics
+
+
 def oracle_greedy_selector(
     J_base: np.ndarray,
     g_true: np.ndarray,
@@ -291,6 +423,14 @@ def runtime_greedy_selector(
     lambda_near: float = 1.0,
     lambda_safety: float = 2.0,
     atom_active_mask: np.ndarray | None = None,
+    predicted_atom_variance: np.ndarray | None = None,
+    base_pair_variance: np.ndarray | None = None,
+    beta_uncertainty: float = 0.0,
+    epsilon_cal: float = 0.0,
+    lambda_info: float = 0.0,
+    prior_atom_variance: float | np.ndarray | None = None,
+    family_ids: np.ndarray | None = None,
+    family_budget_caps: np.ndarray | None = None,
 ) -> SelectionResult:
     """Two-stage runtime selector using base/cheap pair screening only.
 
@@ -313,33 +453,102 @@ def runtime_greedy_selector(
         a = pairs[:, 0]
         b = pairs[:, 1]
         base_delta = np.asarray(predicted_base_cost, dtype=np.float32)[b] - np.asarray(predicted_base_cost, dtype=np.float32)[a]
-        base_support = np.maximum(base_delta, 0.0)
-        atom_support = np.maximum(np.asarray(predicted_atom_costs, dtype=np.float32)[:, b] - np.asarray(predicted_atom_costs, dtype=np.float32)[:, a], 0.0)
         safety_b = np.asarray(runtime_safety_flags, dtype=bool)[b] if np.asarray(runtime_safety_flags).shape[0] > int(np.max(b, initial=0)) else np.zeros_like(base_delta, dtype=bool)
         caps = np.where(
             safety_b,
             float(gamma_max),
             np.minimum(np.maximum(np.abs(base_delta) + float(eta_pred), 1e-3), float(gamma_max)),
         ).astype(np.float32)
+        atom_delta = np.asarray(predicted_atom_costs, dtype=np.float32)[:, b] - np.asarray(predicted_atom_costs, dtype=np.float32)[:, a]
+        base_support = np.maximum(base_delta, 0.0)
+        atom_support = np.maximum(atom_delta, 0.0)
+        if predicted_atom_variance is not None:
+            av = np.asarray(predicted_atom_variance, dtype=np.float32)
+            if av.ndim == 2 and av.shape[1] >= max(int(np.max(b, initial=0)), int(np.max(a, initial=0))) + 1:
+                atom_pair_var = np.maximum(av[:, a], 0.0) + np.maximum(av[:, b], 0.0)
+            elif av.ndim == 2 and av.shape == atom_delta.shape:
+                atom_pair_var = np.maximum(av, 0.0)
+            else:
+                atom_pair_var = np.zeros_like(atom_delta, dtype=np.float32)
+        else:
+            atom_pair_var = np.zeros_like(atom_delta, dtype=np.float32)
+        if base_pair_variance is not None:
+            bpv = np.asarray(base_pair_variance, dtype=np.float32)
+            if bpv.ndim == 1 and bpv.shape[0] == len(pairs):
+                base_var = np.maximum(bpv, 0.0)
+            elif bpv.ndim == 2 and bpv.shape[0] >= len(pairs) and bpv.shape[1] >= 1:
+                base_var = np.maximum(bpv[: len(pairs), 0], 0.0)
+            else:
+                base_var = np.zeros((len(pairs),), dtype=np.float32)
+        else:
+            base_var = np.zeros((len(pairs),), dtype=np.float32)
+        info_caps = np.where(safety_b, float(gamma_max), np.maximum(float(eta_pred), np.abs(base_delta))).astype(np.float32)
     else:
+        base_delta = np.zeros((0,), dtype=np.float32)
         base_support = np.zeros((0,), dtype=np.float32)
         atom_support = np.zeros((E, 0), dtype=np.float32)
+        atom_delta = np.zeros((E, 0), dtype=np.float32)
+        atom_pair_var = np.zeros((E, 0), dtype=np.float32)
+        base_var = np.zeros((0,), dtype=np.float32)
         caps = np.zeros((0,), dtype=np.float32)
-    selected, current, spent = _greedy_cover_from_pair_support(
-        atom_support,
-        base_support,
-        caps,
-        pair_weights,
-        atom_budget_costs,
-        budget,
-        atom_active_mask,
+        info_caps = np.zeros((0,), dtype=np.float32)
+    use_uncertainty_objective = (
+        predicted_atom_variance is not None
+        or abs(float(beta_uncertainty)) > 0.0
+        or abs(float(epsilon_cal)) > 0.0
+        or abs(float(lambda_info)) > 0.0
+        or family_budget_caps is not None
     )
+    if use_uncertainty_objective:
+        if isinstance(prior_atom_variance, np.ndarray):
+            prior = np.asarray(prior_atom_variance, dtype=np.float32)
+            if len(pairs) and prior.ndim == 2 and prior.shape[1] >= max(int(np.max(pairs[:, 0], initial=0)), int(np.max(pairs[:, 1], initial=0))) + 1:
+                prior_pair = np.maximum(prior[:, pairs[:, 0]], 0.0) + np.maximum(prior[:, pairs[:, 1]], 0.0)
+            elif prior.shape == atom_pair_var.shape:
+                prior_pair = prior
+            else:
+                prior_pair = None
+        elif prior_atom_variance is not None:
+            prior_pair = np.full_like(atom_pair_var, float(prior_atom_variance), dtype=np.float32)
+        else:
+            prior_pair = None
+        selected, current, spent, extra_diag = _uncertainty_aware_greedy_from_pair_delta(
+            atom_delta,
+            base_delta,
+            atom_pair_var,
+            base_var,
+            caps,
+            pair_weights,
+            atom_budget_costs,
+            budget,
+            atom_active_mask,
+            beta_uncertainty=beta_uncertainty,
+            epsilon_cal=epsilon_cal,
+            lambda_info=lambda_info,
+            info_caps=info_caps,
+            prior_atom_pair_var=prior_pair,
+            family_ids=family_ids,
+            family_budget_caps=family_budget_caps,
+        )
+        mode = "runtime_hab_lcb_uncertainty"
+    else:
+        selected, current, spent = _greedy_cover_from_pair_support(
+            atom_support,
+            base_support,
+            caps,
+            pair_weights,
+            atom_budget_costs,
+            budget,
+            atom_active_mask,
+        )
+        extra_diag = {}
+        mode = "runtime_base_screen_sparse"
     return SelectionResult(
         selected=selected,
         objective_value=current,
         pair_indices=pairs,
         pair_weights=pair_weights,
-        diagnostics={"spent_budget": spent, "budget": float(budget), "mode": "runtime_base_screen_sparse", "pair_count": int(len(pairs))},
+        diagnostics={"spent_budget": spent, "budget": float(budget), "mode": mode, "pair_count": int(len(pairs)), **extra_diag},
     )
 
 def select_by_mode(

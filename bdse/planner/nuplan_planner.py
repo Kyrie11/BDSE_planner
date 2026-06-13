@@ -11,10 +11,11 @@ from bdse.data.nuplan_runtime_adapter import build_runtime_features_from_planner
 from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.evidence_queries import compute_query_features_for_pairs
+from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
-from bdse.planner.pair_screen import build_runtime_pairs_from_base
+from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
 from bdse.planner.selector import runtime_greedy_selector
-from bdse.planner.tournament import run_tournament
+from bdse.planner.tournament import run_tournament, selected_pair_sigma_from_action_variance
 
 
 class BDSEPlannerCore:
@@ -64,17 +65,51 @@ class BDSEPlannerCore:
             lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
             lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
         )
-        budget = int(cfg.get("evidence", {}).get("budget", 16))
-        M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * budget, budget + 1)))
+        budget = float(cfg.get("evidence", {}).get("budget", 16))
+        M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
         active = np.asarray(evidence_bank.active_mask, dtype=bool)
-        masked_logits = np.where(active, proposal_logits, -1e9)
-        topm = np.argsort(-masked_logits)[: min(M, int(active.sum()) if active.any() else evidence_bank.E)].astype(np.int64)
-        action_ids = np.unique(pairs.reshape(-1)) if len(pairs) else np.flatnonzero(candidates.valid_mask)[: max(1, int(cfg.get("tournament", {}).get("L_infer", 16)))]
+        costs = np.asarray(evidence_bank.budget_costs(), dtype=np.float32)
+        family_ids = family_ids_from_atoms(evidence_bank.atoms, max_atoms=evidence_bank.E)
+        topm, family_budget, hab_diag = select_topm_atoms_hab(
+            proposal_logits,
+            family_ids,
+            active,
+            costs,
+            budget,
+            M,
+            family_scores=None,
+            free_budget=cfg.get("selector", {}).get("hab_free_budget", None),
+            reserve_fraction=float(cfg.get("selector", {}).get("hab_reserve_fraction", 0.2)),
+            enabled=bool(cfg.get("selector", {}).get("hab_enabled", True)),
+        )
+        rival_sets = build_rival_sets_from_base(
+            J0,
+            candidates.valid_mask,
+            runtime_flags,
+            L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
+            eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+        )
+        action_set: set[int] = set()
+        for a_idx, rivals in enumerate(rival_sets):
+            if not bool(candidates.valid_mask[a_idx]) or not rivals:
+                continue
+            action_set.add(int(a_idx))
+            action_set.update(int(r) for r in rivals)
+        if action_set:
+            action_ids = np.asarray(sorted(action_set), dtype=np.int64)
+        else:
+            action_ids = np.unique(pairs.reshape(-1)) if len(pairs) else np.flatnonzero(candidates.valid_mask)[: max(1, int(cfg.get("tournament", {}).get("L_infer", 16)))]
         g = self._rule_score_sparse(runtime, candidates, evidence_bank, topm, action_ids, cfg)
+        g_var = np.zeros_like(g, dtype=np.float32)
         return {
             "J0": J0,
             "g": g,
+            "g_var": g_var,
             "proposal_logits": proposal_logits.astype(np.float32),
+            "family_ids": family_ids,
+            "family_budget_caps": family_budget.family_caps,
+            "family_budgets": family_budget.family_budgets,
+            "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
             "queried_pair_count": int(len(topm) * len(action_ids)),
@@ -102,23 +137,35 @@ class BDSEPlannerCore:
     def _run_certificate_stage(self, runtime: RuntimeFeatures, candidates, evidence_bank, stage_cfg: dict[str, Any]) -> tuple[dict[str, Any], Any, Any, np.ndarray]:
         pred = self._predict_runtime_certificate(runtime, candidates, evidence_bank, stage_cfg)
         J0, g = pred["J0"], pred["g"]
+        g_var = pred.get("g_var", None)
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, stage_cfg)
         sel_cfg = stage_cfg.get("selector", {})
+        tour_cfg = stage_cfg.get("tournament", {})
         atom_active = np.zeros((evidence_bank.E,), dtype=bool)
         topm = np.asarray(pred.get("top_m_atoms", np.flatnonzero(evidence_bank.active_mask)), dtype=np.int64)
         atom_active[topm[(topm >= 0) & (topm < evidence_bank.E)]] = True
         atom_active &= evidence_bank.active_mask
+        family_ids = np.asarray(pred.get("family_ids", family_ids_from_atoms(evidence_bank.atoms, max_atoms=evidence_bank.E)), dtype=np.int64)
+        family_caps = pred.get("family_budget_caps", None)
         selection = runtime_greedy_selector(
             J0, g, evidence_bank.budget_costs(), candidates.valid_mask, runtime_flags,
             budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
-            L_infer=int(stage_cfg.get("tournament", {}).get("L_infer", 16)),
+            L_infer=int(tour_cfg.get("L_infer", 16)),
             gamma_max=float(sel_cfg.get("gamma_max_default", 100.0)),
             eta_pred=float(sel_cfg.get("eta_pred", 1.0)),
             lambda_near=float(sel_cfg.get("lambda_near", 1.0)),
             lambda_safety=float(sel_cfg.get("lambda_safety", 2.0)),
             atom_active_mask=atom_active,
+            predicted_atom_variance=g_var,
+            beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
+            epsilon_cal=float(tour_cfg.get("epsilon_cal", stage_cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
+            lambda_info=float(sel_cfg.get("lambda_info", 0.0)),
+            prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
+            family_ids=family_ids,
+            family_budget_caps=family_caps,
         )
-        tournament = run_tournament(J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg)
+        sigma = selected_pair_sigma_from_action_variance(g_var, selection.selected, candidates.valid_mask)
+        tournament = run_tournament(J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg, sigma=sigma)
         return pred, selection, tournament, atom_active
 
     def _needs_fallback(self, tournament, candidates, cfg: dict[str, Any]) -> bool:
@@ -134,15 +181,9 @@ class BDSEPlannerCore:
             return True
         return False
 
-    def plan_from_components(self, runtime: RuntimeFeatures, candidates, evidence_bank) -> tuple[int, np.ndarray, dict[str, Any]]:
-        """Run the deployment certificate path on a supplied candidate/evidence bank.
-
-        Open-loop evaluation uses cached candidates/evidence so diagnostics remain
-        aligned with teacher labels, while closed-loop runtime calls
-        :meth:`plan_from_runtime` to generate them from current observations.
-        """
-        import time
-
+    def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
+        candidates = generate_candidate_bank(runtime, self.cfg)
+        evidence_bank = enumerate_evidence_atoms(runtime, candidates, self.cfg)
         base_budget = int(self.cfg.get("evidence", {}).get("budget", 16))
         base_M = int(self.cfg.get("selector", {}).get("proposal_top_m", max(2 * base_budget, base_budget + 1)))
         base_L = int(self.cfg.get("tournament", {}).get("L_infer", 16))
@@ -161,12 +202,8 @@ class BDSEPlannerCore:
         best = None
         stage_records = []
         triggered = False
-        total_t0 = time.perf_counter()
         for idx, (stage_name, cfg_stage) in enumerate(stages):
-            stage_t0 = time.perf_counter()
             pred, selection, tournament, atom_active = self._run_certificate_stage(runtime, candidates, evidence_bank, cfg_stage)
-            stage_ms = (time.perf_counter() - stage_t0) * 1000.0
-            rival_sets = [[int(x) for x in r] for r in tournament.rival_sets]
             stage_records.append({
                 "stage": stage_name,
                 "action": int(tournament.action_index),
@@ -176,12 +213,7 @@ class BDSEPlannerCore:
                 "top_m_atoms": list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).tolist())),
                 "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
                 "sparse_query_count": int(pred.get("queried_pair_count", 0)),
-                "tournament_comparison_count": int(sum(len(r) for r in rival_sets)),
-                "rival_sets": rival_sets,
-                "latency_ms": float(stage_ms),
-                "budget": int(cfg_stage.get("evidence", {}).get("budget", base_budget)),
-                "proposal_top_m": int(cfg_stage.get("selector", {}).get("proposal_top_m", base_M)),
-                "L_infer": int(cfg_stage.get("tournament", {}).get("L_infer", base_L)),
+                "hab": pred.get("hab_diagnostics", {}),
             })
             best = (stage_name, cfg_stage, pred, selection, tournament, atom_active)
             if idx == 0 and not self._needs_fallback(tournament, candidates, cfg_stage):
@@ -193,8 +225,6 @@ class BDSEPlannerCore:
         stage_name, cfg_stage, pred, selection, tournament, atom_active = best
         action = int(tournament.action_index)
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg_stage)
-        rule_rerank_used = False
-        conservative_used = False
         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
             from bdse.planner.fallback import rule_based_runtime_scores, conservative_fallback_action
             top_k = int(fcfg.get("rule_rerank_top_k", 5))
@@ -206,39 +236,24 @@ class BDSEPlannerCore:
                 if float(rule_cost[best_rule]) + float(fcfg.get("rule_switch_margin", 0.0)) < float(rule_cost[action]) or runtime_flags[action]:
                     action = int(best_rule)
                     stage_name = stage_name + "+rule_rerank"
-                    rule_rerank_used = True
             elif runtime_flags[action]:
                 action = int(conservative_fallback_action(candidates))
                 stage_name = stage_name + "+conservative"
-                conservative_used = True
         trajectory = candidates.trajectories[action]
-        total_ms = (time.perf_counter() - total_t0) * 1000.0
-        final_rival_sets = [[int(x) for x in r] for r in tournament.rival_sets]
-        queried_actions = list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist()))
         diagnostics = {
             "action_index": action,
-            "selected_atoms": list(map(int, selection.selected)),
+            "selected_atoms": selection.selected,
             "proposal_top_m_atoms": list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).tolist())),
-            "queried_actions": queried_actions,
+            "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
             "sparse_query_count": int(pred.get("queried_pair_count", 0)),
-            "selected_certificate_query_count": int(len(selection.selected) * max(len(queried_actions), 1)),
-            "tournament_comparison_count": int(sum(len(r) for r in final_rival_sets)),
-            "rival_sets": final_rival_sets,
+            "hab": pred.get("hab_diagnostics", {}),
             "selector": selection.diagnostics,
             "tournament": tournament.diagnostics,
             "fallback_stage": stage_name,
             "fallback_triggered": bool(triggered),
-            "rule_rerank_used": bool(rule_rerank_used),
-            "conservative_fallback_used": bool(conservative_used),
             "fallback_stage_records": stage_records,
-            "latency_ms": float(total_ms),
         }
         return action, trajectory, diagnostics
-
-    def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
-        candidates = generate_candidate_bank(runtime, self.cfg)
-        evidence_bank = enumerate_evidence_atoms(runtime, candidates, self.cfg)
-        return self.plan_from_components(runtime, candidates, evidence_bank)
 
 
 class BDSEnuPlanPlanner:

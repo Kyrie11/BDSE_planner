@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from bdse.data.tensorizer import runtime_to_model_numpy
@@ -12,18 +13,35 @@ from bdse.model.evidence_encoder import EvidenceEncoder
 from bdse.model.scene_encoder import SceneEncoder
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, compute_query_features_for_pairs
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
-from bdse.planner.pair_screen import build_runtime_pairs_from_base
+from bdse.planner.hab import max_family_id, select_topm_atoms_hab
+from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
 
 EVIDENCE_TYPE_TO_ID = TYPE_NAMES
 FAMILY_TO_ID = FAMILY_NAMES
 
 
 class BDSEModel(nn.Module):
+    """Neural BDSE interface model.
+
+    The model follows the paper decomposition
+
+        J_T(a) = J_0(a) + sum_i g_i(a)
+
+    and exposes all quantities needed by the deployment-time HAB selector:
+    base costs, proposal logits, family gates, local atom means, and local atom
+    heteroscedastic variances.  The dense forward path is used for training;
+    ``predict_certificate_numpy`` mirrors runtime by only scoring Top-M HAB atoms
+    on actions that appear in the screened rival graph.
+    """
+
     def __init__(self, cfg: dict[str, Any]):
         super().__init__()
         mcfg = cfg.get("model", {})
         h = int(mcfg.get("hidden_dim", 256))
         self.cfg = cfg
+        self.hidden_dim = h
+        self.num_families = int(mcfg.get("num_families", int(mcfg.get("max_family_id", max_family_id())) + 1))
+        self.var_floor = float(mcfg.get("variance_floor", 1e-4))
         self.scene = SceneEncoder(
             h,
             int(mcfg.get("transformer_layers", 4)),
@@ -42,9 +60,19 @@ class BDSEModel(nn.Module):
         self.action_set_proj = nn.Sequential(nn.Linear(16, h), nn.ReLU(), nn.Linear(h, h))
         self.query_proj = nn.Sequential(nn.Linear(int(mcfg.get("query_feature_dim", 12)), h), nn.ReLU(), nn.Linear(h, h))
         self.base_head = nn.Sequential(nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.ReLU(), nn.Linear(h, 1))
+
+        # g_i(a): non-negative local cost contribution; cost *differences* are
+        # antisymmetric by construction: d_i(a,b)=g_i(b)-g_i(a).
         self.local_head = nn.Sequential(nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1), nn.Softplus())
-        # p_i = f_prop(h_x, z_i, u(A_t)); u(A_t) is projected by action_set_proj.
-        self.proposal_head = nn.Sequential(nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1))
+        # Heteroscedastic epistemic/aleatoric uncertainty head for the same query.
+        self.local_var_head = nn.Sequential(nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1))
+
+        # Hierarchical Atom Builder (HAB): family gate pi_tau followed by an
+        # atom proposal conditioned on family embedding and candidate-set summary.
+        self.family_embed = nn.Embedding(self.num_families, h)
+        self.family_activity_proj = nn.Sequential(nn.Linear(8, h), nn.ReLU(), nn.Linear(h, h))
+        self.family_head = nn.Sequential(nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1))
+        self.proposal_head = nn.Sequential(nn.LayerNorm(h * 5), nn.Linear(h * 5, h), nn.ReLU(), nn.Linear(h, 1))
         # Backward-compatible name used by old checkpoints/tests.
         self.selector_head = self.proposal_head
 
@@ -54,9 +82,19 @@ class BDSEModel(nn.Module):
             return x
         if x.shape[-1] > dim:
             return x[..., :dim]
-        return torch.nn.functional.pad(x, (0, dim - x.shape[-1]))
+        return F.pad(x, (0, dim - x.shape[-1]))
 
-    def _candidate_set_summary(self, J0: torch.Tensor, trajectories: torch.Tensor, maneuver_ids: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _positive_variance(raw: torch.Tensor, floor: float) -> torch.Tensor:
+        return F.softplus(raw).clamp_min(float(floor))
+
+    def _candidate_set_summary(
+        self,
+        J0: torch.Tensor,
+        trajectories: torch.Tensor,
+        maneuver_ids: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> torch.Tensor:
         B, K = J0.shape
         finite = torch.where(torch.isfinite(J0) & valid, J0, torch.full_like(J0, 1e6))
         masked = finite.masked_fill(~valid, 1e6)
@@ -76,16 +114,79 @@ class BDSEModel(nn.Module):
         prog_max = progress.masked_fill(~valid, -1e6).max(dim=1, keepdim=True).values.clamp_min(0.0)
         lat_mean = lateral.sum(dim=1, keepdim=True) / valid_count
         speed_mean = speed.sum(dim=1, keepdim=True) / valid_count
-        # Compact maneuver coverage histogram for ids [0..6].  ID 6 is the
-        # conservative/safe-fallback family; exposing it in u(A_t) helps the
-        # proposal head distinguish "has a fallback" from "all candidates risky".
+        # Compact maneuver coverage histogram for ids [0..5].
         hists = []
-        for m in range(7):
+        for m in range(6):
             hists.append(((maneuver_ids == m) & valid).float().sum(dim=1, keepdim=True) / valid_count)
-        raw = torch.cat([valid_count / max(float(K), 1.0), entropy, gap12 / 100.0, near_count, prog_mean / 100.0, prog_max / 100.0, lat_mean / 10.0, speed_mean / 30.0, *hists], dim=1)
+        raw = torch.cat(
+            [
+                valid_count / max(float(K), 1.0),
+                entropy,
+                gap12 / 100.0,
+                near_count,
+                prog_mean / 100.0,
+                prog_max / 100.0,
+                lat_mean / 10.0,
+                speed_mean / 30.0,
+                *hists,
+            ],
+            dim=1,
+        )
         if raw.shape[1] < 16:
-            raw = torch.nn.functional.pad(raw, (0, 16 - raw.shape[1]))
+            raw = F.pad(raw, (0, 16 - raw.shape[1]))
         return raw[:, :16]
+
+    def _family_activity_features(self, prop_feat: torch.Tensor, fam_ids: torch.Tensor, active: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Summarise atom availability/proposal metadata per certificate family.
+
+        Features are intentionally low-dimensional and robust to older cached
+        tensors with fewer proposal columns.  Family 0 is padding/unknown; it is
+        allowed only when no semantic family is present.
+        """
+        B, E, D = prop_feat.shape
+        device = prop_feat.device
+        dtype = prop_feat.dtype
+        n_fam = int(self.num_families)
+        fam = fam_ids.long().clamp(min=0, max=n_fam - 1)
+        out = torch.zeros((B, n_fam, 8), dtype=dtype, device=device)
+        present_list = []
+
+        def col(idx: int) -> torch.Tensor:
+            if D <= 0:
+                return torch.zeros((B, E), dtype=dtype, device=device)
+            j = min(max(int(idx), 0), D - 1)
+            return prop_feat[..., j]
+
+        for f_id in range(n_fam):
+            mask = (fam == f_id) & active
+            present_list.append(mask.any(dim=1))
+            mf = mask.float()
+            count = mf.sum(dim=1)
+            denom = count.clamp_min(1.0)
+            out[:, f_id, 0] = count / max(float(E), 1.0)
+            out[:, f_id, 1] = mask.any(dim=1).float()
+            # Proposal feature schema from evidence_queries: hard flag, budget,
+            # active, radius, lambda, route distance, nearest candidate distance,
+            # overlap/urgency/rule activity.  The index guards keep this usable
+            # for legacy tensors.
+            for dst, src in [(2, 0), (3, 1), (4, 6), (6, 10), (7, 11)]:
+                out[:, f_id, dst] = (col(src) * mf).sum(dim=1) / denom
+            cand_dist = col(8)
+            large = torch.full_like(cand_dist, 1e3)
+            min_dist = torch.where(mask, cand_dist, large).min(dim=1).values
+            out[:, f_id, 5] = torch.where(mask.any(dim=1), min_dist.clamp(0.0, 1e3) / 100.0, torch.zeros_like(min_dist))
+
+        family_active = torch.stack(present_list, dim=1) if present_list else torch.zeros((B, n_fam), dtype=torch.bool, device=device)
+        semantic_present = family_active[:, 1:].any(dim=1) if n_fam > 1 else torch.zeros((B,), dtype=torch.bool, device=device)
+        if n_fam > 1:
+            family_active = family_active.clone()
+            family_active[:, 0] = family_active[:, 0] & ~semantic_present
+        no_active = ~family_active.any(dim=1)
+        if no_active.any():
+            family_active = family_active.clone()
+            family_active[no_active, 0] = True
+            out[no_active, 0, 1] = 1.0
+        return out, family_active
 
     def encode_context(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         scene = self.scene(batch)
@@ -101,25 +202,54 @@ class BDSEModel(nn.Module):
         E = batch["evidence_features"].shape[1]
         e_valid = batch.get("evidence_active", torch.ones((B, E), dtype=torch.bool, device=traj.device)).bool()
         type_ids = batch.get("evidence_type_ids", torch.zeros((B, E), dtype=torch.long, device=traj.device))
-        fam_ids = batch.get("evidence_family_ids", torch.zeros((B, E), dtype=torch.long, device=traj.device))
+        fam_ids_raw = batch.get("evidence_family_ids", torch.zeros((B, E), dtype=torch.long, device=traj.device))
+        fam_ids = fam_ids_raw.long().clamp(min=0, max=self.num_families - 1)
         evid_h = self.evidence(batch["evidence_features"].float(), type_ids, fam_ids, e_valid)
         prop_feat = self._fit_last_dim(batch.get("evidence_proposal_features", batch["evidence_features"]).float(), self.proposal_feature_proj[0].in_features)
         prop_h = self.proposal_feature_proj(prop_feat)
         scene_e = scene[:, None, :].expand(B, E, -1)
         u_A = self.action_set_proj(self._candidate_set_summary(J0, traj, mid, valid))
         u_e = u_A[:, None, :].expand(B, E, -1)
-        proposal_logits = self.proposal_head(torch.cat([evid_h, prop_h, scene_e, u_e], dim=-1)).squeeze(-1)
-        proposal_logits = proposal_logits.masked_fill(~e_valid, -1e9)
-        return {"scene": scene, "action_h": action_h, "evidence_h": evid_h, "J0": J0, "proposal_logits": proposal_logits, "evidence_valid": e_valid, "action_set_summary": u_A}
 
-    def score_sparse_queries(
+        family_feat, family_active = self._family_activity_features(prop_feat, fam_ids, e_valid)
+        family_act_h = self.family_activity_proj(family_feat)
+        fam_token = torch.arange(self.num_families, dtype=torch.long, device=traj.device)
+        family_emb = self.family_embed(fam_token)[None, :, :].expand(B, -1, -1)
+        scene_f = scene[:, None, :].expand(B, self.num_families, -1)
+        u_f = u_A[:, None, :].expand(B, self.num_families, -1)
+        family_logits_raw = self.family_head(torch.cat([scene_f, u_f, family_emb, family_act_h], dim=-1)).squeeze(-1)
+        family_logits = family_logits_raw.masked_fill(~family_active, -1e9)
+        family_pi = torch.softmax(family_logits, dim=1) * family_active.float()
+        family_pi = family_pi / family_pi.sum(dim=1, keepdim=True).clamp_min(1e-6)
+
+        atom_family_h = self.family_embed(fam_ids)
+        atom_pi = torch.gather(family_pi, 1, fam_ids).clamp_min(1e-6)
+        proposal_logits = self.proposal_head(torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h], dim=-1)).squeeze(-1)
+        # Condition the atom proposal by the learned family gate.  Invalid atoms
+        # are masked after adding the log gate so gradients still reach the gate.
+        proposal_logits = proposal_logits + torch.log(atom_pi)
+        proposal_logits = proposal_logits.masked_fill(~e_valid, -1e9)
+        return {
+            "scene": scene,
+            "action_h": action_h,
+            "evidence_h": evid_h,
+            "J0": J0,
+            "proposal_logits": proposal_logits,
+            "selector_logits": proposal_logits,
+            "family_logits": family_logits,
+            "family_pi": family_pi,
+            "family_active": family_active,
+            "evidence_valid": e_valid,
+            "action_set_summary": u_A,
+        }
+
+    def _sparse_query_features(
         self,
         context: dict[str, torch.Tensor],
         atom_indices: torch.Tensor,
         action_indices: torch.Tensor,
         query_features: torch.Tensor,
     ) -> torch.Tensor:
-        # atom/action indices: [B,Q], query_features: [B,Q,Dq]
         action_h = context["action_h"]
         evid_h = context["evidence_h"]
         scene = context["scene"]
@@ -131,7 +261,23 @@ class BDSEModel(nn.Module):
         e_h = torch.gather(evid_h, 1, e_idx[..., None].expand(B, Q, H))
         q_h = self.query_proj(self._fit_last_dim(query_features.float(), self.query_proj[0].in_features))
         s_h = scene[:, None, :].expand(B, Q, H)
-        return self.local_head(torch.cat([a_h, e_h, q_h, s_h], dim=-1)).squeeze(-1)
+        return torch.cat([a_h, e_h, q_h, s_h], dim=-1)
+
+    def score_sparse_queries(
+        self,
+        context: dict[str, torch.Tensor],
+        atom_indices: torch.Tensor,
+        action_indices: torch.Tensor,
+        query_features: torch.Tensor,
+        return_uncertainty: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        # atom/action indices: [B,Q], query_features: [B,Q,Dq]
+        z = self._sparse_query_features(context, atom_indices, action_indices, query_features)
+        mean = self.local_head(z).squeeze(-1)
+        if not return_uncertainty:
+            return mean
+        var = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
+        return mean, var
 
     def propose_atoms(self, context: dict[str, torch.Tensor], M: int) -> torch.Tensor:
         logits = context["proposal_logits"]
@@ -153,15 +299,23 @@ class BDSEModel(nn.Module):
             a_exp = action_h[:, None, :, :].expand(B, E, K, -1)
             e_exp = evid_h[:, :, None, :].expand(B, E, K, -1)
             s_exp = scene[:, None, None, :].expand(B, E, K, -1)
-            local = self.local_head(torch.cat([a_exp, e_exp, q_h, s_exp], dim=-1)).squeeze(-1)
+            z = torch.cat([a_exp, e_exp, q_h, s_exp], dim=-1)
+            local = self.local_head(z).squeeze(-1)
+            local_var = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
             local = local.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, :, None], 0.0)
+            local_var = local_var.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, :, None], 0.0)
         else:
             local = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
+            local_var = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
         out = {
             "J0": J0,
             "g": local,
+            "g_var": local_var,
             "proposal_logits": ctx["proposal_logits"],
             "selector_logits": ctx["proposal_logits"],
+            "family_logits": ctx["family_logits"],
+            "family_pi": ctx["family_pi"],
+            "family_active": ctx["family_active"],
             "scene": scene,
             "action_h": action_h,
             "evidence_h": evid_h,
@@ -191,6 +345,8 @@ class BDSEModel(nn.Module):
             ctx = self.encode_context(batch)
         J0 = ctx["J0"][0].detach().cpu().numpy().astype(np.float32)
         proposal_logits = ctx["proposal_logits"][0].detach().cpu().numpy().astype(np.float32)
+        family_logits = ctx["family_logits"][0].detach().cpu().numpy().astype(np.float32)
+        family_pi = ctx["family_pi"][0].detach().cpu().numpy().astype(np.float32)
         flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
         pairs, pair_weights = build_runtime_pairs_from_base(
             J0,
@@ -201,29 +357,72 @@ class BDSEModel(nn.Module):
             lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
             lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
         )
-        budget = int(cfg.get("evidence", {}).get("budget", 16))
-        M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * budget, budget + 1)))
+        budget = float(cfg.get("evidence", {}).get("budget", 16))
+        M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
         active = np.asarray(evidence_bank.active_mask, dtype=bool)
-        masked_logits = np.where(active, proposal_logits[: len(active)], -1e9)
-        topm = np.argsort(-masked_logits)[: min(M, int(active.sum()) if active.any() else len(masked_logits))].astype(np.int64)
-        if len(pairs):
+        costs = np.asarray(evidence_bank.budget_costs(), dtype=np.float32)
+        if "evidence_family_ids" in batch:
+            family_ids = batch["evidence_family_ids"][0].detach().cpu().numpy().astype(np.int64)[: evidence_bank.E]
+        else:
+            family_ids = np.asarray([getattr(a, "family_id", 0) for a in evidence_bank.atoms], dtype=np.int64)
+        topm, family_budget, hab_diag = select_topm_atoms_hab(
+            proposal_logits[: evidence_bank.E],
+            family_ids,
+            active,
+            costs,
+            budget,
+            M,
+            family_scores=family_logits,
+            free_budget=cfg.get("selector", {}).get("hab_free_budget", None),
+            reserve_fraction=float(cfg.get("selector", {}).get("hab_reserve_fraction", 0.2)),
+            enabled=bool(cfg.get("selector", {}).get("hab_enabled", True)),
+        )
+        rival_sets = build_rival_sets_from_base(
+            J0,
+            candidates.valid_mask,
+            flags,
+            L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
+            eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+        )
+        action_set: set[int] = set()
+        for a_idx, rivals in enumerate(rival_sets):
+            if not bool(candidates.valid_mask[a_idx]) or not rivals:
+                continue
+            action_set.add(int(a_idx))
+            action_set.update(int(r) for r in rivals)
+        if action_set:
+            action_ids = np.asarray(sorted(action_set), dtype=np.int64)
+        elif len(pairs):
             action_ids = np.unique(pairs.reshape(-1))
         else:
             action_ids = np.flatnonzero(candidates.valid_mask)[: max(1, int(cfg.get("tournament", {}).get("L_infer", 16)))]
         atom_ids, action_ids_rep, q = compute_query_features_for_pairs(evidence_bank.atoms, candidates, runtime, topm, action_ids, cfg)
         g_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
+        g_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         if len(atom_ids):
             atom_t = torch.from_numpy(atom_ids[None].astype(np.int64)).to(next(self.parameters()).device)
             act_t = torch.from_numpy(action_ids_rep[None].astype(np.int64)).to(next(self.parameters()).device)
             q_t = torch.from_numpy(q[None].astype(np.float32)).to(next(self.parameters()).device)
             with torch.no_grad():
-                vals = self.score_sparse_queries(ctx, atom_t, act_t, q_t)[0].detach().cpu().numpy().astype(np.float32)
-            g_sparse[atom_ids, action_ids_rep] = vals
-        g_sparse[:, ~np.asarray(candidates.valid_mask, dtype=bool)] = 0.0
+                vals, var = self.score_sparse_queries(ctx, atom_t, act_t, q_t, return_uncertainty=True)
+                vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
+                var_np = var[0].detach().cpu().numpy().astype(np.float32)
+            g_sparse[atom_ids, action_ids_rep] = vals_np
+            g_var_sparse[atom_ids, action_ids_rep] = var_np
+        valid_mask = np.asarray(candidates.valid_mask, dtype=bool)
+        g_sparse[:, ~valid_mask] = 0.0
+        g_var_sparse[:, ~valid_mask] = 0.0
         return {
             "J0": J0,
             "g": g_sparse,
+            "g_var": g_var_sparse,
             "proposal_logits": proposal_logits,
+            "family_logits": family_logits,
+            "family_pi": family_pi,
+            "family_ids": family_ids,
+            "family_budget_caps": family_budget.family_caps,
+            "family_budgets": family_budget.family_budgets,
+            "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
             "queried_pair_count": int(len(atom_ids)),
@@ -231,26 +430,8 @@ class BDSEModel(nn.Module):
             "runtime_pair_weights": pair_weights,
         }
 
-
-    def predict_dense_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> tuple[np.ndarray, np.ndarray]:
-        """Return base costs and dense E x K atom scores for offline diagnostics.
-
-        This is intentionally not used by the runtime planner.  It requires dense
-        query tensors and is meant for full-interface open-loop metrics only.
-        """
-        cfg = cfg or self.cfg
-        batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=True)
-        self.eval()
-        with torch.no_grad():
-            out = self.forward(batch)
-        J0 = out["J0"][0].detach().cpu().numpy().astype(np.float32)
-        g = out["g"][0].detach().cpu().numpy().astype(np.float32)
-        E = evidence_bank.E
-        K = candidates.K
-        return J0[:K], g[:E, :K]
-
     def predict_numpy(self, runtime, candidates, evidence_bank):
         # Legacy API: return only base and sparse-scored local costs.  The runtime
-        # planner uses predict_certificate_numpy to also obtain proposal diagnostics.
+        # planner uses predict_certificate_numpy to also obtain proposal/HAB diagnostics.
         out = self.predict_certificate_numpy(runtime, candidates, evidence_bank, self.cfg)
         return out["J0"], out["g"]

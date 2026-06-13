@@ -10,6 +10,38 @@ from bdse.planner.selector import budgeted_margin, full_interface_margin
 from bdse.utils import softmin_np
 
 
+
+
+def selected_pair_sigma_from_action_variance(
+    predicted_atom_variance: np.ndarray | None,
+    selected_atoms: list[int] | np.ndarray,
+    valid_mask: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """Build sigma(a,b) from selected per-atom action variances.
+
+    The model predicts a variance for each queried g_i(a).  For a pair margin
+    d_i(a,b)=g_i(b)-g_i(a), we use var_i(a)+var_i(b), summed over selected
+    atoms.  Unqueried actions/atoms should be zero in the supplied variance
+    matrix, matching the sparse deployment interface.
+    """
+    if predicted_atom_variance is None:
+        return None
+    var = np.asarray(predicted_atom_variance, dtype=np.float32)
+    if var.ndim != 2:
+        return None
+    K = var.shape[1]
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    selected = selected[(selected >= 0) & (selected < var.shape[0])]
+    action_var = np.zeros((K,), dtype=np.float32)
+    if selected.size:
+        action_var = np.maximum(var[selected], 0.0).sum(axis=0).astype(np.float32)
+    if valid_mask is not None:
+        valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+        if valid.shape[0] == K:
+            action_var = np.where(valid, action_var, 0.0)
+    return np.sqrt(np.maximum(action_var[:, None] + action_var[None, :], 0.0)).astype(np.float32)
+
+
 @dataclass(slots=True)
 class TournamentResult:
     action_index: int
@@ -127,21 +159,61 @@ def run_tournament(
             "valid_actions": int(np.asarray(valid_mask).sum()),
             "rival_source": "base_score_cheap_flags",
             "epsilon_cal": epsilon_cal,
+            "beta_uncertainty": float(tc.get("beta_uncertainty", 0.0)),
+            "sigma_used": bool(sigma is not None),
             "safety_lcb_min": safety_lcb_min,
             "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
         },
     )
 
+def full_interface_cost(
+    predicted_base_cost: np.ndarray,
+    predicted_atom_costs: np.ndarray,
+    valid_mask: np.ndarray,
+) -> np.ndarray:
+    """Dense full-interface cost with invalid actions masked to +inf."""
+    J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    g = np.asarray(predicted_atom_costs, dtype=np.float32)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    if g.ndim != 2 or g.shape[1] != J0.shape[0]:
+        raise ValueError(f"predicted_atom_costs must have shape [E,K] with K={J0.shape[0]}, got {g.shape}")
+    cost = J0 + g.sum(axis=0)
+    cost = np.asarray(cost, dtype=np.float32).copy()
+    cost[~valid] = np.inf
+    return cost
+
+
 def full_interface_action(
+    predicted_base_cost: np.ndarray,
+    predicted_atom_costs: np.ndarray,
+    valid_mask: np.ndarray,
+    cfg: dict[str, Any] | None = None,
+) -> int:
+    """Hard-argmin dense full-interface diagnostic action.
+
+    This diagnostic should measure whether J_base + sum_i g_i reconstructs the
+    teacher argmin.  It intentionally does not use softmin tournament smoothing,
+    because softmin can change the argmin even when the dense cost partition is
+    exact.
+    """
+    cost = full_interface_cost(predicted_base_cost, predicted_atom_costs, valid_mask)
+    if not np.isfinite(cost).any():
+        return 0
+    return int(np.nanargmin(cost))
+
+
+def full_interface_soft_tournament_action(
     predicted_base_cost: np.ndarray,
     predicted_atom_costs: np.ndarray,
     valid_mask: np.ndarray,
     cfg: dict[str, Any],
 ) -> int:
+    """Backward-compatible dense soft tournament action for ablations only."""
     M = full_interface_margin(predicted_base_cost, predicted_atom_costs)
-    K = len(valid_mask)
-    rivals = [[b for b in range(K) if b != a and valid_mask[b]] for a in range(K)]
-    scores = tournament_scores(M, np.asarray(valid_mask, dtype=bool), rivals, True, float(cfg.get("tournament", {}).get("softmin_tau", 1.0)))
+    valid = np.asarray(valid_mask, dtype=bool)
+    K = len(valid)
+    rivals = [[b for b in range(K) if b != a and valid[b]] for a in range(K)]
+    scores = tournament_scores(M, valid, rivals, True, float(cfg.get("tournament", {}).get("softmin_tau", 1.0)))
     return int(np.argmax(scores))
 
 

@@ -73,11 +73,11 @@ runtime:
   agent_radius_m: 80.0
   max_agents: 32
   max_map_polylines: 128
-  include_drivable_polygons: true
+  include_drivable_polygons: false
   # No current BDSE evidence atom consumes crosswalk polygons. Keeping this off
   # preserves teacher labels while avoiding expensive nuPlan map scans.
   include_crosswalks: false
-  max_drivable_polygons: 48
+  max_drivable_polygons: 24
   max_polygon_points: 128
   max_route_points: 512
   route_horizon_m: 220.0
@@ -114,13 +114,13 @@ candidate:
     safe_fallback: 3
 evidence:
   max_atoms: 128
-  max_interaction_atoms: 48
-  max_interaction_agents: 16
+  max_interaction_atoms: 36
+  max_interaction_agents: 12
   interaction_candidate_radius_m: 30.0
   interaction_route_radius_m: 7.0
   interaction_close_radius_m: 18.0
   interaction_ahead_limit_m: 90.0
-  max_map_atoms: 40
+  max_map_atoms: 32
   max_kinematic_atoms: 16
   include_interaction: true
   include_rule_map: true
@@ -136,9 +136,8 @@ evidence:
 teacher:
   robust:
     enabled: true
-    hard_fail: true
-  demo_weight: 1.0
-  demo_scale: 120.0
+  demo_weight: 10.0
+  demo_scale: 100.0
   atom_normalization_first: true
   separate_hard_gate: false
   use_reactive_proxy: true
@@ -152,10 +151,8 @@ pairs:
   eta_percentile: 20
 selector:
   mode: runtime_predicted
-  proposal_top_m: 48
 tournament:
   L_infer: 16
-  softmin_tau: 0.5
 
 calibration:
   epsilon_cal: 0.0

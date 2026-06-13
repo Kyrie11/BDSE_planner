@@ -138,39 +138,27 @@ class PairLabels:
     residuals: np.ndarray
     valid_mask: np.ndarray
 
-    def validate_positive_direction(self, atol: float = 1e-6) -> None:
-        """Validate pair-label invariants used by the BDSE margin losses.
-
-        The pair builder stores each pair as ``(a, b)`` where ``a`` is the
-        teacher-preferred action and ``b`` is the rival.  Therefore teacher
-        margins ``J_T(b) - J_T(a)`` must be non-negative on valid pairs.  This
-        helper intentionally checks shapes as well as the sign convention so a
-        corrupt cache fails close to its source instead of surfacing later as a
-        silent training/evaluation error.
-        """
-        pairs = np.asarray(self.pairs)
-        margins = np.asarray(self.margins)
-        weights = np.asarray(self.weights)
-        residuals = np.asarray(self.residuals)
-        valid_mask = np.asarray(self.valid_mask, dtype=bool)
-
-        if pairs.ndim != 2 or pairs.shape[1] != 2:
-            raise AssertionError("pairs must have shape [P,2]")
-        n = int(pairs.shape[0])
-        for name, arr in (("margins", margins), ("weights", weights), ("residuals", residuals), ("valid_mask", valid_mask)):
+    def __post_init__(self) -> None:
+        self.pairs = np.asarray(self.pairs, dtype=np.int64).reshape(-1, 2)
+        n = int(self.pairs.shape[0])
+        self.margins = np.asarray(self.margins, dtype=np.float32).reshape(-1)
+        self.weights = np.asarray(self.weights, dtype=np.float32).reshape(-1)
+        self.residuals = np.asarray(self.residuals, dtype=np.float32).reshape(-1)
+        self.valid_mask = np.asarray(self.valid_mask, dtype=bool).reshape(-1)
+        for name in ("margins", "weights", "residuals", "valid_mask"):
+            arr = getattr(self, name)
             if arr.shape[0] != n:
-                raise AssertionError(f"{name} must have length {n}, got shape {arr.shape}")
-        if n == 0:
-            return
-        if np.any(pairs < 0):
-            raise AssertionError("pair action indices must be non-negative")
-        active_margins = margins[valid_mask] if valid_mask.shape[0] == n else margins
-        if active_margins.size and np.nanmin(active_margins) < -float(atol):
-            raise AssertionError("PairLabels margins must be non-negative: pairs should be ordered as (teacher-preferred, rival)")
-        for name, arr in (("margins", margins), ("weights", weights), ("residuals", residuals)):
-            active = arr[valid_mask] if valid_mask.shape[0] == n else arr
-            if active.size and not np.all(np.isfinite(active)):
-                raise AssertionError(f"{name} contains non-finite values")
+                raise ValueError(f"PairLabels.{name} must have length {n}, got {arr.shape[0]}")
+
+    def validate_positive_direction(self, atol: float = 1e-6) -> None:
+        if self.pairs.ndim != 2 or self.pairs.shape[1] != 2:
+            raise AssertionError("pairs must have shape [P,2]")
+        valid = np.asarray(self.valid_mask, dtype=bool)
+        if valid.any() and np.any(self.margins[valid] <= -float(atol)):
+            bad = int(np.flatnonzero(valid & (self.margins <= -float(atol)))[0])
+            raise AssertionError(f"Pair margin must be non-negative for valid pairs; pair {bad} has margin {self.margins[bad]}")
+        if valid.any() and np.any(self.weights[valid] < 0.0):
+            raise AssertionError("Pair weights must be non-negative")
 
 
 @dataclass(slots=True)
@@ -183,7 +171,6 @@ class Sample:
     evidence_bank: EvidenceBank
     teacher: TeacherLabels | None
     pairs: PairLabels | None
-
 
 def pad_array(arr: np.ndarray, shape: tuple[int, ...], value: float = 0.0, dtype=np.float32) -> np.ndarray:
     out = np.full(shape, value, dtype=dtype)

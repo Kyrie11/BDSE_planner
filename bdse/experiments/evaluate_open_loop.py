@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
+import numpy as np
 import torch
 from tqdm import tqdm
 
 from bdse.config import load_config
-from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
+from bdse.data.nuplan_dataset import NuPlanBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
-from bdse.planner.nuplan_planner import BDSEPlannerCore
+from bdse.planner.fallback import runtime_safety_flags_from_runtime
+from bdse.planner.selector import runtime_greedy_selector
+from bdse.planner.tournament import run_tournament, selected_pair_sigma_from_action_variance
 
 
 def load_model(checkpoint: str, cfg):
     model = BDSEModel(cfg)
     ckpt = torch.load(checkpoint, map_location="cpu")
-    model.load_state_dict(ckpt["model"])
+    state = ckpt.get("model", ckpt)
+    current = model.state_dict()
+    compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
+    model.load_state_dict(compatible, strict=False)
     model.eval()
     return model
 
@@ -26,71 +31,50 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--split", type=str, nargs="+", default=["val"])
-    parser.add_argument("--preprocessed-dir", type=str, default=None, help="Evaluate cached .npz samples instead of rebuilding from nuPlan devkit.")
+    parser.add_argument("--split", type=str, default="val")
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
-    parser.add_argument("--dense-full-interface", dest="dense_full_interface", action="store_true", default=True)
-    parser.add_argument("--no-dense-full-interface", dest="dense_full_interface", action="store_false")
-    parser.add_argument("--write-details", action="store_true")
     parser.add_argument("--output", type=str, default="outputs/open_loop_bdse_metrics.json")
     args = parser.parse_args()
     cfg = load_config(args.config)
     model = load_model(args.checkpoint, cfg)
-    if args.preprocessed_dir:
-        dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios)
-    else:
-        if len(args.split) != 1:
-            raise ValueError("On-the-fly open-loop evaluation supports one split at a time; use --preprocessed-dir for multiple split folders.")
-        dataset = NuPlanBDSEDataset(cfg, split=args.split[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
-    core = BDSEPlannerCore(model=model, cfg=cfg)
+    dataset = NuPlanBDSEDataset(cfg, split=args.split, max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
     results = []
-    detail_rows = []
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
-        if sample.teacher is None or sample.pairs is None:
-            continue
-        action, _, planner_diag = core.plan_from_components(sample.runtime, sample.candidates, sample.evidence_bank)
-        if args.dense_full_interface and hasattr(model, "predict_dense_numpy"):
-            J0, g_dense = model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
-            g_budget = g_dense
-            g_full = g_dense
-        else:
-            pred = model.predict_certificate_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
-            J0 = pred["J0"]
-            g_budget = pred["g"]
-            g_full = None
-        res = compute_bdse_diagnostics(
-            sample.candidates,
-            sample.evidence_bank,
-            sample.teacher,
-            sample.pairs,
-            J0,
-            g_budget,
-            planner_diag.get("selected_atoms", []),
-            action,
-            cfg=cfg,
-            planner_diagnostics=planner_diag,
-            full_predicted_atom_costs=g_full,
+        pred = model.predict_certificate_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
+        J0, g = pred["J0"], pred["g"]
+        g_var = pred.get("g_var", None)
+        flags = runtime_safety_flags_from_runtime(sample.runtime, sample.candidates, cfg)
+        topm = np.asarray(pred.get("top_m_atoms", np.flatnonzero(sample.evidence_bank.active_mask)), dtype=np.int64)
+        atom_active = np.zeros((sample.evidence_bank.E,), dtype=bool)
+        atom_active[topm[(topm >= 0) & (topm < sample.evidence_bank.E)]] = True
+        atom_active &= sample.evidence_bank.active_mask
+        sel = runtime_greedy_selector(
+            J0, g, sample.evidence_bank.budget_costs(), sample.candidates.valid_mask, flags, float(cfg["evidence"]["budget"]),
+            L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
+            gamma_max=float(cfg.get("selector", {}).get("gamma_max_default", 100.0)),
+            eta_pred=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+            lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
+            lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
+            atom_active_mask=atom_active,
+            predicted_atom_variance=g_var,
+            beta_uncertainty=float(cfg.get("tournament", {}).get("beta_uncertainty", 0.0)),
+            epsilon_cal=float(cfg.get("tournament", {}).get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
+            lambda_info=float(cfg.get("selector", {}).get("lambda_info", 0.0)),
+            prior_atom_variance=cfg.get("selector", {}).get("unqueried_atom_variance", None),
+            family_ids=pred.get("family_ids", None),
+            family_budget_caps=pred.get("family_budget_caps", None),
         )
-        results.append(res)
-        if args.write_details:
-            detail_rows.append({
-                "scenario_token": sample.scenario_token,
-                "timestamp_us": int(sample.timestamp_us),
-                **res.values,
-                "action_index": int(action),
-                "a_star": int(sample.teacher.a_star),
-                "fallback_stage": planner_diag.get("fallback_stage", ""),
-            })
+        sigma = selected_pair_sigma_from_action_variance(g_var, sel.selected, sample.candidates.valid_mask)
+        tour = run_tournament(J0, g, sel.selected, sample.candidates.valid_mask, flags, cfg, sigma=sigma)
+        results.append(compute_bdse_diagnostics(sample.candidates, sample.evidence_bank, sample.teacher, sample.pairs, J0, g, sel.selected, tour.action_index, cfg=cfg))
     summary = aggregate_metric_results(results)
-    summary["num_scenarios"] = float(len(results))
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"summary": summary}
-    if args.write_details:
-        payload["details"] = detail_rows
-    out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    import json
+
+    out.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    print(summary)
 
 
 if __name__ == "__main__":

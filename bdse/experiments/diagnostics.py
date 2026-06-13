@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -15,6 +16,7 @@ from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.evidence_atoms import hard_event_matrix, atom_weight_scale_cap
+from bdse.planner.evidence_queries import certificate_family
 from bdse.utils import nearest_polyline_distance
 from bdse.planner.selector import oracle_greedy_selector, runtime_greedy_selector
 from bdse.planner.tournament import run_tournament
@@ -86,6 +88,48 @@ def _hard_event_type_flags(s, hard_events: np.ndarray, candidate_idx: int, prefi
     return {f"{prefix}_{k}": float(v) for k, v in out.items()}
 
 
+def _certificate_family_counts(s) -> dict[str, float]:
+    """Count paper-aligned certificate families with legacy aliases preserved.
+
+    Older caches may store families such as interaction/rule_map/kinematic, while
+    current atoms use reachability_interaction/feasibility/dynamic_regularity.
+    Diagnostics should report the semantic family rather than returning misleading
+    zeros for the legacy names.
+    """
+    counts = Counter(certificate_family(a.type, a.family) for a in s.evidence_bank.atoms)
+    out = {
+        "feasibility_atom_count": float(counts.get("feasibility", 0)),
+        "reachability_interaction_atom_count": float(counts.get("reachability_interaction", 0)),
+        "precedence_atom_count": float(counts.get("precedence", 0)),
+        "dynamic_regularity_atom_count": float(counts.get("dynamic_regularity", 0)),
+        "decision_boundary_atom_count": float(counts.get("decision_boundary", 0)),
+    }
+    # Backward-compatible aliases used by existing tables/scripts.
+    out["rule_map_atom_count"] = out["feasibility_atom_count"]
+    out["interaction_atom_count"] = out["reachability_interaction_atom_count"]
+    out["kinematic_atom_count"] = out["dynamic_regularity_atom_count"]
+    return out
+
+
+def _sample_identity(s) -> dict[str, Any]:
+    return {
+        "scenario_token": str(getattr(s, "scenario_token", "")),
+        "timestamp_us": int(getattr(s, "timestamp_us", 0) or 0),
+    }
+
+
+def _identity_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    keys = [f"{x.get('scenario_token','')}@{int(x.get('timestamp_us', 0) or 0)}" for x in items]
+    h = hashlib.sha1("\n".join(sorted(keys)).encode("utf-8")).hexdigest() if keys else ""
+    return {
+        "identity_count": int(len(keys)),
+        "identity_unique_count": int(len(set(keys))),
+        "identity_duplicate_count": int(len(keys) - len(set(keys))),
+        "identity_sha1": h,
+        "identity_first5": keys[:5],
+    }
+
+
 def _atom_saturation_metrics(s, valid: np.ndarray, cfg: dict[str, Any]) -> dict[str, float]:
     out: dict[str, float] = {}
     if s.teacher is None or s.teacher.g_evid.size == 0 or not valid.any():
@@ -154,7 +198,6 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any], recompute_hard_events: bool 
         hard_candidate_mask_from_atoms = hard_valid
     teacher_vs_log = float(log_nearest >= 0 and log_nearest != a_star)
     teacher_regret_to_log = float(s.teacher.J_T[log_nearest] - s.teacher.J_T[a_star]) if log_nearest >= 0 and np.isfinite(s.teacher.J_T[log_nearest]) else float("nan")
-    family_counts = Counter(a.family for a in s.evidence_bank.atoms)
     hard_counts = Counter(a.type for a in s.evidence_bank.atoms if a.is_hard)
     route_diag = dict(s.runtime.map_features.get("route_quality", {}) or {})
     route_diag.update(_route_stats(route))
@@ -206,9 +249,7 @@ def _teacher_sample_metrics(s, cfg: dict[str, Any], recompute_hard_events: bool 
         "atom_count": float(len(s.evidence_bank.atoms)),
         "pair_count": float(0 if s.pairs is None else len(s.pairs.pairs)),
         "pair_nonempty": float(s.pairs is not None and len(s.pairs.pairs) > 0),
-        "interaction_atom_count": float(family_counts.get("interaction", 0)),
-        "rule_map_atom_count": float(family_counts.get("rule_map", 0)),
-        "kinematic_atom_count": float(family_counts.get("kinematic", 0)),
+        **_certificate_family_counts(s),
         "hard_atom_count": float(sum(hard_counts.values())),
         "teacher_J_base_min": float(np.nanmin(s.teacher.J_base[valid])) if valid.any() else float("nan"),
         "teacher_J_evid_min": float(np.nanmin(s.teacher.J_evid[valid])) if valid.any() else float("nan"),
@@ -259,7 +300,20 @@ def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: lis
     runtime_sel = runtime_greedy_selector(J0, g, s.evidence_bank.budget_costs(), s.candidates.valid_mask, flags, float(cfg["evidence"]["budget"]), atom_active_mask=s.evidence_bank.active_mask)
     oracle_sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(cfg["evidence"]["budget"]), s.evidence_bank.active_mask)
     tour = run_tournament(J0, g, runtime_sel.selected, s.candidates.valid_mask, flags, cfg)
-    bdse_result = compute_bdse_diagnostics(s.candidates, s.evidence_bank, s.teacher, s.pairs, J0, g, runtime_sel.selected, tour.action_index, runtime_sel.selected, oracle_sel.selected, cfg)
+    bdse_result = compute_bdse_diagnostics(
+        s.candidates,
+        s.evidence_bank,
+        s.teacher,
+        s.pairs,
+        J0,
+        g,
+        runtime_sel.selected,
+        tour.action_index,
+        runtime_sel.selected,
+        oracle_sel.selected,
+        cfg,
+        inference_pairs=runtime_sel.pair_indices,
+    )
     budget_metrics: dict[str, float] = {}
     hard = set(np.flatnonzero(s.evidence_bank.hard_mask() & s.evidence_bank.active_mask).astype(int).tolist())
     for B in budgets:
@@ -267,7 +321,7 @@ def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: lis
         t = run_tournament(J0, g, sel.selected, s.candidates.valid_mask, flags, cfg)
         budget_metrics[f"B{int(B)}_decision_sufficiency"] = float(t.action_index == s.teacher.a_star)
         budget_metrics[f"B{int(B)}_hard_recall"] = float(len(hard & set(sel.selected)) / max(len(hard), 1))
-    return teacher_metrics, bdse_result, budget_metrics
+    return teacher_metrics, bdse_result, budget_metrics, _sample_identity(s)
 
 
 def run_diagnostics(
@@ -288,6 +342,7 @@ def run_diagnostics(
     teacher_acc: dict[str, list[float]] = defaultdict(list)
     bdse_results = []
     budget_acc: dict[str, list[float]] = defaultdict(list)
+    identity_items: list[dict[str, Any]] = []
     budgets = [float(x) for x in cfg.get("diagnostics", {}).get("budget_sweep", [4, 8, 16, 24, 32])]
     if recompute_hard_events is None:
         recompute_hard_events = bool(cfg.get("diagnostics", {}).get("recompute_hard_events", False))
@@ -302,10 +357,11 @@ def run_diagnostics(
         if res is None:
             skipped_missing += 1
             return
-        teacher_metrics, bdse_result, budget_metrics = res
+        teacher_metrics, bdse_result, budget_metrics, identity = res
         _update_lists(teacher_acc, teacher_metrics)
         bdse_results.append(bdse_result)
         _update_lists(budget_acc, budget_metrics)
+        identity_items.append(identity)
 
     n = len(dataset)
     if workers <= 1:
@@ -321,6 +377,7 @@ def run_diagnostics(
         "num_samples": int(len(next(iter(teacher_acc.values()))) if teacher_acc else 0),
         "num_skipped_missing_labels": int(skipped_missing),
         "recomputed_hard_event_matrix": bool(recompute_hard_events),
+        "split_identity": _identity_summary(identity_items),
         "E1_teacher_sanity_and_candidate_coverage": _summarize_lists(teacher_acc),
         "E2_evidence_sufficiency_oracle_teacher_interface": aggregate_metric_results(bdse_results),
         "E4_budget_sweep_oracle_teacher_interface": _summarize_lists(budget_acc),

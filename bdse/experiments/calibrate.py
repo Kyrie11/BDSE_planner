@@ -18,7 +18,10 @@ from bdse.planner.selector import runtime_greedy_selector, budgeted_margin
 def load_model(checkpoint: str, cfg):
     model = BDSEModel(cfg)
     ckpt = torch.load(checkpoint, map_location="cpu")
-    model.load_state_dict(ckpt["model"])
+    state = ckpt.get("model", ckpt)
+    current = model.state_dict()
+    compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
+    model.load_state_dict(compatible, strict=False)
     model.eval()
     return model
 
@@ -47,11 +50,29 @@ def main() -> None:
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
         if sample.teacher is None or sample.pairs is None or len(sample.pairs.pairs) == 0:
             continue
-        J0, g = model.predict_numpy(sample.runtime, sample.candidates, sample.evidence_bank)
+        pred = model.predict_certificate_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
+        J0, g = pred["J0"], pred["g"]
         flags = runtime_safety_flags_from_runtime(sample.runtime, sample.candidates, cfg)
+        topm = np.asarray(pred.get("top_m_atoms", np.flatnonzero(sample.evidence_bank.active_mask)), dtype=np.int64)
+        atom_active = np.zeros((sample.evidence_bank.E,), dtype=bool)
+        atom_active[topm[(topm >= 0) & (topm < sample.evidence_bank.E)]] = True
+        atom_active &= sample.evidence_bank.active_mask
         sel = runtime_greedy_selector(
             J0, g, sample.evidence_bank.budget_costs(), sample.candidates.valid_mask, flags,
-            float(cfg.get("evidence", {}).get("budget", 16)), atom_active_mask=sample.evidence_bank.active_mask,
+            float(cfg.get("evidence", {}).get("budget", 16)),
+            L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
+            gamma_max=float(cfg.get("selector", {}).get("gamma_max_default", 100.0)),
+            eta_pred=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+            lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
+            lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
+            atom_active_mask=atom_active,
+            predicted_atom_variance=pred.get("g_var", None),
+            beta_uncertainty=float(cfg.get("tournament", {}).get("beta_uncertainty", 0.0)),
+            epsilon_cal=float(cfg.get("tournament", {}).get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
+            lambda_info=float(cfg.get("selector", {}).get("lambda_info", 0.0)),
+            prior_atom_variance=cfg.get("selector", {}).get("unqueried_atom_variance", None),
+            family_ids=pred.get("family_ids", None),
+            family_budget_caps=pred.get("family_budget_caps", None),
         )
         M_pred = budgeted_margin(J0, g, sel.selected)
         for (a, b), valid in zip(sample.pairs.pairs, sample.pairs.valid_mask):

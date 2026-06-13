@@ -6,11 +6,6 @@ This repository implements **Budgeted Decision-Sufficient Evidence (BDSE)** for 
 
 The implementation now addresses the main paper/code mismatches that existed in the earlier package:
 
-- **P0 cache/schema repair:** `PairLabels` and `Sample` dataclasses are restored, pair-label invariants are validated, and the package compiles/imports cleanly.
-- **Runtime map/history adapter:** the nuPlan runtime adapter now tries to recover route/map/stop-line/drivable context from `initialization.map_api`, enriches red-light geometry, builds tracked agent history from observation history when available, rotates agent velocities into the ego frame, and sorts/pads agents deterministically instead of repeating the current frame blindly.
-- **Open-loop uses the real planner core:** evaluation now runs `BDSEPlannerCore.plan_from_components(...)`, so fallback re-query stages, rule reranking, query accounting, and planner diagnostics are included.
-- **Full-interface offline diagnostics:** `predict_dense_numpy(...)` is available for validation-only dense evidence scoring, while runtime still uses sparse Top-M/action queries.
-- **BDSE metrics and ablations:** metrics now report decisive-rival recall, proposal/critical-atom recall, effective query counts, fallback/rerank rates, latency, and full-interface action match; the ablation runner can generate and optionally execute budget/proposal/rival/family/fallback/demo/drivable sweeps.
 - **Strict teacher feasibility:** robust teacher labels use lexicographic hard feasibility through owned hard evidence atoms. Collision, off-drivable, wrong-way, and red-light events are no longer collapsed into one soft boolean.
 - **Partition-preserving hard costs:** hard priorities are injected into the unique owning hard atom before normalization, so `J_T = J_base_T + sum_i g_i_T` still holds and residual margin labels remain closed.
 - **Runtime sparse path:** deployment uses Top-M evidence proposal, base/cheap rival pair screening, sparse `q_i(a)` queries only for Top-M atoms and screened actions, greedy certificate selection, and tournament scoring.
@@ -89,7 +84,6 @@ Set dataset paths before preprocessing/training:
 export NUPLAN_DATA_ROOT=/path/to/nuplan/data/cache
 export NUPLAN_MAPS_ROOT=/path/to/nuplan/maps
 export NUPLAN_EXP_ROOT=/path/to/nuplan/exp
-export BDSE_CACHE_ROOT=/path/to/bdse_cache
 ```
 
 ## Quick validation
@@ -103,23 +97,23 @@ pytest -q
 Expected result in this package revision:
 
 ```text
-26 passed, 1 warning
+24 passed
 ```
 
-## Recommended experiment command flow
+## Preprocessing
 
-Use `paper.yaml` for the main paper-faithful setup. It enables candidate-aware agent selection, drivable polygons, robust teacher hard-fail checks, Top-M=48, B=16, and the oracle-to-predicted certificate schedule. Use `smoke.yaml` only for quick debugging.
+Use `full_preprocess.yaml` or `paper.yaml` for data used in experiments. `smoke.yaml` is only for fast debugging.
 
-### 1) Dataset preprocessing
+Small validation preprocessing:
 
 ```bash
 python -m bdse.experiments.preprocess \
-  --config bdse/configs/paper.yaml \
-  --data-root "$NUPLAN_DATA_ROOT" \
-  --maps-root "$NUPLAN_MAPS_ROOT" \
+  --config bdse/configs/full_preprocess.yaml \
+  --data-root /data0/senzeyu2/dataset/nuplan/data/cache \
+  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
   --map-version nuplan-maps-v1.0 \
-  --splits train val \
-  --output-dir "$BDSE_CACHE_ROOT" \
+  --splits val \
+  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_val \
   --scenario-stride 10 \
   --scenario-iteration-policy initial \
   --max-samples-per-log 512 \
@@ -131,7 +125,7 @@ python -m bdse.experiments.preprocess \
   --teacher-cost-eval-stride 1 \
   --resume \
   --candidate-aware-agent-selection \
-  --include-drivable-polygons \
+  --no-include-drivable-polygons \
   --no-include-crosswalks \
   --cache-local-scheduler \
   --cache-local-log-parallelism 1 \
@@ -143,30 +137,48 @@ python -m bdse.experiments.preprocess \
   --profile-threshold-s 10.0
 ```
 
-For a smaller validation-only smoke preprocess, replace `--splits train val` with `--splits val` and add `--max-files` / lower `--max-samples-per-log`.
-
-Preprocessing stores runtime-only features, label-only futures, candidates, evidence atoms, proposal features, teacher labels, and pair labels. Runtime code consumes runtime features, candidate bank, evidence atoms, proposal features, and sparse queries only.
-
-### 2) Dataset diagnostics
+Training preprocessing:
 
 ```bash
-python -m bdse.experiments.diagnostics \
-  --config bdse/configs/paper.yaml \
-  --split val \
-  --preprocessed-dir "$BDSE_CACHE_ROOT" \
-  --max-scenarios 500 \
-  --output outputs/diagnostics_val.json
+python -m bdse.experiments.preprocess \
+  --config bdse/configs/full_preprocess.yaml \
+  --data-root "$NUPLAN_DATA_ROOT" \
+  --maps-root "$NUPLAN_MAPS_ROOT" \
+  --map-version nuplan-maps-v1.0 \
+  --splits train \
+  --output-dir /path/to/bdse_cache/train \
+  --scenario-stride 10 \
+  --scenario-iteration-policy initial \
+  --max-samples-per-log 512 \
+  --max-samples-per-log-strategy uniform_blocks \
+  --max-samples-per-log-block-size 64 \
+  --num-workers 6 \
+  --max-in-flight 6 \
+  --scenario-builder-workers 8 \
+  --teacher-cost-eval-stride 1 \
+  --resume \
+  --candidate-aware-agent-selection \
+  --no-include-drivable-polygons \
+  --no-include-crosswalks \
+  --cache-local-scheduler \
+  --cache-local-log-parallelism 1 \
+  --temporal-frame-cache-max-entries 262144 \
+  --temporal-frame-cache-individual-miss-threshold 32 \
+  --temporal-frame-cache-coalesce-bulk \
+  --skip-failed-samples \
+  --profile \
+  --profile-threshold-s 10.0
 ```
 
-Use `--recompute-hard-events` for a slower consistency check of hard-event labels.
+Preprocessing stores runtime-only features, label-only futures, candidates, evidence atoms, proposal features, teacher labels, and pair labels. Runtime code only consumes runtime features, candidate bank, evidence atoms, proposal features, and sparse queries.
 
-### 3) Training
+## Training
 
 ```bash
 python -m bdse.experiments.train \
-  --config bdse/configs/paper.yaml \
+  --config bdse/configs/full_preprocess.yaml \
   --split train \
-  --preprocessed-dir "$BDSE_CACHE_ROOT" \
+  --preprocessed-dir /path/to/bdse_cache \
   --output outputs/bdse_model.pt
 ```
 
@@ -176,7 +188,7 @@ For a short sanity run:
 python -m bdse.experiments.train \
   --config bdse/configs/smoke.yaml \
   --split train \
-  --preprocessed-dir "$BDSE_CACHE_ROOT" \
+  --preprocessed-dir /path/to/bdse_cache \
   --max-scenarios 128 \
   --output outputs/bdse_smoke.pt
 ```
@@ -184,25 +196,27 @@ python -m bdse.experiments.train \
 Training losses:
 
 - `L_base`: regress predicted base cost to `J_base_T`.
-- `L_res`: offline residual-margin supervision over the full evidence bank.
+- `L_res`: offline residual-margin supervision over full evidence bank.
 - `L_rank`: logistic rank loss over positive teacher pairs.
 - `L_prop`: BCE/listwise proposal loss from oracle marginal certificate gain.
-- `L_act`: deployment-consistent sparse proposal/query/greedy/tournament action loss with optional oracle-to-predicted certificate schedule.
+- `L_act`: deployment-consistent sparse proposal/query/greedy/tournament action loss.
 - `L_cal`: optional margin calibration surrogate when `training.loss_weights.calibration > 0`.
 
-### 4) Post-hoc calibration
+## Post-hoc calibration
+
+Estimate a validation-set one-sided margin residual quantile:
 
 ```bash
 python -m bdse.experiments.calibrate \
-  --config bdse/configs/paper.yaml \
+  --config bdse/configs/full_preprocess.yaml \
   --checkpoint outputs/bdse_model.pt \
   --split val \
-  --preprocessed-dir "$BDSE_CACHE_ROOT" \
+  --preprocessed-dir /path/to/bdse_cache \
   --delta 0.1 \
   --output outputs/calibration.json
 ```
 
-Copy the reported value into your runtime config:
+Then copy the reported value into your runtime config:
 
 ```yaml
 tournament:
@@ -211,67 +225,28 @@ fallback:
   safety_lcb_min: 0.0
 ```
 
-### 5) Open-loop evaluation and BDSE diagnostics
+This is the deployment-oriented substitute for an unimplemented learned uncertainty head. It is cheaper and easier to validate in a real-time planner: it uses a scalar validation quantile instead of expanding the runtime network output.
+
+## Open-loop diagnostics
 
 ```bash
 python -m bdse.experiments.evaluate_open_loop \
-  --config bdse/configs/paper.yaml \
+  --config bdse/configs/full_preprocess.yaml \
   --checkpoint outputs/bdse_model.pt \
   --split val \
-  --preprocessed-dir "$BDSE_CACHE_ROOT" \
   --max-scenarios 500 \
-  --dense-full-interface \
-  --write-details \
   --output outputs/open_loop_bdse_metrics.json
 ```
 
-`--dense-full-interface` is validation-only. It computes dense evidence predictions for `full_interface_action_match` while the planner path still uses sparse Top-M/action queries and fallback diagnostics.
-
-### 6) Closed-loop evaluation hook
-
-The package constructs a real `BDSEnuPlanPlanner`; your nuPlan project must still provide its Hydra simulation runner. The wrapper accepts a `module:function` runner that receives `planner=...`, `cfg=...`, `challenge=...`, and `output_dir=...`.
+Teacher/evidence diagnostics:
 
 ```bash
-python -m bdse.experiments.evaluate_closed_loop \
-  --config bdse/configs/paper.yaml \
-  --checkpoint outputs/bdse_model.pt \
-  --challenge closed_loop_nonreactive_agents \
-  --output-dir outputs/closed_loop_nonreactive \
-  --run \
-  --runner your_nuplan_project.bdse_runner:run_with_prebuilt_planner
-```
-
-To validate/export an already produced nuPlan metric summary:
-
-```bash
-python -m bdse.experiments.evaluate_closed_loop \
-  --config bdse/configs/paper.yaml \
-  --checkpoint outputs/bdse_model.pt \
-  --metric-summary /path/to/nuplan_metric_summary.json \
-  --output-dir outputs/closed_loop_nonreactive
-```
-
-### 7) Ablation sweeps
-
-Generate configs and the plan only:
-
-```bash
-python -m bdse.experiments.ablations \
-  --config bdse/configs/paper.yaml \
-  --output-dir outputs/ablations
-```
-
-Run open-loop ablations over budget/proposal/rival size, selector family, evidence-family disables, fallback, demo prior, and drivable-polygons settings:
-
-```bash
-python -m bdse.experiments.ablations \
-  --config bdse/configs/paper.yaml \
-  --output-dir outputs/ablations \
-  --run \
-  --checkpoint outputs/bdse_model.pt \
-  --preprocessed-dir "$BDSE_CACHE_ROOT" \
+python -m bdse.experiments.diagnostics \
+  --config bdse/configs/full_preprocess.yaml \
   --split val \
-  --max-scenarios 500
+  --preprocessed-dir /path/to/bdse_cache \
+  --max-scenarios 500 \
+  --output outputs/diagnostics_val.json
 ```
 
 ## Runtime planner path
@@ -315,7 +290,7 @@ from bdse.planner.nuplan_planner import BDSEnuPlanPlanner
 planner = BDSEnuPlanPlanner(model=model, cfg=cfg)
 ```
 
-The included `bdse.experiments.evaluate_closed_loop` script constructs the planner, can validate/export existing metric summaries, and can call a project-provided `module:function` runner. Full nuPlan closed-loop evaluation still needs your project’s Hydra `run_simulation` entrypoint to pass the constructed planner instance as a pre-built planner. This repository does not bundle a full Hydra simulation config.
+The included `bdse.experiments.evaluate_closed_loop` script only verifies planner construction and prints integration instructions. Full nuPlan closed-loop evaluation still needs your project’s Hydra `run_simulation` entrypoint to pass the constructed planner instance as a pre-built planner. This repository does not bundle a full Hydra simulation config.
 
 Inside a nuPlan environment, `BDSEnuPlanPlanner.compute_trajectory()` returns `InterpolatedTrajectory` built from global `EgoState` objects with velocity and acceleration vectors. Outside a nuPlan environment, the converter returns the local numpy trajectory for unit tests and lightweight debugging.
 
