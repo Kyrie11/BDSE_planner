@@ -54,18 +54,97 @@ def oracle_objective_value(
     margins: np.ndarray,
     weights: np.ndarray,
 ) -> float:
-    selected_arr = np.asarray(selected, dtype=np.int64)
-    total = 0.0
-    for pidx, (a, b) in enumerate(np.asarray(pairs, dtype=np.int64)):
-        cap = float(margins[pidx])
-        base_support = max(float(J_base[b] - J_base[a]), 0.0)
-        if selected_arr.size:
-            evid_support = np.maximum(g_true[selected_arr, b] - g_true[selected_arr, a], 0.0).sum()
-        else:
-            evid_support = 0.0
-        total += float(weights[pidx]) * min(cap, base_support + float(evid_support))
-    return float(total)
+    """Signed certificate objective for labeled teacher pairs.
 
+    For pair (a, b), positive margin means action a should beat b.  The
+    certificate score accumulates the signed margin contribution J(b)-J(a).
+    Clipping every atom delta before summing can overestimate evidence because
+    an atom that supports one pair may hurt another pair.
+    """
+    selected_arr = np.asarray(selected, dtype=np.int64)
+    pair_arr = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+    if pair_arr.size == 0:
+        return 0.0
+    caps = np.asarray(margins, dtype=np.float32).reshape(-1)[: pair_arr.shape[0]]
+    w = np.asarray(weights, dtype=np.float32).reshape(-1)[: pair_arr.shape[0]]
+    if caps.shape[0] != pair_arr.shape[0]:
+        caps = np.zeros((pair_arr.shape[0],), dtype=np.float32)
+    if w.shape[0] != pair_arr.shape[0]:
+        w = np.ones((pair_arr.shape[0],), dtype=np.float32)
+    a = pair_arr[:, 0]
+    b = pair_arr[:, 1]
+    margin = np.asarray(J_base, dtype=np.float32)[b] - np.asarray(J_base, dtype=np.float32)[a]
+    if selected_arr.size:
+        valid_sel = selected_arr[(selected_arr >= 0) & (selected_arr < np.asarray(g_true).shape[0])]
+        if valid_sel.size:
+            g = np.asarray(g_true, dtype=np.float32)
+            margin = margin + (g[valid_sel[:, None], b[None, :]] - g[valid_sel[:, None], a[None, :]]).sum(axis=0)
+    cert = np.minimum(caps, np.maximum(margin, 0.0))
+    return float(np.sum(w * cert, dtype=np.float64))
+
+
+
+def _greedy_cover_from_pair_delta(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    caps: np.ndarray,
+    pair_weights: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+) -> tuple[list[int], float, float]:
+    """Greedy signed certificate coverage over pair margins.
+
+    ``base_margin[p]`` and ``atom_delta[i, p]`` are signed contributions to
+    J(b)-J(a) for pair p.  Value is sum_p w_p min(cap_p, max(margin_p, 0)).
+    """
+    margin = np.asarray(base_margin, dtype=np.float32).reshape(-1).copy()
+    caps = np.asarray(caps, dtype=np.float32).reshape(-1)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    atom_delta = np.asarray(atom_delta, dtype=np.float32)
+    E = int(atom_delta.shape[0]) if atom_delta.ndim == 2 else int(np.asarray(atom_budget_costs).shape[0])
+    if atom_delta.ndim != 2 or atom_delta.shape[1] != margin.shape[0]:
+        atom_delta = np.zeros((E, margin.shape[0]), dtype=np.float32)
+    if caps.shape[0] != margin.shape[0]:
+        caps = np.zeros((margin.shape[0],), dtype=np.float32)
+    if weights.shape[0] != margin.shape[0]:
+        weights = np.ones((margin.shape[0],), dtype=np.float32)
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).reshape(-1).copy()
+    if active.shape[0] < E:
+        active = np.pad(active, (0, E - active.shape[0]), constant_values=False)
+    active = active[:E]
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+
+    def value(m: np.ndarray) -> float:
+        return float(np.sum(weights * np.minimum(caps, np.maximum(m, 0.0)), dtype=np.float64))
+
+    current = value(margin)
+    selected: list[int] = []
+    spent = 0.0
+    while bool(active.any()):
+        best: tuple[int, float, float] | None = None
+        best_key = (-np.inf, -np.inf, np.inf)
+        for i in np.flatnonzero(active):
+            idx = int(i)
+            c = float(costs[idx])
+            if not np.isfinite(c) or spent + c > float(budget) + 1e-6:
+                continue
+            gain = float(value(margin + atom_delta[idx]) - current)
+            key = (gain / max(c, 1e-6), gain, -idx)
+            if key > best_key:
+                best_key = key
+                best = (idx, gain, c)
+        if best is None or best_key[1] <= 1e-9:
+            break
+        idx, gain, c = best
+        selected.append(idx)
+        active[idx] = False
+        spent += c
+        margin += atom_delta[idx]
+        current += float(gain)
+    return selected, float(current), float(spent)
 
 
 
@@ -285,11 +364,11 @@ def oracle_greedy_selector(
     else:
         a = pair_arr[:, 0]
         b = pair_arr[:, 1]
-        base_support = np.maximum(np.asarray(J_base, dtype=np.float32)[b] - np.asarray(J_base, dtype=np.float32)[a], 0.0)
-        atom_support = np.maximum(np.asarray(g_true, dtype=np.float32)[:, b] - np.asarray(g_true, dtype=np.float32)[:, a], 0.0)
-        selected, current, spent = _greedy_cover_from_pair_support(
-            atom_support,
-            base_support,
+        base_delta = np.asarray(J_base, dtype=np.float32)[b] - np.asarray(J_base, dtype=np.float32)[a]
+        atom_delta = np.asarray(g_true, dtype=np.float32)[:, b] - np.asarray(g_true, dtype=np.float32)[:, a]
+        selected, current, spent = _greedy_cover_from_pair_delta(
+            atom_delta,
+            base_delta,
             np.asarray(margins, dtype=np.float32).reshape(-1)[: pair_arr.shape[0]],
             np.asarray(weights, dtype=np.float32).reshape(-1)[: pair_arr.shape[0]],
             atom_budget_costs,
@@ -349,17 +428,24 @@ def runtime_objective_value(
     gamma_max: float,
 ) -> float:
     selected_arr = np.asarray(selected, dtype=np.int64)
+    pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    if pair_arr.size == 0:
+        return 0.0
     M_full = full_interface_margin(predicted_base_cost, predicted_atom_costs)
-    total = 0.0
-    for pidx, (a, b) in enumerate(np.asarray(pair_indices, dtype=np.int64)):
-        gamma = min(max(float(M_full[a, b]), 0.0), float(gamma_max))
-        base_support = max(float(predicted_base_cost[b] - predicted_base_cost[a]), 0.0)
-        if selected_arr.size:
-            evid_support = np.maximum(predicted_atom_costs[selected_arr, b] - predicted_atom_costs[selected_arr, a], 0.0).sum()
-        else:
-            evid_support = 0.0
-        total += float(pair_weights[pidx]) * min(gamma, base_support + float(evid_support))
-    return float(total)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)[: pair_arr.shape[0]]
+    if weights.shape[0] != pair_arr.shape[0]:
+        weights = np.ones((pair_arr.shape[0],), dtype=np.float32)
+    a = pair_arr[:, 0]
+    b = pair_arr[:, 1]
+    gamma = np.minimum(np.maximum(M_full[a, b], 0.0), float(gamma_max)).astype(np.float32)
+    margin = np.asarray(predicted_base_cost, dtype=np.float32)[b] - np.asarray(predicted_base_cost, dtype=np.float32)[a]
+    if selected_arr.size:
+        valid_sel = selected_arr[(selected_arr >= 0) & (selected_arr < np.asarray(predicted_atom_costs).shape[0])]
+        if valid_sel.size:
+            g = np.asarray(predicted_atom_costs, dtype=np.float32)
+            margin = margin + (g[valid_sel[:, None], b[None, :]] - g[valid_sel[:, None], a[None, :]]).sum(axis=0)
+    cert = np.minimum(gamma, np.maximum(margin, 0.0))
+    return float(np.sum(weights * cert, dtype=np.float64))
 
 
 def full_prescore_greedy_selector(
@@ -391,15 +477,15 @@ def full_prescore_greedy_selector(
     if len(pairs):
         a = pairs[:, 0]
         b = pairs[:, 1]
-        base_support = np.maximum(np.asarray(predicted_base_cost, dtype=np.float32)[b] - np.asarray(predicted_base_cost, dtype=np.float32)[a], 0.0)
-        atom_support = np.maximum(np.asarray(predicted_atom_costs, dtype=np.float32)[:, b] - np.asarray(predicted_atom_costs, dtype=np.float32)[:, a], 0.0)
+        base_delta = np.asarray(predicted_base_cost, dtype=np.float32)[b] - np.asarray(predicted_base_cost, dtype=np.float32)[a]
+        atom_delta = np.asarray(predicted_atom_costs, dtype=np.float32)[:, b] - np.asarray(predicted_atom_costs, dtype=np.float32)[:, a]
         caps = np.minimum(np.maximum(M[a, b], 0.0), float(gamma_max)).astype(np.float32)
     else:
-        base_support = np.zeros((0,), dtype=np.float32)
-        atom_support = np.zeros((E, 0), dtype=np.float32)
+        base_delta = np.zeros((0,), dtype=np.float32)
+        atom_delta = np.zeros((E, 0), dtype=np.float32)
         caps = np.zeros((0,), dtype=np.float32)
-    selected, current, spent = _greedy_cover_from_pair_support(
-        atom_support, base_support, caps, pair_weights, atom_budget_costs, budget, atom_active_mask
+    selected, current, spent = _greedy_cover_from_pair_delta(
+        atom_delta, base_delta, caps, pair_weights, atom_budget_costs, budget, atom_active_mask
     )
     return SelectionResult(
         selected=selected,
@@ -532,9 +618,9 @@ def runtime_greedy_selector(
         )
         mode = "runtime_hab_lcb_uncertainty"
     else:
-        selected, current, spent = _greedy_cover_from_pair_support(
-            atom_support,
-            base_support,
+        selected, current, spent = _greedy_cover_from_pair_delta(
+            atom_delta,
+            base_delta,
             caps,
             pair_weights,
             atom_budget_costs,
@@ -542,7 +628,7 @@ def runtime_greedy_selector(
             atom_active_mask,
         )
         extra_diag = {}
-        mode = "runtime_base_screen_sparse"
+        mode = "runtime_base_screen_sparse_signed"
     return SelectionResult(
         selected=selected,
         objective_value=current,
@@ -610,7 +696,7 @@ def runtime_greedy_selector_pair_conditioned(
     if delta.ndim != 2 or delta.shape[1] != pair_arr.shape[0]:
         delta = np.zeros((E, pair_arr.shape[0]), dtype=np.float32)
     base_support = np.maximum(base_delta, 0.0).astype(np.float32)
-    atom_support = np.maximum(delta, 0.0).astype(np.float32)
+    atom_support = np.maximum(delta, 0.0).astype(np.float32)  # legacy/debug only
 
     use_uncertainty_objective = (
         pair_atom_variance is not None
@@ -651,9 +737,9 @@ def runtime_greedy_selector_pair_conditioned(
         )
         mode = "runtime_pair_conditioned_lcb_uncertainty"
     else:
-        selected, current, spent = _greedy_cover_from_pair_support(atom_support, base_support, caps, weights, atom_budget_costs, budget, atom_active_mask)
+        selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
         extra_diag = {}
-        mode = "runtime_pair_conditioned"
+        mode = "runtime_pair_conditioned_signed"
     return SelectionResult(
         selected=selected,
         objective_value=current,

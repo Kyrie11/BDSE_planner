@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 
-from bdse.planner.selector import SelectionResult, _greedy_cover_from_pair_support
+from bdse.planner.selector import SelectionResult, _greedy_cover_from_pair_delta
 
 
 def runtime_certificate_selector_sparse(
@@ -30,16 +30,15 @@ def runtime_certificate_selector_sparse(
         a = pairs[:, 0]
         b = pairs[:, 1]
         base_delta = J0[b] - J0[a]
-        base_support = np.maximum(base_delta, 0.0)
-        atom_support = np.maximum(g[:, b] - g[:, a], 0.0)
+        atom_delta = g[:, b] - g[:, a]
         caps = np.minimum(np.maximum(np.abs(base_delta) + float(gamma_max) * 0.25, 1e-3), float(gamma_max)).astype(np.float32)
     else:
-        base_support = np.zeros((0,), dtype=np.float32)
-        atom_support = np.zeros((g.shape[0], 0), dtype=np.float32)
+        base_delta = np.zeros((0,), dtype=np.float32)
+        atom_delta = np.zeros((g.shape[0], 0), dtype=np.float32)
         caps = np.zeros((0,), dtype=np.float32)
-    selected, current, spent = _greedy_cover_from_pair_support(
-        atom_support,
-        base_support,
+    selected, current, spent = _greedy_cover_from_pair_delta(
+        atom_delta,
+        base_delta,
         caps,
         np.asarray(pair_weights, dtype=np.float32)[: len(pairs)],
         atom_budget_costs,

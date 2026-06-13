@@ -332,12 +332,22 @@ def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: lis
         inference_pairs=runtime_sel.pair_indices,
     )
     budget_metrics: dict[str, float] = {}
-    hard = set(np.flatnonzero(s.evidence_bank.hard_mask() & s.evidence_bank.active_mask).astype(int).tolist())
+    hard_mask = s.evidence_bank.hard_mask() & s.evidence_bank.active_mask
+    hard = set(np.flatnonzero(hard_mask).astype(int).tolist())
+    decisive_hard: set[int] = set()
+    if len(s.pairs.pairs):
+        for a_pair, b_pair in np.asarray(s.pairs.pairs[s.pairs.valid_mask], dtype=np.int64):
+            delta = np.asarray(s.teacher.g_evid[:, b_pair] - s.teacher.g_evid[:, a_pair], dtype=np.float32)
+            for ei in np.flatnonzero(hard_mask & (delta > 1e-6)):
+                decisive_hard.add(int(ei))
+    hard_denom = decisive_hard if decisive_hard else hard
     for B in budgets:
         sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(B), s.evidence_bank.active_mask)
         t = run_tournament(J0, g, sel.selected, s.candidates.valid_mask, flags, cfg)
+        selected_set = set(sel.selected)
         budget_metrics[f"B{int(B)}_decision_sufficiency"] = float(t.action_index == s.teacher.a_star)
-        budget_metrics[f"B{int(B)}_hard_recall"] = float(len(hard & set(sel.selected)) / max(len(hard), 1))
+        budget_metrics[f"B{int(B)}_hard_recall"] = float(len(hard & selected_set) / max(len(hard), 1))
+        budget_metrics[f"B{int(B)}_decisive_hard_recall"] = float(len(hard_denom & selected_set) / max(len(hard_denom), 1))
     return teacher_metrics, bdse_result, budget_metrics, _sample_identity(s)
 
 

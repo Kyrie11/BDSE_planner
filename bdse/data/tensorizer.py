@@ -8,7 +8,7 @@ import torch
 from bdse.data.cache_schema import CandidateBank, EvidenceBank, RuntimeFeatures, Sample
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, PROPOSAL_FEATURE_DIM, compute_proposal_features
 from bdse.planner.evidence_atoms import ATOM_QUERY_DIM, compute_query_features
-from bdse.planner.selector import _greedy_cover_from_pair_support
+from bdse.planner.selector import _greedy_cover_from_pair_delta
 
 
 def _pad_2d(arr: np.ndarray, shape: tuple[int, int], value: float = 0.0) -> np.ndarray:
@@ -261,31 +261,32 @@ def sample_to_model_inputs(sample: Sample, cfg: dict[str, Any], include_teacher:
             Etrue = min(Emax, sample.teacher.g_evid.shape[0])
             a = pairs[:n, 0]
             b = pairs[:n, 1]
-            base_support = np.maximum(sample.teacher.J_base[b] - sample.teacher.J_base[a], 0.0).astype(np.float32)
-            atom_support = np.zeros((Emax, n), dtype=np.float32)
-            atom_support[:Etrue] = np.maximum(sample.teacher.g_evid[:Etrue, b] - sample.teacher.g_evid[:Etrue, a], 0.0)
+            base_delta = (sample.teacher.J_base[b] - sample.teacher.J_base[a]).astype(np.float32)
+            atom_delta = np.zeros((Emax, n), dtype=np.float32)
+            atom_delta[:Etrue] = sample.teacher.g_evid[:Etrue, b] - sample.teacher.g_evid[:Etrue, a]
             caps = np.maximum(margins[:n], 0.0).astype(np.float32)
             e_cost = np.ones((Emax,), dtype=np.float32)
             e_cost[: min(Emax, sample.evidence_bank.budget_costs().shape[0])] = sample.evidence_bank.budget_costs()[:Emax]
             e_active = np.zeros((Emax,), dtype=bool)
             e_active[: min(Emax, sample.evidence_bank.active_mask.shape[0])] = sample.evidence_bank.active_mask[:Emax]
-            selected, _, _ = _greedy_cover_from_pair_support(
-                atom_support, base_support, caps, weights[:n], e_cost, float(cfg.get("evidence", {}).get("budget", 16)), e_active
+            selected, _, _ = _greedy_cover_from_pair_delta(
+                atom_delta, base_delta, caps, weights[:n], e_cost, float(cfg.get("evidence", {}).get("budget", 16)), e_active
             )
-            # Recompute the greedy trace to expose selected-step marginal gains.
-            support = base_support.copy()
-            current = np.minimum(caps, support)
+            # Recompute the signed greedy trace to expose selected-step marginal gains.
+            margin_state = base_delta.copy()
+            current = np.minimum(caps, np.maximum(margin_state, 0.0))
             remaining = set(np.flatnonzero(e_active).tolist())
             spent = 0.0
             for idx in selected:
                 if idx not in remaining:
                     continue
-                trial = np.minimum(caps, support + atom_support[idx])
+                trial_margin = margin_state + atom_delta[idx]
+                trial = np.minimum(caps, np.maximum(trial_margin, 0.0))
                 gain = float(np.sum(weights[:n] * (trial - current), dtype=np.float64))
                 crit[idx] = max(crit[idx], gain)
                 oracle[idx] = True
-                support += atom_support[idx]
-                current = np.minimum(caps, support)
+                margin_state = trial_margin
+                current = trial
                 spent += float(e_cost[idx])
                 remaining.discard(idx)
         # Family-level oracle target for HAB.  It aggregates the same greedy

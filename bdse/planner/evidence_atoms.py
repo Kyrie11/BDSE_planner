@@ -717,8 +717,11 @@ def raw_local_costs(atoms: list[EvidenceAtom], candidates: CandidateBank, runtim
             cvar = weighted_cvar(raw_stack, probs_arr, float(rcfg.get("cvar_alpha", 0.9)))
             w = float(rcfg.get("cvar_weight", 0.4))
             return ((1.0 - w) * mean + w * cvar).astype(np.float32)
-        except Exception:
-            pass
+        except Exception as exc:
+            r_cfg = cfg.get("teacher", {}).get("robust", {}) or {}
+            if not bool(r_cfg.get("fallback_on_error", False)):
+                raise RuntimeError("robust teacher evidence aggregation failed; refusing to silently downgrade to single-world labels") from exc
+            runtime.metadata["robust_teacher_fallback_error"] = repr(exc)
     raw, _ = raw_local_costs_with_hard_events(atoms, candidates, runtime, label_future, cfg)
     return raw
 
