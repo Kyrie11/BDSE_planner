@@ -111,9 +111,14 @@ class NuPlanScenarioSource:
         # process pool here can silently block before tqdm is created.  Keep discovery
         # threaded/single-process and parallelize sample materialization instead.
         builder_use_process_pool = bool(preprocess_cfg.get("scenario_builder_use_process_pool", False))
-        scenario_filter_limit = self.max_scenarios
-        if scenario_filter_limit is None:
-            scenario_filter_limit = preprocess_cfg.get("scenario_filter_limit_total_scenarios", None)
+        # Do not implicitly pass --max-scenarios-per-split to nuPlan's ScenarioBuilder.
+        # ScenarioBuilder's limit_total_scenarios is an order-dependent discovery cap,
+        # while BDSE's max_scenarios should describe the final materialized subset.
+        # Use preprocess.scenario_filter_limit_total_scenarios / --scenario-builder-limit
+        # only for deliberate fast, potentially biased discovery probes.
+        scenario_filter_limit = preprocess_cfg.get("scenario_filter_limit_total_scenarios", None)
+        if scenario_filter_limit is None and bool(preprocess_cfg.get("use_max_scenarios_as_builder_limit", False)):
+            scenario_filter_limit = self.max_scenarios
 
         db_files = db_files_for_nuplan_builder(self.records)
         print(
@@ -449,10 +454,6 @@ class NuPlanBDSEDataset:
                     out.append(DevkitScenarioIndexRecord(scenario, self.split, folder, log_name, token, iteration,
                                                          timestamp_us))
                     per_log_counts[log_name] = per_log_counts.get(log_name, 0) + 1
-                    if self.max_scenarios is not None and len(out) >= self.max_scenarios:
-                        self._index = out
-                        print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
-                        return self._index
 
             if self.max_samples_per_log is not None and cap_strategy in {"uniform", "uniform_blocks"}:
                 grouped: dict[str, list[DevkitScenarioIndexRecord]] = {}
@@ -480,6 +481,33 @@ class NuPlanBDSEDataset:
                 )
 
             out = _sort_devkit_records_for_temporal_cache(out)
+
+            if self.max_scenarios is not None and len(out) > int(self.max_scenarios):
+                cap = max(1, int(self.max_scenarios))
+                split_cap_strategy = str(self.cfg.get("preprocess", {}).get("max_scenarios_strategy", "uniform_blocks")).lower()
+                if split_cap_strategy in {"uniform-blocks", "blocked_uniform", "blocked-uniform"}:
+                    split_cap_strategy = "uniform_blocks"
+                if split_cap_strategy not in {"first", "uniform", "uniform_blocks"}:
+                    raise ValueError(
+                        f"Unsupported max_scenarios_strategy={split_cap_strategy!r}; "
+                        "expected 'first', 'uniform', or 'uniform_blocks'."
+                    )
+                if split_cap_strategy == "first":
+                    out = out[:cap]
+                elif split_cap_strategy == "uniform":
+                    idx = _uniform_indices(len(out), cap)
+                    out = [out[int(i)] for i in idx[:cap]]
+                else:
+                    block_size = max(1, int(self.cfg.get("preprocess", {}).get("max_samples_per_log_block_size", 8)))
+                    idx = _uniform_block_indices(len(out), cap, block_size)
+                    out = [out[int(i)] for i in idx[:cap]]
+                out = _sort_devkit_records_for_temporal_cache(out)
+                print(
+                    f"[bdse] applied split cap: split={self.split} strategy={split_cap_strategy} "
+                    f"cap={cap} records={len(out)}",
+                    flush=True,
+                )
+
             self._index = out
             print(f"[bdse] built scenario index: split={self.split} records={len(out)}", flush=True)
             return self._index

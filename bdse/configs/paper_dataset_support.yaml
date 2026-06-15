@@ -6,6 +6,8 @@ preprocess:
   resume: true
   scenario_stride: 10
   scenario_iteration_policy: initial
+  max_scenarios_strategy: uniform_blocks
+  scenario_filter_limit_total_scenarios: null
   label_agent_future_mode: logged
   runtime_agent_history_mode: logged
   candidate_aware_agent_selection: true

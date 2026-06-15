@@ -130,6 +130,101 @@ def _identity_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _config_summary(cfg: dict[str, Any]) -> dict[str, Any]:
+    pcfg = cfg.get("preprocess", {}) if isinstance(cfg, dict) else {}
+    rcfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
+    ccfg = cfg.get("candidate", {}) if isinstance(cfg, dict) else {}
+    ecfg = cfg.get("evidence", {}) if isinstance(cfg, dict) else {}
+    tcfg = cfg.get("teacher", {}) if isinstance(cfg, dict) else {}
+    return {
+        "preprocess": {
+            "scenario_stride": pcfg.get("scenario_stride"),
+            "scenario_iteration_policy": pcfg.get("scenario_iteration_policy"),
+            "max_samples_per_log": pcfg.get("max_samples_per_log"),
+            "max_samples_per_log_strategy": pcfg.get("max_samples_per_log_strategy"),
+            "max_scenarios_strategy": pcfg.get("max_scenarios_strategy"),
+            "scenario_filter_limit_total_scenarios": pcfg.get("scenario_filter_limit_total_scenarios"),
+            "label_agent_future_mode": pcfg.get("label_agent_future_mode"),
+            "runtime_agent_history_mode": pcfg.get("runtime_agent_history_mode"),
+            "candidate_aware_agent_selection": pcfg.get("candidate_aware_agent_selection"),
+        },
+        "runtime": {
+            "map_radius_m": rcfg.get("map_radius_m"),
+            "agent_radius_m": rcfg.get("agent_radius_m"),
+            "max_agents": rcfg.get("max_agents"),
+            "include_drivable_polygons": rcfg.get("include_drivable_polygons"),
+            "max_drivable_polygons": rcfg.get("max_drivable_polygons"),
+            "max_polygon_points": rcfg.get("max_polygon_points"),
+            "include_crosswalks": rcfg.get("include_crosswalks"),
+        },
+        "candidate": {
+            "K": ccfg.get("K"),
+            "pool_K": ccfg.get("pool_K"),
+            "prune_pool_to_K": ccfg.get("prune_pool_to_K"),
+            "min_valid_candidates": ccfg.get("min_valid_candidates"),
+        },
+        "evidence": {
+            "budget": ecfg.get("budget"),
+            "max_atoms": ecfg.get("max_atoms"),
+            "max_interaction_atoms": ecfg.get("max_interaction_atoms"),
+            "max_interaction_agents": ecfg.get("max_interaction_agents"),
+        },
+        "teacher": {
+            "robust_enabled": (tcfg.get("robust", {}) or {}).get("enabled"),
+            "cost_eval_stride": tcfg.get("cost_eval_stride"),
+            "demo_weight": tcfg.get("demo_weight"),
+            "route_weight": tcfg.get("route_weight"),
+        },
+    }
+
+
+def _paper_scale_gate(metrics: dict[str, Any]) -> dict[str, Any]:
+    e1 = metrics.get("E1_teacher_sanity_and_candidate_coverage", {}) or {}
+    e2 = metrics.get("E2_evidence_sufficiency_oracle_teacher_interface", {}) or {}
+    e4 = metrics.get("E4_budget_sweep_oracle_teacher_interface", {}) or {}
+    checks = [
+        ("full_interface_action_match", e2.get("full_interface_action_match"), ">=", 0.95),
+        ("B16_oracle_decision_sufficiency", e4.get("B16_decision_sufficiency"), ">=", 0.85),
+        ("runtime_decision_sufficiency", e2.get("decision_sufficiency"), ">=", 0.72),
+        ("evidence_sufficiency", e2.get("evidence_sufficiency"), ">=", 0.50),
+        ("selector_value_ratio", e2.get("selector_value_ratio"), ">=", 0.60),
+        ("teacher_hard_when_safe_exists", e1.get("teacher_hard_when_safe_exists"), "==", 0.0),
+        ("safe_candidate_exists", e1.get("safe_candidate_exists"), ">=", 0.75),
+        ("valid_candidate_count", e1.get("valid_candidate_count"), ">=", 24.0),
+        ("partition_max_abs_error", e1.get("partition_max_abs_error"), "==", 0.0),
+        ("evidence_sum_max_abs_error", e1.get("evidence_sum_max_abs_error"), "<", 1e-2),
+        ("candidate_log_ade_teacher_p50", e1.get("candidate_log_ade_teacher_p50"), "<", 3.5),
+        ("candidate_log_ade_teacher_p90", e1.get("candidate_log_ade_teacher_p90"), "<", 12.0),
+        ("logged_ego_route_dist_p95_p90", e1.get("logged_ego_route_dist_p95_p90"), "<", 6.0),
+    ]
+    out_checks: dict[str, dict[str, Any]] = {}
+    failed: list[str] = []
+    for name, value, op, threshold in checks:
+        try:
+            v = float(value)
+        except Exception:
+            v = float("nan")
+        if op == ">=":
+            ok = bool(np.isfinite(v) and v >= float(threshold))
+        elif op == "<":
+            ok = bool(np.isfinite(v) and v < float(threshold))
+        elif op == "==":
+            ok = bool(np.isfinite(v) and abs(v - float(threshold)) <= 1e-12)
+        else:
+            ok = False
+        out_checks[name] = {"value": v, "op": op, "threshold": float(threshold), "pass": ok}
+        if not ok:
+            failed.append(name)
+    return {
+        "overall_pass": bool(not failed),
+        "num_checks": int(len(checks)),
+        "num_pass": int(len(checks) - len(failed)),
+        "num_fail": int(len(failed)),
+        "failed_checks": failed,
+        "checks": out_checks,
+    }
+
+
 def _atom_saturation_metrics(s, valid: np.ndarray, cfg: dict[str, Any]) -> dict[str, float]:
     out: dict[str, float] = {}
     if s.teacher is None or s.teacher.g_evid.size == 0 or not valid.any():
@@ -399,16 +494,19 @@ def run_diagnostics(
             futures = {ex.submit(_diagnose_one_sample, dataset, i, cfg, budgets, bool(recompute_hard_events)): i for i in range(n)}
             for fut in tqdm(as_completed(futures), total=n, desc=f"diagnostics:{split}"):
                 consume(fut.result())
-    return {
+    result = {
         "num_loaded": int(len(dataset)),
         "num_samples": int(len(next(iter(teacher_acc.values()))) if teacher_acc else 0),
         "num_skipped_missing_labels": int(skipped_missing),
         "recomputed_hard_event_matrix": bool(recompute_hard_events),
+        "config_summary": _config_summary(cfg),
         "split_identity": _identity_summary(identity_items),
         "E1_teacher_sanity_and_candidate_coverage": _summarize_lists(teacher_acc),
         "E2_evidence_sufficiency_oracle_teacher_interface": aggregate_metric_results(bdse_results),
         "E4_budget_sweep_oracle_teacher_interface": _summarize_lists(budget_acc),
     }
+    result["E0_paper_scale_gate"] = _paper_scale_gate(result)
+    return result
 
 
 def main() -> None:

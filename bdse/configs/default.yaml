@@ -34,6 +34,12 @@ preprocess:
   # 10x--100x and creates highly overlapping labels.
   scenario_iteration_policy: initial
   max_samples_per_log_strategy: uniform_blocks
+  # Strategy for --max-scenarios-per-split after all eligible scenarios are indexed.
+  # This avoids order-biased first-N subsets when building paper-scale probes.
+  max_scenarios_strategy: uniform_blocks
+  # Optional nuPlan ScenarioBuilder discovery cap. Leave null for paper probes;
+  # setting it is faster but can bias the subset before BDSE balancing is applied.
+  scenario_filter_limit_total_scenarios: null
   max_samples_per_log_block_size: 32
   num_workers: 1
   max_in_flight: 2

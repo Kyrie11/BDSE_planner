@@ -28,6 +28,10 @@ def main() -> None:
     parser.add_argument("--max-files-per-split", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--max-scenarios-per-split", type=int, default=None)
+    parser.add_argument("--max-scenarios-per-split-strategy", type=str, default=None, choices=["first", "uniform", "uniform_blocks"],
+                        help="How to choose a capped subset when --max-scenarios-per-split is set. Prefer uniform_blocks for balanced paper probes.")
+    parser.add_argument("--scenario-builder-limit", type=int, default=None,
+                        help="Optional nuPlan ScenarioBuilder limit_total_scenarios. This is a discovery-speed cap and may bias the sample order; leave unset for paper probes.")
     parser.add_argument("--max-samples-per-log", type=int, default=None,
                         help="Cap materialized samples per nuPlan DB/log after stride thinning. Useful for balanced time tests.")
     parser.add_argument("--max-samples-per-log-strategy", type=str, default=None, choices=["first", "uniform", "uniform_blocks"],
@@ -136,6 +140,10 @@ def main() -> None:
         cfg["preprocess"]["max_samples_per_log"] = int(args.max_samples_per_log)
     if args.max_samples_per_log_strategy is not None:
         cfg["preprocess"]["max_samples_per_log_strategy"] = str(args.max_samples_per_log_strategy)
+    if args.max_scenarios_per_split_strategy is not None:
+        cfg["preprocess"]["max_scenarios_strategy"] = str(args.max_scenarios_per_split_strategy)
+    if args.scenario_builder_limit is not None:
+        cfg["preprocess"]["scenario_filter_limit_total_scenarios"] = max(1, int(args.scenario_builder_limit))
     if args.max_samples_per_log_block_size is not None:
         cfg["preprocess"]["max_samples_per_log_block_size"] = max(1, int(args.max_samples_per_log_block_size))
     if args.num_workers is not None:
