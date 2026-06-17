@@ -64,6 +64,9 @@ class BDSEPlannerCore:
             eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
             lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
             lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
+            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", False)),
+            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 0.5)),
+            pair_cap_multiplier=float(cfg.get("selector", {}).get("runtime_pair_cap_multiplier", 1.0)),
         )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
@@ -196,6 +199,9 @@ class BDSEPlannerCore:
                 prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
                 family_ids=family_ids,
                 family_budget_caps=family_caps,
+                bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", False)),
+                reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 0.5)),
+                pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),
             )
             sigma = selected_pair_sigma_from_action_variance(g_var, selection.selected, candidates.valid_mask)
             tournament = run_tournament(J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg, sigma=sigma)

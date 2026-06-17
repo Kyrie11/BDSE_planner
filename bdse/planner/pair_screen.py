@@ -12,17 +12,24 @@ def build_runtime_pairs_from_base(
     lambda_near: float = 1.0,
     lambda_safety: float = 2.0,
     preserve_safety_pairs: bool = True,
+    bidirectional_pairs: bool = False,
+    reverse_pair_weight: float = 0.5,
+    pair_cap_multiplier: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Runtime pair screen using only base scores and cheap safety flags.
 
-    The better/base-lower action is stored first.  No full-interface evidence
-    margin is read here; this is the inference-time rival graph required by the
-    two-stage BDSE certificate pipeline.
+    By default the lower predicted base-cost action is stored first, matching the
+    original runtime graph.  When ``bidirectional_pairs`` is enabled, ordinary
+    top/near rival pairs are also stored in the reverse direction with a smaller
+    weight.  This is important for deployment-style evidence selection: evidence
+    often needs to overturn the base winner in favor of a safer/route-consistent
+    action, and a one-way lower-base graph cannot score negative evidence deltas
+    as useful margin support.  Cheap safe-vs-unsafe pairs remain oriented
+    safe->unsafe and outside the ordinary pair cap.
     """
     J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
     valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
     safety = np.asarray(cheap_safety_flags, dtype=bool).reshape(-1)
-    K = len(valid)
     valid_idx = np.flatnonzero(valid & np.isfinite(J0))
     if valid_idx.size == 0:
         return np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32)
@@ -30,19 +37,29 @@ def build_runtime_pairs_from_base(
     pair_set: dict[tuple[int, int], float] = {}
     safety_pair_set: dict[tuple[int, int], float] = {}
 
-    def add(a: int, b: int, w: float) -> None:
+    def _base_order(a: int, b: int) -> tuple[int, int]:
+        if (float(J0[b]), int(b)) < (float(J0[a]), int(a)):
+            return int(b), int(a)
+        return int(a), int(b)
+
+    def _add_direct(a: int, b: int, w: float) -> None:
         if a == b or not valid[a] or not valid[b]:
             return
-        # Store lower predicted base cost first.  Ties break by index.
-        if (float(J0[b]), int(b)) < (float(J0[a]), int(a)):
-            a, b = b, a
         key = (int(a), int(b))
         pair_set[key] = max(float(w), pair_set.get(key, 0.0))
+
+    def add(a: int, b: int, w: float) -> None:
+        a0, b0 = _base_order(int(a), int(b))
+        _add_direct(a0, b0, w)
+        if bool(bidirectional_pairs):
+            rw = max(0.0, float(reverse_pair_weight)) * float(w)
+            if rw > 0.0:
+                _add_direct(b0, a0, rw)
 
     for i, a in enumerate(top.tolist()):
         for b in top.tolist()[i + 1 :]:
             add(a, b, 1.0)
-    for i, a in enumerate(valid_idx.tolist()):
+    for a in valid_idx.tolist():
         near = valid_idx[np.abs(J0[valid_idx] - J0[a]) < float(eta0)]
         for b in near.tolist():
             if a != b:
@@ -59,19 +76,21 @@ def build_runtime_pairs_from_base(
                 if a == b:
                     continue
                 key = (int(a), int(b))
-                safety_pair_set[key] = max(1.0 + float(lambda_safety), safety_pair_set.get(key, 0.0))
-                pair_set[key] = max(1.0 + float(lambda_safety), pair_set.get(key, 0.0))
+                w = 1.0 + float(lambda_safety)
+                safety_pair_set[key] = max(w, safety_pair_set.get(key, 0.0))
+                pair_set[key] = max(w, pair_set.get(key, 0.0))
     if not pair_set:
         return np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32)
     items = sorted(pair_set.items(), key=lambda kv: (abs(float(J0[kv[0][1]] - J0[kv[0][0]])), kv[0][0], kv[0][1]))
     max_pairs = max(int(L0) * max(int(L0), 1), int(L0))
+    max_pairs = int(np.ceil(max_pairs * max(1.0, float(pair_cap_multiplier))))
     if preserve_safety_pairs and safety_pair_set:
         safety_items = sorted(safety_pair_set.items(), key=lambda kv: (float(J0[kv[0][0]]), float(J0[kv[0][1]]), kv[0][0], kv[0][1]))
         safety_keys = {k for k, _ in safety_items}
         regular_items = [kv for kv in items if kv[0] not in safety_keys]
         items = safety_items + regular_items[:max_pairs]
     else:
-        items = items[: max_pairs]
+        items = items[:max_pairs]
     pairs = np.asarray([k for k, _ in items], dtype=np.int64)
     weights = np.asarray([w for _, w in items], dtype=np.float32)
     return pairs, weights

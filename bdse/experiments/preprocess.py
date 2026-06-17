@@ -106,6 +106,10 @@ def main() -> None:
                         help="Override number of selected agent slots saved in runtime/label tensors.")
     parser.add_argument("--max-route-points", type=int, default=None,
                         help="Override max route centerline points stored per sample.")
+    parser.add_argument("--max-drivable-polygons", type=int, default=None,
+                        help="Override max drivable-area polygons stored per sample when full drivable map extraction is enabled.")
+    parser.add_argument("--max-polygon-points", type=int, default=None,
+                        help="Override max vertices stored per drivable polygon.")
     parser.add_argument("--max-interaction-agents", type=int, default=None,
                         help="Override number of agents used when enumerating interaction evidence atoms.")
     parser.add_argument("--max-interaction-atoms", type=int, default=None,
@@ -116,6 +120,14 @@ def main() -> None:
                         help="Override the larger runtime proposal pool size before pruning back to candidate.K. This does not change the final teacher/evidence tensor K.")
     parser.add_argument("--teacher-cost-eval-stride", type=int, default=None,
                         help="Evaluate expensive teacher costs every N candidate timesteps; candidates are still saved at full resolution.")
+    parser.add_argument("--materialize-quality-filter", action="store_true", default=None,
+                        help="Apply preprocess.quality_filter during materialization and skip rejected samples instead of saving them.")
+    parser.add_argument("--no-materialize-quality-filter", action="store_false", dest="materialize_quality_filter")
+    parser.add_argument("--bidirectional-runtime-pairs", action="store_true", default=None,
+                        help="Use bidirectional top/near runtime rival pairs so evidence can overturn a low-base but unsafe/off-route action.")
+    parser.add_argument("--no-bidirectional-runtime-pairs", action="store_false", dest="bidirectional_runtime_pairs")
+    parser.add_argument("--runtime-pair-cap-multiplier", type=float, default=None,
+                        help="Multiplier for ordinary runtime rival-pair cap when bidirectional pairs are enabled.")
     args = parser.parse_args()
     cfg = load_config(args.config)
     cfg.setdefault("paths", {})
@@ -189,6 +201,10 @@ def main() -> None:
         cfg.setdefault("runtime", {})["max_agents"] = max(1, int(args.max_agents))
     if args.max_route_points is not None:
         cfg.setdefault("runtime", {})["max_route_points"] = max(2, int(args.max_route_points))
+    if args.max_drivable_polygons is not None:
+        cfg.setdefault("runtime", {})["max_drivable_polygons"] = max(0, int(args.max_drivable_polygons))
+    if args.max_polygon_points is not None:
+        cfg.setdefault("runtime", {})["max_polygon_points"] = max(4, int(args.max_polygon_points))
     if args.max_interaction_agents is not None:
         cfg.setdefault("evidence", {})["max_interaction_agents"] = max(0, int(args.max_interaction_agents))
     if args.max_interaction_atoms is not None:
@@ -200,6 +216,12 @@ def main() -> None:
         cand_cfg["pool_K"] = max(int(cand_cfg.get("K", 1)), int(args.candidate_pool_k))
     if args.teacher_cost_eval_stride is not None:
         cfg.setdefault("teacher", {})["cost_eval_stride"] = max(1, int(args.teacher_cost_eval_stride))
+    if args.materialize_quality_filter is not None:
+        cfg.setdefault("preprocess", {})["materialize_quality_filter"] = bool(args.materialize_quality_filter)
+    if args.bidirectional_runtime_pairs is not None:
+        cfg.setdefault("selector", {})["bidirectional_pairs"] = bool(args.bidirectional_runtime_pairs)
+    if args.runtime_pair_cap_multiplier is not None:
+        cfg.setdefault("selector", {})["runtime_pair_cap_multiplier"] = max(1.0, float(args.runtime_pair_cap_multiplier))
     if args.list_splits:
         print(discover_available_splits(cfg["paths"]["data_cache_root"]))
         return

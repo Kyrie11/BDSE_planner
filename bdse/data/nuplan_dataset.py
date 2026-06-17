@@ -19,6 +19,7 @@ import numpy as np
 from bdse.config import load_config
 from bdse.data.cache_schema import Sample, load_sample_npz, save_sample_npz
 from bdse.data.label_builder import build_training_sample_from_scenario
+from bdse.data.quality import quality_decision
 from bdse.data.scenario_sampler import DBFileRecord, db_files_for_nuplan_builder, discover_db_files, normalize_split_name, select_records
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,50 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     except sqlite3.Error:
         return set()
     return {str(r[1]) for r in rows}
+
+
+def _cfg_digest_summary(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Small JSON-serializable snapshot of knobs that affect cache labels/features."""
+    out: dict[str, Any] = {}
+    for section, keys in {
+        "preprocess": [
+            "scenario_stride", "scenario_iteration_policy", "max_samples_per_log",
+            "max_samples_per_log_strategy", "max_scenarios_strategy",
+            "label_agent_future_mode", "runtime_agent_history_mode",
+            "candidate_aware_agent_selection", "materialize_quality_filter",
+        ],
+        "runtime": [
+            "map_radius_m", "agent_radius_m", "max_agents", "include_drivable_polygons",
+            "max_drivable_polygons", "max_polygon_points", "include_crosswalks",
+        ],
+        "candidate": ["K", "pool_K", "prune_pool_to_K", "min_valid_candidates"],
+        "evidence": ["budget", "max_atoms", "max_interaction_atoms", "max_interaction_agents"],
+        "teacher": ["cost_eval_stride", "demo_weight", "demo_scale", "route_weight", "progress_weight"],
+        "selector": ["bidirectional_pairs", "reverse_pair_weight", "runtime_pair_cap_multiplier", "lambda_safety", "lambda_near"],
+        "tournament": ["L_infer"],
+    }.items():
+        sec = cfg.get(section, {}) or {}
+        out[section] = {k: sec.get(k) for k in keys if k in sec}
+    return out
+
+
+def _quality_metrics_from_teacher_diag(sample: Sample) -> dict[str, Any]:
+    diag = {} if sample.teacher is None else dict(sample.teacher.diagnostics or {})
+    out: dict[str, Any] = {}
+    for k, v in diag.items():
+        if str(k).startswith("quality_"):
+            out[str(k)[len("quality_"):]] = v
+    return out
+
+
+def _preprocess_quality_decision_for_sample(sample: Sample, cfg: dict[str, Any]):
+    metrics = _quality_metrics_from_teacher_diag(sample)
+    # Force preprocess.quality_filter semantics even if training.quality_filter is
+    # enabled in the same config file.  Training may be stricter; materialization
+    # should be explicitly controlled by preprocess.materialize_quality_filter.
+    qcfg = dict(cfg)
+    qcfg["training"] = {"quality_filter": {"enabled": False}}
+    return quality_decision(metrics, qcfg)
 
 
 def scan_db_for_lidarpc_tokens(db_path: str | Path, split: str, folder: str, stride: int = 10, max_frames: int | None = None) -> list[ScenarioIndexRecord]:
@@ -739,6 +784,32 @@ class NuPlanBDSEDataset:
         t0 = time.perf_counter()
         sample = self[i]
         t_sample = time.perf_counter()
+        if sample.runtime.metadata is None:
+            sample.runtime.metadata = {}
+        sample.runtime.metadata["bdse_cache_config_summary"] = _cfg_digest_summary(self.cfg)
+        sample.runtime.metadata["bdse_cache_split"] = str(self.split)
+        if bool(pcfg.get("materialize_quality_filter", False)):
+            q_dec = _preprocess_quality_decision_for_sample(sample, self.cfg)
+            if not bool(q_dec.keep):
+                t_done = time.perf_counter()
+                if profile and (t_done - t0) >= threshold_s:
+                    print(
+                        f"[bdse][profile-filtered] idx={i} build={t_sample - t0:.3f}s "
+                        f"total={t_done - t0:.3f}s reasons={','.join(q_dec.reasons)} path={path}",
+                        flush=True,
+                    )
+                rec = {
+                    "path": str(path),
+                    "split": self.split,
+                    "scenario_token": sample.scenario_token,
+                    "timestamp_us": int(sample.timestamp_us),
+                    "iteration": int(getattr(self.build_index()[i], "iteration", -1)),
+                    "filtered": True,
+                    "quality_keep": False,
+                    "quality_reasons": list(q_dec.reasons),
+                    "quality_metrics": q_dec.metrics,
+                }
+                return i, Path(), rec
         # np.savez appends ".npz" when the target name does not already end with it.
         # Keep the temporary filename ending in .npz, otherwise os.replace(tmp, path)
         # will look for a different file than the one numpy created.
@@ -760,6 +831,10 @@ class NuPlanBDSEDataset:
             "a_star": int(sample.teacher.a_star if sample.teacher is not None else -1),
             "valid_candidates": int(sample.candidates.valid_mask.sum()),
             "iteration": int(getattr(self.build_index()[i], "iteration", -1)),
+            "filtered": False,
+            "quality_keep": bool((sample.teacher.diagnostics or {}).get("quality_keep", True)) if sample.teacher is not None else True,
+            "quality_reasons": list((sample.teacher.diagnostics or {}).get("quality_reasons", [])) if sample.teacher is not None else [],
+            "cache_config_summary": _cfg_digest_summary(self.cfg),
         }
         return i, path, rec
 
@@ -830,7 +905,7 @@ class NuPlanBDSEDataset:
             flush=True,
         )
         if not pending:
-            return all_paths
+            return [p for p in all_paths if p and self._cache_file_looks_complete(p, self.cfg)]
 
         workers = int(num_workers if num_workers is not None else self.num_workers or 1)
         workers = max(1, workers)
@@ -1039,7 +1114,7 @@ class NuPlanBDSEDataset:
                         pbar.close()
         _append_manifest(manifest_records)
         _append_failed(failed_records)
-        return paths
+        return [p for p in paths if p and self._cache_file_looks_complete(p, self.cfg)]
 
 
 class PreprocessedBDSEDataset:

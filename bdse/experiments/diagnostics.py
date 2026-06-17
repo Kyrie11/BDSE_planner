@@ -409,7 +409,24 @@ def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: lis
     J0 = s.teacher.J_base.copy()
     g = s.teacher.g_evid.copy()
     flags = runtime_safety_flags_from_runtime(s.runtime, s.candidates, cfg)
-    runtime_sel = runtime_greedy_selector(J0, g, s.evidence_bank.budget_costs(), s.candidates.valid_mask, flags, float(cfg["evidence"]["budget"]), atom_active_mask=s.evidence_bank.active_mask)
+    sel_cfg = cfg.get("selector", {}) or {}
+    runtime_sel = runtime_greedy_selector(
+        J0,
+        g,
+        s.evidence_bank.budget_costs(),
+        s.candidates.valid_mask,
+        flags,
+        float(cfg["evidence"]["budget"]),
+        L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
+        gamma_max=float(sel_cfg.get("gamma_max_default", 100.0)),
+        eta_pred=float(sel_cfg.get("eta_pred", 1.0)),
+        lambda_near=float(sel_cfg.get("lambda_near", 1.0)),
+        lambda_safety=float(sel_cfg.get("lambda_safety", 2.0)),
+        atom_active_mask=s.evidence_bank.active_mask,
+        bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", False)),
+        reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 0.5)),
+        pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),
+    )
     oracle_sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(cfg["evidence"]["budget"]), s.evidence_bank.active_mask)
     tour = run_tournament(J0, g, runtime_sel.selected, s.candidates.valid_mask, flags, cfg)
     bdse_result = compute_bdse_diagnostics(

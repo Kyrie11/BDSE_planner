@@ -11,14 +11,17 @@ preprocess:
   label_agent_future_mode: logged
   runtime_agent_history_mode: logged
   candidate_aware_agent_selection: true
+  # Set --materialize-quality-filter to save only samples that can support the
+  # paper's teacher/interface claims.  These thresholds match the training gate.
+  materialize_quality_filter: false
   quality_filter:
-    require_safe_candidate: false
+    require_safe_candidate: true
     min_valid_candidates: 16
     max_candidate_log_ade_min: 8.0
     max_candidate_log_ade_teacher: 10.0
     max_teacher_to_nearest_log_ade_gap: 6.0
     max_logged_route_p95: 6.0
-    exclude_teacher_hard: false
+    exclude_teacher_hard: true
 
 runtime:
   map_radius_m: 120.0
@@ -118,10 +121,19 @@ pairs:
   safe_unsafe_weight: 8.0
 
 selector:
-  proposal_top_m: 48
+  proposal_top_m: 64
   lambda_safety: 6.0
   lambda_near: 1.0
   preserve_safety_pairs: true
+  # Fixes a deployment-interface failure mode where the base-cost winner is
+  # always placed first, so evidence that should overturn it has negative signed
+  # deltas and cannot be selected by the greedy budgeted certificate.
+  bidirectional_pairs: true
+  reverse_pair_weight: 0.5
+  runtime_pair_cap_multiplier: 2.0
+
+tournament:
+  L_infer: 24
 
 training:
   quality_filter:

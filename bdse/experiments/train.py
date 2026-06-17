@@ -111,8 +111,34 @@ def main() -> None:
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--preprocessed-dir", type=str, default=None, help="Load generated .npz cache instead of building samples on the fly.")
     parser.add_argument("--output", type=str, default="outputs/bdse_model.pt")
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--num-workers", type=int, default=None)
+    parser.add_argument("--device", type=str, default=None, choices=["auto", "cuda", "cpu"])
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--amp", action="store_true", help="Use CUDA mixed precision for faster training when available.")
     args = parser.parse_args()
     cfg = load_config(args.config)
+    cfg.setdefault("training", {})
+    if args.epochs is not None:
+        cfg["training"]["epochs"] = int(args.epochs)
+    if args.batch_size is not None:
+        cfg["training"]["batch_size"] = int(args.batch_size)
+    if args.lr is not None:
+        cfg["training"]["lr"] = float(args.lr)
+    if args.weight_decay is not None:
+        cfg["training"]["weight_decay"] = float(args.weight_decay)
+    if args.num_workers is not None:
+        cfg["training"]["num_workers"] = max(0, int(args.num_workers))
+    if args.seed is not None:
+        cfg["seed"] = int(args.seed)
+    seed = int(cfg.get("seed", 17))
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     splits = args.split
     if args.preprocessed_dir:
         dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=splits, max_scenarios=args.max_scenarios)
@@ -121,21 +147,40 @@ def main() -> None:
         if len(splits) != 1:
             raise ValueError("On-the-fly training supports one split at a time; preprocess first to train from multiple split folders.")
         dataset = NuPlanBDSEDataset(cfg, split=splits[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
-    loader = DataLoader(OnTheFlyDataset(dataset), batch_size=int(cfg["training"]["batch_size"]), shuffle=True, num_workers=0, collate_fn=lambda x: collate(x, cfg))
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    loader = DataLoader(
+        OnTheFlyDataset(dataset),
+        batch_size=int(cfg["training"]["batch_size"]),
+        shuffle=True,
+        num_workers=int(cfg["training"].get("num_workers", 0)),
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=int(cfg["training"].get("num_workers", 0)) > 0,
+        collate_fn=lambda x: collate(x, cfg),
+    )
+    if args.device == "cpu":
+        device = torch.device("cpu")
+    elif args.device == "cuda":
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BDSEModel(cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
+    use_amp = bool(args.amp and device.type == "cuda")
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     for epoch in range(int(cfg["training"]["epochs"])):
+        cfg["training"]["current_epoch"] = int(epoch)
         model.train()
         meters: dict[str, list[float]] = {}
         for batch in tqdm(loader, desc=f"epoch {epoch}"):
-            batch = {k: v.to(device) for k, v in batch.items()}
-            out = model(batch)
-            losses = compute_bdse_losses(out, batch, cfg)
+            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             opt.zero_grad(set_to_none=True)
-            losses["loss"].backward()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                out = model(batch)
+                losses = compute_bdse_losses(out, batch, cfg)
+            scaler.scale(losses["loss"]).backward()
+            scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg["training"]["grad_clip"]))
-            opt.step()
+            scaler.step(opt)
+            scaler.update()
             for k, v in losses.items():
                 meters.setdefault(k, []).append(float(v.detach().cpu()))
         print({k: float(np.mean(v)) for k, v in meters.items()})
