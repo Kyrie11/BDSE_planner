@@ -97,7 +97,7 @@ pytest -q
 Expected result in this package revision:
 
 ```text
-24 passed
+32 passed
 ```
 
 ## Preprocessing
@@ -196,10 +196,13 @@ python -m bdse.experiments.train \
 Training losses:
 
 - `L_base`: regress predicted base cost to `J_base_T`.
-- `L_res`: offline residual-margin supervision over full evidence bank.
+- `L_pair`: direct pair-conditioned atom-margin supervision for `d_i(a,b)`.
+- `L_res`: aggregate residual-margin supervision over the full evidence bank.
+- `L_atom`: action-conditioned local-cost supervision for `g_i(a)`, keeping the factorized diagnostic/fallback path trained.
+- `L_unc`: heteroscedastic atom-pair uncertainty loss when pair variances are available.
 - `L_rank`: logistic rank loss over positive teacher pairs.
-- `L_prop`: BCE/listwise proposal loss from oracle marginal certificate gain.
-- `L_act`: deployment-consistent sparse proposal/query/greedy/tournament action loss.
+- `L_fam` / `L_prop`: family-gate and atom-proposal ranking losses from oracle marginal certificate gain.
+- `L_act`: deployment-oriented sparse HAB/tournament action loss. When `runtime.use_pair_conditioned_margins=true`, this loss includes the pair-conditioned tournament path and keeps a smaller action-conditioned auxiliary branch.
 - `L_cal`: optional margin calibration surrogate when `training.loss_weights.calibration > 0`.
 
 ## Post-hoc calibration

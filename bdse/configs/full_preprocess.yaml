@@ -16,7 +16,7 @@ preprocess:
   atomic_write: true
   manifest_name: manifest.jsonl
   # Resume should be fast on large generated caches: by default we reject only
-  # dot/tmp files and tiny placeholders via stat().  Turn on
+  # dot/tmp files Land tiny placeholders via stat().  Turn on
   # --resume-validate-existing for a one-time schema audit after an interrupted
   # or manually edited run.
   resume_min_file_bytes: 512
@@ -161,7 +161,7 @@ pairs:
 selector:
   mode: runtime_predicted
 tournament:
-  L_infer: 16
+  L_infer: 31
 
 calibration:
   epsilon_cal: 0.0

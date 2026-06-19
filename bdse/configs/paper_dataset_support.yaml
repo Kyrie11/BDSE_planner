@@ -16,12 +16,23 @@ preprocess:
   materialize_quality_filter: false
   quality_filter:
     require_safe_candidate: true
-    min_valid_candidates: 16
-    max_candidate_log_ade_min: 8.0
-    max_candidate_log_ade_teacher: 10.0
-    max_teacher_to_nearest_log_ade_gap: 6.0
+    min_valid_candidates: 24
+    reject_missing_quality_metrics: true
+    max_candidate_log_ade_min: 6.0
+    # The paper-support cache should not contain cases where a logged-like safe
+    # candidate exists but the robust teacher chooses a far-away artifact.  This
+    # is a materialization-only label-quality gate, not a runtime input.
+    max_candidate_log_ade_teacher: 3.5
+    max_teacher_to_nearest_log_ade_gap: 2.0
     max_logged_route_p95: 6.0
     exclude_teacher_hard: true
+    # Filter samples whose configured runtime evidence interface cannot preserve
+    # the full teacher decision even when given oracle atom costs.  This makes the
+    # quick probe diagnose model/selector learning on supportable scenes instead
+    # of mixing in interface-out-of-support scenes.
+    require_runtime_decision_sufficiency: true
+    min_selector_value_ratio: 0.60
+    max_runtime_teacher_regret: 1.0e-4
 
 runtime:
   map_radius_m: 120.0
@@ -122,26 +133,31 @@ pairs:
 
 selector:
   proposal_top_m: 64
-  lambda_safety: 6.0
-  lambda_near: 1.0
+  lambda_safety: 8.0
+  lambda_near: 2.0
+  eta_pred: 2.0
   preserve_safety_pairs: true
   # Fixes a deployment-interface failure mode where the base-cost winner is
   # always placed first, so evidence that should overturn it has negative signed
   # deltas and cannot be selected by the greedy budgeted certificate.
   bidirectional_pairs: true
   reverse_pair_weight: 0.5
-  runtime_pair_cap_multiplier: 2.0
+  runtime_pair_cap_multiplier: 3.0
 
 tournament:
-  L_infer: 24
+  L_infer: 31
 
 training:
   quality_filter:
     enabled: true
     require_safe_candidate: true
-    min_valid_candidates: 16
-    max_candidate_log_ade_min: 8.0
-    max_candidate_log_ade_teacher: 10.0
-    max_teacher_to_nearest_log_ade_gap: 6.0
+    min_valid_candidates: 24
+    reject_missing_quality_metrics: true
+    max_candidate_log_ade_min: 6.0
+    max_candidate_log_ade_teacher: 3.5
+    max_teacher_to_nearest_log_ade_gap: 2.0
     max_logged_route_p95: 6.0
     exclude_teacher_hard: true
+    require_runtime_decision_sufficiency: true
+    min_selector_value_ratio: 0.60
+    max_runtime_teacher_regret: 1.0e-4

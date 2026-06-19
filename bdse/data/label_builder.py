@@ -11,7 +11,7 @@ from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.pair_builder import build_pair_labels
 from bdse.planner.teacher_cost import evaluate_teacher_costs
-from bdse.data.quality import summarize_sample_quality, quality_decision
+from bdse.data.quality import summarize_sample_quality, quality_decision, runtime_interface_metrics
 from bdse.utils import transform_states_to_local
 
 
@@ -232,6 +232,17 @@ def build_training_sample_from_scenario(scenario: Any, iteration: int, cfg: dict
     teacher.diagnostics["quality_reasons"] = list(q_dec.reasons)
     mark("teacher")
     pairs = build_pair_labels(candidates, teacher, cfg)
+    # After pair labels exist, add materialization-only runtime-interface quality
+    # metrics.  Strict paper-support probes can filter out scenes whose configured
+    # base-screen + budgeted selector cannot preserve the full teacher decision;
+    # these metrics are stored only as quality_* diagnostics and never used by the
+    # runtime planner.
+    sample_with_pairs = Sample("", 0, runtime, label_future, candidates, evidence, teacher, pairs)
+    q_metrics.update(runtime_interface_metrics(sample_with_pairs, cfg))
+    q_dec = quality_decision(q_metrics, cfg)
+    teacher.diagnostics.update({f"quality_{k}": v for k, v in q_metrics.items()})
+    teacher.diagnostics["quality_keep"] = bool(q_dec.keep)
+    teacher.diagnostics["quality_reasons"] = list(q_dec.reasons)
     mark("pairs")
     token = str(getattr(scenario, "token", getattr(scenario, "scenario_name", "")))
     ts_obj = _call(scenario, ["get_time_point", "get_timestamp_at_iteration"], iteration, default=getattr(scenario, "start_time", None))
@@ -262,4 +273,11 @@ def build_training_sample_from_runtime_and_future(runtime, label_future, cfg: di
     evidence = enumerate_evidence_atoms(runtime, candidates, cfg)
     teacher = evaluate_teacher_costs(runtime, label_future, candidates, evidence, cfg)
     pairs = build_pair_labels(candidates, teacher, cfg)
+    sample_stub = Sample(scenario_token, int(timestamp_us), runtime, label_future, candidates, evidence, teacher, pairs)
+    q_metrics = summarize_sample_quality(sample_stub)
+    q_metrics.update(runtime_interface_metrics(sample_stub, cfg))
+    q_dec = quality_decision(q_metrics, cfg)
+    teacher.diagnostics.update({f"quality_{k}": v for k, v in q_metrics.items()})
+    teacher.diagnostics["quality_keep"] = bool(q_dec.keep)
+    teacher.diagnostics["quality_reasons"] = list(q_dec.reasons)
     return Sample(scenario_token, int(timestamp_us), runtime, label_future, candidates, evidence, teacher, pairs)

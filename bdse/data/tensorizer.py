@@ -9,6 +9,7 @@ from bdse.data.cache_schema import CandidateBank, EvidenceBank, RuntimeFeatures,
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, PROPOSAL_FEATURE_DIM, compute_proposal_features
 from bdse.planner.evidence_atoms import ATOM_QUERY_DIM, compute_query_features
 from bdse.planner.selector import _greedy_cover_from_pair_delta
+from bdse.planner.fallback import runtime_safety_flags_from_runtime
 
 
 def _pad_2d(arr: np.ndarray, shape: tuple[int, int], value: float = 0.0) -> np.ndarray:
@@ -211,6 +212,7 @@ def runtime_to_model_numpy(runtime: RuntimeFeatures, candidates: CandidateBank, 
         "traffic_token_valid": traffic_valid,
         "mission_goal": goal,
         "mission_goal_valid": goal_valid,
+        "runtime_safety_flags": runtime_safety_flags_from_runtime(runtime, candidates, cfg),
     }
     out.update(evidence_arrays(evidence_bank, candidates, runtime, cfg, include_dense_query=include_dense_query))
     return out

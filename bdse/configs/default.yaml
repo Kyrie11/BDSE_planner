@@ -323,6 +323,7 @@ training:
     base: 1.0
     pair: 1.0
     residual: 1.0
+    atom_cost: 0.25
     uncertainty: 0.1
     full_interface_rank_aux: 0.1
     family: 0.5
@@ -332,6 +333,9 @@ training:
   rank_margin: 1.0
   rank_tau: 1.0
   pair_zero_weight: 0.1
+  atom_zero_weight: 0.1
+  pair_action_loss_weight: 1.0
+  action_conditioned_action_loss_weight: 0.25
 
 calibration:
   epsilon_cal: 0.0
