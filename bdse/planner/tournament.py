@@ -174,21 +174,55 @@ def _pair_delta_margin_matrix(
     selected_atoms: list[int] | np.ndarray,
     valid_mask: np.ndarray,
 ) -> np.ndarray:
+    """Build a valid-valid antisymmetric sparse pair-margin matrix.
+
+    ``pair_atom_delta[:, p]`` predicts directed evidence contribution for
+    ``pair_indices[p] = (a,b)``.  The planning tournament, however, is defined on
+    a pairwise margin game where M[a,b] = -M[b,a] for the same queried support.
+    Therefore every queried directed margin is mirrored immediately.  If both
+    directions are queried and the neural pair scorer is not exactly
+    antisymmetric, we use the antisymmetric projection
+    0.5 * (M_hat[a,b] - M_hat[b,a]) rather than letting the later direction
+    silently overwrite the earlier one.
+    """
     J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
     K = J0.shape[0]
     M = J0[None, :] - J0[:, None]
+    np.fill_diagonal(M, 0.0)
     pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
     delta = np.asarray(pair_atom_delta, dtype=np.float32)
     selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
     selected = selected[(selected >= 0) & (selected < delta.shape[0])] if delta.ndim == 2 else np.zeros((0,), dtype=np.int64)
+
+    directed: dict[tuple[int, int], float] = {}
     if pair_arr.size and delta.ndim == 2 and delta.shape[1] >= pair_arr.shape[0] and selected.size:
         support = delta[selected, : pair_arr.shape[0]].sum(axis=0)
-        for pidx, (a, b) in enumerate(pair_arr.tolist()):
-            if 0 <= int(a) < K and 0 <= int(b) < K:
-                M[int(a), int(b)] = J0[int(b)] - J0[int(a)] + float(support[pidx])
+        for pidx, (a_raw, b_raw) in enumerate(pair_arr.tolist()):
+            a, b = int(a_raw), int(b_raw)
+            if 0 <= a < K and 0 <= b < K and a != b:
+                directed[(a, b)] = J0[b] - J0[a] + float(support[pidx])
+
+    done: set[tuple[int, int]] = set()
+    for (a, b), value_ab in directed.items():
+        if (a, b) in done or (b, a) in done:
+            continue
+        value_ba = directed.get((b, a), None)
+        if value_ba is None:
+            m_ab = float(value_ab)
+        else:
+            # Antisymmetric projection of two independently predicted directions.
+            m_ab = 0.5 * (float(value_ab) - float(value_ba))
+        M[a, b] = m_ab
+        M[b, a] = -m_ab
+        done.add((a, b)); done.add((b, a))
+
     valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    if valid.shape[0] < K:
+        valid = np.pad(valid, (0, K - valid.shape[0]), constant_values=False)
+    valid = valid[:K]
     M[~valid, :] = -1e9
     M[:, ~valid] = -1e9
+    M[np.diag_indices(K)] = 0.0
     return M.astype(np.float32)
 
 
@@ -198,6 +232,7 @@ def _pair_sigma_matrix(
     selected_atoms: list[int] | np.ndarray,
     K: int,
 ) -> np.ndarray | None:
+    """Build a symmetric sigma matrix for conservative pair tournaments."""
     if pair_atom_variance is None:
         return None
     var = np.asarray(pair_atom_variance, dtype=np.float32)
@@ -208,9 +243,12 @@ def _pair_sigma_matrix(
         return None
     sigma = np.zeros((K, K), dtype=np.float32)
     support = np.maximum(var[selected, : pair_arr.shape[0]], 0.0).sum(axis=0)
-    for pidx, (a, b) in enumerate(pair_arr.tolist()):
-        if 0 <= int(a) < K and 0 <= int(b) < K:
-            sigma[int(a), int(b)] = float(np.sqrt(max(float(support[pidx]), 0.0)))
+    for pidx, (a_raw, b_raw) in enumerate(pair_arr.tolist()):
+        a, b = int(a_raw), int(b_raw)
+        if 0 <= a < K and 0 <= b < K and a != b:
+            s = float(np.sqrt(max(float(support[pidx]), 0.0)))
+            sigma[a, b] = max(float(sigma[a, b]), s)
+            sigma[b, a] = max(float(sigma[b, a]), s)
     return sigma
 
 

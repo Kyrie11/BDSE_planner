@@ -516,8 +516,8 @@ class BDSEModel(nn.Module):
             eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
             lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
             lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
-            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", False)),
-            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 0.5)),
+            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", True)),
+            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 1.0)),
             pair_cap_multiplier=float(cfg.get("selector", {}).get("runtime_pair_cap_multiplier", 1.0)),
         )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
@@ -594,7 +594,15 @@ class BDSEModel(nn.Module):
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
-            "queried_pair_count": int(len(atom_ids)),
+            # Query accounting uses explicit categories.  Keep queried_pair_count
+            # as a backward-compatible alias for the total number of sparse model
+            # scores actually evaluated in this runtime certificate stage.
+            "action_atom_query_count": int(len(atom_ids)),
+            "selector_pair_atom_query_count": int(len(topm) * len(pairs)),
+            "tournament_pair_atom_query_count": int(len(topm) * len(rival_pairs)),
+            "runtime_pair_count": int(len(pairs)),
+            "tournament_pair_count": int(len(rival_pairs)),
+            "queried_pair_count": int(len(atom_ids) + len(topm) * len(pairs) + len(topm) * len(rival_pairs)),
             "pair_atom_delta": selector_pair_delta,
             "pair_atom_var": selector_pair_var,
             "pair_indices": pairs,

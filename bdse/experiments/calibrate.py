@@ -73,8 +73,8 @@ def main() -> None:
             prior_atom_variance=cfg.get("selector", {}).get("unqueried_atom_variance", None),
             family_ids=pred.get("family_ids", None),
             family_budget_caps=pred.get("family_budget_caps", None),
-            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", False)),
-            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 0.5)),
+            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", True)),
+            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 1.0)),
             pair_cap_multiplier=float(cfg.get("selector", {}).get("runtime_pair_cap_multiplier", 1.0)),
         )
         M_pred = budgeted_margin(J0, g, sel.selected)

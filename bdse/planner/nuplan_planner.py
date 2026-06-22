@@ -18,6 +18,49 @@ from bdse.planner.selector import runtime_greedy_selector, runtime_greedy_select
 from bdse.planner.tournament import run_tournament, run_pair_conditioned_tournament, selected_pair_sigma_from_action_variance
 
 
+def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | np.ndarray | None = None) -> dict[str, int]:
+    """Return unambiguous runtime sparse-query counts.
+
+    We separate the scores evaluated by the runtime model from the smaller
+    certificate support eventually used by the tournament.  This avoids mixing
+    action-conditioned atom queries with pair-conditioned delta queries.
+    """
+    topm = np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1)
+    actions = np.asarray(pred.get("queried_actions", []), dtype=np.int64).reshape(-1)
+    runtime_pairs = np.asarray(pred.get("runtime_pairs", pred.get("pair_indices", [])), dtype=np.int64)
+    runtime_pairs = runtime_pairs.reshape(-1, 2) if runtime_pairs.size else np.zeros((0, 2), dtype=np.int64)
+    rival_pairs = np.asarray(pred.get("rival_pair_indices", []), dtype=np.int64)
+    rival_pairs = rival_pairs.reshape(-1, 2) if rival_pairs.size else np.zeros((0, 2), dtype=np.int64)
+
+    action_atom = int(pred.get("action_atom_query_count", len(topm) * len(actions)))
+    selector_pair_atom = int(pred.get("selector_pair_atom_query_count", len(topm) * len(runtime_pairs)))
+    tournament_pair_atom = int(pred.get("tournament_pair_atom_query_count", len(topm) * len(rival_pairs)))
+    total = int(action_atom + selector_pair_atom + tournament_pair_atom)
+
+    if selected_atoms is None:
+        selected_count = 0
+    else:
+        selected_count = int(len(np.asarray(selected_atoms, dtype=np.int64).reshape(-1)))
+    if len(rival_pairs):
+        selected_certificate = int(selected_count * len(rival_pairs))
+    else:
+        selected_certificate = int(selected_count * len(actions))
+
+    return {
+        "proposal_atom_count": int(len(topm)),
+        "queried_action_count": int(len(actions)),
+        "runtime_pair_count": int(len(runtime_pairs)),
+        "tournament_pair_count": int(len(rival_pairs)),
+        "action_atom_query_count": action_atom,
+        "selector_pair_atom_query_count": selector_pair_atom,
+        "tournament_pair_atom_query_count": tournament_pair_atom,
+        "sparse_query_count": total,
+        "total_sparse_query_count": total,
+        "selected_certificate_query_count": selected_certificate,
+        "effective_query_count": selected_certificate,
+    }
+
+
 class BDSEPlannerCore:
     def __init__(self, model: Any | None = None, cfg: dict[str, Any] | None = None):
         self.cfg = cfg or load_config()
@@ -64,8 +107,8 @@ class BDSEPlannerCore:
             eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
             lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
             lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
-            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", False)),
-            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 0.5)),
+            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", True)),
+            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 1.0)),
             pair_cap_multiplier=float(cfg.get("selector", {}).get("runtime_pair_cap_multiplier", 1.0)),
         )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
@@ -115,6 +158,11 @@ class BDSEPlannerCore:
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
+            "action_atom_query_count": int(len(topm) * len(action_ids)),
+            "selector_pair_atom_query_count": 0,
+            "tournament_pair_atom_query_count": 0,
+            "runtime_pair_count": int(len(pairs)),
+            "tournament_pair_count": 0,
             "queried_pair_count": int(len(topm) * len(action_ids)),
             "runtime_pairs": pairs,
             "runtime_pair_weights": pair_weights,
@@ -199,8 +247,8 @@ class BDSEPlannerCore:
                 prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
                 family_ids=family_ids,
                 family_budget_caps=family_caps,
-                bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", False)),
-                reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 0.5)),
+                bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", True)),
+                reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 1.0)),
                 pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),
             )
             sigma = selected_pair_sigma_from_action_variance(g_var, selection.selected, candidates.valid_mask)
@@ -243,6 +291,7 @@ class BDSEPlannerCore:
         triggered = False
         for idx, (stage_name, cfg_stage) in enumerate(stages):
             pred, selection, tournament, atom_active = self._run_certificate_stage(runtime, candidates, evidence_bank, cfg_stage)
+            qdiag = runtime_query_diagnostics(pred, selection.selected)
             stage_records.append({
                 "stage": stage_name,
                 "action": int(tournament.action_index),
@@ -251,7 +300,7 @@ class BDSEPlannerCore:
                 "selected_atoms": list(map(int, selection.selected)),
                 "top_m_atoms": list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).tolist())),
                 "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
-                "sparse_query_count": int(pred.get("queried_pair_count", 0)),
+                **qdiag,
                 "hab": pred.get("hab_diagnostics", {}),
             })
             best = (stage_name, cfg_stage, pred, selection, tournament, atom_active)
@@ -279,12 +328,13 @@ class BDSEPlannerCore:
                 action = int(conservative_fallback_action(candidates))
                 stage_name = stage_name + "+conservative"
         trajectory = candidates.trajectories[action]
+        qdiag = runtime_query_diagnostics(pred, selection.selected)
         diagnostics = {
             "action_index": action,
             "selected_atoms": selection.selected,
             "proposal_top_m_atoms": list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).tolist())),
             "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
-            "sparse_query_count": int(pred.get("queried_pair_count", 0)),
+            **qdiag,
             "hab": pred.get("hab_diagnostics", {}),
             "selector": selection.diagnostics,
             "tournament": tournament.diagnostics,

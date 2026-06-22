@@ -12,16 +12,17 @@ def build_runtime_pairs_from_base(
     lambda_near: float = 1.0,
     lambda_safety: float = 2.0,
     preserve_safety_pairs: bool = True,
-    bidirectional_pairs: bool = False,
-    reverse_pair_weight: float = 0.5,
+    bidirectional_pairs: bool = True,
+    reverse_pair_weight: float = 1.0,
     pair_cap_multiplier: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Runtime pair screen using only base scores and cheap safety flags.
 
     By default the lower predicted base-cost action is stored first, matching the
     original runtime graph.  When ``bidirectional_pairs`` is enabled, ordinary
-    top/near rival pairs are also stored in the reverse direction with a smaller
-    weight.  This is important for deployment-style evidence selection: evidence
+    top/near rival pairs are also stored in the reverse direction.  The default
+    is bidirectional so the runtime certificate graph matches the paper's
+    pairwise margin game rather than only protecting the base-score order.  This is important for deployment-style evidence selection: evidence
     often needs to overturn the base winner in favor of a safer/route-consistent
     action, and a one-way lower-base graph cannot score negative evidence deltas
     as useful margin support.  Cheap safe-vs-unsafe pairs remain oriented

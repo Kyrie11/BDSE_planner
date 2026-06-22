@@ -141,7 +141,7 @@ selector:
   # always placed first, so evidence that should overturn it has negative signed
   # deltas and cannot be selected by the greedy budgeted certificate.
   bidirectional_pairs: true
-  reverse_pair_weight: 0.5
+  reverse_pair_weight: 1.0
   runtime_pair_cap_multiplier: 3.0
 
 tournament:

@@ -517,8 +517,8 @@ def runtime_greedy_selector(
     prior_atom_variance: float | np.ndarray | None = None,
     family_ids: np.ndarray | None = None,
     family_budget_caps: np.ndarray | None = None,
-    bidirectional_pairs: bool = False,
-    reverse_pair_weight: float = 0.5,
+    bidirectional_pairs: bool = True,
+    reverse_pair_weight: float = 1.0,
     pair_cap_multiplier: float = 1.0,
 ) -> SelectionResult:
     """Two-stage runtime selector using base/cheap pair screening only.

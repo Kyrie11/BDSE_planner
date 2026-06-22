@@ -48,3 +48,24 @@ def test_proposal_top_m_limits_selected_atoms(synthetic_sample, cfg):
     topm = set(diag["proposal_top_m_atoms"])
     assert len(topm) <= 3
     assert set(diag["selected_atoms"]).issubset(topm)
+
+
+def test_runtime_query_diagnostics_separates_action_pair_and_certificate_counts():
+    from bdse.planner.nuplan_planner import runtime_query_diagnostics
+
+    pred = {
+        "top_m_atoms": np.asarray([2, 4, 6]),
+        "queried_actions": np.asarray([0, 1, 3, 5]),
+        "runtime_pairs": np.asarray([[0, 1], [1, 0], [0, 3]]),
+        "rival_pair_indices": np.asarray([[0, 1], [0, 3], [1, 3], [3, 5], [5, 0]]),
+        "action_atom_query_count": 12,
+        "selector_pair_atom_query_count": 9,
+        "tournament_pair_atom_query_count": 15,
+    }
+    out = runtime_query_diagnostics(pred, selected_atoms=[2, 6])
+    assert out["action_atom_query_count"] == 12
+    assert out["selector_pair_atom_query_count"] == 9
+    assert out["tournament_pair_atom_query_count"] == 15
+    assert out["sparse_query_count"] == 36
+    assert out["selected_certificate_query_count"] == 10
+    assert out["effective_query_count"] == 10

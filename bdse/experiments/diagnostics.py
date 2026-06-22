@@ -423,8 +423,8 @@ def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: lis
         lambda_near=float(sel_cfg.get("lambda_near", 1.0)),
         lambda_safety=float(sel_cfg.get("lambda_safety", 2.0)),
         atom_active_mask=s.evidence_bank.active_mask,
-        bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", False)),
-        reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 0.5)),
+        bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", True)),
+        reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 1.0)),
         pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),
     )
     oracle_sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(cfg["evidence"]["budget"]), s.evidence_bank.active_mask)

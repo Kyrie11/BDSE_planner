@@ -11,7 +11,7 @@ from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
-from bdse.planner.nuplan_planner import BDSEPlannerCore
+from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
 
 
 def load_model(checkpoint: str, cfg):
@@ -61,6 +61,8 @@ def main() -> None:
                 sel.selected,
                 tour.action_index,
                 cfg=cfg,
+                inference_pairs=pred.get("rival_pair_indices", sel.pair_indices),
+                query_diagnostics=runtime_query_diagnostics(pred, sel.selected),
             )
         )
     summary = aggregate_metric_results(results)

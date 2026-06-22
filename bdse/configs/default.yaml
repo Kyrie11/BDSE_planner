@@ -249,6 +249,11 @@ pairs:
 selector:
   mode: runtime_predicted
   proposal_top_m: 32
+  # Runtime pair screens are bidirectional by default so a candidate that is
+  # worse under the cheap base score can still be promoted by decisive evidence.
+  bidirectional_pairs: true
+  reverse_pair_weight: 1.0
+  runtime_pair_cap_multiplier: 2.0
   gamma_cap_percentile: 95
   gamma_max_default: 100.0
   lambda_near: 1.0

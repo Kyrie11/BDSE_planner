@@ -41,6 +41,7 @@ def compute_bdse_diagnostics(
     cfg: dict[str, Any] | None = None,
     inference_pairs: np.ndarray | None = None,
     queried_atom_count: int | None = None,
+    query_diagnostics: dict[str, Any] | None = None,
 ) -> BDSEMetricResult:
     cfg = cfg or {}
     valid = candidates.valid_mask.astype(bool)
@@ -60,7 +61,12 @@ def compute_bdse_diagnostics(
     else:
         query_action_count = int(valid.sum())
     query_atom_count = int(len(selected_atoms) if queried_atom_count is None else queried_atom_count)
-    effective_query_count = float(query_atom_count * query_action_count)
+    pair_conditioned_runtime = bool(cfg.get("runtime", {}).get("use_pair_conditioned_margins", cfg.get("model", {}).get("pair_conditioned", False)))
+    if pair_conditioned_runtime and inference_pairs is not None:
+        effective_query_count = float(query_atom_count * len(query_pairs))
+    else:
+        effective_query_count = float(query_atom_count * query_action_count)
+    qdiag = query_diagnostics or {}
     hard = evidence_bank.hard_mask() & evidence_bank.active_mask
     selected_set = set(map(int, selected_atoms))
     active_hard = set(map(int, np.flatnonzero(hard)))
@@ -94,11 +100,16 @@ def compute_bdse_diagnostics(
         "decision_sufficiency": float(action_index == a_star),
         "selector_value_ratio": selector_ratio,
         "hard_evidence_recall": hard_recall,
-        "effective_query_count": effective_query_count,
-        "effective_query_atom_count": float(query_atom_count),
-        "effective_query_action_count": float(query_action_count),
-        "effective_pair_count": float(len(query_pairs)),
+        "effective_query_count": float(qdiag.get("effective_query_count", effective_query_count)),
+        "effective_query_atom_count": float(qdiag.get("selected_atom_count", query_atom_count)),
+        "effective_query_action_count": float(qdiag.get("queried_action_count", query_action_count)),
+        "effective_pair_count": float(qdiag.get("tournament_pair_count", len(query_pairs))),
         "teacher_pair_count": float(len(pairs.pairs)),
+        "total_sparse_query_count": float(qdiag.get("total_sparse_query_count", qdiag.get("sparse_query_count", effective_query_count))),
+        "action_atom_query_count": float(qdiag.get("action_atom_query_count", query_atom_count * query_action_count)),
+        "selector_pair_atom_query_count": float(qdiag.get("selector_pair_atom_query_count", 0.0)),
+        "tournament_pair_atom_query_count": float(qdiag.get("tournament_pair_atom_query_count", 0.0)),
+        "selected_certificate_query_count": float(qdiag.get("selected_certificate_query_count", effective_query_count)),
     }
     return BDSEMetricResult(values=values, details={"full_action": full_action, "a_star": a_star, "selected_atoms": selected_atoms, "query_action_count": query_action_count})
 
