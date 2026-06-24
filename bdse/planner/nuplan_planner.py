@@ -110,6 +110,10 @@ class BDSEPlannerCore:
             bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", True)),
             reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 1.0)),
             pair_cap_multiplier=float(cfg.get("selector", {}).get("runtime_pair_cap_multiplier", 1.0)),
+            candidate_trajectories=candidates.trajectories,
+            maneuver_ids=candidates.maneuver_ids,
+            progress_pair_count=int(cfg.get("selector", {}).get("progress_pair_count", 8)),
+            maneuver_pair_count=int(cfg.get("selector", {}).get("maneuver_pair_count", 8)),
         )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
@@ -127,6 +131,7 @@ class BDSEPlannerCore:
             free_budget=cfg.get("selector", {}).get("hab_free_budget", None),
             reserve_fraction=float(cfg.get("selector", {}).get("hab_reserve_fraction", 0.2)),
             enabled=bool(cfg.get("selector", {}).get("hab_enabled", True)),
+            min_family_slots=cfg.get("selector", {}).get("min_family_topm_slots", None),
         )
         rival_sets = build_rival_sets_from_base(
             J0,
@@ -134,6 +139,10 @@ class BDSEPlannerCore:
             runtime_flags,
             L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
             eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+            candidate_trajectories=candidates.trajectories,
+            maneuver_ids=candidates.maneuver_ids,
+            progress_rivals=int(cfg.get("selector", {}).get("progress_rivals", 4)),
+            maneuver_rivals=int(cfg.get("selector", {}).get("maneuver_rivals", 4)),
         )
         action_set: set[int] = set()
         for a_idx, rivals in enumerate(rival_sets):

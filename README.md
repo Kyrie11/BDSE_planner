@@ -18,6 +18,7 @@ The implementation now addresses the main paper/code mismatches that existed in 
 - **LCB diagnostics and calibration hook:** tournament diagnostics include `safety_lcb_min`; `bdse.experiments.calibrate` estimates validation-set `epsilon_cal` for one-sided certificate checks.
 - **nuPlan trajectory conversion:** `BDSEnuPlanPlanner` now builds `InterpolatedTrajectory` using global pose, `StateVector2D` velocity, and acceleration instead of silently returning a numpy array in nuPlan environments.
 - **Regression tests:** tests now cover sparse runtime behavior, Top-M selection limits, padding invariance, hard-priority teacher behavior, and fallback re-query expansion.
+- **Vegas/stress-scene robustness:** candidate-set summaries now include `safe_fallback`, red-light crossing is part of cheap runtime safety flags, the pair screen adds deployment-only stop/yield-vs-go rival pairs, HAB can reserve Top-M slots for critical evidence families, route tokens cover long routes instead of truncating after one polyline, and query features include constant-velocity interaction proxies.
 
 ## Repository layout
 
@@ -97,7 +98,7 @@ pytest -q
 Expected result in this package revision:
 
 ```text
-32 passed
+36 passed
 ```
 
 ## Preprocessing
@@ -309,5 +310,5 @@ Inside a nuPlan environment, `BDSEnuPlanPlanner.compute_trajectory()` returns `I
 ## Known limits
 
 - The repository provides the planner and scripts, but not a full nuPlan Hydra experiment bundle.
-- Learned uncertainty heads are not implemented; the recommended runtime-safe option is validation quantile calibration through `bdse.experiments.calibrate`.
+- Learned atom/pair uncertainty heads are implemented and should be validated with `bdse.experiments.calibrate`; the runtime-safe setting is to use the validation quantile as `tournament.epsilon_cal` in addition to learned variance.
 - Sparse query geometry is vectorized over the requested Top-M atoms and selected action ids. It avoids full `E × K` runtime scoring, but individual atom helpers may reuse candidate-level geometry internally for speed and numerical consistency.

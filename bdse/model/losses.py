@@ -72,6 +72,10 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
     fam_ids_np = fam_ids_t.detach().cpu().numpy().astype(np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
     B, E = logits.shape
     K = valid.shape[1]
+    traj_np = batch.get("candidate_trajectories")
+    traj_np = traj_np.detach().cpu().numpy().astype(np.float32) if traj_np is not None else None
+    man_np = batch.get("candidate_maneuver_ids")
+    man_np = man_np.detach().cpu().numpy().astype(np.int64) if man_np is not None else None
     selected_mask = np.zeros((B, E), dtype=bool)
     query_mask = np.zeros((B, E, K), dtype=bool)
 
@@ -103,6 +107,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             free_budget=s_cfg.get("hab_free_budget", None),
             reserve_fraction=float(s_cfg.get("hab_reserve_fraction", 0.2)),
             enabled=bool(s_cfg.get("hab_enabled", True)),
+            min_family_slots=s_cfg.get("min_family_topm_slots", None),
         )
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True
@@ -110,9 +115,19 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
         flags = batch.get("runtime_safety_flags")
         flag_np = flags[bidx].detach().cpu().numpy().astype(bool) if flags is not None else np.zeros((K,), dtype=bool)
         pairs, _ = build_runtime_pairs_from_base(
-            J0[bidx], valid[bidx], flag_np, L0=L0, eta0=eta, lambda_near=lambda_near, lambda_safety=lambda_safety
+            J0[bidx], valid[bidx], flag_np, L0=L0, eta0=eta, lambda_near=lambda_near, lambda_safety=lambda_safety,
+            candidate_trajectories=traj_np[bidx] if traj_np is not None else None,
+            maneuver_ids=man_np[bidx] if man_np is not None else None,
+            progress_pair_count=int(s_cfg.get("progress_pair_count", 8)),
+            maneuver_pair_count=int(s_cfg.get("maneuver_pair_count", 8)),
         )
-        rival_sets = build_rival_sets_from_base(J0[bidx], valid[bidx], flag_np, L_infer=L0, eta0=eta)
+        rival_sets = build_rival_sets_from_base(
+            J0[bidx], valid[bidx], flag_np, L_infer=L0, eta0=eta,
+            candidate_trajectories=traj_np[bidx] if traj_np is not None else None,
+            maneuver_ids=man_np[bidx] if man_np is not None else None,
+            progress_rivals=int(s_cfg.get("progress_rivals", 4)),
+            maneuver_rivals=int(s_cfg.get("maneuver_rivals", 4)),
+        )
         action_set: set[int] = set()
         for a_idx, rivals in enumerate(rival_sets):
             if not bool(valid[bidx, a_idx]) or not rivals:
@@ -215,6 +230,7 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             free_budget=s_cfg.get("hab_free_budget", None),
             reserve_fraction=float(s_cfg.get("hab_reserve_fraction", 0.2)),
             enabled=bool(s_cfg.get("hab_enabled", True)),
+            min_family_slots=s_cfg.get("min_family_topm_slots", None),
         )
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True

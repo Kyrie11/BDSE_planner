@@ -7,7 +7,7 @@ import numpy as np
 from bdse.data.cache_schema import CandidateBank, EvidenceAtom, RuntimeFeatures
 from bdse.utils import nearest_polyline_distance, route_progress_along_polyline
 
-ATOM_QUERY_DIM = 12
+ATOM_QUERY_DIM = 18
 PROPOSAL_FEATURE_DIM = 24
 
 FAMILY_NAMES = {

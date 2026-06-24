@@ -66,7 +66,11 @@ class BDSEModel(nn.Module):
         self.proposal_feature_proj = nn.Sequential(
             nn.Linear(int(mcfg.get("proposal_feature_dim", 24)), h), nn.ReLU(), nn.Linear(h, h)
         )
-        self.action_set_proj = nn.Sequential(nn.Linear(16, h), nn.ReLU(), nn.Linear(h, h))
+        # Candidate-set context includes fixed scalar summaries plus a maneuver histogram.
+        # Keep the projection input configurable/backward compatible; the default
+        # remains 16, which is enough for 7 maneuvers (including safe_fallback).
+        self.action_set_summary_dim = int(mcfg.get("action_set_summary_dim", 16))
+        self.action_set_proj = nn.Sequential(nn.Linear(self.action_set_summary_dim, h), nn.ReLU(), nn.Linear(h, h))
         self.query_proj = nn.Sequential(nn.Linear(int(mcfg.get("query_feature_dim", 12)), h), nn.ReLU(), nn.Linear(h, h))
         self.base_head = nn.Sequential(nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.ReLU(), nn.Linear(h, 1))
 
@@ -130,9 +134,15 @@ class BDSEModel(nn.Module):
         prog_max = progress.masked_fill(~valid, -1e6).max(dim=1, keepdim=True).values.clamp_min(0.0)
         lat_mean = lateral.sum(dim=1, keepdim=True) / valid_count
         speed_mean = speed.sum(dim=1, keepdim=True) / valid_count
-        # Compact maneuver coverage histogram for ids [0..5].
+        # Compact maneuver coverage histogram.  Earlier versions hard-coded
+        # ids [0..5] and silently dropped id=6 (safe_fallback), which made the
+        # proposal head blind to whether the candidate bank contained conservative
+        # stop/fallback options.
+        max_mid = int(self.cfg.get("candidate", {}).get("num_maneuvers", 7))
+        max_hist = max(0, int(self.action_set_summary_dim) - 8)
+        num_bins = min(max(max_mid, 7), max_hist if max_hist > 0 else max(max_mid, 7))
         hists = []
-        for m in range(6):
+        for m in range(num_bins):
             hists.append(((maneuver_ids == m) & valid).float().sum(dim=1, keepdim=True) / valid_count)
         raw = torch.cat(
             [
@@ -148,9 +158,10 @@ class BDSEModel(nn.Module):
             ],
             dim=1,
         )
-        if raw.shape[1] < 16:
-            raw = F.pad(raw, (0, 16 - raw.shape[1]))
-        return raw[:, :16]
+        target_dim = int(self.action_set_summary_dim)
+        if raw.shape[1] < target_dim:
+            raw = F.pad(raw, (0, target_dim - raw.shape[1]))
+        return raw[:, :target_dim]
 
     def _family_activity_features(self, prop_feat: torch.Tensor, fam_ids: torch.Tensor, active: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Summarise atom availability/proposal metadata per certificate family.
@@ -519,6 +530,10 @@ class BDSEModel(nn.Module):
             bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", True)),
             reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 1.0)),
             pair_cap_multiplier=float(cfg.get("selector", {}).get("runtime_pair_cap_multiplier", 1.0)),
+            candidate_trajectories=candidates.trajectories,
+            maneuver_ids=candidates.maneuver_ids,
+            progress_pair_count=int(cfg.get("selector", {}).get("progress_pair_count", 8)),
+            maneuver_pair_count=int(cfg.get("selector", {}).get("maneuver_pair_count", 8)),
         )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
@@ -539,6 +554,7 @@ class BDSEModel(nn.Module):
             free_budget=cfg.get("selector", {}).get("hab_free_budget", None),
             reserve_fraction=float(cfg.get("selector", {}).get("hab_reserve_fraction", 0.2)),
             enabled=bool(cfg.get("selector", {}).get("hab_enabled", True)),
+            min_family_slots=cfg.get("selector", {}).get("min_family_topm_slots", None),
         )
         rival_sets = build_rival_sets_from_base(
             J0,
@@ -546,6 +562,10 @@ class BDSEModel(nn.Module):
             flags,
             L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
             eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+            candidate_trajectories=candidates.trajectories,
+            maneuver_ids=candidates.maneuver_ids,
+            progress_rivals=int(cfg.get("selector", {}).get("progress_rivals", 4)),
+            maneuver_rivals=int(cfg.get("selector", {}).get("maneuver_rivals", 4)),
         )
         action_set: set[int] = set()
         rival_pair_list: list[tuple[int, int]] = []

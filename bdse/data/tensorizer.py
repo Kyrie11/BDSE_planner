@@ -43,8 +43,10 @@ def _polyline_to_features(xy: np.ndarray, dim: int) -> np.ndarray:
 def vectorize_map_features(map_features: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     mcfg = cfg.get("model", {})
     max_map = int(cfg.get("runtime", {}).get("max_map_polylines", mcfg.get("max_map_polylines", 128)))
-    max_route_pts = min(int(cfg.get("runtime", {}).get("max_route_points", 256)), int(mcfg.get("max_polyline_points", 64)))
+    max_route_total = int(cfg.get("runtime", {}).get("max_route_points", 256))
     max_poly_pts = int(mcfg.get("max_polyline_points", 64))
+    max_route_tokens = int(cfg.get("runtime", {}).get("max_route_tokens", mcfg.get("max_route_tokens", max(1, int(np.ceil(max_route_total / max(max_poly_pts, 1)))))))
+    max_route_tokens = max(1, max_route_tokens)
     map_dim = int(mcfg.get("map_feature_dim", 8))
     route_dim = int(mcfg.get("route_feature_dim", 8))
     tl_dim = int(mcfg.get("traffic_feature_dim", 12))
@@ -78,15 +80,35 @@ def vectorize_map_features(map_features: dict[str, Any], cfg: dict[str, Any]) ->
             idx += 1
 
     route = np.asarray(map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32).reshape(-1, 2)
-    route = route[:max_route_pts]
-    route_tokens = np.zeros((1, max_route_pts, route_dim), dtype=np.float32)
-    route_valid = np.zeros((1,), dtype=bool)
+    route = route[: max_route_total]
+    route_tokens = np.zeros((max_route_tokens, max_poly_pts, route_dim), dtype=np.float32)
+    route_valid = np.zeros((max_route_tokens,), dtype=bool)
     if len(route) >= 2:
-        route_feat = _polyline_to_features(route, route_dim)
-        if route_dim > 5:
-            route_feat[:, 5] = float(map_features.get("speed_limit_mps", 13.4)) / 30.0
-        route_tokens[0, : len(route_feat)] = route_feat
-        route_valid[0] = True
+        # Split long routes into multiple tokens instead of truncating a 200 m
+        # route to the first 64 points.  Adjacent chunks overlap by one point to
+        # preserve local continuity at token boundaries.
+        step = max(max_poly_pts - 1, 1)
+        total_len = max(float(np.sum(np.linalg.norm(np.diff(route, axis=0), axis=1))), 1e-3)
+        cum = np.zeros((len(route),), dtype=np.float32)
+        if len(route) > 1:
+            cum[1:] = np.cumsum(np.linalg.norm(np.diff(route, axis=0), axis=1)).astype(np.float32)
+        for ridx, start in enumerate(range(0, len(route), step)):
+            if ridx >= max_route_tokens:
+                break
+            seg = route[start : start + max_poly_pts]
+            if len(seg) < 2:
+                break
+            route_feat = _polyline_to_features(seg, route_dim)
+            if route_dim > 4:
+                route_feat[:, 4] = cum[start : start + len(seg)] / total_len
+            if route_dim > 5:
+                route_feat[:, 5] = float(map_features.get("speed_limit_mps", 13.4)) / 30.0
+            if route_dim > 6:
+                route_feat[:, 6] = float(ridx) / max(float(max_route_tokens - 1), 1.0)
+            if route_dim > 7:
+                route_feat[:, 7] = 1.0 - route_feat[:, 4]
+            route_tokens[ridx, : len(route_feat)] = route_feat
+            route_valid[ridx] = True
 
     tl = np.zeros((max_tl, tl_dim), dtype=np.float32)
     tl_valid = np.zeros((max_tl,), dtype=bool)

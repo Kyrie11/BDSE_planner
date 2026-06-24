@@ -151,20 +151,35 @@ def allocate_family_budgets(
     )
 
 
-def _slot_allocation(pi: np.ndarray, present: np.ndarray, active_counts: np.ndarray, total_slots: int) -> np.ndarray:
+def _slot_allocation(pi: np.ndarray, present: np.ndarray, active_counts: np.ndarray, total_slots: int, min_family_slots: dict[int, int] | None = None) -> np.ndarray:
     slots = np.zeros_like(pi, dtype=np.int64)
     M = max(int(total_slots), 0)
     fams = [int(f) for f in np.flatnonzero(present) if active_counts[int(f)] > 0]
     if M <= 0 or not fams:
         return slots
+    mins = {int(k): max(0, int(v)) for k, v in (min_family_slots or {}).items()}
+    # Reserve a few Top-M slots for safety/rule/interaction families.  This is a
+    # proposal-stage recall guard, not teacher leakage: it only uses atom family ids.
+    remaining_slots = M
+    for f in sorted(fams):
+        want = min(int(active_counts[f]), int(mins.get(int(f), 0)), remaining_slots)
+        if want > 0:
+            slots[int(f)] = max(slots[int(f)], want)
+            remaining_slots -= want
+    if remaining_slots <= 0:
+        return slots
     ordered = sorted(fams, key=lambda f: (-float(pi[f]), f))
-    if M < len(ordered):
-        for f in ordered[:M]:
-            slots[f] = 1
+    if remaining_slots < len([f for f in ordered if slots[f] == 0]):
+        for f in ordered:
+            if slots[f] == 0 and remaining_slots > 0:
+                slots[f] = 1
+                remaining_slots -= 1
         return slots
     for f in ordered:
-        slots[f] = 1
-    remaining = M - len(ordered)
+        if slots[f] == 0 and remaining_slots > 0:
+            slots[f] = 1
+            remaining_slots -= 1
+    remaining = remaining_slots
     raw = M * pi
     # Families with higher desired count and fractional remainder receive extra slots.
     while remaining > 0:
@@ -195,6 +210,7 @@ def select_topm_atoms_hab(
     free_budget: float | None = None,
     reserve_fraction: float = 0.2,
     enabled: bool = True,
+    min_family_slots: dict[int, int] | None = None,
 ) -> tuple[np.ndarray, FamilyBudgetResult, dict[str, Any]]:
     """Family-gated Top-M proposal for the Hierarchical Atom Builder.
 
@@ -230,7 +246,7 @@ def select_topm_atoms_hab(
     counts = np.zeros((size,), dtype=np.int64)
     for f in np.flatnonzero(result.active_families):
         counts[int(f)] = int(np.sum(active & (fam == int(f))))
-    slots = _slot_allocation(result.family_pi, result.active_families, counts, M)
+    slots = _slot_allocation(result.family_pi, result.active_families, counts, M, min_family_slots=min_family_slots)
     selected: list[int] = []
     selected_set: set[int] = set()
     for f in np.flatnonzero(slots > 0):

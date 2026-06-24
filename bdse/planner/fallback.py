@@ -11,6 +11,27 @@ from bdse.planner.tournament import TournamentResult, run_tournament
 from bdse.utils import compute_curvature, finite_difference, nearest_polyline_distance
 
 
+def _ccw(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
+    return bool((c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0]))
+
+
+def _segments_intersect(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray) -> bool:
+    return _ccw(a, c, d) != _ccw(b, c, d) and _ccw(a, b, c) != _ccw(a, b, d)
+
+
+def _crosses_polyline(path_xy: np.ndarray, line_xy: np.ndarray) -> bool:
+    path = np.asarray(path_xy, dtype=np.float32).reshape(-1, 2)
+    line = np.asarray(line_xy, dtype=np.float32).reshape(-1, 2)
+    if len(path) < 2 or len(line) < 2:
+        return False
+    for i in range(len(path) - 1):
+        a, b = path[i], path[i + 1]
+        for j in range(len(line) - 1):
+            if _segments_intersect(a, b, line[j], line[j + 1]):
+                return True
+    return False
+
+
 @dataclass(slots=True)
 class FallbackResult:
     action_index: int
@@ -32,6 +53,15 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
         traj = candidates.trajectories[a]
         off_route = bool((nearest_polyline_distance(traj[:, :2], route) > width + 1.0).any())
         speed_bad = bool((traj[:, 3] > speed_limit + 2.0).any())
+        red_light_bad = False
+        for sl in runtime.map_features.get("stop_lines", []) if runtime.map_features else []:
+            status_red = bool(sl.get("red", False)) or ("red" in str(sl.get("status", "")).lower())
+            if not status_red:
+                continue
+            xy = np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)
+            if len(xy) >= 2 and _crosses_polyline(traj[:, :2], xy):
+                red_light_bad = True
+                break
         v = traj[:, 3]
         acc = finite_difference(v, dt)
         jerk = finite_difference(acc, dt)
@@ -49,7 +79,7 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
             if np.linalg.norm(traj[:, :2] - pred, axis=1).min() < 1.5:
                 agent_bad = True
                 break
-        flags[a] = off_route or speed_bad or dyn_bad or agent_bad
+        flags[a] = off_route or speed_bad or dyn_bad or agent_bad or red_light_bad
     return flags
 
 

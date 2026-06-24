@@ -8,7 +8,7 @@ from bdse.data.cache_schema import CandidateBank, EvidenceAtom, EvidenceBank, La
 from bdse.planner.evidence_queries import certificate_family, compute_proposal_features
 from bdse.utils import angle_wrap, compute_curvature, finite_difference, nearest_polyline_distance, oriented_box_corners, polygons_overlap_sat, route_progress_along_polyline
 
-ATOM_QUERY_DIM = 12
+ATOM_QUERY_DIM = 18
 
 
 def _unit_cost(cfg: dict[str, Any], atom_type: str, family: str) -> float:
@@ -880,13 +880,41 @@ def compute_query_features(atoms: list[EvidenceAtom], candidates: CandidateBank,
             traj = eval_trajs[a]
             feat = np.zeros((ATOM_QUERY_DIM,), dtype=np.float32)
             if "current_state" in atom.anchor:
-                cur = np.asarray(atom.anchor["current_state"], dtype=np.float32)
+                cur = np.asarray(atom.anchor["current_state"], dtype=np.float32).reshape(-1)
                 dist = np.linalg.norm(traj[:, :2] - cur[:2][None, :], axis=1)
                 arg = int(np.argmin(dist))
-                feat[0] = dist.min()
-                feat[1] = dist.mean()
-                feat[2] = traj[arg, 4]
-                feat[3] = cur[3] if len(cur) > 3 else 0.0
+                feat[0] = float(dist.min())
+                feat[1] = float(dist.mean())
+                feat[2] = float(traj[arg, 4])
+                feat[3] = float(cur[3]) if len(cur) > 3 else 0.0
+                # Runtime-only constant-velocity interaction proxies.  These do
+                # not use logged future labels, but make query features much
+                # closer to the teacher's future interaction atoms.
+                vx = float(cur[5]) if cur.shape[0] > 5 else (float(cur[3]) * np.cos(float(cur[2])) if cur.shape[0] > 3 else 0.0)
+                vy = float(cur[6]) if cur.shape[0] > 6 else (float(cur[3]) * np.sin(float(cur[2])) if cur.shape[0] > 3 else 0.0)
+                times = traj[:, 4]
+                pred_xy = cur[:2][None, :] + times[:, None] * np.asarray([vx, vy], dtype=np.float32)[None, :]
+                dist_cv = np.linalg.norm(traj[:, :2] - pred_xy, axis=1)
+                arg_cv = int(np.argmin(dist_cv))
+                feat[12] = float(dist_cv[arg_cv])
+                feat[13] = float(times[arg_cv])
+                ego_vx = float(traj[arg_cv, 3]) * float(np.cos(float(traj[arg_cv, 2])))
+                ego_vy = float(traj[arg_cv, 3]) * float(np.sin(float(traj[arg_cv, 2])))
+                rel_pos = pred_xy[arg_cv] - traj[arg_cv, :2]
+                rel_norm = max(float(np.linalg.norm(rel_pos)), 1e-3)
+                rel_dir = rel_pos / rel_norm
+                closing = -float(np.dot(np.asarray([vx - ego_vx, vy - ego_vy], dtype=np.float32), rel_dir))
+                feat[14] = max(closing, 0.0)
+                feat[15] = float(times[arg_cv])
+                # Ego-frame longitudinal gap proxies for gap/yield atoms.  Positive
+                # x is ahead in the local route-following frame used by candidates.
+                rel_x = float(cur[0]) if cur.shape[0] > 0 else 0.0
+                if rel_x >= 0.0:
+                    feat[16] = max(0.0, rel_x - float(traj[arg_cv, 0]))
+                    feat[17] = 0.0
+                else:
+                    feat[16] = 0.0
+                    feat[17] = max(0.0, float(traj[arg_cv, 0]) - rel_x)
             if route_arr is not None:
                 dist = cached_route_dist(route_arr, a)
                 feat[4] = dist.min(); feat[5] = dist.mean(); feat[6] = dist.max()
