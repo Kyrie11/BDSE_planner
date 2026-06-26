@@ -199,7 +199,7 @@ def main() -> None:
         for batch in tqdm(loader, desc=f"epoch {epoch}"):
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             opt.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast("cuda", enabled=use_amp):
+            with torch.cuda.amp.autocast(device_type="cuda", enabled=use_amp):
                 out = model(batch)
                 losses = compute_bdse_losses(out, batch, cfg)
             scaler.scale(losses["loss"]).backward()
