@@ -1124,6 +1124,7 @@ class PreprocessedBDSEDataset:
         split: str | list[str] | tuple[str, ...] | None = None,
         manifest_name: str = "manifest.jsonl",
         max_scenarios: int | None = None,
+        max_scenarios_per_split: int | None = None,
     ):
         self.preprocessed_dir = Path(preprocessed_dir)
         if split is None:
@@ -1136,6 +1137,7 @@ class PreprocessedBDSEDataset:
         self.split = None if self.splits is None else (self.splits[0] if len(self.splits) == 1 else list(self.splits))
         self.manifest_name = manifest_name
         self.max_scenarios = max_scenarios
+        self.max_scenarios_per_split = max_scenarios_per_split
         self._paths: list[Path] | None = None
 
     @staticmethod
@@ -1170,6 +1172,85 @@ class PreprocessedBDSEDataset:
         if self._is_canonical_split_name(split) and normalize_split_name(root_name) == split:
             return True
         return False
+
+    def _path_matches_requested_split(self, path: Path, split: str) -> bool:
+        """Best-effort split ownership for balanced multi-split caps.
+
+        Cache layouts can be ROOT/train_boston/*.npz, ROOT/train/train_boston/*.npz,
+        or manifest paths under log subfolders. Exact concrete split names are
+        preferred; canonical names such as ``train`` intentionally match all
+        concrete train_* folders.
+        """
+        parts = tuple(str(x) for x in Path(path).parts)
+        if split in parts:
+            return True
+        norm = normalize_split_name(split)
+        if self._is_canonical_split_name(split):
+            return any(normalize_split_name(part) == norm for part in parts)
+        return False
+
+    def _apply_training_caps(self, paths: list[Path]) -> list[Path]:
+        """Apply caps without silently collapsing multi-city training to one folder.
+
+        Earlier behavior sorted all paths globally and then sliced ``[:max_scenarios]``.
+        With concrete split lists such as train_boston/train_singapore/... this could
+        select only the alphabetically first city when that folder had enough files.
+        """
+        total_cap = None if self.max_scenarios is None else max(0, int(self.max_scenarios))
+        per_cap = None if self.max_scenarios_per_split is None else max(0, int(self.max_scenarios_per_split))
+        splits = list(self.splits or [])
+        if not splits or len(splits) <= 1:
+            if per_cap is not None:
+                paths = paths[:per_cap]
+            if total_cap is not None:
+                paths = paths[:total_cap]
+            return paths
+
+        groups: dict[str, list[Path]] = {s: [] for s in splits}
+        other: list[Path] = []
+        for p in paths:
+            assigned = False
+            for split in splits:
+                if self._path_matches_requested_split(p, split):
+                    groups[split].append(p)
+                    assigned = True
+                    break
+            if not assigned:
+                other.append(p)
+
+        if per_cap is not None:
+            groups = {k: v[:per_cap] for k, v in groups.items()}
+
+        if total_cap is None:
+            out: list[Path] = []
+            for split in splits:
+                out.extend(groups.get(split, []))
+            out.extend(other)
+            return out
+
+        # Round-robin across requested splits for an approximately balanced total.
+        out: list[Path] = []
+        idx = 0
+        while len(out) < total_cap:
+            added = False
+            for split in splits:
+                g = groups.get(split, [])
+                if idx < len(g):
+                    out.append(g[idx])
+                    added = True
+                    if len(out) >= total_cap:
+                        break
+            if not added:
+                break
+            idx += 1
+        if len(out) < total_cap:
+            used = set(out)
+            for p in other:
+                if p not in used:
+                    out.append(p)
+                    if len(out) >= total_cap:
+                        break
+        return out
 
     def _split_search_roots(self) -> list[Path]:
         root = self.preprocessed_dir
@@ -1252,8 +1333,7 @@ class PreprocessedBDSEDataset:
         # Manifests may contain duplicates after resumed preprocessing. Keep one
         # copy of each path and sort deterministically.
         paths = sorted(dict.fromkeys(paths), key=lambda p: str(p))
-        if self.max_scenarios is not None:
-            paths = paths[: int(self.max_scenarios)]
+        paths = self._apply_training_caps(paths)
         if not paths:
             hint = ""
             if self.splits is not None:

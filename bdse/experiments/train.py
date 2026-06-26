@@ -108,7 +108,8 @@ def main() -> None:
     parser.add_argument("--config", type=str, default=None)
     parser.add_argument("--split", type=str, nargs="+", default=["train"], help="One or more preprocessed splits/folders, e.g. train or train_1 train_2.")
     parser.add_argument("--max-files", type=int, default=None)
-    parser.add_argument("--max-scenarios", type=int, default=None)
+    parser.add_argument("--max-scenarios", type=int, default=None, help="Total cap after split selection. With multiple concrete splits, the cap is balanced across splits.")
+    parser.add_argument("--max-scenarios-per-split", type=int, default=None, help="Optional per-split cap for multi-city/cache training.")
     parser.add_argument("--preprocessed-dir", type=str, default=None, help="Load generated .npz cache instead of building samples on the fly.")
     parser.add_argument("--output", type=str, default="outputs/bdse_model.pt")
     parser.add_argument("--epochs", type=int, default=None)
@@ -137,35 +138,60 @@ def main() -> None:
     seed = int(cfg.get("seed", 17))
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception as exc:
+        cuda_available = False
+        print(f"[bdse] CUDA availability check failed; falling back to CPU: {type(exc).__name__}: {exc}", flush=True)
+    if cuda_available:
         torch.cuda.manual_seed_all(seed)
     splits = args.split
     if args.preprocessed_dir:
-        dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=splits, max_scenarios=args.max_scenarios)
+        dataset = PreprocessedBDSEDataset(
+            args.preprocessed_dir,
+            split=splits,
+            max_scenarios=args.max_scenarios,
+            max_scenarios_per_split=args.max_scenarios_per_split,
+        )
         _apply_training_quality_filter(dataset, cfg)
     else:
         if len(splits) != 1:
             raise ValueError("On-the-fly training supports one split at a time; preprocess first to train from multiple split folders.")
         dataset = NuPlanBDSEDataset(cfg, split=splits[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
+    dataset_len = len(dataset)
+    batch_size = int(cfg["training"]["batch_size"])
+    num_workers = int(cfg["training"].get("num_workers", 0))
+    print(
+        f"[bdse] dataset_samples={dataset_len} splits={splits} batch_size={batch_size} "
+        f"num_workers={num_workers} max_scenarios={args.max_scenarios} "
+        f"max_scenarios_per_split={args.max_scenarios_per_split}",
+        flush=True,
+    )
     loader = DataLoader(
         OnTheFlyDataset(dataset),
-        batch_size=int(cfg["training"]["batch_size"]),
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=int(cfg["training"].get("num_workers", 0)),
-        pin_memory=torch.cuda.is_available(),
-        persistent_workers=int(cfg["training"].get("num_workers", 0)) > 0,
+        num_workers=num_workers,
+        pin_memory=cuda_available,
+        persistent_workers=num_workers > 0,
         collate_fn=lambda x: collate(x, cfg),
     )
     if args.device == "cpu":
         device = torch.device("cpu")
     elif args.device == "cuda":
+        if not cuda_available:
+            raise RuntimeError(
+                "--device cuda was requested, but torch.cuda.is_available() is false. "
+                "Fix the NVIDIA driver / PyTorch CUDA build mismatch, or run with --device cpu."
+            )
         device = torch.device("cuda")
     else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda" if cuda_available else "cpu")
+    print(f"[bdse] device={device} cuda_available={cuda_available} amp={bool(args.amp and device.type == 'cuda')}", flush=True)
     model = BDSEModel(cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
     use_amp = bool(args.amp and device.type == "cuda")
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     for epoch in range(int(cfg["training"]["epochs"])):
         cfg["training"]["current_epoch"] = int(epoch)
         model.train()
@@ -173,7 +199,7 @@ def main() -> None:
         for batch in tqdm(loader, desc=f"epoch {epoch}"):
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             opt.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast("cuda", enabled=use_amp):
                 out = model(batch)
                 losses = compute_bdse_losses(out, batch, cfg)
             scaler.scale(losses["loss"]).backward()
