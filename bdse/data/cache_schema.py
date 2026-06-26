@@ -288,7 +288,7 @@ def save_sample_npz(sample: Sample, path: str | Path, compressed: bool = False) 
     )
 
 
-def load_sample_npz(path: str | Path) -> Sample:
+def load_sample_npz(path: str | Path, *, include_label_future: bool = True, include_candidate_metadata: bool = True) -> Sample:
     p = Path(path)
     with np.load(p, allow_pickle=True) as z:
         scenario_token = str(z["scenario_token"].item() if z["scenario_token"].shape == () else z["scenario_token"].reshape(-1)[0])
@@ -312,7 +312,7 @@ def load_sample_npz(path: str | Path) -> Sample:
             mission_goal=mission_goal_val,
             metadata=_json_loads_npz(z, "runtime_metadata_json", {}),
         )
-        if "label_logged_ego" in z.files and np.asarray(z["label_logged_ego"]).size:
+        if include_label_future and "label_logged_ego" in z.files and np.asarray(z["label_logged_ego"]).size:
             label_future = LabelOnlyFuture(
                 logged_ego=np.asarray(z["label_logged_ego"], dtype=np.float32),
                 logged_agents=np.asarray(z["label_logged_agents"], dtype=np.float32),
@@ -321,16 +321,28 @@ def load_sample_npz(path: str | Path) -> Sample:
                 metadata=_json_loads_npz(z, "label_future_metadata_json", {}),
             )
         else:
+            # Training and runtime tensorization do not use label-only futures.
+            # Skipping these arrays avoids copying large logged-agent future tensors
+            # through DataLoader workers while preserving the default full loader.
             label_future = None
         trajectories = np.asarray(z["candidate_trajectories"], dtype=np.float32)
         K = int(trajectories.shape[0])
+        if include_candidate_metadata:
+            theta = _json_loads_npz(z, "candidate_theta_json", [{} for _ in range(K)])
+            dynamic_flags = _json_loads_npz(z, "candidate_dynamic_flags_json", [{} for _ in range(K)])
+            candidate_metadata = _json_loads_npz(z, "candidate_metadata_json", [{} for _ in range(K)])
+        else:
+            # The training tensorizer only needs trajectories, validity, and maneuver ids.
+            theta = [{} for _ in range(K)]
+            dynamic_flags = [{} for _ in range(K)]
+            candidate_metadata = [{} for _ in range(K)]
         candidates = CandidateBank(
             trajectories=trajectories,
             valid_mask=np.asarray(z["candidate_valid"], dtype=bool),
             maneuver_ids=np.asarray(z["candidate_maneuver_ids"], dtype=np.int64),
-            theta=_json_loads_npz(z, "candidate_theta_json", [{} for _ in range(K)]),
-            dynamic_flags=_json_loads_npz(z, "candidate_dynamic_flags_json", [{} for _ in range(K)]),
-            metadata=_json_loads_npz(z, "candidate_metadata_json", [{} for _ in range(K)]),
+            theta=theta,
+            dynamic_flags=dynamic_flags,
+            metadata=candidate_metadata,
         )
         types = _string_list(np.asarray(z["evidence_types"]))
         families = _string_list(np.asarray(z["evidence_families"]))

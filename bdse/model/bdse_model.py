@@ -366,8 +366,51 @@ class BDSEModel(nn.Module):
         k = min(max(int(M), 1), logits.shape[1])
         return torch.topk(logits, k=k, dim=1).indices
 
-    def _dense_pair_delta_from_batch(self, context: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], q_h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor] | None:
-        if not self.pair_conditioned or "pair_indices" not in batch:
+    def _training_chunk_size(self, key: str, default: int) -> int:
+        train_cfg = self.cfg.get("training", {}) if isinstance(self.cfg, dict) else {}
+        model_cfg = self.cfg.get("model", {}) if isinstance(self.cfg, dict) else {}
+        value = train_cfg.get(key, model_cfg.get(key, default))
+        try:
+            return max(1, int(value))
+        except Exception:
+            return max(1, int(default))
+
+    def _dense_local_from_batch(self, context: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        action_h = context["action_h"]
+        evid_h = context["evidence_h"]
+        scene = context["scene"]
+        J0 = context["J0"]
+        valid = batch["candidate_valid"].bool()
+        e_valid = context["evidence_valid"]
+        q_raw_all = self._fit_last_dim(batch["evidence_query_features"].float(), self.query_proj[0].in_features)
+        B, K, H = action_h.shape
+        E = evid_h.shape[1]
+        chunk_e = min(E, self._training_chunk_size("local_forward_atom_chunk", 32))
+        local_parts: list[torch.Tensor] = []
+        local_var_parts: list[torch.Tensor] = []
+        for e0 in range(0, E, chunk_e):
+            e1 = min(E, e0 + chunk_e)
+            Ce = e1 - e0
+            q_h = self.query_proj(q_raw_all[:, e0:e1])
+            a_exp = action_h[:, None, :, :].expand(B, Ce, K, H)
+            e_exp = evid_h[:, e0:e1, None, :].expand(B, Ce, K, H)
+            s_exp = scene[:, None, None, :].expand(B, Ce, K, H)
+            z = torch.cat([a_exp, e_exp, q_h, s_exp], dim=-1)
+            local_chunk = self.local_head(z).squeeze(-1)
+            local_var_chunk = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
+            local_chunk = local_chunk.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, e0:e1, None], 0.0)
+            local_var_chunk = local_var_chunk.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, e0:e1, None], 0.0)
+            local_parts.append(local_chunk)
+            local_var_parts.append(local_var_chunk)
+        if not local_parts:
+            return (
+                torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device),
+                torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device),
+            )
+        return torch.cat(local_parts, dim=1), torch.cat(local_var_parts, dim=1)
+
+    def _dense_pair_delta_from_batch(self, context: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if not self.pair_conditioned or "pair_indices" not in batch or "evidence_query_features" not in batch:
             return None
         pairs = batch["pair_indices"].long()
         action_h = context["action_h"]
@@ -377,30 +420,53 @@ class BDSEModel(nn.Module):
         E = evid_h.shape[1]
         H = action_h.shape[-1]
         K = action_h.shape[1]
-        a_idx = pairs[..., 0].clamp_min(0).clamp_max(K - 1)
-        b_idx = pairs[..., 1].clamp_min(0).clamp_max(K - 1)
-        a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, P, H))[:, None, :, :].expand(B, E, P, H)
-        b_h = torch.gather(action_h, 1, b_idx[..., None].expand(B, P, H))[:, None, :, :].expand(B, E, P, H)
-        e_h = evid_h[:, :, None, :].expand(B, E, P, H)
-        idx_a = a_idx[:, None, :, None].expand(B, E, P, H)
-        idx_b = b_idx[:, None, :, None].expand(B, E, P, H)
-        q_a = torch.gather(q_h, 2, idx_a)
-        q_b = torch.gather(q_h, 2, idx_b)
-        s_h = scene[:, None, None, :].expand(B, E, P, H)
-        z_ab = torch.cat([a_h, b_h, e_h, q_a, q_b, s_h], dim=-1)
-        z_ba = torch.cat([b_h, a_h, e_h, q_b, q_a, s_h], dim=-1)
-        delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
-        var = self._positive_variance(self.pair_var_head(z_ab).squeeze(-1), self.var_floor)
-        var = var + self._positive_variance(self.pair_var_head(z_ba).squeeze(-1), self.var_floor)
-        pair_valid = batch.get("pair_valid")
-        e_valid = context.get("evidence_valid")
-        if pair_valid is not None:
-            delta = delta.masked_fill(~pair_valid[:, None, :].bool(), 0.0)
-            var = var.masked_fill(~pair_valid[:, None, :].bool(), 0.0)
-        if e_valid is not None:
-            delta = delta.masked_fill(~e_valid[:, :, None].bool(), 0.0)
-            var = var.masked_fill(~e_valid[:, :, None].bool(), 0.0)
-        return delta, var
+        a_idx_all = pairs[..., 0].clamp_min(0).clamp_max(K - 1)
+        b_idx_all = pairs[..., 1].clamp_min(0).clamp_max(K - 1)
+        q_raw_all = self._fit_last_dim(batch["evidence_query_features"].float(), self.query_proj[0].in_features)
+        chunk_e = min(E, self._training_chunk_size("pair_forward_atom_chunk", 16))
+        chunk_p = min(P, self._training_chunk_size("pair_forward_pair_chunk", 32))
+        delta_chunks: list[torch.Tensor] = []
+        var_chunks: list[torch.Tensor] = []
+        for e0 in range(0, E, chunk_e):
+            e1 = min(E, e0 + chunk_e)
+            Ce = e1 - e0
+            delta_p_chunks: list[torch.Tensor] = []
+            var_p_chunks: list[torch.Tensor] = []
+            q_raw_e = q_raw_all[:, e0:e1]
+            e_h = evid_h[:, e0:e1, None, :].expand(B, Ce, 1, H)
+            for p0 in range(0, P, chunk_p):
+                p1 = min(P, p0 + chunk_p)
+                Cp = p1 - p0
+                a_idx = a_idx_all[:, p0:p1]
+                b_idx = b_idx_all[:, p0:p1]
+                a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, Cp, H))[:, None, :, :].expand(B, Ce, Cp, H)
+                b_h = torch.gather(action_h, 1, b_idx[..., None].expand(B, Cp, H))[:, None, :, :].expand(B, Ce, Cp, H)
+                idx_a_q = a_idx[:, None, :, None].expand(B, Ce, Cp, q_raw_e.shape[-1])
+                idx_b_q = b_idx[:, None, :, None].expand(B, Ce, Cp, q_raw_e.shape[-1])
+                q_a = self.query_proj(torch.gather(q_raw_e, 2, idx_a_q))
+                q_b = self.query_proj(torch.gather(q_raw_e, 2, idx_b_q))
+                e_hp = e_h.expand(B, Ce, Cp, H)
+                s_h = scene[:, None, None, :].expand(B, Ce, Cp, H)
+                z_ab = torch.cat([a_h, b_h, e_hp, q_a, q_b, s_h], dim=-1)
+                z_ba = torch.cat([b_h, a_h, e_hp, q_b, q_a, s_h], dim=-1)
+                delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
+                var = self._positive_variance(self.pair_var_head(z_ab).squeeze(-1), self.var_floor)
+                var = var + self._positive_variance(self.pair_var_head(z_ba).squeeze(-1), self.var_floor)
+                pair_valid = batch.get("pair_valid")
+                if pair_valid is not None:
+                    p_mask = pair_valid[:, p0:p1].bool()
+                    delta = delta.masked_fill(~p_mask[:, None, :], 0.0)
+                    var = var.masked_fill(~p_mask[:, None, :], 0.0)
+                e_valid = context.get("evidence_valid")
+                if e_valid is not None:
+                    e_mask = e_valid[:, e0:e1].bool()
+                    delta = delta.masked_fill(~e_mask[:, :, None], 0.0)
+                    var = var.masked_fill(~e_mask[:, :, None], 0.0)
+                delta_p_chunks.append(delta)
+                var_p_chunks.append(var)
+            delta_chunks.append(torch.cat(delta_p_chunks, dim=2))
+            var_chunks.append(torch.cat(var_p_chunks, dim=2))
+        return torch.cat(delta_chunks, dim=1), torch.cat(var_chunks, dim=1)
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         ctx = self.encode_context(batch)
@@ -408,21 +474,11 @@ class BDSEModel(nn.Module):
         action_h = ctx["action_h"]
         evid_h = ctx["evidence_h"]
         scene = ctx["scene"]
-        valid = batch["candidate_valid"].bool()
-        e_valid = ctx["evidence_valid"]
         B, K, H = action_h.shape
         E = evid_h.shape[1]
         if "evidence_query_features" in batch:
-            q_h = self.query_proj(self._fit_last_dim(batch["evidence_query_features"].float(), self.query_proj[0].in_features))
-            a_exp = action_h[:, None, :, :].expand(B, E, K, -1)
-            e_exp = evid_h[:, :, None, :].expand(B, E, K, -1)
-            s_exp = scene[:, None, None, :].expand(B, E, K, -1)
-            z = torch.cat([a_exp, e_exp, q_h, s_exp], dim=-1)
-            local = self.local_head(z).squeeze(-1)
-            local_var = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
-            local = local.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, :, None], 0.0)
-            local_var = local_var.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, :, None], 0.0)
-            pair_out = self._dense_pair_delta_from_batch(ctx, batch, q_h)
+            local, local_var = self._dense_local_from_batch(ctx, batch)
+            pair_out = self._dense_pair_delta_from_batch(ctx, batch)
         else:
             local = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
             local_var = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)

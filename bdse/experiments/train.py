@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Any
 
 import json
 import numpy as np
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 from bdse.config import load_config
-from bdse.data.cache_schema import Sample
+from bdse.data.cache_schema import Sample, load_sample_npz
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.data.tensorizer import sample_to_model_inputs
 from bdse.data.quality import quality_decision
@@ -20,13 +24,21 @@ from bdse.model.losses import compute_bdse_losses
 
 
 class OnTheFlyDataset(Dataset):
-    def __init__(self, source: NuPlanBDSEDataset):
+    def __init__(self, source: NuPlanBDSEDataset | PreprocessedBDSEDataset):
         self.source = source
 
     def __len__(self) -> int:
         return len(self.source)
 
     def __getitem__(self, idx: int) -> Sample:
+        if isinstance(self.source, PreprocessedBDSEDataset):
+            # Training does not consume label-only futures or candidate JSON metadata.
+            # Avoid moving those large unused arrays through DataLoader workers.
+            return load_sample_npz(
+                self.source.build_index()[idx],
+                include_label_future=False,
+                include_candidate_metadata=False,
+            )
         return self.source[idx]
 
 
@@ -120,6 +132,9 @@ def main() -> None:
     parser.add_argument("--device", type=str, default=None, choices=["auto", "cuda", "cpu"])
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--amp", action="store_true", help="Use CUDA mixed precision for faster training when available.")
+    parser.add_argument("--local-rank", "--local_rank", dest="local_rank", type=int, default=None, help="Local rank passed by torchrun; normally inferred from LOCAL_RANK.")
+    parser.add_argument("--prefetch-factor", type=int, default=None, help="DataLoader prefetch factor when num_workers > 0. Use 1 to reduce host/pinned-memory pressure.")
+    parser.add_argument("--no-pin-memory", action="store_true", help="Disable pinned host memory for DataLoader batches.")
     args = parser.parse_args()
     cfg = load_config(args.config)
     cfg.setdefault("training", {})
@@ -133,6 +148,10 @@ def main() -> None:
         cfg["training"]["weight_decay"] = float(args.weight_decay)
     if args.num_workers is not None:
         cfg["training"]["num_workers"] = max(0, int(args.num_workers))
+    if args.prefetch_factor is not None:
+        cfg["training"]["prefetch_factor"] = max(1, int(args.prefetch_factor))
+    if args.no_pin_memory:
+        cfg["training"]["pin_memory"] = False
     if args.seed is not None:
         cfg["seed"] = int(args.seed)
     seed = int(cfg.get("seed", 17))
@@ -145,6 +164,17 @@ def main() -> None:
         print(f"[bdse] CUDA availability check failed; falling back to CPU: {type(exc).__name__}: {exc}", flush=True)
     if cuda_available:
         torch.cuda.manual_seed_all(seed)
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    distributed = world_size > 1
+    local_rank = int(os.environ.get("LOCAL_RANK", args.local_rank if args.local_rank is not None else 0))
+    global_rank = int(os.environ.get("RANK", "0"))
+    if distributed:
+        if not cuda_available:
+            raise RuntimeError("Distributed CUDA training was requested by torchrun, but CUDA is not available.")
+        torch.cuda.set_device(local_rank)
+        if not dist.is_initialized():
+            dist.init_process_group(backend="nccl")
+    is_main = global_rank == 0
     splits = args.split
     if args.preprocessed_dir:
         dataset = PreprocessedBDSEDataset(
@@ -161,22 +191,31 @@ def main() -> None:
     dataset_len = len(dataset)
     batch_size = int(cfg["training"]["batch_size"])
     num_workers = int(cfg["training"].get("num_workers", 0))
-    print(
-        f"[bdse] dataset_samples={dataset_len} splits={splits} batch_size={batch_size} "
-        f"num_workers={num_workers} max_scenarios={args.max_scenarios} "
-        f"max_scenarios_per_split={args.max_scenarios_per_split}",
-        flush=True,
-    )
-    loader = DataLoader(
-        OnTheFlyDataset(dataset),
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=cuda_available,
-        persistent_workers=num_workers > 0,
-        collate_fn=lambda x: collate(x, cfg),
-    )
-    if args.device == "cpu":
+    if is_main:
+        print(
+            f"[bdse] dataset_samples={dataset_len} splits={splits} batch_size_per_process={batch_size} "
+            f"world_size={world_size} global_batch_size={batch_size * world_size} "
+            f"num_workers={num_workers} max_scenarios={args.max_scenarios} "
+            f"max_scenarios_per_split={args.max_scenarios_per_split}",
+            flush=True,
+        )
+    wrapped_dataset = OnTheFlyDataset(dataset)
+    sampler = DistributedSampler(wrapped_dataset, num_replicas=world_size, rank=global_rank, shuffle=True, seed=seed) if distributed else None
+    loader_kwargs: dict[str, Any] = {
+        "batch_size": batch_size,
+        "shuffle": sampler is None,
+        "num_workers": num_workers,
+        "pin_memory": bool(cfg["training"].get("pin_memory", cuda_available) and cuda_available),
+        "persistent_workers": num_workers > 0,
+        "collate_fn": lambda x: collate(x, cfg),
+        "sampler": sampler,
+    }
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = int(cfg["training"].get("prefetch_factor", 1))
+    loader = DataLoader(wrapped_dataset, **loader_kwargs)
+    if distributed:
+        device = torch.device(f"cuda:{local_rank}")
+    elif args.device == "cpu":
         device = torch.device("cpu")
     elif args.device == "cuda":
         if not cuda_available:
@@ -187,8 +226,11 @@ def main() -> None:
         device = torch.device("cuda")
     else:
         device = torch.device("cuda" if cuda_available else "cpu")
-    print(f"[bdse] device={device} cuda_available={cuda_available} amp={bool(args.amp and device.type == 'cuda')}", flush=True)
+    if is_main:
+        print(f"[bdse] device={device} distributed={distributed} cuda_available={cuda_available} amp={bool(args.amp and device.type == 'cuda')}", flush=True)
     model = BDSEModel(cfg).to(device)
+    if distributed:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
     use_amp = bool(args.amp and device.type == "cuda")
     if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
@@ -197,9 +239,11 @@ def main() -> None:
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     for epoch in range(int(cfg["training"]["epochs"])):
         cfg["training"]["current_epoch"] = int(epoch)
+        if sampler is not None:
+            sampler.set_epoch(epoch)
         model.train()
         meters: dict[str, list[float]] = {}
-        for batch in tqdm(loader, desc=f"epoch {epoch}"):
+        for batch in tqdm(loader, desc=f"epoch {epoch}", disable=not is_main):
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             opt.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast(enabled=use_amp):
@@ -213,10 +257,16 @@ def main() -> None:
             scaler.update()
             for k, v in losses.items():
                 meters.setdefault(k, []).append(float(v.detach().cpu()))
-        print({k: float(np.mean(v)) for k, v in meters.items()})
-    out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"model": model.state_dict(), "cfg": cfg}, out_path)
+        if is_main:
+            print({k: float(np.mean(v)) for k, v in meters.items()})
+    if is_main:
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_model = model.module if isinstance(model, DDP) else model
+        torch.save({"model": raw_model.state_dict(), "cfg": cfg}, out_path)
+    if distributed and dist.is_initialized():
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
