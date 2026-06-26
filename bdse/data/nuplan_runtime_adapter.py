@@ -5,7 +5,12 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import RuntimeFeatures
-from bdse.data.feature_builder import build_runtime_features_from_arrays, make_default_route_centerline
+from bdse.data.feature_builder import (
+    build_runtime_features_from_arrays,
+    make_default_route_centerline,
+    select_agents_deterministic,
+    _agent_selection_order,
+)
 from bdse.utils import transform_states_to_local
 
 
@@ -53,6 +58,39 @@ def _object_to_array(obj: Any) -> np.ndarray:
     length = float(getattr(box, "length", getattr(obj, "length", 4.8)))
     width = float(getattr(box, "width", getattr(obj, "width", 2.0)))
     return np.asarray([x, y, yaw, float(np.hypot(vx, vy)), 0.0, vx, vy, length, width, 0.0], dtype=np.float32)
+
+
+
+
+def _object_token(obj: Any, fallback_index: int) -> str:
+    for attr in ("track_token", "token", "id", "track_id"):
+        val = getattr(obj, attr, None)
+        if val not in (None, ""):
+            return str(val)
+    metadata = getattr(obj, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("track_token", "token", "id", "track_id"):
+            val = metadata.get(key)
+            if val not in (None, ""):
+                return str(val)
+    return f"idx:{int(fallback_index)}"
+
+
+def _boxes_global_to_local(boxes: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+    boxes = np.asarray(boxes, dtype=np.float32).reshape(-1, 10)
+    if len(boxes) == 0:
+        return boxes.copy()
+    out = boxes.copy()
+    local_pose = transform_states_to_local(boxes[:, :5], current_state[:2], float(current_state[2]))
+    out[:, :5] = local_pose[:, :5]
+    c = float(np.cos(-float(current_state[2])))
+    s = float(np.sin(-float(current_state[2])))
+    vx = boxes[:, 5].copy()
+    vy = boxes[:, 6].copy()
+    out[:, 5] = c * vx - s * vy
+    out[:, 6] = s * vx + c * vy
+    out[:, 3] = np.hypot(out[:, 5], out[:, 6]).astype(np.float32)
+    return out.astype(np.float32)
 
 
 def _iter_objects(obs: Any) -> list[Any]:
@@ -319,19 +357,32 @@ def build_runtime_features_from_planner_input(current_input: Any, initialization
     ego_local[:, 4] = np.linspace(-float(cfg.get("runtime", {}).get("history_s", 2.0)), 0.0, h_steps, dtype=np.float32)
 
     max_agents = int(cfg.get("runtime", {}).get("max_agents", 32))
+    radius = float(cfg.get("runtime", {}).get("agent_radius_m", 80.0))
     obs_tail = observations[-h_steps:] if observations else []
     current_objs = _iter_objects(obs_tail[-1]) if obs_tail else []
-    current_agents_global = np.asarray([_object_to_array(o) for o in current_objs[:max_agents]], dtype=np.float32) if current_objs else np.zeros((0, 10), dtype=np.float32)
-    agent_history = np.zeros((max_agents, h_steps, 10), dtype=np.float32)
-    current_agents = np.zeros((max_agents, 10), dtype=np.float32)
-    if len(current_agents_global):
-        # Transform current detections to ego frame.  Earlier history uses current
-        # snapshot repeated if object tracking alignment is unavailable in PlannerInput.
-        xy = current_agents_global[:, :5].copy()
-        local = transform_states_to_local(xy, current[:2], float(current[2]))
-        current_agents[: len(local), :5] = local[:, :5]
-        current_agents[: len(local), 5:10] = current_agents_global[:, 5:10]
-        agent_history[: len(local), :, :] = current_agents[: len(local), None, :]
+    raw_current_global = np.asarray([_object_to_array(o) for o in current_objs], dtype=np.float32) if current_objs else np.zeros((0, 10), dtype=np.float32)
+    raw_current = _boxes_global_to_local(raw_current_global, current) if len(raw_current_global) else np.zeros((0, 10), dtype=np.float32)
+    raw_tokens = [_object_token(o, i) for i, o in enumerate(current_objs)]
+    raw_hist = np.zeros((len(raw_current), h_steps, 10), dtype=np.float32)
+    if len(raw_current):
+        raw_hist[:, -1, :] = raw_current
+        token_to_idx = {tok: i for i, tok in enumerate(raw_tokens)}
+        frames = obs_tail[-h_steps:]
+        start = h_steps - len(frames)
+        for fi, obs in enumerate(frames):
+            objs = _iter_objects(obs)
+            if not objs:
+                continue
+            boxes_global = np.asarray([_object_to_array(o) for o in objs], dtype=np.float32)
+            boxes_local = _boxes_global_to_local(boxes_global, current)
+            for j, obj in enumerate(objs):
+                idx = token_to_idx.get(_object_token(obj, j))
+                if idx is not None and j < len(boxes_local):
+                    raw_hist[idx, start + fi, :] = boxes_local[j]
+    agent_order = _agent_selection_order(raw_current, np.zeros((2,), dtype=np.float32), max_agents, radius, candidate_trajectories=None)
+    agent_history, current_agents, agent_valid = select_agents_deterministic(
+        raw_current, raw_hist, np.zeros((2,), dtype=np.float32), max_agents, radius, candidate_trajectories=None
+    )
     traffic = _traffic_lights_from_input(current_input)
     map_features = _map_features_from_initialization(initialization, cfg, current_state=current, traffic_lights=traffic)
     route_ids = list(getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
@@ -349,4 +400,11 @@ def build_runtime_features_from_planner_input(current_input: Any, initialization
     )
     runtime.metadata["source"] = "PlannerInput.history_observations"
     runtime.metadata["scenario_db_replay_used"] = False
+    runtime.metadata["selected_agent_tokens"] = [raw_tokens[i] for i in agent_order if i < len(raw_tokens)]
+    runtime.metadata["raw_agent_count"] = int(len(raw_current))
+    runtime.metadata["agent_history_mode"] = "planner_input_track_token_match"
+    if bool(cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)):
+        runtime.metadata["_raw_agent_tokens"] = list(raw_tokens)
+        runtime.metadata["_raw_current_agents"] = raw_current.astype(np.float32)
+        runtime.metadata["_raw_agent_history"] = raw_hist.astype(np.float32)
     return runtime

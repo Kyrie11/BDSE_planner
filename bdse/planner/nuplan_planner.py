@@ -279,6 +279,13 @@ class BDSEPlannerCore:
 
     def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
         candidates = generate_candidate_bank(runtime, self.cfg)
+        if bool(self.cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)):
+            from bdse.data.feature_builder import resort_runtime_agents_for_candidates
+
+            runtime2 = resort_runtime_agents_for_candidates(runtime, candidates, self.cfg)
+            if runtime2 is not runtime:
+                runtime = runtime2
+                candidates = generate_candidate_bank(runtime, self.cfg)
         evidence_bank = enumerate_evidence_atoms(runtime, candidates, self.cfg)
         base_budget = int(self.cfg.get("evidence", {}).get("budget", 16))
         base_M = int(self.cfg.get("selector", {}).get("proposal_top_m", max(2 * base_budget, base_budget + 1)))
@@ -429,6 +436,8 @@ class BDSEnuPlanPlanner:
             c = float(np.cos(oyaw))
             s = float(np.sin(oyaw))
             states = []
+            if last is not None:
+                states.append(last)
             traj_arr = np.asarray(trajectory, dtype=np.float32)
             # Estimate local longitudinal velocity and acceleration for nuPlan state dynamics.
             local_vx = traj_arr[:, 3] * np.cos(traj_arr[:, 2])

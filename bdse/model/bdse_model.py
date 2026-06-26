@@ -116,14 +116,22 @@ class BDSEModel(nn.Module):
         valid: torch.Tensor,
     ) -> torch.Tensor:
         B, K = J0.shape
-        finite = torch.where(torch.isfinite(J0) & valid, J0, torch.full_like(J0, 1e6))
-        masked = finite.masked_fill(~valid, 1e6)
+        # This summary is used inside autocast.  Keep sentinel arithmetic in
+        # float32: fp16 cannot represent 1e6/-1e6 and will overflow when AMP is
+        # enabled.  Returning fp32 is safe because the following Linear layer is
+        # autocast-aware.
+        valid = valid.bool()
+        J0f = J0.float()
+        large = J0f.new_tensor(1e6)
+        neg_large = J0f.new_tensor(-1e6)
+        finite = torch.where(torch.isfinite(J0f) & valid, J0f, large)
+        masked = finite.masked_fill(~valid, large)
         valid_count = valid.float().sum(dim=1, keepdim=True).clamp_min(1.0)
         sorted_cost, _ = torch.sort(masked, dim=1)
         top1 = sorted_cost[:, :1]
         top2 = sorted_cost[:, 1:2] if K > 1 else top1
         gap12 = (top2 - top1).clamp(min=0.0, max=1e4)
-        centered = torch.where(valid, -(finite - top1), torch.full_like(finite, -1e6))
+        centered = torch.where(valid, -(finite - top1), neg_large.expand_as(finite))
         prob = torch.softmax(centered, dim=1)
         entropy = -(prob * torch.log(prob.clamp_min(1e-9))).sum(dim=1, keepdim=True)
         near_count = ((masked - top1).abs() < float(self.cfg.get("selector", {}).get("eta_pred", 1.0))).float().sum(dim=1, keepdim=True) / valid_count
@@ -131,7 +139,7 @@ class BDSEModel(nn.Module):
         lateral = trajectories[:, :, -1, 1].float().abs().masked_fill(~valid, 0.0)
         speed = trajectories[:, :, -1, 3].float().masked_fill(~valid, 0.0)
         prog_mean = progress.sum(dim=1, keepdim=True) / valid_count
-        prog_max = progress.masked_fill(~valid, -1e6).max(dim=1, keepdim=True).values.clamp_min(0.0)
+        prog_max = progress.masked_fill(~valid, neg_large).max(dim=1, keepdim=True).values.clamp_min(0.0)
         lat_mean = lateral.sum(dim=1, keepdim=True) / valid_count
         speed_mean = speed.sum(dim=1, keepdim=True) / valid_count
         # Compact maneuver coverage histogram.  Earlier versions hard-coded
@@ -245,8 +253,9 @@ class BDSEModel(nn.Module):
         scene_f = scene[:, None, :].expand(B, self.num_families, -1)
         u_f = u_A[:, None, :].expand(B, self.num_families, -1)
         family_logits_raw = self.family_head(torch.cat([scene_f, u_f, family_emb, family_act_h], dim=-1)).squeeze(-1)
-        family_logits = family_logits_raw.masked_fill(~family_active, -1e9)
-        family_pi = torch.softmax(family_logits, dim=1) * family_active.float()
+        neg_mask = torch.finfo(family_logits_raw.dtype).min / 2.0
+        family_logits = family_logits_raw.masked_fill(~family_active, neg_mask)
+        family_pi = torch.softmax(family_logits.float(), dim=1).to(family_logits.dtype) * family_active.float()
         family_pi = family_pi / family_pi.sum(dim=1, keepdim=True).clamp_min(1e-6)
 
         atom_family_h = self.family_embed(fam_ids)
@@ -255,7 +264,8 @@ class BDSEModel(nn.Module):
         # Condition the atom proposal by the learned family gate.  Invalid atoms
         # are masked after adding the log gate so gradients still reach the gate.
         proposal_logits = proposal_logits + torch.log(atom_pi)
-        proposal_logits = proposal_logits.masked_fill(~e_valid, -1e9)
+        proposal_neg_mask = torch.finfo(proposal_logits.dtype).min / 2.0
+        proposal_logits = proposal_logits.masked_fill(~e_valid, proposal_neg_mask)
         return {
             "scene": scene,
             "action_h": action_h,

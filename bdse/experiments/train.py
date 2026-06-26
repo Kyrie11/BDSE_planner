@@ -191,7 +191,10 @@ def main() -> None:
     model = BDSEModel(cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
     use_amp = bool(args.amp and device.type == "cuda")
-    scaler = torch.cuda.amp.GradScaler("cuda", enabled=use_amp)
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     for epoch in range(int(cfg["training"]["epochs"])):
         cfg["training"]["current_epoch"] = int(epoch)
         model.train()
@@ -201,6 +204,7 @@ def main() -> None:
             opt.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast(enabled=use_amp):
                 out = model(batch)
+            with torch.cuda.amp.autocast(enabled=False):
                 losses = compute_bdse_losses(out, batch, cfg)
             scaler.scale(losses["loss"]).backward()
             scaler.unscale_(opt)
