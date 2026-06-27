@@ -376,7 +376,10 @@ class BDSEnuPlanPlanner:
             from bdse.model.bdse_model import BDSEModel
 
             model = BDSEModel(cfg)
-            ckpt = torch.load(checkpoint, map_location=device)
+            try:
+                ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
+            except TypeError:
+                ckpt = torch.load(checkpoint, map_location=device)
             state = ckpt.get("model", ckpt)
             current = model.state_dict()
             compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}

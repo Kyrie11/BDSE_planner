@@ -182,6 +182,49 @@ python -m bdse.experiments.train \
   --preprocessed-dir /path/to/bdse_cache \
   --output outputs/bdse_model.pt
 ```
+### distributed training
+```bash
+torchrun --standalone --nproc_per_node=2 -m bdse.experiments.train \
+  --config bdse/configs/full_preprocess.yaml \
+  --split train_boston train_singapore train_pittsburgh \
+  --preprocessed-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/ \
+  --max-scenarios 50000 \
+  --max-scenarios-per-split 16667 \
+  --batch-size 16 \
+  --num-workers 4 \
+  --prefetch-factor 1 \
+  --device cuda \
+  --amp \
+  --output outputs/bdse_v2_patch_3city_50k.pt
+```
+
+Per-epoch validation-best checkpointing can be enabled with a held-out cache:
+
+```bash
+python -m bdse.experiments.train \
+  --config bdse/configs/full_preprocess.yaml \
+  --split train_boston train_pittsburgh train_singapore \
+  --preprocessed-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/ \
+  --max-scenarios 50000 \
+  --max-scenarios-per-split 16667 \
+  --batch-size 16 \
+  --num-workers 8 \
+  --prefetch-factor 1 \
+  --device cuda \
+  --amp \
+  --val-split val \
+  --val-max-scenarios 1000 \
+  --val-mode open_loop \
+  --output outputs/bdse_v2_patch_3city_50k.pt
+```
+
+With `--best-metric auto`, `<output_stem>.best.pt` is selected by `val_bdse_score`
+when validation is enabled.  The score is an open-loop proxy aligned with the
+paper diagnostics: teacher action match and teacher regret dominate, while
+evidence sufficiency, hard-evidence recall, budget-vs-full match, and preserved
+margin error act as tie-breakers.  Closed-loop nuPlan metrics should still be
+reported with the external evaluation pipeline, but they are usually too slow to
+run after every epoch.
 
 For a short sanity run:
 

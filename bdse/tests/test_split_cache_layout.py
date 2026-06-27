@@ -70,3 +70,22 @@ def test_resume_filename_index_finds_old_log_layout(tmp_path):
     old.write_bytes(b"placeholder" * 64)
     by_name = ds._build_resume_filename_index(tmp_path)
     assert by_name["tok123_it000070.npz"] == old
+
+
+def test_canonical_train_per_split_cap_balances_concrete_subfolders(tmp_path):
+    paths = []
+    for split in ("train_boston", "train_pittsburgh", "train_singapore", "train_vegas_2"):
+        for i in range(4):
+            p = tmp_path / split / "log" / f"{i}.npz"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"placeholder")
+            paths.append(p)
+    ds = PreprocessedBDSEDataset(tmp_path, split="train", max_scenarios=8, max_scenarios_per_split=3)
+    got = ds.build_index()
+    assert len(got) == 8
+    counts = {split: 0 for split in ("train_boston", "train_pittsburgh", "train_singapore", "train_vegas_2")}
+    for p in got:
+        for split in counts:
+            if split in p.parts:
+                counts[split] += 1
+    assert counts == {"train_boston": 2, "train_pittsburgh": 2, "train_singapore": 2, "train_vegas_2": 2}

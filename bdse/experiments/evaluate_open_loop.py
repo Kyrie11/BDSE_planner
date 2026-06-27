@@ -14,9 +14,16 @@ from bdse.model.bdse_model import BDSEModel
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
 
 
+def _torch_load_any(path: str | Path, map_location="cpu"):
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
 def load_model(checkpoint: str, cfg):
     model = BDSEModel(cfg)
-    ckpt = torch.load(checkpoint, map_location="cpu")
+    ckpt = _torch_load_any(checkpoint, map_location="cpu")
     state = ckpt.get("model", ckpt)
     current = model.state_dict()
     compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}

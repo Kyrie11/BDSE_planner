@@ -1189,17 +1189,88 @@ class PreprocessedBDSEDataset:
             return any(normalize_split_name(part) == norm for part in parts)
         return False
 
+    def _concrete_split_key_for_path(self, path: Path, requested_split: str) -> str:
+        """Infer the concrete cache bucket that owns ``path``.
+
+        A canonical request such as ``split=train`` may scan several concrete
+        folders (``train_boston``, ``train_singapore``, or
+        ``train/train_boston``).  Per-split caps must apply to those concrete
+        folders; otherwise ``--max-scenarios-per-split`` with the default
+        ``--split train`` collapses the dataset to the first sorted folder.
+        """
+        norm = normalize_split_name(str(requested_split))
+        parts = tuple(str(x) for x in Path(path).parts)
+        # Prefer explicit concrete folder names such as train_boston.
+        for part in parts:
+            if part != norm and normalize_split_name(part) == norm:
+                return part
+        # Handle ROOT/train/train_boston/log/file.npz even if the loop above was
+        # conservative because of unusual parent names.
+        for idx, part in enumerate(parts[:-1]):
+            nxt = parts[idx + 1]
+            if part == norm and nxt != norm and normalize_split_name(nxt) == norm:
+                return nxt
+        return norm
+
+    @staticmethod
+    def _round_robin_cap(groups: dict[str, list[Path]], order: list[str], total_cap: int | None, other: list[Path] | None = None) -> list[Path]:
+        if total_cap is None:
+            out: list[Path] = []
+            for key in order:
+                out.extend(groups.get(key, []))
+            if other:
+                out.extend(other)
+            return out
+        out = []
+        idx = 0
+        while len(out) < total_cap:
+            added = False
+            for key in order:
+                g = groups.get(key, [])
+                if idx < len(g):
+                    out.append(g[idx])
+                    added = True
+                    if len(out) >= total_cap:
+                        break
+            if not added:
+                break
+            idx += 1
+        if other and len(out) < total_cap:
+            used = set(out)
+            for p in other:
+                if p not in used:
+                    out.append(p)
+                    if len(out) >= total_cap:
+                        break
+        return out
+
     def _apply_training_caps(self, paths: list[Path]) -> list[Path]:
         """Apply caps without silently collapsing multi-city training to one folder.
 
         Earlier behavior sorted all paths globally and then sliced ``[:max_scenarios]``.
         With concrete split lists such as train_boston/train_singapore/... this could
         select only the alphabetically first city when that folder had enough files.
+        The same issue also occurs for the canonical request ``split=train`` when
+        the cache contains concrete train_* folders and ``max_scenarios_per_split``
+        is set.
         """
         total_cap = None if self.max_scenarios is None else max(0, int(self.max_scenarios))
         per_cap = None if self.max_scenarios_per_split is None else max(0, int(self.max_scenarios_per_split))
         splits = list(self.splits or [])
-        if not splits or len(splits) <= 1:
+        if not splits:
+            if total_cap is not None:
+                paths = paths[:total_cap]
+            return paths
+        if len(splits) <= 1:
+            split = splits[0]
+            if per_cap is not None and self._is_canonical_split_name(split):
+                groups: dict[str, list[Path]] = {}
+                for p in paths:
+                    groups.setdefault(self._concrete_split_key_for_path(p, split), []).append(p)
+                if len(groups) > 1:
+                    groups = {k: v[:per_cap] for k, v in groups.items()}
+                    order = sorted(groups)
+                    return self._round_robin_cap(groups, order, total_cap)
             if per_cap is not None:
                 paths = paths[:per_cap]
             if total_cap is not None:
@@ -1221,36 +1292,7 @@ class PreprocessedBDSEDataset:
         if per_cap is not None:
             groups = {k: v[:per_cap] for k, v in groups.items()}
 
-        if total_cap is None:
-            out: list[Path] = []
-            for split in splits:
-                out.extend(groups.get(split, []))
-            out.extend(other)
-            return out
-
-        # Round-robin across requested splits for an approximately balanced total.
-        out: list[Path] = []
-        idx = 0
-        while len(out) < total_cap:
-            added = False
-            for split in splits:
-                g = groups.get(split, [])
-                if idx < len(g):
-                    out.append(g[idx])
-                    added = True
-                    if len(out) >= total_cap:
-                        break
-            if not added:
-                break
-            idx += 1
-        if len(out) < total_cap:
-            used = set(out)
-            for p in other:
-                if p not in used:
-                    out.append(p)
-                    if len(out) >= total_cap:
-                        break
-        return out
+        return self._round_robin_cap(groups, splits, total_cap, other)
 
     def _split_search_roots(self) -> list[Path]:
         root = self.preprocessed_dir
