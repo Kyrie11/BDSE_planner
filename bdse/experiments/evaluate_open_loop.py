@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import numpy as np
 import torch
 from tqdm import tqdm
 
@@ -12,38 +11,14 @@ from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
-
-
-def _torch_load_any(path: str | Path, map_location="cpu"):
-    try:
-        return torch.load(path, map_location=map_location, weights_only=False)
-    except TypeError:
-        return torch.load(path, map_location=map_location)
-
-
-def resolve_device(device_arg: str | None) -> torch.device:
-    """Resolve the evaluation device.
-
-    Open-loop evaluation used to load the checkpoint on CPU and never moved the
-    model afterwards.  Since BDSEModel creates runtime query tensors on
-    ``next(self.parameters()).device``, moving the model is sufficient to make
-    the neural parts of certificate scoring run on GPU while keeping the
-    numpy/selector/metric parts on CPU.
-    """
-    requested = (device_arg or "auto").lower()
-    if requested == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if requested.startswith("cuda") and not torch.cuda.is_available():
-        print(f"CUDA was requested via --device={device_arg!r}, but torch.cuda.is_available() is False; falling back to CPU.")
-        return torch.device("cpu")
-    return torch.device(device_arg)
+from bdse.utils import configure_torch_for_device, resolve_torch_device, torch_load_any
 
 
 def load_model(checkpoint: str, cfg, device: torch.device):
     # Keep deserialization on CPU so checkpoints saved from any device are safe
     # to load, then explicitly move the module to the requested evaluation device.
     model = BDSEModel(cfg)
-    ckpt = _torch_load_any(checkpoint, map_location="cpu")
+    ckpt = torch_load_any(checkpoint, map_location="cpu")
     state = ckpt.get("model", ckpt)
     current = model.state_dict()
     compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
@@ -73,13 +48,8 @@ def main() -> None:
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
-    device = resolve_device(args.device)
-    if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True
-        try:
-            torch.set_float32_matmul_precision("high")
-        except Exception:
-            pass
+    device = resolve_torch_device(args.device, context="Open-loop evaluation")
+    configure_torch_for_device(device)
     model = load_model(args.checkpoint, cfg, device)
     print(f"Open-loop evaluation device: {device}")
     core = BDSEPlannerCore(model=model, cfg=cfg)
@@ -108,6 +78,7 @@ def main() -> None:
             )
         )
     summary = aggregate_metric_results(results)
+    summary["device"] = str(device)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     import json

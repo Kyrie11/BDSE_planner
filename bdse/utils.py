@@ -197,3 +197,47 @@ def ensure_dir(path: str | Path) -> Path:
 
 def deterministic_order(keys: Iterable[object]) -> list[int]:
     return sorted(range(len(list(keys))), key=lambda i: str(list(keys)[i]))
+
+
+def resolve_torch_device(device: str | None = "auto", *, context: str = "BDSE"):
+    """Resolve a torch device string for inference/evaluation code.
+
+    ``auto`` chooses CUDA when available and CPU otherwise. Explicit CUDA
+    requests such as ``cuda`` or ``cuda:0`` are respected when possible and
+    safely fall back to CPU when the runtime PyTorch build cannot see CUDA.
+    Torch is imported lazily so non-ML utility users do not pay the import cost.
+    """
+    import torch
+
+    requested = str(device or "auto").strip().lower()
+    if requested in {"", "auto", "gpu"}:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if requested.startswith("cuda") and not torch.cuda.is_available():
+        print(f"{context}: CUDA was requested via device={device!r}, but torch.cuda.is_available() is False; falling back to CPU.")
+        return torch.device("cpu")
+    return torch.device(requested)
+
+
+def configure_torch_for_device(device) -> None:
+    """Enable safe inference-time CUDA performance knobs for the resolved device."""
+    import torch
+
+    dev = torch.device(device)
+    if dev.type != "cuda":
+        return
+    torch.backends.cudnn.benchmark = True
+    try:
+        torch.set_float32_matmul_precision("high")
+    except Exception:
+        pass
+
+
+def torch_load_any(path: str | Path, map_location="cpu"):
+    """Compatibility wrapper for PyTorch versions with/without weights_only."""
+    import torch
+
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+

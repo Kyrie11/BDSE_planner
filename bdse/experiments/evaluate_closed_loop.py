@@ -49,7 +49,7 @@ def main() -> None:
     )
     parser.add_argument("--config", type=str, default="bdse/configs/full_preprocess.yaml")
     parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--device", type=str, default="auto", help="Planner device passed to BDSEnuPlanPlanner. auto uses CUDA when available.")
     parser.add_argument("--challenge", type=str, default="closed_loop_nonreactive_agents")
     parser.add_argument("--output-dir", type=str, default="outputs/closed_loop_bdse")
     parser.add_argument("--experiment-uid", type=str, default="bdse_closed_loop")

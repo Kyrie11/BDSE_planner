@@ -13,22 +13,24 @@ from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.model.bdse_model import BDSEModel
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.selector import runtime_greedy_selector, budgeted_margin
+from bdse.utils import configure_torch_for_device, resolve_torch_device, torch_load_any
 
 
-def _torch_load_any(path: str | Path, map_location="cpu"):
-    try:
-        return torch.load(path, map_location=map_location, weights_only=False)
-    except TypeError:
-        return torch.load(path, map_location=map_location)
-
-
-def load_model(checkpoint: str, cfg):
+def load_model(checkpoint: str, cfg, device: torch.device):
+    # Deserialize on CPU for portability, then explicitly move the model to the
+    # requested inference device.  BDSEModel.predict_certificate_numpy places all
+    # runtime tensors on next(self.parameters()).device, so this is the critical
+    # step that enables CUDA for calibration.
     model = BDSEModel(cfg)
-    ckpt = _torch_load_any(checkpoint, map_location="cpu")
+    ckpt = torch_load_any(checkpoint, map_location="cpu")
     state = ckpt.get("model", ckpt)
     current = model.state_dict()
     compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
+    missing = sorted(set(current) - set(compatible))
+    if missing:
+        print(f"Loaded {len(compatible)}/{len(current)} compatible tensors; missing/new tensors include: {missing[:8]}")
     model.load_state_dict(compatible, strict=False)
+    model.to(device)
     model.eval()
     return model
 
@@ -43,10 +45,19 @@ def main() -> None:
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--delta", type=float, default=0.1, help="Allowed one-sided error rate; epsilon is the 1-delta residual quantile.")
     parser.add_argument("--output", type=str, default="outputs/calibration.json")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Calibration device. Defaults to auto, which uses CUDA when available and otherwise CPU.",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    model = load_model(args.checkpoint, cfg)
+    device = resolve_torch_device(args.device, context="Calibration")
+    configure_torch_for_device(device)
+    model = load_model(args.checkpoint, cfg, device)
+    print(f"Calibration device: {device}")
     if args.preprocessed_dir:
         dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=[args.split], max_scenarios=args.max_scenarios)
     else:
@@ -108,6 +119,7 @@ def main() -> None:
         "delta": float(args.delta),
         "pair_count": int(len(residuals)),
         "safety_pair_count": int(len(safety_residuals)),
+        "device": str(device),
         "recommendation": "Set tournament.epsilon_cal to epsilon_cal. This is a one-sided over-confidence quantile, not an absolute residual.",
     }
     path = Path(args.output)

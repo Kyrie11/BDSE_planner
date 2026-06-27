@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from bdse.config import load_config
-from bdse.utils import angle_wrap
+from bdse.utils import angle_wrap, configure_torch_for_device, resolve_torch_device, torch_load_any
 from bdse.data.cache_schema import RuntimeFeatures
 from bdse.data.nuplan_runtime_adapter import build_runtime_features_from_planner_input
 from bdse.planner.candidate_generator import generate_candidate_bank
@@ -368,24 +368,33 @@ class BDSEnuPlanPlanner:
         cfg: dict[str, Any] | None = None,
         checkpoint: str | None = None,
         config_path: str | None = None,
-        device: str = "cpu",
+        device: str = "auto",
     ):
         cfg = cfg or load_config(config_path)
+        self.device = resolve_torch_device(device, context="BDSEnuPlanPlanner")
+        configure_torch_for_device(self.device)
         if model is None and checkpoint:
-            import torch
             from bdse.model.bdse_model import BDSEModel
 
+            # Load checkpoint tensors on CPU first to avoid accidentally putting
+            # optimizer/RNG payloads from full training checkpoints on GPU.  Then
+            # move only the model module to the resolved planner device.
             model = BDSEModel(cfg)
-            try:
-                ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
-            except TypeError:
-                ckpt = torch.load(checkpoint, map_location=device)
+            ckpt = torch_load_any(checkpoint, map_location="cpu")
             state = ckpt.get("model", ckpt)
             current = model.state_dict()
             compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
+            missing = sorted(set(current) - set(compatible))
+            if missing:
+                print(f"BDSEnuPlanPlanner loaded {len(compatible)}/{len(current)} compatible tensors; missing/new tensors include: {missing[:8]}")
             model.load_state_dict(compatible, strict=False)
-            model.to(torch.device(device if device == "cpu" or torch.cuda.is_available() else "cpu"))
+            model.to(self.device)
             model.eval()
+        elif model is not None and hasattr(model, "to"):
+            model.to(self.device)
+            if hasattr(model, "eval"):
+                model.eval()
+        print(f"BDSEnuPlanPlanner device: {self.device}")
         self.core = BDSEPlannerCore(model=model, cfg=cfg)
         self._name = "BDSEPlanner"
 
