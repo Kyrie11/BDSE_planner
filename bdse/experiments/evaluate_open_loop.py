@@ -21,7 +21,27 @@ def _torch_load_any(path: str | Path, map_location="cpu"):
         return torch.load(path, map_location=map_location)
 
 
-def load_model(checkpoint: str, cfg):
+def resolve_device(device_arg: str | None) -> torch.device:
+    """Resolve the evaluation device.
+
+    Open-loop evaluation used to load the checkpoint on CPU and never moved the
+    model afterwards.  Since BDSEModel creates runtime query tensors on
+    ``next(self.parameters()).device``, moving the model is sufficient to make
+    the neural parts of certificate scoring run on GPU while keeping the
+    numpy/selector/metric parts on CPU.
+    """
+    requested = (device_arg or "auto").lower()
+    if requested == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if requested.startswith("cuda") and not torch.cuda.is_available():
+        print(f"CUDA was requested via --device={device_arg!r}, but torch.cuda.is_available() is False; falling back to CPU.")
+        return torch.device("cpu")
+    return torch.device(device_arg)
+
+
+def load_model(checkpoint: str, cfg, device: torch.device):
+    # Keep deserialization on CPU so checkpoints saved from any device are safe
+    # to load, then explicitly move the module to the requested evaluation device.
     model = BDSEModel(cfg)
     ckpt = _torch_load_any(checkpoint, map_location="cpu")
     state = ckpt.get("model", ckpt)
@@ -31,6 +51,7 @@ def load_model(checkpoint: str, cfg):
     if missing:
         print(f"Loaded {len(compatible)}/{len(current)} compatible tensors; missing/new tensors include: {missing[:8]}")
     model.load_state_dict(compatible, strict=False)
+    model.to(device)
     model.eval()
     return model
 
@@ -44,9 +65,23 @@ def main() -> None:
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--output", type=str, default="outputs/open_loop_bdse_metrics.json")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Evaluation device. Defaults to auto, which uses CUDA when available and otherwise CPU.",
+    )
     args = parser.parse_args()
     cfg = load_config(args.config)
-    model = load_model(args.checkpoint, cfg)
+    device = resolve_device(args.device)
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
+    model = load_model(args.checkpoint, cfg, device)
+    print(f"Open-loop evaluation device: {device}")
     core = BDSEPlannerCore(model=model, cfg=cfg)
     if args.preprocessed_dir:
         dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios)
