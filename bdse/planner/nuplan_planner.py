@@ -238,6 +238,8 @@ class BDSEPlannerCore:
                 runtime_flags,
                 stage_cfg,
                 pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+                candidate_trajectories=candidates.trajectories,
+                maneuver_ids=candidates.maneuver_ids,
             )
         else:
             selection = runtime_greedy_selector(
@@ -259,9 +261,17 @@ class BDSEPlannerCore:
                 bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", True)),
                 reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 1.0)),
                 pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),
+                candidate_trajectories=candidates.trajectories,
+                maneuver_ids=candidates.maneuver_ids,
+                progress_pair_count=int(sel_cfg.get("progress_pair_count", 0)),
+                maneuver_pair_count=int(sel_cfg.get("maneuver_pair_count", 0)),
             )
             sigma = selected_pair_sigma_from_action_variance(g_var, selection.selected, candidates.valid_mask)
-            tournament = run_tournament(J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg, sigma=sigma)
+            tournament = run_tournament(
+                J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg, sigma=sigma,
+                candidate_trajectories=candidates.trajectories,
+                maneuver_ids=candidates.maneuver_ids,
+            )
         return pred, selection, tournament, atom_active
 
     def _needs_fallback(self, tournament, candidates, cfg: dict[str, Any]) -> bool:

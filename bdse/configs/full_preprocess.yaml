@@ -166,10 +166,14 @@ pairs:
   eta_percentile: 20
 selector:
   mode: runtime_predicted
-  progress_pair_count: 8
-  maneuver_pair_count: 8
-  progress_rivals: 4
-  maneuver_rivals: 4
+  # Validation and Vegas diagnostics expose stop/go and rule-interaction cases.
+  # Query a wider, still deployment-available pair/rival graph so the runtime
+  # selector is evaluated against the same decisive comparisons as the planner.
+  progress_pair_count: 12
+  maneuver_pair_count: 12
+  progress_rivals: 8
+  maneuver_rivals: 12
+  runtime_pair_cap_multiplier: 3.0
   min_family_topm_slots:
     1: 4   # feasibility: red light / drivable / route / speed
     2: 6   # reachability interaction: occupancy / collision / TTC

@@ -11,8 +11,7 @@ from tqdm import tqdm
 from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.model.bdse_model import BDSEModel
-from bdse.planner.fallback import runtime_safety_flags_from_runtime
-from bdse.planner.selector import runtime_greedy_selector, budgeted_margin
+from bdse.planner.nuplan_planner import BDSEPlannerCore
 from bdse.utils import configure_torch_for_device, resolve_torch_device, torch_load_any
 
 
@@ -65,44 +64,31 @@ def main() -> None:
 
     residuals: list[float] = []
     safety_residuals: list[float] = []
+    core = BDSEPlannerCore(model=model, cfg=cfg)
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
         if sample.teacher is None or sample.pairs is None or len(sample.pairs.pairs) == 0:
             continue
-        pred = model.predict_certificate_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
-        J0, g = pred["J0"], pred["g"]
-        flags = runtime_safety_flags_from_runtime(sample.runtime, sample.candidates, cfg)
-        topm = np.asarray(pred.get("top_m_atoms", np.flatnonzero(sample.evidence_bank.active_mask)), dtype=np.int64)
-        atom_active = np.zeros((sample.evidence_bank.E,), dtype=bool)
-        atom_active[topm[(topm >= 0) & (topm < sample.evidence_bank.E)]] = True
-        atom_active &= sample.evidence_bank.active_mask
-        sel = runtime_greedy_selector(
-            J0, g, sample.evidence_bank.budget_costs(), sample.candidates.valid_mask, flags,
-            float(cfg.get("evidence", {}).get("budget", 16)),
-            L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
-            gamma_max=float(cfg.get("selector", {}).get("gamma_max_default", 100.0)),
-            eta_pred=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
-            lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
-            lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
-            atom_active_mask=atom_active,
-            predicted_atom_variance=pred.get("g_var", None),
-            beta_uncertainty=float(cfg.get("tournament", {}).get("beta_uncertainty", 0.0)),
-            epsilon_cal=float(cfg.get("tournament", {}).get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
-            lambda_info=float(cfg.get("selector", {}).get("lambda_info", 0.0)),
-            prior_atom_variance=cfg.get("selector", {}).get("unqueried_atom_variance", None),
-            family_ids=pred.get("family_ids", None),
-            family_budget_caps=pred.get("family_budget_caps", None),
-            bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", True)),
-            reverse_pair_weight=float(cfg.get("selector", {}).get("reverse_pair_weight", 1.0)),
-            pair_cap_multiplier=float(cfg.get("selector", {}).get("runtime_pair_cap_multiplier", 1.0)),
-        )
-        M_pred = budgeted_margin(J0, g, sel.selected)
-        for (a, b), valid in zip(sample.pairs.pairs, sample.pairs.valid_mask):
-            if not valid:
+        # Calibrate the same staged planner used at deployment.  This is important
+        # when runtime.use_pair_conditioned_margins=True: a factorized budgeted_margin
+        # calibration can report epsilon=0 even though the deployed pair scorer is the
+        # object that actually drives the tournament.
+        # Run one base stage so that we can access the selected margin matrix used
+        # by the tournament without fallback side effects.
+        candidates = sample.candidates
+        evidence_bank = sample.evidence_bank
+        pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, candidates, evidence_bank, cfg)
+        M_pred = np.asarray(tour.margins, dtype=np.float32)
+        pair_source = np.asarray(sel.pair_indices, dtype=np.int64).reshape(-1, 2) if np.asarray(sel.pair_indices).size else np.asarray(sample.pairs.pairs, dtype=np.int64).reshape(-1, 2)
+        if pair_source.size == 0:
+            continue
+        seen: set[tuple[int, int]] = set()
+        for a_raw, b_raw in pair_source.tolist():
+            a, b = int(a_raw), int(b_raw)
+            if (a, b) in seen or not (0 <= a < M_pred.shape[0] and 0 <= b < M_pred.shape[1]):
                 continue
+            seen.add((a, b))
             true_margin = float(sample.teacher.J_T[b] - sample.teacher.J_T[a])
             pred_margin = float(M_pred[a, b])
-            # One-sided certificate calibration: epsilon covers over-confident
-            # margins.  Underestimation is conservative and should not inflate eps.
             err = max(0.0, pred_margin - true_margin)
             residuals.append(err)
             if bool(sample.teacher.hard_violation_mask[b]) and not bool(sample.teacher.hard_violation_mask[a]):

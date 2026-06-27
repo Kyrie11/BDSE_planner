@@ -520,6 +520,10 @@ def runtime_greedy_selector(
     bidirectional_pairs: bool = True,
     reverse_pair_weight: float = 1.0,
     pair_cap_multiplier: float = 1.0,
+    candidate_trajectories: np.ndarray | None = None,
+    maneuver_ids: np.ndarray | None = None,
+    progress_pair_count: int = 0,
+    maneuver_pair_count: int = 0,
 ) -> SelectionResult:
     """Two-stage runtime selector using base/cheap pair screening only.
 
@@ -539,6 +543,10 @@ def runtime_greedy_selector(
         bidirectional_pairs=bidirectional_pairs,
         reverse_pair_weight=reverse_pair_weight,
         pair_cap_multiplier=pair_cap_multiplier,
+        candidate_trajectories=candidate_trajectories,
+        maneuver_ids=maneuver_ids,
+        progress_pair_count=int(progress_pair_count),
+        maneuver_pair_count=int(maneuver_pair_count),
     )
     E = int(predicted_atom_costs.shape[0])
     if len(pairs):

@@ -116,6 +116,8 @@ def run_tournament(
     runtime_safety_flags: np.ndarray,
     cfg: dict[str, Any],
     sigma: np.ndarray | None = None,
+    candidate_trajectories: np.ndarray | None = None,
+    maneuver_ids: np.ndarray | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -125,6 +127,10 @@ def run_tournament(
         runtime_safety_flags,
         L_infer=int(tc.get("L_infer", 16)),
         eta0=float(sc.get("eta_pred", 1.0)),
+        candidate_trajectories=candidate_trajectories,
+        maneuver_ids=maneuver_ids,
+        progress_rivals=int(sc.get("progress_rivals", 0)),
+        maneuver_rivals=int(sc.get("maneuver_rivals", 0)),
     )
     M_B = budgeted_margin(predicted_base_cost, predicted_atom_costs, selected_atoms)
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
@@ -261,6 +267,8 @@ def run_pair_conditioned_tournament(
     runtime_safety_flags: np.ndarray,
     cfg: dict[str, Any],
     pair_atom_variance: np.ndarray | None = None,
+    candidate_trajectories: np.ndarray | None = None,
+    maneuver_ids: np.ndarray | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -270,6 +278,10 @@ def run_pair_conditioned_tournament(
         runtime_safety_flags,
         L_infer=int(tc.get("L_infer", 16)),
         eta0=float(sc.get("eta_pred", 1.0)),
+        candidate_trajectories=candidate_trajectories,
+        maneuver_ids=maneuver_ids,
+        progress_rivals=int(sc.get("progress_rivals", 0)),
+        maneuver_rivals=int(sc.get("maneuver_rivals", 0)),
     )
     M_B = _pair_delta_margin_matrix(predicted_base_cost, pair_indices, pair_atom_delta, selected_atoms, valid_mask)
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))

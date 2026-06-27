@@ -426,9 +426,17 @@ def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: lis
         bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", True)),
         reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 1.0)),
         pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),
+        candidate_trajectories=s.candidates.trajectories,
+        maneuver_ids=s.candidates.maneuver_ids,
+        progress_pair_count=int(sel_cfg.get("progress_pair_count", 0)),
+        maneuver_pair_count=int(sel_cfg.get("maneuver_pair_count", 0)),
     )
     oracle_sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(cfg["evidence"]["budget"]), s.evidence_bank.active_mask)
-    tour = run_tournament(J0, g, runtime_sel.selected, s.candidates.valid_mask, flags, cfg)
+    tour = run_tournament(
+        J0, g, runtime_sel.selected, s.candidates.valid_mask, flags, cfg,
+        candidate_trajectories=s.candidates.trajectories,
+        maneuver_ids=s.candidates.maneuver_ids,
+    )
     bdse_result = compute_bdse_diagnostics(
         s.candidates,
         s.evidence_bank,
@@ -455,7 +463,11 @@ def _diagnose_one_sample(dataset: Any, i: int, cfg: dict[str, Any], budgets: lis
     hard_denom = decisive_hard if decisive_hard else hard
     for B in budgets:
         sel = oracle_greedy_selector(s.teacher.J_base, s.teacher.g_evid, s.pairs.pairs, s.pairs.margins, s.pairs.weights, s.evidence_bank.budget_costs(), float(B), s.evidence_bank.active_mask)
-        t = run_tournament(J0, g, sel.selected, s.candidates.valid_mask, flags, cfg)
+        t = run_tournament(
+            J0, g, sel.selected, s.candidates.valid_mask, flags, cfg,
+            candidate_trajectories=s.candidates.trajectories,
+            maneuver_ids=s.candidates.maneuver_ids,
+        )
         selected_set = set(sel.selected)
         budget_metrics[f"B{int(B)}_decision_sufficiency"] = float(t.action_index == s.teacher.a_star)
         budget_metrics[f"B{int(B)}_hard_recall"] = float(len(hard & selected_set) / max(len(hard), 1))
