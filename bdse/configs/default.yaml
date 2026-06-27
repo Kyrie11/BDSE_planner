@@ -342,8 +342,11 @@ training:
     uncertainty: 0.1
     full_interface_rank_aux: 0.1
     family: 0.5
-    proposal: 1.0
+    proposal: 2.0
     action: 1.0
+    full_action: 1.0
+    full_margin: 0.5
+    hard_feasibility: 0.5
     calibration: 0.0
   rank_margin: 1.0
   rank_tau: 1.0
@@ -351,6 +354,14 @@ training:
   atom_zero_weight: 0.1
   pair_action_loss_weight: 1.0
   action_conditioned_action_loss_weight: 0.25
+  full_action_tau: 10.0
+  full_margin_tau: 10.0
+  hard_feasibility_margin: 10.0
+  hard_feasibility_tau: 10.0
+  proposal_positive_weight: 4.0
+  proposal_decisive_hard_weight: 4.0
+  proposal_decisive_hard_gain_boost: 1.0
+  proposal_rank_weight: 0.5
 
 calibration:
   epsilon_cal: 0.0

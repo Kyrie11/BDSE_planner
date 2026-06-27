@@ -313,6 +313,30 @@ def sample_to_model_inputs(sample: Sample, cfg: dict[str, Any], include_teacher:
                 current = trial
                 spent += float(e_cost[idx])
                 remaining.discard(idx)
+        # Decisive-evidence auxiliary targets.  Oracle greedy labels are sparse
+        # and can miss safety/rule atoms that are important in nearby decisive
+        # pairs, especially in traffic-light/stop-line scenes.  These masks add
+        # a deployment-aligned supervision signal without using labels that are
+        # unavailable to the offline teacher: an atom is decisive when it gives
+        # positive margin support on at least one supervised pair.
+        decisive = np.zeros((Emax,), dtype=bool)
+        decisive_hard = np.zeros((Emax,), dtype=bool)
+        if n:
+            active_mask = np.zeros((Emax,), dtype=bool)
+            active_mask[: min(Emax, sample.evidence_bank.active_mask.shape[0])] = sample.evidence_bank.active_mask[:Emax]
+            hard_mask = np.zeros((Emax,), dtype=bool)
+            try:
+                hard_src = sample.evidence_bank.hard_mask()
+                hard_mask[: min(Emax, hard_src.shape[0])] = hard_src[:Emax]
+            except Exception:
+                hard_mask[:] = False
+            positive_support = atom_delta > 1e-6
+            decisive = active_mask & positive_support.any(axis=1)
+            decisive_hard = decisive & hard_mask
+            # Make decisive hard/rule atoms visible to the ranking target even if
+            # they were not chosen by the budgeted oracle trace.
+            crit[decisive_hard] = np.maximum(crit[decisive_hard], np.percentile(crit[crit > 0], 75) if np.any(crit > 0) else 1.0)
+
         # Family-level oracle target for HAB.  It aggregates the same greedy
         # marginal gains used for atom proposals into certificate families, so
         # the family gate learns which evidence family deserves budget in this
@@ -331,6 +355,8 @@ def sample_to_model_inputs(sample: Sample, cfg: dict[str, Any], include_teacher:
         if not family_active.any():
             family_active[0] = True
         arrays["oracle_selected_mask"] = oracle
+        arrays["decisive_atom_mask"] = decisive
+        arrays["decisive_hard_mask"] = decisive_hard
         arrays["proposal_target_gain"] = crit
         arrays["family_target_gain"] = family_gain
         arrays["family_target_active"] = family_active

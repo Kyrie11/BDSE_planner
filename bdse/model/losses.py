@@ -456,20 +456,39 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_rank = J0.new_tensor(0.0)
 
     target_sel = batch.get("oracle_selected_mask")
+    decisive = batch.get("decisive_atom_mask")
+    decisive_hard = batch.get("decisive_hard_mask")
     gain = batch.get("proposal_target_gain")
     if target_sel is not None:
-        bce = F.binary_cross_entropy_with_logits(out["proposal_logits"], target_sel.float(), reduction="none")
-        L_prop_bce = bce[e_mask].mean() if e_mask.sum() > 0 else J0.new_tensor(0.0)
+        target_bool = target_sel.bool()
+        if decisive is not None and bool(train_cfg.get("proposal_include_decisive_atoms", True)):
+            target_bool = target_bool | decisive.bool()
+        if decisive_hard is not None and bool(train_cfg.get("proposal_include_decisive_hard", True)):
+            target_bool = target_bool | decisive_hard.bool()
+        bce = F.binary_cross_entropy_with_logits(out["proposal_logits"], target_bool.float(), reduction="none")
+        pos_w = float(train_cfg.get("proposal_positive_weight", 4.0))
+        hard_w = float(train_cfg.get("proposal_decisive_hard_weight", 4.0))
+        weights_prop = torch.ones_like(bce)
+        weights_prop = torch.where(target_bool, weights_prop * pos_w, weights_prop)
+        if decisive_hard is not None:
+            weights_prop = torch.where(decisive_hard.bool(), weights_prop * hard_w, weights_prop)
+        mask_prop = e_mask & torch.isfinite(bce)
+        L_prop_bce = (bce[mask_prop] * weights_prop[mask_prop]).sum() / weights_prop[mask_prop].sum().clamp_min(1e-6) if mask_prop.sum() > 0 else J0.new_tensor(0.0)
     else:
         L_prop_bce = J0.new_tensor(0.0)
     if gain is not None and e_mask.sum() > 0:
-        target_dist = gain.float().masked_fill(~e_mask, 0.0)
-        target_dist = target_dist / target_dist.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        target_gain = gain.float().masked_fill(~e_mask, 0.0)
+        if decisive_hard is not None:
+            # Give safety/rule atoms nonzero listwise mass even when the greedy
+            # trace spent its budget elsewhere; this improves hard-evidence recall.
+            boost = float(train_cfg.get("proposal_decisive_hard_gain_boost", 1.0))
+            target_gain = target_gain + boost * decisive_hard.float()
+        target_dist = target_gain / target_gain.sum(dim=1, keepdim=True).clamp_min(1e-6)
         logp = F.log_softmax(out["proposal_logits"].masked_fill(~e_mask, _neg_mask_value(out["proposal_logits"])), dim=1)
         L_prop_rank = -(target_dist * logp).sum(dim=1).mean()
     else:
         L_prop_rank = J0.new_tensor(0.0)
-    L_prop = L_prop_bce + 0.25 * L_prop_rank
+    L_prop = L_prop_bce + float(train_cfg.get("proposal_rank_weight", 0.5)) * L_prop_rank
 
     # Family-listwise loss for the HAB family gate.
     fam_gain = batch.get("family_target_gain")
@@ -516,15 +535,43 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     else:
         logits_pair = None
 
+    full_pred_cost = finite_J0 + (g * e_mask[:, :, None].float()).sum(dim=1)
+    full_pred_cost = full_pred_cost.masked_fill(~valid, J0.new_tensor(1e6))
+    full_logits = -full_pred_cost / max(float(train_cfg.get("full_action_tau", 10.0)), 1e-6)
     if "teacher_J_T" in batch:
         tau_T = float(train_cfg.get("teacher_soft_target_tau", 1.0))
         teacher_cost = batch["teacher_J_T"].float().masked_fill(~valid, J0.new_tensor(1e9))
         p = torch.softmax(-teacher_cost / max(tau_T, 1e-6), dim=1)
         L_act_action = -(p * F.log_softmax(logits_action, dim=1)).sum(dim=1).mean()
         L_act_pair = -(p * F.log_softmax(logits_pair, dim=1)).sum(dim=1).mean() if logits_pair is not None else J0.new_tensor(0.0)
+        L_full_action = -(p * F.log_softmax(full_logits, dim=1)).sum(dim=1).mean()
     else:
         L_act_action = F.cross_entropy(logits_action, target_action)
         L_act_pair = F.cross_entropy(logits_pair, target_action) if logits_pair is not None else J0.new_tensor(0.0)
+        L_full_action = F.cross_entropy(full_logits, target_action)
+
+    # Dense full-interface margin distillation.  Open-loop evaluation uses J0+sum_e g_e(a),
+    # so train this deployed full-interface explicitly rather than relying only on
+    # local Huber terms whose large hard-cost targets can dominate optimization.
+    Bsz, Ksz = full_pred_cost.shape
+    tgt = target_action.clamp_min(0).clamp_max(Ksz - 1)
+    c_star = torch.gather(full_pred_cost, 1, tgt[:, None]).expand(Bsz, Ksz)
+    margin_mask = valid.clone()
+    margin_mask.scatter_(1, tgt[:, None], False)
+    L_full_margin_terms = F.softplus((c_star - full_pred_cost) / max(float(train_cfg.get("full_margin_tau", 10.0)), 1e-6))
+    L_full_margin = L_full_margin_terms[margin_mask].mean() if margin_mask.sum() > 0 else J0.new_tensor(0.0)
+
+    hard_mask = batch.get("teacher_hard_violation")
+    if hard_mask is not None:
+        hard_mask = hard_mask.bool() & valid
+        safe_mask = (~hard_mask) & valid
+        safe_cost = full_pred_cost.masked_fill(~safe_mask, J0.new_tensor(1e6)).min(dim=1, keepdim=True).values
+        hard_cost = full_pred_cost.masked_fill(~hard_mask, J0.new_tensor(1e6))
+        feasible_pair = safe_mask.any(dim=1, keepdim=True) & hard_mask
+        L_hard_feas = F.softplus((safe_cost - hard_cost + float(train_cfg.get("hard_feasibility_margin", 10.0))) / max(float(train_cfg.get("hard_feasibility_tau", 10.0)), 1e-6))
+        L_hard_feas = L_hard_feas[feasible_pair].mean() if feasible_pair.sum() > 0 else J0.new_tensor(0.0)
+    else:
+        L_hard_feas = J0.new_tensor(0.0)
     pair_act_weight = float(train_cfg.get("pair_action_loss_weight", 1.0 if logits_pair is not None else 0.0))
     action_act_weight = float(train_cfg.get("action_conditioned_action_loss_weight", 0.25 if logits_pair is not None else 1.0))
     norm_act = max(pair_act_weight + action_act_weight, 1e-6)
@@ -548,6 +595,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("family", 0.5)) * L_fam
         + float(lw.get("proposal", lw.get("selection", 1.0))) * L_prop
         + float(lw.get("action", 1.0)) * L_act
+        + float(lw.get("full_action", 1.0)) * L_full_action
+        + float(lw.get("full_margin", 0.5)) * L_full_margin
+        + float(lw.get("hard_feasibility", 0.5)) * L_hard_feas
         + float(lw.get("calibration", 0.0)) * L_cal
     )
     return {
@@ -564,5 +614,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_act": L_act,
         "L_act_pair": L_act_pair if 'L_act_pair' in locals() else J0.new_tensor(0.0),
         "L_act_action": L_act_action if 'L_act_action' in locals() else J0.new_tensor(0.0),
+        "L_full_action": L_full_action if 'L_full_action' in locals() else J0.new_tensor(0.0),
+        "L_full_margin": L_full_margin if 'L_full_margin' in locals() else J0.new_tensor(0.0),
+        "L_hard_feas": L_hard_feas if 'L_hard_feas' in locals() else J0.new_tensor(0.0),
         "L_cal": L_cal,
     }

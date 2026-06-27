@@ -568,6 +568,7 @@ def main() -> None:
     parser.add_argument("--val-every-n-epochs", type=int, default=1, help="Run validation every N epochs. Set 0 to disable validation even when --val-split is provided.")
     parser.add_argument("--val-mode", type=str, default="open_loop", choices=["loss", "open_loop", "both"], help="Validation signal. open_loop computes BDSE decision diagnostics; both also reports val loss.")
     parser.add_argument("--val-strict", action="store_true", help="Raise validation exceptions instead of counting failed validation samples.")
+    parser.add_argument("--log-file", type=str, default=None, help="Optional JSONL file for per-epoch train/validation metrics. Defaults to <output_stem>.train_log.jsonl.")
     args = parser.parse_args()
     cfg = load_config(args.config)
     cfg.setdefault("training", {})
@@ -704,6 +705,10 @@ def main() -> None:
     start_epoch, best_metric, best_epoch, _ = _load_checkpoint_if_requested(
         args=args, model=model, optimizer=opt, scaler=scaler, device=device, is_main=is_main
     )
+    log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
+    if is_main and start_epoch == 0:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text("", encoding="utf-8")
     total_epochs = int(cfg["training"]["epochs"])
     for epoch in range(start_epoch, total_epochs):
         cfg["training"]["current_epoch"] = int(epoch)
@@ -770,6 +775,9 @@ def main() -> None:
             epoch_metrics.update(val_metrics)
         if is_main:
             print(epoch_metrics, flush=True)
+            log_row = {"epoch": int(epoch), **{str(k): float(v) for k, v in epoch_metrics.items()}}
+            with log_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(log_row, sort_keys=True) + "\n")
         best_metric, best_epoch = _save_training_checkpoints(
             args=args,
             model=model,
