@@ -43,7 +43,12 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
         # such as simulation_metric/default_metrics and metric_aggregator/*.
         "hydra.searchpath=[pkg://nuplan.planning.script.config.common,pkg://nuplan.planning.script.experiments,pkg://bdse.nuplan_config]",
         "planner=bdse_planner",
-        f"simulation={args.challenge}",
+        # In some nuPlan-devkit/Hydra combinations, default_simulation.yaml is
+        # already the root config and does not list a `simulation` defaults
+        # group. Using `simulation=...` then fails with:
+        #   Could not override 'simulation'. No match in the defaults list.
+        # Appending the challenge-specific config is the compatible form.
+        f"+simulation={args.challenge}",
         f"output_dir={args.output_dir}",
         f"experiment_uid={args.experiment_uid}",
     ]

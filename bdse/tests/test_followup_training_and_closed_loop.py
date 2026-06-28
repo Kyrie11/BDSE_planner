@@ -82,3 +82,32 @@ def test_closed_loop_runner_does_not_use_invalid_splitter_null_retry():
 
     source = inspect.getsource(evaluate_closed_loop._run_nuplan_command)
     assert "splitter=null" not in source
+
+
+def test_closed_loop_command_appends_simulation_group_for_current_nuplan(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator="closed_loop_nonreactive_agents_weighted_average",
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [])
+    assert "+simulation=closed_loop_nonreactive_agents" in cmd
+    assert "simulation=closed_loop_nonreactive_agents" not in cmd
+    assert "metric_aggregator=closed_loop_nonreactive_agents_weighted_average" in cmd
