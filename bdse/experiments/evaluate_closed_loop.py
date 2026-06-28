@@ -52,13 +52,20 @@ def _hydra_list(values: list[str]) -> str:
 
 
 def _db_load_paths_from_root(root: str | Path) -> list[str]:
-    """Return nuPlan-compatible db load paths for a local root.
+    """Return nuPlan-compatible DB load paths for a local root.
 
-    nuPlan's directory loader only scans the immediate children of a directory
-    for ``*.db`` files.  BDSE split roots are often laid out as
-    ``root/split_or_city/*.db``.  For those nested layouts, pass the concrete
-    subdirectories that directly contain DB files as ``scenario_builder.db_files``
-    instead of passing the top-level root as ``scenario_builder.data_root``.
+    nuPlan's ``discover_log_dbs`` can load a single ``.db`` file, a directory
+    whose *immediate* children are ``*.db`` files, or a list of such files /
+    directories. It does not recursively scan arbitrary split roots. BDSE
+    validation caches are commonly laid out as::
+
+        val_root/2021.06.07.11.59.52_veh-35/*.db
+        val_root/2021.06.08.19.16.23_veh-26/*.db
+
+    In that layout, passing ``val_root`` as ``scenario_builder.data_root``
+    yields ``No log files found``. This helper rewrites the top-level root to a
+    Hydra ``scenario_builder.db_files=[child_dir_1,child_dir_2,...]`` override,
+    where each returned directory directly contains at least one ``.db`` file.
     """
     path = Path(root).expanduser()
     if path.suffix == ".db":
@@ -66,12 +73,44 @@ def _db_load_paths_from_root(root: str | Path) -> list[str]:
     if not path.is_dir():
         return []
 
-    direct_dbs = sorted(path.glob("*.db"), key=lambda p: str(p))
-    if direct_dbs:
+    # Fast path: this directory itself is a valid nuPlan DB load directory.
+    if any(path.glob("*.db")):
         return [str(path)]
 
+    # Common BDSE split layout: val/<log_name>/*.db. Prefer direct children so
+    # the generated command remains readable and deterministic.
+    direct_child_db_dirs = sorted(
+        [child for child in path.iterdir() if child.is_dir() and any(child.glob("*.db"))],
+        key=lambda p: str(p),
+    )
+    if direct_child_db_dirs:
+        return [str(p) for p in direct_child_db_dirs]
+
+    # Fallback for one more unexpected nesting level. Return unique DB parent
+    # directories; each is directly consumable by nuPlan.
     db_parent_dirs = sorted({p.parent for p in path.rglob("*.db")}, key=lambda p: str(p))
     return [str(p) for p in db_parent_dirs]
+
+
+def _expand_db_load_paths(paths: list[str] | tuple[str, ...]) -> list[str]:
+    """Expand user-provided DB files/roots to nuPlan-compatible load paths."""
+    expanded: list[str] = []
+    for item in paths:
+        item_path = Path(item).expanduser()
+        if item_path.exists():
+            discovered = _db_load_paths_from_root(item_path)
+            expanded.extend(discovered if discovered else [str(item_path)])
+        else:
+            expanded.append(str(item_path))
+
+    # Preserve order while deduplicating.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in expanded:
+        if item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique
 
 
 def _rewrite_local_db_root_overrides(overrides: list[str]) -> list[str]:
@@ -158,14 +197,21 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
     # after ``--`` still take precedence.
     if getattr(args, "nuplan_db_files", None):
         if not _has_override(final_overrides, "scenario_builder.db_files"):
-            final_overrides.insert(0, f"scenario_builder.db_files={_hydra_list(args.nuplan_db_files)}")
+            db_load_paths = _expand_db_load_paths(args.nuplan_db_files)
+            final_overrides.insert(0, f"scenario_builder.db_files={_hydra_list(db_load_paths)}")
     elif getattr(args, "nuplan_db_root", None):
         if not _has_override(final_overrides, "scenario_builder.data_root") and not _has_override(final_overrides, "scenario_builder.db_files"):
-            db_load_paths = _db_load_paths_from_root(args.nuplan_db_root)
+            root_path = Path(args.nuplan_db_root).expanduser()
+            db_load_paths = _db_load_paths_from_root(root_path)
             if db_load_paths:
                 final_overrides.insert(0, f"scenario_builder.db_files={_hydra_list(db_load_paths)}")
+            elif root_path.exists():
+                raise FileNotFoundError(
+                    f"No .db files found under --nuplan-db-root={root_path}. "
+                    "Closed-loop simulation needs nuPlan log DB files, not only tensor/cache artifacts."
+                )
             else:
-                final_overrides.insert(0, f"scenario_builder.data_root={str(Path(args.nuplan_db_root).expanduser())}")
+                final_overrides.insert(0, f"scenario_builder.data_root={str(root_path)}")
 
     # If a raw override such as scenario_builder.data_root=... is provided, make
     # it robust for nested split/city cache layouts before handing it to nuPlan.
