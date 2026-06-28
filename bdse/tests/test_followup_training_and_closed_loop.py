@@ -64,3 +64,10 @@ def test_closed_loop_command_can_pass_nuplan_roots(tmp_path: Path):
     assert "NUPLAN_EXP_ROOT=/data/exp" in env
     assert "HYDRA_FULL_ERROR=1" in env
     assert "~splitter" not in cmd
+
+def test_nuplan_splitter_compat_config_is_packaged():
+    from importlib.resources import files
+
+    cfg_path = files("bdse.nuplan_config").joinpath("splitter", "nuplan.yaml")
+    assert cfg_path.is_file()
+    assert "null" in cfg_path.read_text()
