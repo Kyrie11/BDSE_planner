@@ -308,13 +308,13 @@ def _validation_bdse_score(metrics: dict[str, float]) -> float:
     full_match = finite("val_full_interface_action_match", 0.0)
     margin_err = max(0.0, finite("val_preserved_margin_error", 1e6))
     return float(
-        100.0 * match
-        - np.log1p(regret)
-        + 2.0 * suff
-        + 1.0 * hard
-        + 1.0 * budget_full
-        + 0.5 * full_match
-        - 0.1 * np.log1p(margin_err)
+        200.0 * match
+        + 80.0 * full_match
+        + 10.0 * suff
+        + 10.0 * hard
+        + 5.0 * budget_full
+        - 5.0 * np.log1p(regret / 1000.0)
+        - 0.5 * np.log1p(margin_err / 1000.0)
     )
 
 

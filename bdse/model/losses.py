@@ -115,6 +115,19 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             enabled=bool(s_cfg.get("hab_enabled", True)),
             min_family_slots=s_cfg.get("min_family_topm_slots", None),
         )
+        # Mirror the hybrid selector used at deployment: hard/rule atoms that
+        # support supervised margins must remain queryable even when proposal
+        # logits are still immature.  This is not dense leakage into the final
+        # certificate; it only expands the Top-M candidate pool before the same
+        # budgeted greedy selector runs.
+        if bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
+            hard_train = batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx]
+            forced = np.flatnonzero(hard_train)
+            if forced.size:
+                forced_cap = int(s_cfg.get("max_forced_hard_topm", max(1, M // 2)))
+                forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(logits[bidx, i]), int(i)))[:forced_cap], dtype=np.int64)
+                non_forced = [int(i) for i in np.asarray(topm, dtype=np.int64).reshape(-1).tolist() if int(i) not in set(forced.tolist())]
+                topm = np.asarray((forced.tolist() + non_forced)[:M], dtype=np.int64)
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True
         atom_active &= active[bidx]
@@ -238,6 +251,19 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             enabled=bool(s_cfg.get("hab_enabled", True)),
             min_family_slots=s_cfg.get("min_family_topm_slots", None),
         )
+        # Mirror the hybrid selector used at deployment: hard/rule atoms that
+        # support supervised margins must remain queryable even when proposal
+        # logits are still immature.  This is not dense leakage into the final
+        # certificate; it only expands the Top-M candidate pool before the same
+        # budgeted greedy selector runs.
+        if bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
+            hard_train = batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx]
+            forced = np.flatnonzero(hard_train)
+            if forced.size:
+                forced_cap = int(s_cfg.get("max_forced_hard_topm", max(1, M // 2)))
+                forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(logits[bidx, i]), int(i)))[:forced_cap], dtype=np.int64)
+                non_forced = [int(i) for i in np.asarray(topm, dtype=np.int64).reshape(-1).tolist() if int(i) not in set(forced.tolist())]
+                topm = np.asarray((forced.tolist() + non_forced)[:M], dtype=np.int64)
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True
         atom_active &= active[bidx]
@@ -364,6 +390,33 @@ def _weighted_mean(loss: torch.Tensor, weights: torch.Tensor, mask: torch.Tensor
     return (loss * w).sum() / w.sum().clamp_min(1e-6)
 
 
+def _valid_row_scale(values: torch.Tensor, valid: torch.Tensor, min_scale: float = 1.0) -> torch.Tensor:
+    """Per-sample robust scale for costs/margins with invalid entries masked out."""
+    mask = valid.bool() & torch.isfinite(values)
+    count = mask.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+    safe = torch.where(mask, values, torch.zeros_like(values))
+    mean = safe.sum(dim=1, keepdim=True) / count
+    var = (torch.where(mask, values - mean, torch.zeros_like(values)).pow(2).sum(dim=1, keepdim=True) / count).clamp_min(0.0)
+    scale = torch.sqrt(var).clamp_min(float(min_scale))
+    return scale.detach()
+
+
+def _negative_cost_logits(cost: torch.Tensor, valid: torch.Tensor, min_scale: float = 1.0) -> torch.Tensor:
+    """Convert arbitrary-scale costs to stable CE logits without changing argmin order."""
+    finite_cost = torch.where(torch.isfinite(cost), cost, torch.zeros_like(cost))
+    scale = _valid_row_scale(finite_cost, valid, min_scale=min_scale)
+    center = torch.where(valid.bool(), finite_cost, torch.zeros_like(finite_cost)).sum(dim=1, keepdim=True) / valid.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+    logits = -(finite_cost - center.detach()) / scale
+    return logits.masked_fill(~valid.bool(), _neg_mask_value(logits))
+
+
+def _pair_margin_scale(pair_margins: torch.Tensor, pair_mask: torch.Tensor, default: float = 100.0) -> torch.Tensor:
+    vals = pair_margins[pair_mask].detach().abs()
+    if vals.numel() == 0:
+        return pair_margins.new_tensor(float(default))
+    return vals.median().clamp_min(float(default))
+
+
 def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     # Losses include large teacher costs and masking sentinels.  Compute them in
     # float32 even when model forward uses CUDA AMP; otherwise fp16 masks such as
@@ -448,10 +501,20 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
 
     J_a_pair, J_b_pair = pair_gather(finite_J0, pairs)
     M_hat_E = (J_b_pair - J_a_pair) + pred_atom_delta.sum(dim=1)
+    # Pair margins have scene-dependent magnitudes.  A fixed tau=1 makes the
+    # rank loss explode numerically while contributing weak, unstable gradients
+    # relative to the deployed decision objective.  Normalize by the supervised
+    # margin scale and optionally regress the normalized margin value.
     tau_rank = float(train_cfg.get("rank_tau", train_cfg.get("rank_margin", 1.0)))
     if pair_mask.sum() > 0:
-        rank_terms = F.softplus(-M_hat_E[pair_mask] / max(tau_rank, 1e-6))
-        L_rank = (pair_weights[pair_mask] * rank_terms).sum() / pair_weights[pair_mask].sum().clamp_min(1e-6)
+        margin_scale_cfg = float(train_cfg.get("pair_margin_scale", 0.0) or 0.0)
+        margin_scale = J0.new_tensor(margin_scale_cfg) if margin_scale_cfg > 0 else _pair_margin_scale(batch["pair_margins"].float(), pair_mask, default=float(train_cfg.get("pair_margin_min_scale", 100.0)))
+        rank_terms = F.softplus(-M_hat_E[pair_mask] / (margin_scale * max(tau_rank, 1e-6)))
+        L_rank_cls = (pair_weights[pair_mask] * rank_terms).sum() / pair_weights[pair_mask].sum().clamp_min(1e-6)
+        target_margin = batch["pair_margins"].float()
+        reg_terms = F.huber_loss(M_hat_E[pair_mask] / margin_scale, target_margin[pair_mask] / margin_scale, delta=float(train_cfg.get("pair_margin_reg_delta", 1.0)), reduction="none")
+        L_rank_reg = (pair_weights[pair_mask] * reg_terms).sum() / pair_weights[pair_mask].sum().clamp_min(1e-6)
+        L_rank = L_rank_cls + float(train_cfg.get("pair_margin_reg_weight", 1.0)) * L_rank_reg
     else:
         L_rank = J0.new_tensor(0.0)
 
@@ -537,11 +600,13 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
 
     full_pred_cost = finite_J0 + (g * e_mask[:, :, None].float()).sum(dim=1)
     full_pred_cost = full_pred_cost.masked_fill(~valid, J0.new_tensor(1e6))
-    full_logits = -full_pred_cost / max(float(train_cfg.get("full_action_tau", 10.0)), 1e-6)
-    if "teacher_J_T" in batch:
+    full_logits = _negative_cost_logits(full_pred_cost, valid, min_scale=float(train_cfg.get("full_action_min_scale", 1.0)))
+    hard_action_targets = bool(train_cfg.get("hard_action_targets", True))
+    if "teacher_J_T" in batch and not hard_action_targets:
         tau_T = float(train_cfg.get("teacher_soft_target_tau", 1.0))
         teacher_cost = batch["teacher_J_T"].float().masked_fill(~valid, J0.new_tensor(1e9))
-        p = torch.softmax(-teacher_cost / max(tau_T, 1e-6), dim=1)
+        teacher_logits = _negative_cost_logits(teacher_cost, valid, min_scale=float(train_cfg.get("teacher_action_min_scale", 1.0))) / max(tau_T, 1e-6)
+        p = torch.softmax(teacher_logits, dim=1)
         L_act_action = -(p * F.log_softmax(logits_action, dim=1)).sum(dim=1).mean()
         L_act_pair = -(p * F.log_softmax(logits_pair, dim=1)).sum(dim=1).mean() if logits_pair is not None else J0.new_tensor(0.0)
         L_full_action = -(p * F.log_softmax(full_logits, dim=1)).sum(dim=1).mean()
@@ -550,15 +615,18 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_act_pair = F.cross_entropy(logits_pair, target_action) if logits_pair is not None else J0.new_tensor(0.0)
         L_full_action = F.cross_entropy(full_logits, target_action)
 
-    # Dense full-interface margin distillation.  Open-loop evaluation uses J0+sum_e g_e(a),
-    # so train this deployed full-interface explicitly rather than relying only on
-    # local Huber terms whose large hard-cost targets can dominate optimization.
+    # Dense full-interface margin distillation.  Use a per-scene scale so this
+    # term optimizes ordering rather than absolute cost units.
     Bsz, Ksz = full_pred_cost.shape
     tgt = target_action.clamp_min(0).clamp_max(Ksz - 1)
     c_star = torch.gather(full_pred_cost, 1, tgt[:, None]).expand(Bsz, Ksz)
     margin_mask = valid.clone()
     margin_mask.scatter_(1, tgt[:, None], False)
-    L_full_margin_terms = F.softplus((c_star - full_pred_cost) / max(float(train_cfg.get("full_margin_tau", 10.0)), 1e-6))
+    if "teacher_J_T" in batch:
+        full_scale = _valid_row_scale(batch["teacher_J_T"].float().masked_fill(~valid, 0.0), valid, min_scale=float(train_cfg.get("full_margin_min_scale", 100.0)))
+    else:
+        full_scale = _valid_row_scale(full_pred_cost, valid, min_scale=float(train_cfg.get("full_margin_min_scale", 100.0)))
+    L_full_margin_terms = F.softplus((c_star - full_pred_cost) / (full_scale * max(float(train_cfg.get("full_margin_tau", 1.0)), 1e-6)))
     L_full_margin = L_full_margin_terms[margin_mask].mean() if margin_mask.sum() > 0 else J0.new_tensor(0.0)
 
     hard_mask = batch.get("teacher_hard_violation")
@@ -568,7 +636,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         safe_cost = full_pred_cost.masked_fill(~safe_mask, J0.new_tensor(1e6)).min(dim=1, keepdim=True).values
         hard_cost = full_pred_cost.masked_fill(~hard_mask, J0.new_tensor(1e6))
         feasible_pair = safe_mask.any(dim=1, keepdim=True) & hard_mask
-        L_hard_feas = F.softplus((safe_cost - hard_cost + float(train_cfg.get("hard_feasibility_margin", 10.0))) / max(float(train_cfg.get("hard_feasibility_tau", 10.0)), 1e-6))
+        hard_scale = _valid_row_scale(batch["teacher_J_T"].float().masked_fill(~valid, 0.0), valid, min_scale=float(train_cfg.get("hard_feasibility_min_scale", 100.0))) if "teacher_J_T" in batch else _valid_row_scale(full_pred_cost, valid, min_scale=float(train_cfg.get("hard_feasibility_min_scale", 100.0)))
+        L_hard_feas = F.softplus((safe_cost - hard_cost + float(train_cfg.get("hard_feasibility_margin", 10.0))) / (hard_scale * max(float(train_cfg.get("hard_feasibility_tau", 1.0)), 1e-6)))
         L_hard_feas = L_hard_feas[feasible_pair].mean() if feasible_pair.sum() > 0 else J0.new_tensor(0.0)
     else:
         L_hard_feas = J0.new_tensor(0.0)

@@ -153,6 +153,20 @@ class BDSEPlannerCore:
             enabled=bool(cfg.get("selector", {}).get("hab_enabled", True)),
             min_family_slots=cfg.get("selector", {}).get("min_family_topm_slots", None),
         )
+        if bool(cfg.get("selector", {}).get("force_hard_topm", True)):
+            try:
+                hard = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E] & active
+            except Exception:
+                hard = np.zeros((evidence_bank.E,), dtype=bool)
+            forced = np.flatnonzero(hard)
+            if forced.size:
+                forced_cap = int(cfg.get("selector", {}).get("max_forced_hard_topm", max(1, M // 2)))
+                forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(proposal_logits[int(i)]), int(i)))[:forced_cap], dtype=np.int64)
+                forced_set = set(forced.tolist())
+                non_forced = [int(i) for i in np.asarray(topm, dtype=np.int64).reshape(-1).tolist() if int(i) not in forced_set]
+                topm = np.asarray((forced.tolist() + non_forced)[:M], dtype=np.int64)
+                hab_diag = dict(hab_diag)
+                hab_diag["forced_hard_topm"] = int(forced.size)
         rival_sets = build_rival_sets_from_base(
             J0,
             candidates.valid_mask,

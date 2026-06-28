@@ -354,14 +354,21 @@ training:
   atom_zero_weight: 0.1
   pair_action_loss_weight: 1.0
   action_conditioned_action_loss_weight: 0.25
-  full_action_tau: 10.0
-  full_margin_tau: 10.0
+  hard_action_targets: true
+  pair_margin_scale: 0.0
+  pair_margin_min_scale: 100.0
+  pair_margin_reg_weight: 1.0
+  pair_margin_reg_delta: 1.0
+  full_action_min_scale: 1.0
+  full_margin_tau: 1.0
+  full_margin_min_scale: 100.0
   hard_feasibility_margin: 10.0
-  hard_feasibility_tau: 10.0
-  proposal_positive_weight: 4.0
-  proposal_decisive_hard_weight: 4.0
-  proposal_decisive_hard_gain_boost: 1.0
-  proposal_rank_weight: 0.5
+  hard_feasibility_tau: 1.0
+  hard_feasibility_min_scale: 100.0
+  proposal_positive_weight: 6.0
+  proposal_decisive_hard_weight: 8.0
+  proposal_decisive_hard_gain_boost: 2.0
+  proposal_rank_weight: 1.0
 
 calibration:
   epsilon_cal: 0.0

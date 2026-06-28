@@ -186,15 +186,29 @@ calibration:
 
 training:
   loss_weights:
-    proposal: 2.0
-    full_action: 1.0
-    full_margin: 0.5
-    hard_feasibility: 0.5
-  proposal_positive_weight: 4.0
-  proposal_decisive_hard_weight: 4.0
-  proposal_decisive_hard_gain_boost: 1.0
-  proposal_rank_weight: 0.5
-  full_action_tau: 10.0
-  full_margin_tau: 10.0
+    base: 0.2
+    pair: 0.25
+    residual: 0.1
+    atom_cost: 0.05
+    uncertainty: 0.01
+    full_interface_rank_aux: 3.0
+    proposal: 4.0
+    action: 5.0
+    full_action: 5.0
+    full_margin: 3.0
+    hard_feasibility: 2.0
+  hard_action_targets: true
+  pair_margin_scale: 0.0
+  pair_margin_min_scale: 100.0
+  pair_margin_reg_weight: 1.0
+  pair_margin_reg_delta: 1.0
+  full_action_min_scale: 1.0
+  full_margin_tau: 1.0
+  full_margin_min_scale: 100.0
   hard_feasibility_margin: 10.0
-  hard_feasibility_tau: 10.0
+  hard_feasibility_tau: 1.0
+  hard_feasibility_min_scale: 100.0
+  proposal_positive_weight: 6.0
+  proposal_decisive_hard_weight: 8.0
+  proposal_decisive_hard_gain_boost: 2.0
+  proposal_rank_weight: 1.0
