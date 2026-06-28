@@ -196,28 +196,162 @@ def _xy_array_from_geometry(obj: Any) -> np.ndarray:
     return np.zeros((0, 2), dtype=np.float32)
 
 
-def _object_baseline_polylines(obj: Any) -> list[np.ndarray]:
-    out: list[np.ndarray] = []
-    for attr in ("baseline_path", "path"):
-        val = getattr(obj, attr, None)
-        if val is not None:
-            arr = _xy_array_from_geometry(val)
-            if len(arr) >= 2:
-                out.append(arr)
-    for attr in ("interior_edges", "incoming_edges", "outgoing_edges"):
-        edges = getattr(obj, attr, None)
-        if edges is None:
-            continue
+def _safe_getattr(obj: Any, attr: str, default: Any = None) -> Any:
+    """Read potentially lazy nuPlan map attributes without crashing runtime feature construction."""
+    try:
+        return getattr(obj, attr, default)
+    except Exception:
+        return default
+
+
+def _map_object_id(obj: Any) -> str:
+    for attr in ("id", "token", "fid"):
+        val = _safe_getattr(obj, attr, None)
+        if val not in (None, ""):
+            return str(val)
+    return f"pyobj:{id(obj)}"
+
+
+def _map_edge_roadblock_id(edge: Any) -> str:
+    getter = _safe_getattr(edge, "get_roadblock_id", None)
+    if callable(getter):
         try:
-            iterator = list(edges)
-        except TypeError:
-            iterator = []
-        for edge in iterator:
-            out.extend(_object_baseline_polylines(edge))
-    arr = _xy_array_from_geometry(obj)
+            rid = getter()
+            if rid not in (None, ""):
+                return str(rid)
+        except Exception:
+            pass
+    parent = _safe_getattr(edge, "parent", None)
+    if parent is not None:
+        pid = _map_object_id(parent)
+        if not pid.startswith("pyobj:"):
+            return pid
+    return _map_object_id(edge)
+
+
+def _safe_iter_map_objects(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return []
+    try:
+        return list(value)
+    except Exception:
+        return []
+
+
+def _edge_baseline_polyline(edge: Any) -> np.ndarray:
+    for attr in ("baseline_path", "path"):
+        val = _safe_getattr(edge, attr, None)
+        if val is None:
+            continue
+        arr = _xy_array_from_geometry(val)
+        if len(arr) >= 2:
+            return np.asarray(arr, dtype=np.float32).reshape(-1, 2)
+    arr = _xy_array_from_geometry(edge)
     if len(arr) >= 2:
-        out.append(arr)
+        return np.asarray(arr, dtype=np.float32).reshape(-1, 2)
+    return np.zeros((0, 2), dtype=np.float32)
+
+
+def _object_interior_edges(obj: Any) -> list[Any]:
+    """Return only container interior lane edges, not graph-neighbor edges.
+
+    ``incoming_edges`` and ``outgoing_edges`` are nuPlan lane-graph links. They
+    are intentionally excluded here because the road/lane graph is cyclic; a
+    recursive traversal through those attributes can loop indefinitely.
+    """
+    edges = _safe_iter_map_objects(_safe_getattr(obj, "interior_edges", None))
+    return [edge for edge in edges if edge is not None]
+
+
+def _object_baseline_polylines(obj: Any) -> list[np.ndarray]:
+    """Extract baseline polylines from a nuPlan map object without graph recursion."""
+    out: list[np.ndarray] = []
+    direct = _edge_baseline_polyline(obj)
+    if len(direct) >= 2:
+        out.append(direct)
+    for edge in _object_interior_edges(obj):
+        arr = _edge_baseline_polyline(edge)
+        if len(arr) >= 2:
+            out.append(arr)
     return out
+
+
+def _nearest_polyline_distance(polyline: np.ndarray, point_xy: np.ndarray) -> float:
+    pts = np.asarray(polyline, dtype=np.float32).reshape(-1, 2)
+    if len(pts) == 0:
+        return float("inf")
+    return float(np.min(np.linalg.norm(pts - point_xy.reshape(1, 2), axis=1)))
+
+
+def _edge_start_distance(edge: Any, point_xy: np.ndarray) -> float:
+    arr = _edge_baseline_polyline(edge)
+    if len(arr) < 2:
+        return float("inf")
+    return float(np.linalg.norm(arr[0] - point_xy.reshape(2)))
+
+
+def _select_initial_route_edge(edges: list[Any], current_state: np.ndarray | None) -> Any | None:
+    if not edges:
+        return None
+    if current_state is None:
+        return edges[0]
+    ego_xy = np.asarray(current_state[:2], dtype=np.float32).reshape(2)
+    return min(edges, key=lambda e: _nearest_polyline_distance(_edge_baseline_polyline(e), ego_xy))
+
+
+def _choose_next_route_edge(prev_edge: Any | None, candidates: list[Any], prev_endpoint: np.ndarray | None) -> Any | None:
+    if not candidates:
+        return None
+    if prev_edge is not None:
+        outgoing_ids = {_map_object_id(edge) for edge in _safe_iter_map_objects(_safe_getattr(prev_edge, "outgoing_edges", None))}
+        connected = [edge for edge in candidates if _map_object_id(edge) in outgoing_ids]
+        if connected:
+            candidates = connected
+    if prev_endpoint is None:
+        return candidates[0]
+    return min(candidates, key=lambda e: _edge_start_distance(e, prev_endpoint))
+
+
+def _route_edges_by_roadblock(initialization: Any) -> list[tuple[str, list[Any]]]:
+    route_ids = list(_safe_getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
+    map_api = _safe_getattr(initialization, "map_api", None) if initialization is not None else None
+    grouped: list[tuple[str, list[Any]]] = []
+    for rid in route_ids:
+        obj = _get_map_object_any_layer(map_api, str(rid))
+        if obj is None:
+            continue
+        edges = _object_interior_edges(obj)
+        if not edges:
+            edges = [obj]
+        # Drop objects that do not expose a usable baseline.  This avoids passing
+        # lazy map objects downstream where a baseline lookup can fail on a single
+        # malformed row and stop the whole simulation.
+        usable = [edge for edge in edges if len(_edge_baseline_polyline(edge)) >= 2]
+        if usable:
+            grouped.append((str(rid), usable))
+    return grouped
+
+
+def _stitch_route_edge_sequence(edge_groups: list[tuple[str, list[Any]]], current_state: np.ndarray | None) -> list[np.ndarray]:
+    pieces: list[np.ndarray] = []
+    prev_edge: Any | None = None
+    prev_endpoint: np.ndarray | None = None
+    for _rid, candidates in edge_groups:
+        if prev_edge is None:
+            edge = _select_initial_route_edge(candidates, current_state)
+        else:
+            edge = _choose_next_route_edge(prev_edge, candidates, prev_endpoint)
+        if edge is None:
+            continue
+        arr = _edge_baseline_polyline(edge)
+        if len(arr) < 2:
+            continue
+        pieces.append(arr)
+        prev_edge = edge
+        prev_endpoint = arr[-1]
+    return pieces
 
 
 def _to_local_xy(points_xy: np.ndarray, current_state: np.ndarray | None) -> np.ndarray:
@@ -233,6 +367,9 @@ def _to_local_xy(points_xy: np.ndarray, current_state: np.ndarray | None) -> np.
 def _get_map_object_any_layer(map_api: Any, object_id: str) -> Any | None:
     if map_api is None or not object_id:
         return None
+    # Route IDs supplied by nuPlan initialization are roadblock or
+    # roadblock-connector IDs.  Keep lane layers as a fallback for tests/custom
+    # data, but try container layers first to preserve route semantics.
     for name in ("ROADBLOCK", "ROADBLOCK_CONNECTOR", "LANE", "LANE_CONNECTOR"):
         layer = _semantic_map_layer(name)
         if layer is None:
@@ -247,29 +384,18 @@ def _get_map_object_any_layer(map_api: Any, object_id: str) -> Any | None:
 
 
 def _route_from_map_api(initialization: Any, current_state: np.ndarray | None, cfg: dict[str, Any]) -> np.ndarray:
-    route_ids = list(getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
-    map_api = getattr(initialization, "map_api", None) if initialization is not None else None
-    pieces: list[np.ndarray] = []
-    for rid in route_ids:
-        obj = _get_map_object_any_layer(map_api, str(rid))
-        if obj is None:
-            continue
-        baselines = _object_baseline_polylines(obj)
-        if not baselines:
-            continue
-        # Prefer the first baseline exposed by nuPlan.  This is not a route search;
-        # it simply makes closed-loop runtime use real map geometry rather than a
-        # synthetic straight route.
-        pieces.append(np.asarray(baselines[0], dtype=np.float32).reshape(-1, 2))
+    edge_groups = _route_edges_by_roadblock(initialization)
+    pieces = _stitch_route_edge_sequence(edge_groups, current_state)
     if pieces:
-        route_global = []
+        route_global: list[np.ndarray] = []
         for pts in pieces:
+            pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
             if len(pts) < 2:
                 continue
             if route_global and np.linalg.norm(route_global[-1] - pts[0]) < 1e-3:
-                route_global.extend(pts[1:])
+                route_global.extend(list(pts[1:]))
             else:
-                route_global.extend(pts)
+                route_global.extend(list(pts))
         if len(route_global) >= 2:
             route_local = _to_local_xy(np.asarray(route_global, dtype=np.float32), current_state)
             max_pts = int(cfg.get("runtime", {}).get("max_route_points", 512))
@@ -278,7 +404,7 @@ def _route_from_map_api(initialization: Any, current_state: np.ndarray | None, c
 
 
 def _stop_lines_from_map_api(initialization: Any, current_state: np.ndarray | None, traffic_lights: list[dict[str, Any]], cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    map_api = getattr(initialization, "map_api", None) if initialization is not None else None
+    map_api = _safe_getattr(initialization, "map_api", None) if initialization is not None else None
     if map_api is None or current_state is None:
         return []
     layer = _semantic_map_layer("STOP_LINE")
@@ -324,8 +450,8 @@ def _map_features_from_initialization(initialization: Any, cfg: dict[str, Any], 
     # to the deployed planner; otherwise closed-loop would plan on a synthetic
     # straight route with no stop-line geometry.
     traffic_lights = list(traffic_lights or [])
-    route_ids = list(getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
-    goal = getattr(initialization, "mission_goal", None) if initialization is not None else None
+    route_ids = list(_safe_getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
+    goal = _safe_getattr(initialization, "mission_goal", None) if initialization is not None else None
     route = _route_from_map_api(initialization, current_state, cfg)
     stop_lines = _stop_lines_from_map_api(initialization, current_state, traffic_lights, cfg)
     return {
@@ -385,7 +511,7 @@ def build_runtime_features_from_planner_input(current_input: Any, initialization
     )
     traffic = _traffic_lights_from_input(current_input)
     map_features = _map_features_from_initialization(initialization, cfg, current_state=current, traffic_lights=traffic)
-    route_ids = list(getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
+    route_ids = list(_safe_getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
     goal_obj = getattr(initialization, "mission_goal", None) if initialization is not None else None
     goal_arr = _state_to_array(goal_obj)[:4] if goal_obj is not None else None
     runtime = build_runtime_features_from_arrays(

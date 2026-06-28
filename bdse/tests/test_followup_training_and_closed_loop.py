@@ -409,3 +409,62 @@ def test_closed_loop_normalizes_singular_challenge_name(tmp_path: Path):
     _env, cmd = build_nuplan_command(args, [])
     assert "+simulation=closed_loop_nonreactive_agents" in cmd
     assert "+simulation=closed_loop_nonreactive_agent" not in cmd
+
+
+def test_closed_loop_output_dir_is_challenge_scoped_for_metric_aggregation(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="outputs/closed_loop/bdse_debug_one",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator="closed_loop_nonreactive_agents_weighted_average",
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [])
+    assert "output_dir=outputs/closed_loop/bdse_debug_one/closed_loop_nonreactive_agents" in cmd
+
+
+def test_closed_loop_output_dir_is_not_double_scoped(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="outputs/closed_loop/closed_loop_nonreactive_agents/eid",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator="closed_loop_nonreactive_agents_weighted_average",
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [])
+    assert "output_dir=outputs/closed_loop/closed_loop_nonreactive_agents/eid" in cmd
+    assert "closed_loop_nonreactive_agents/eid/closed_loop_nonreactive_agents" not in " ".join(cmd)

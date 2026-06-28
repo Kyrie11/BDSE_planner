@@ -94,6 +94,21 @@ def _canonical_challenge_name(challenge: str) -> str:
     return canonical
 
 
+def _challenge_scoped_output_dir(output_dir: str, challenge: str) -> str:
+    """Ensure nuPlan metric aggregation can find challenge-specific metric files.
+
+    nuPlan's metric aggregator filters parquet paths by ``metric_aggregator.challenge``.
+    If users override ``output_dir`` to a generic path, the simulation can succeed
+    but aggregation can report ``No metric files found`` because the challenge name
+    is absent from every metric-file path.  Appending the challenge here preserves
+    user control over the root directory while keeping official aggregation semantics.
+    """
+    out = Path(output_dir).expanduser()
+    if challenge in str(out):
+        return str(out)
+    return str(out / challenge)
+
+
 def _replace_simple_override(item: str, key: str, value: str) -> str:
     for prefix in ("++", "+", ""):
         marker = f"{prefix}{key}="
@@ -285,6 +300,8 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
     if args.hydra_full_error:
         env_overrides.append("HYDRA_FULL_ERROR=1")
 
+    challenge = _canonical_challenge_name(args.challenge)
+    output_dir = _challenge_scoped_output_dir(args.output_dir, challenge)
     base = [
         sys.executable,
         "-m",
@@ -300,8 +317,8 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
         # group. Using `simulation=...` then fails with:
         #   Could not override 'simulation'. No match in the defaults list.
         # Appending the challenge-specific config is the compatible form.
-        f"+simulation={_canonical_challenge_name(args.challenge)}",
-        f"output_dir={args.output_dir}",
+        f"+simulation={challenge}",
+        f"output_dir={output_dir}",
         f"experiment_uid={args.experiment_uid}",
     ]
     if args.scenario_builder:
@@ -411,7 +428,7 @@ def main() -> None:
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
     if args.config and not Path(args.config).exists():
         raise FileNotFoundError(f"BDSE config not found: {args.config}")
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    Path(_challenge_scoped_output_dir(args.output_dir, _canonical_challenge_name(args.challenge))).mkdir(parents=True, exist_ok=True)
     overrides = _split_overrides(args.overrides)
     env_assignments, cmd = build_nuplan_command(args, overrides)
     print(" ".join(env_assignments + cmd))
