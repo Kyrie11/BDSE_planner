@@ -468,17 +468,71 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         )
 
     def _to_nuplan_trajectory(self, trajectory: np.ndarray, current_input: Any):
+        """Convert a BDSE ego-local candidate rollout to nuPlan's trajectory type.
+
+        The preferred path delegates pose-to-state conversion to nuPlan's ML
+        planner utility. That utility applies the same relative-to-absolute pose
+        transform and velocity/acceleration estimation used by nuPlan learned
+        planners, which avoids frame mistakes in closed-loop comfort metrics.
+        A manual fallback remains for tests and older/local nuPlan builds.
+        """
+        traj_arr = np.asarray(trajectory, dtype=np.float32)
+        if traj_arr.ndim != 2 or traj_arr.shape[1] < 5 or len(traj_arr) == 0:
+            raise ValueError(f"Expected BDSE trajectory with shape [T,5+], got {traj_arr.shape}")
         try:
-            state_mod = __import__("nuplan.common.actor_state.ego_state", fromlist=["EgoState"])
             traj_mod = __import__("nuplan.planning.simulation.trajectory.interpolated_trajectory", fromlist=["InterpolatedTrajectory"])
+            InterpolatedTrajectory = getattr(traj_mod, "InterpolatedTrajectory")
+            history = getattr(current_input, "history", None)
+            ego_states = getattr(history, "ego_states", None)
+            if ego_states is not None and len(ego_states) >= 2:
+                try:
+                    transform_mod = __import__(
+                        "nuplan.planning.simulation.planner.ml_planner.transform_utils",
+                        fromlist=["transform_predictions_to_states"],
+                    )
+                    transform_predictions_to_states = getattr(transform_mod, "transform_predictions_to_states")
+                    times = np.asarray(traj_arr[:, 4], dtype=np.float32)
+                    if len(times) > 1:
+                        diffs = np.diff(times)
+                        diffs = diffs[np.isfinite(diffs) & (diffs > 1e-4)]
+                        step_interval = float(np.median(diffs)) if diffs.size else float(times[0])
+                    else:
+                        step_interval = float(times[0]) if float(times[0]) > 1e-4 else 0.1
+                    future_horizon = float(times[-1])
+                    expected_steps = int(round(future_horizon / max(step_interval, 1e-4)))
+                    poses = traj_arr[:, :3]
+                    # nuPlan's helper constructs fixed timesteps from horizon and
+                    # interval.  If a non-uniform trajectory slipped through, trim or
+                    # pad poses to the fixed-timestep count rather than producing an
+                    # inconsistent state/time list.
+                    if expected_steps > 0 and expected_steps != len(poses):
+                        if expected_steps < len(poses):
+                            poses = poses[:expected_steps]
+                        else:
+                            pad = np.repeat(poses[-1:], expected_steps - len(poses), axis=0)
+                            poses = np.concatenate([poses, pad], axis=0)
+                    states = transform_predictions_to_states(
+                        predicted_poses=poses.astype(np.float32),
+                        ego_history=ego_states,
+                        future_horizon=future_horizon,
+                        step_interval=step_interval,
+                        include_ego_state=True,
+                    )
+                    return InterpolatedTrajectory(states)
+                except Exception:
+                    # Fall through to the explicit implementation below. This keeps
+                    # the planner usable with older devkit revisions whose helper
+                    # signature differs while still surfacing conversion failures at
+                    # the final boundary if manual conversion also fails.
+                    pass
+
+            state_mod = __import__("nuplan.common.actor_state.ego_state", fromlist=["EgoState"])
             time_mod = __import__("nuplan.common.actor_state.state_representation", fromlist=["TimePoint", "StateSE2", "StateVector2D"])
             EgoState = getattr(state_mod, "EgoState")
-            InterpolatedTrajectory = getattr(traj_mod, "InterpolatedTrajectory")
             TimePoint = getattr(time_mod, "TimePoint")
             StateSE2 = getattr(time_mod, "StateSE2")
             StateVector2D = getattr(time_mod, "StateVector2D")
-            ego_state = getattr(current_input, "history", None)
-            last = ego_state.ego_states[-1] if ego_state is not None and getattr(ego_state, "ego_states", None) else None
+            last = ego_states[-1] if ego_states is not None and len(ego_states) else None
             start_us = int(getattr(getattr(last, "time_point", None), "time_us", 0))
             rear = getattr(last, "rear_axle", last)
             ox = float(getattr(rear, "x", 0.0))
@@ -489,49 +543,46 @@ class BDSEnuPlanPlanner(AbstractPlanner):
             states = []
             if last is not None:
                 states.append(last)
-            traj_arr = np.asarray(trajectory, dtype=np.float32)
-            # Estimate local longitudinal velocity and acceleration for nuPlan state dynamics.
-            local_vx = traj_arr[:, 3] * np.cos(traj_arr[:, 2])
-            local_vy = traj_arr[:, 3] * np.sin(traj_arr[:, 2])
-            t = traj_arr[:, 4]
-            dt = np.maximum(np.gradient(t), 1e-3) if len(t) > 1 else np.asarray([0.1], dtype=np.float32)
-            local_ax = np.gradient(local_vx) / dt if len(t) > 1 else np.asarray([0.0], dtype=np.float32)
-            local_ay = np.gradient(local_vy) / dt if len(t) > 1 else np.asarray([0.0], dtype=np.float32)
+            times = np.asarray(traj_arr[:, 4], dtype=np.float32)
+            speeds = np.asarray(traj_arr[:, 3], dtype=np.float32)
+            if len(times) > 1:
+                accel_lon = np.gradient(speeds, times, edge_order=1).astype(np.float32)
+            else:
+                accel_lon = np.asarray([0.0], dtype=np.float32)
+            vehicle_params = getattr(getattr(self, "initialization", None), "vehicle_parameters", None)
+            if vehicle_params is None and last is not None:
+                vehicle_params = getattr(last, "car_footprint", None)
+                vehicle_params = getattr(vehicle_params, "vehicle_parameters", None)
+            if vehicle_params is None:
+                try:
+                    vp_mod = __import__("nuplan.common.actor_state.vehicle_parameters", fromlist=["get_pacifica_parameters"])
+                    vehicle_params = getattr(vp_mod, "get_pacifica_parameters")()
+                except Exception:
+                    vehicle_params = None
             for k, row in enumerate(traj_arr):
-                # Candidate trajectories are represented in the ego-local frame. nuPlan
-                # expects global SE2 states in closed-loop simulation.
+                # Candidate trajectories are represented in the ego-local frame.
+                # nuPlan expects global SE2 poses, but DynamicCarState rear-axle
+                # velocity/acceleration are expressed in the ego-body frame.
                 lx, ly = float(row[0]), float(row[1])
                 gx = ox + c * lx - s * ly
                 gy = oy + s * lx + c * ly
                 gyaw = float(angle_wrap(oyaw + float(row[2])))
                 t_us = start_us + int(float(row[4]) * 1e6)
-                if hasattr(EgoState, "build_from_rear_axle"):
-                    lvx, lvy = float(local_vx[k]), float(local_vy[k])
-                    lax, lay = float(local_ax[k]), float(local_ay[k])
-                    gvx = c * lvx - s * lvy
-                    gvy = s * lvx + c * lvy
-                    gax = c * lax - s * lay
-                    gay = s * lax + c * lay
-                    vehicle_params = getattr(getattr(self, "initialization", None), "vehicle_parameters", None)
-                    if vehicle_params is None and last is not None:
-                        vehicle_params = getattr(last, "car_footprint", None)
-                        vehicle_params = getattr(vehicle_params, "vehicle_parameters", None)
-                    state = EgoState.build_from_rear_axle(
-                        rear_axle_pose=StateSE2(gx, gy, gyaw),
-                        rear_axle_velocity_2d=StateVector2D(gvx, gvy),
-                        rear_axle_acceleration_2d=StateVector2D(gax, gay),
-                        tire_steering_angle=0.0,
-                        time_point=TimePoint(t_us),
-                        vehicle_parameters=vehicle_params,
-                    )
-                else:
-                    state = np.asarray([gx, gy, gyaw, row[3], row[4]], dtype=np.float32)
+                state = EgoState.build_from_rear_axle(
+                    rear_axle_pose=StateSE2(gx, gy, gyaw),
+                    rear_axle_velocity_2d=StateVector2D(float(max(speeds[k], 0.0)), 0.0),
+                    rear_axle_acceleration_2d=StateVector2D(float(accel_lon[k]), 0.0),
+                    tire_steering_angle=0.0,
+                    time_point=TimePoint(t_us),
+                    vehicle_parameters=vehicle_params,
+                    is_in_auto_mode=True,
+                )
                 states.append(state)
             return InterpolatedTrajectory(states)
         except ImportError:
-            # Unit-test / non-nuPlan environments may not install nuPlan.  In a real
-            # nuPlan simulation this branch is not taken; callers can still inspect the
-            # local-frame trajectory array.
+            # Unit-test / non-nuPlan environments may not install nuPlan. In a real
+            # nuPlan simulation this branch is not taken; callers can still inspect
+            # the local-frame trajectory array.
             return trajectory
         except Exception as exc:
             raise RuntimeError(f"Failed to convert BDSE local trajectory to nuPlan InterpolatedTrajectory: {exc}") from exc

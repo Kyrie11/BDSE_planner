@@ -348,3 +348,64 @@ def test_closed_loop_nuplan_db_files_expands_roots_too(tmp_path: Path):
     _env, cmd = build_nuplan_command(args, [])
     assert f"scenario_builder.db_files=[{log_a}]" in cmd
     assert "scenario_filter.log_names=null" in cmd
+
+
+def test_closed_loop_normalizes_singular_simulation_metric_override(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator="closed_loop_nonreactive_agent_weighted_average",
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, ["simulation_metric=simulation_closed_loop_nonreactive_agent"])
+    assert "simulation_metric=simulation_closed_loop_nonreactive_agents" in cmd
+    assert "simulation_metric=simulation_closed_loop_nonreactive_agent" not in cmd
+    assert "metric_aggregator=closed_loop_nonreactive_agents_weighted_average" in cmd
+
+
+def test_closed_loop_normalizes_singular_challenge_name(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agent",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator=None,
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [])
+    assert "+simulation=closed_loop_nonreactive_agents" in cmd
+    assert "+simulation=closed_loop_nonreactive_agent" not in cmd

@@ -6,6 +6,133 @@ import subprocess
 import sys
 from pathlib import Path
 
+_CANONICAL_NUPLAN_CHALLENGES: dict[str, dict[str, str]] = {
+    "closed_loop_nonreactive_agents": {
+        "simulation": "closed_loop_nonreactive_agents",
+        "simulation_metric": "simulation_closed_loop_nonreactive_agents",
+        "metric_aggregator": "closed_loop_nonreactive_agents_weighted_average",
+    },
+    "closed_loop_reactive_agents": {
+        "simulation": "closed_loop_reactive_agents",
+        "simulation_metric": "simulation_closed_loop_reactive_agents",
+        "metric_aggregator": "closed_loop_reactive_agents_weighted_average",
+    },
+    "open_loop_boxes": {
+        "simulation": "open_loop_boxes",
+        "simulation_metric": "simulation_open_loop_boxes",
+        "metric_aggregator": "open_loop_boxes_weighted_average",
+    },
+}
+
+_NUPLAN_OVERRIDE_ALIASES: dict[str, dict[str, str]] = {
+    "simulation": {
+        "closed_loop_nonreactive_agent": "closed_loop_nonreactive_agents",
+        "closed_loop_nonreactive_agents": "closed_loop_nonreactive_agents",
+        "simulation_closed_loop_nonreactive_agent": "closed_loop_nonreactive_agents",
+        "simulation_closed_loop_nonreactive_agents": "closed_loop_nonreactive_agents",
+        "closed_loop_reactive_agent": "closed_loop_reactive_agents",
+        "closed_loop_reactive_agents": "closed_loop_reactive_agents",
+        "simulation_closed_loop_reactive_agent": "closed_loop_reactive_agents",
+        "simulation_closed_loop_reactive_agents": "closed_loop_reactive_agents",
+        "open_loop_box": "open_loop_boxes",
+        "open_loop_boxes": "open_loop_boxes",
+        "simulation_open_loop_box": "open_loop_boxes",
+        "simulation_open_loop_boxes": "open_loop_boxes",
+    },
+    "simulation_metric": {
+        "closed_loop_nonreactive_agent": "simulation_closed_loop_nonreactive_agents",
+        "closed_loop_nonreactive_agents": "simulation_closed_loop_nonreactive_agents",
+        "simulation_closed_loop_nonreactive_agent": "simulation_closed_loop_nonreactive_agents",
+        "simulation_closed_loop_nonreactive_agents": "simulation_closed_loop_nonreactive_agents",
+        "closed_loop_reactive_agent": "simulation_closed_loop_reactive_agents",
+        "closed_loop_reactive_agents": "simulation_closed_loop_reactive_agents",
+        "simulation_closed_loop_reactive_agent": "simulation_closed_loop_reactive_agents",
+        "simulation_closed_loop_reactive_agents": "simulation_closed_loop_reactive_agents",
+        "open_loop_box": "simulation_open_loop_boxes",
+        "open_loop_boxes": "simulation_open_loop_boxes",
+        "simulation_open_loop_box": "simulation_open_loop_boxes",
+        "simulation_open_loop_boxes": "simulation_open_loop_boxes",
+    },
+    "metric_aggregator": {
+        "closed_loop_nonreactive_agent_weighted_average": "closed_loop_nonreactive_agents_weighted_average",
+        "closed_loop_nonreactive_agents_weighted_average": "closed_loop_nonreactive_agents_weighted_average",
+        "closed_loop_nonreactive_agent": "closed_loop_nonreactive_agents_weighted_average",
+        "closed_loop_nonreactive_agents": "closed_loop_nonreactive_agents_weighted_average",
+        "closed_loop_reactive_agent_weighted_average": "closed_loop_reactive_agents_weighted_average",
+        "closed_loop_reactive_agents_weighted_average": "closed_loop_reactive_agents_weighted_average",
+        "closed_loop_reactive_agent": "closed_loop_reactive_agents_weighted_average",
+        "closed_loop_reactive_agents": "closed_loop_reactive_agents_weighted_average",
+        "open_loop_box_weighted_average": "open_loop_boxes_weighted_average",
+        "open_loop_boxes_weighted_average": "open_loop_boxes_weighted_average",
+        "open_loop_box": "open_loop_boxes_weighted_average",
+        "open_loop_boxes": "open_loop_boxes_weighted_average",
+    },
+}
+
+
+def _strip_hydra_wrapping(value: str) -> str:
+    value = str(value).strip()
+    while len(value) >= 2 and ((value[0] == value[-1] == '"') or (value[0] == value[-1] == "'")):
+        value = value[1:-1].strip()
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if "," not in inner:
+            value = inner.strip()
+    return value
+
+
+def _canonical_override_value(group: str, value: str) -> str:
+    raw = _strip_hydra_wrapping(value)
+    return _NUPLAN_OVERRIDE_ALIASES.get(group, {}).get(raw, raw)
+
+
+def _canonical_challenge_name(challenge: str) -> str:
+    canonical = _canonical_override_value("simulation", challenge)
+    if canonical not in _CANONICAL_NUPLAN_CHALLENGES:
+        valid = ", ".join(sorted(_CANONICAL_NUPLAN_CHALLENGES))
+        raise ValueError(f"Unknown nuPlan challenge '{challenge}'. Expected one of: {valid}")
+    return canonical
+
+
+def _replace_simple_override(item: str, key: str, value: str) -> str:
+    for prefix in ("++", "+", ""):
+        marker = f"{prefix}{key}="
+        if item.startswith(marker):
+            return f"{prefix}{key}={value}"
+    marker = f"/{key}="
+    if item.startswith(marker):
+        return f"/{key}={value}"
+    return item
+
+
+def _normalize_known_nuplan_overrides(overrides: list[str]) -> list[str]:
+    """Normalize fragile nuPlan Hydra group names before launching Hydra.
+
+    Several nuPlan groups use plural names (for example
+    ``simulation_closed_loop_nonreactive_agents``).  A one-character typo such as
+    ``..._agent`` fails during Hydra composition before BDSE is instantiated.
+    This helper keeps user-supplied choices but canonicalizes known aliases and
+    singular/plural variants for the official simulation, simulation_metric, and
+    metric_aggregator groups.
+    """
+    normalized: list[str] = []
+    for item in overrides:
+        new_item = item
+        matched = False
+        for key in ("simulation", "simulation_metric", "metric_aggregator"):
+            for prefix in ("++", "+", "", "/"):
+                marker = f"{prefix}{key}="
+                if item.startswith(marker):
+                    value = item[len(marker):]
+                    canonical = _canonical_override_value(key, value)
+                    new_item = _replace_simple_override(item, key, canonical)
+                    matched = True
+                    break
+            if matched:
+                break
+        normalized.append(new_item)
+    return normalized
+
 
 def _split_overrides(raw: list[str]) -> list[str]:
     if raw and raw[0] == "--":
@@ -173,7 +300,7 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
         # group. Using `simulation=...` then fails with:
         #   Could not override 'simulation'. No match in the defaults list.
         # Appending the challenge-specific config is the compatible form.
-        f"+simulation={args.challenge}",
+        f"+simulation={_canonical_challenge_name(args.challenge)}",
         f"output_dir={args.output_dir}",
         f"experiment_uid={args.experiment_uid}",
     ]
@@ -184,9 +311,9 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
     if args.worker:
         base.append(f"worker={args.worker}")
     if args.metric_aggregator:
-        base.append(f"metric_aggregator={args.metric_aggregator}")
+        base.append(f"metric_aggregator={_canonical_override_value('metric_aggregator', args.metric_aggregator)}")
 
-    final_overrides = list(overrides)
+    final_overrides = _normalize_known_nuplan_overrides(list(overrides))
 
     # nuPlan's official scenario_builder=nuplan config derives its default DB
     # path from NUPLAN_DATA_ROOT as ``${NUPLAN_DATA_ROOT}/nuplan-v1.1/trainval``.
