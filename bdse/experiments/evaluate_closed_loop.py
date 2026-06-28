@@ -37,7 +37,11 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
         sys.executable,
         "-m",
         args.nuplan_module,
-        "hydra.searchpath=[pkg://bdse.nuplan_config]",
+        # Keep nuPlan's official shared config search paths and append BDSE's
+        # planner config package. Passing only bdse.nuplan_config here overrides
+        # the default Hydra searchpath and makes nuPlan unable to resolve groups
+        # such as simulation_metric/default_metrics and metric_aggregator/*.
+        "hydra.searchpath=[pkg://nuplan.planning.script.config.common,pkg://nuplan.planning.script.experiments,pkg://bdse.nuplan_config]",
         "planner=bdse_planner",
         f"simulation={args.challenge}",
         f"output_dir={args.output_dir}",
@@ -53,27 +57,20 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
         base.append(f"metric_aggregator={args.metric_aggregator}")
 
     final_overrides = list(overrides)
-    # Some nuPlan-devkit installs ship a default_simulation.yaml that references
-    # splitter/nuplan while the cloned config tree does not include that group.
-    # Removing the splitter default is safe for small sequential smoke runs and
-    # avoids the Hydra composition error before simulation starts.
+    # Keep nuPlan's splitter default by default. The official config resolves it
+    # to a no-op YAML; if a local devkit checkout is incomplete, BDSE also ships
+    # a no-op splitter/nuplan.yaml as a compatibility fallback.
     if args.disable_splitter and not any(x.startswith("splitter=") or x == "~splitter" for x in final_overrides):
         final_overrides.insert(0, "~splitter")
     return env_overrides, base + final_overrides
 
 
 def _run_nuplan_command(cmd: list[str], env: dict[str, str], *, retry_without_splitter: bool) -> None:
-    try:
-        subprocess.run(cmd, check=True, env=env)
-    except subprocess.CalledProcessError as exc:
-        # Fallback for Hydra versions that do not support defaults-list deletion
-        # with '~splitter'.  This keeps the original error visible if both fail.
-        if retry_without_splitter and "~splitter" in cmd:
-            alt = [x for x in cmd if x != "~splitter"] + ["splitter=null"]
-            print("[bdse] nuPlan command failed with '~splitter'; retrying with splitter=null", flush=True)
-            subprocess.run(alt, check=True, env=env)
-            return
-        raise exc
+    # Do not retry by assigning a YAML null to a defaults-list group: Hydra
+    # treats group overrides as string/list selections. With nuPlan's common
+    # config searchpath restored, splitter/nuplan resolves to the official no-op
+    # YAML, so no fallback is needed.
+    subprocess.run(cmd, check=True, env=env)
 
 
 def main() -> None:
@@ -98,8 +95,8 @@ def main() -> None:
     parser.add_argument("--nuplan-map-root", type=str, default=None, help="Optional NUPLAN_MAPS_ROOT passed to nuPlan.")
     parser.add_argument("--nuplan-exp-root", type=str, default=None, help="Optional NUPLAN_EXP_ROOT passed to nuPlan.")
     parser.add_argument("--hydra-full-error", action="store_true", help="Set HYDRA_FULL_ERROR=1 for full Hydra stack traces.")
-    parser.add_argument("--disable-splitter", dest="disable_splitter", action="store_true", default=True, help="Remove nuPlan's splitter default; fixes missing splitter/nuplan configs in many local devkit clones.")
-    parser.add_argument("--keep-splitter", dest="disable_splitter", action="store_false", help="Do not remove nuPlan's splitter default.")
+    parser.add_argument("--disable-splitter", dest="disable_splitter", action="store_true", default=False, help="Remove nuPlan's splitter default if your local Hydra setup explicitly requires it.")
+    parser.add_argument("--keep-splitter", dest="disable_splitter", action="store_false", help="Keep nuPlan's splitter default. This is now the default.")
     parser.add_argument("--dry-run", action="store_true", help="Print the nuPlan command without executing it.")
     parser.add_argument("overrides", nargs=argparse.REMAINDER)
     args = parser.parse_args()

@@ -6,7 +6,7 @@ from pathlib import Path
 from bdse.experiments.evaluate_closed_loop import build_nuplan_command
 
 
-def test_closed_loop_command_removes_missing_splitter_by_default(tmp_path: Path):
+def test_closed_loop_command_keeps_splitter_by_default(tmp_path: Path):
     ckpt = tmp_path / "m.pt"
     cfg = tmp_path / "c.yaml"
     ckpt.write_bytes(b"x")
@@ -27,12 +27,16 @@ def test_closed_loop_command_removes_missing_splitter_by_default(tmp_path: Path)
         scenario_filter=None,
         worker="sequential",
         metric_aggregator=None,
-        disable_splitter=True,
+        disable_splitter=False,
     )
     env, cmd = build_nuplan_command(args, ["scenario_filter.limit_total_scenarios=2"])
     assert any(x.startswith("BDSE_CHECKPOINT=") for x in env)
-    assert "~splitter" in cmd
+    assert "~splitter" not in cmd
     assert "planner=bdse_planner" in cmd
+    searchpath = next(x for x in cmd if x.startswith("hydra.searchpath="))
+    assert "pkg://nuplan.planning.script.config.common" in searchpath
+    assert "pkg://nuplan.planning.script.experiments" in searchpath
+    assert "pkg://bdse.nuplan_config" in searchpath
 
 
 def test_closed_loop_command_can_pass_nuplan_roots(tmp_path: Path):
@@ -71,3 +75,10 @@ def test_nuplan_splitter_compat_config_is_packaged():
     cfg_path = files("bdse.nuplan_config").joinpath("splitter", "nuplan.yaml")
     assert cfg_path.is_file()
     assert "null" in cfg_path.read_text()
+
+def test_closed_loop_runner_does_not_use_invalid_splitter_null_retry():
+    import inspect
+    from bdse.experiments import evaluate_closed_loop
+
+    source = inspect.getsource(evaluate_closed_loop._run_nuplan_command)
+    assert "splitter=null" not in source
