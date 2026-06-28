@@ -18,6 +18,8 @@ def test_closed_loop_command_keeps_splitter_by_default(tmp_path: Path):
         nuplan_data_root=None,
         nuplan_map_root=None,
         nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=None,
         hydra_full_error=False,
         nuplan_module="nuplan.planning.script.run_simulation",
         challenge="closed_loop_nonreactive_agents",
@@ -51,6 +53,8 @@ def test_closed_loop_command_can_pass_nuplan_roots(tmp_path: Path):
         nuplan_data_root="/data/nuplan",
         nuplan_map_root="/data/maps",
         nuplan_exp_root="/data/exp",
+        nuplan_db_root=None,
+        nuplan_db_files=None,
         hydra_full_error=True,
         nuplan_module="nuplan.planning.script.run_simulation",
         challenge="closed_loop_nonreactive_agents",
@@ -96,6 +100,8 @@ def test_closed_loop_command_appends_simulation_group_for_current_nuplan(tmp_pat
         nuplan_data_root=None,
         nuplan_map_root=None,
         nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=None,
         hydra_full_error=False,
         nuplan_module="nuplan.planning.script.run_simulation",
         challenge="closed_loop_nonreactive_agents",
@@ -111,3 +117,61 @@ def test_closed_loop_command_appends_simulation_group_for_current_nuplan(tmp_pat
     assert "+simulation=closed_loop_nonreactive_agents" in cmd
     assert "simulation=closed_loop_nonreactive_agents" not in cmd
     assert "metric_aggregator=closed_loop_nonreactive_agents_weighted_average" in cmd
+
+
+def test_closed_loop_command_can_override_nuplan_db_root(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root="/data0/senzeyu2/dataset/nuplan",
+        nuplan_map_root="/data0/senzeyu2/dataset/nuplan/maps",
+        nuplan_exp_root="/data0/senzeyu2/dataset/nuplan/exp",
+        nuplan_db_root="/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/val",
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator=None,
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [])
+    assert "scenario_builder.data_root=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/val" in cmd
+
+
+def test_closed_loop_command_can_override_multiple_db_dirs(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=["/cache/train_boston", "/cache/train_pittsburgh"],
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator=None,
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [])
+    assert "scenario_builder.db_files=[/cache/train_boston,/cache/train_pittsburgh]" in cmd

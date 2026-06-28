@@ -18,6 +18,24 @@ def _append_if_missing(items: list[str], value: str) -> None:
         items.append(value)
 
 
+def _has_override(overrides: list[str], key: str) -> bool:
+    """Return True when a Hydra override already sets or deletes ``key``.
+
+    Examples matched for key="scenario_builder.data_root":
+    - scenario_builder.data_root=/path
+    - +scenario_builder.data_root=/path
+    - ++scenario_builder.data_root=/path
+    - ~scenario_builder.data_root
+    """
+    prefixes = (f"{key}=", f"+{key}=", f"++{key}=", f"~{key}")
+    return any(item.startswith(prefixes) for item in overrides)
+
+
+def _hydra_list(values: list[str]) -> str:
+    """Format a simple Hydra list override for absolute DB file/dir paths."""
+    return "[" + ",".join(str(Path(v).expanduser()) for v in values) + "]"
+
+
 def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tuple[list[str], list[str]]:
     env_overrides = [
         f"BDSE_CHECKPOINT={str(Path(args.checkpoint).resolve())}",
@@ -62,6 +80,21 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
         base.append(f"metric_aggregator={args.metric_aggregator}")
 
     final_overrides = list(overrides)
+
+    # nuPlan's official scenario_builder=nuplan config derives its default DB
+    # path from NUPLAN_DATA_ROOT as ``${NUPLAN_DATA_ROOT}/nuplan-v1.1/trainval``.
+    # BDSE preprocessing commonly writes nuPlan-compatible DB caches elsewhere
+    # (for example data/cache/bdse_val_v2/val).  Forward an explicit DB root or
+    # DB file/dir list to ScenarioBuilder so closed-loop evaluation does not fall
+    # back to a missing raw trainval directory.  User-supplied raw Hydra overrides
+    # after ``--`` still take precedence.
+    if getattr(args, "nuplan_db_files", None):
+        if not _has_override(final_overrides, "scenario_builder.db_files"):
+            final_overrides.insert(0, f"scenario_builder.db_files={_hydra_list(args.nuplan_db_files)}")
+    elif getattr(args, "nuplan_db_root", None):
+        if not _has_override(final_overrides, "scenario_builder.data_root") and not _has_override(final_overrides, "scenario_builder.db_files"):
+            final_overrides.insert(0, f"scenario_builder.data_root={str(Path(args.nuplan_db_root).expanduser())}")
+
     # Keep nuPlan's splitter default by default. The official config resolves it
     # to a no-op YAML; if a local devkit checkout is incomplete, BDSE also ships
     # a no-op splitter/nuplan.yaml as a compatibility fallback.
@@ -99,6 +132,24 @@ def main() -> None:
     parser.add_argument("--nuplan-data-root", type=str, default=None, help="Optional NUPLAN_DATA_ROOT passed to nuPlan.")
     parser.add_argument("--nuplan-map-root", type=str, default=None, help="Optional NUPLAN_MAPS_ROOT passed to nuPlan.")
     parser.add_argument("--nuplan-exp-root", type=str, default=None, help="Optional NUPLAN_EXP_ROOT passed to nuPlan.")
+    parser.add_argument(
+        "--nuplan-db-root",
+        type=str,
+        default=None,
+        help=(
+            "Directory or .db file passed to nuPlan ScenarioBuilder as scenario_builder.data_root. "
+            "Use this for closed-loop validation caches such as .../data/cache/bdse_val_v2/val."
+        ),
+    )
+    parser.add_argument(
+        "--nuplan-db-files",
+        nargs="+",
+        default=None,
+        help=(
+            "One or more nuPlan .db files or directories passed as scenario_builder.db_files. "
+            "Use this when the split is spread over multiple folders such as train_boston/train_pittsburgh."
+        ),
+    )
     parser.add_argument("--hydra-full-error", action="store_true", help="Set HYDRA_FULL_ERROR=1 for full Hydra stack traces.")
     parser.add_argument("--disable-splitter", dest="disable_splitter", action="store_true", default=False, help="Remove nuPlan's splitter default if your local Hydra setup explicitly requires it.")
     parser.add_argument("--keep-splitter", dest="disable_splitter", action="store_false", help="Keep nuPlan's splitter default. This is now the default.")
