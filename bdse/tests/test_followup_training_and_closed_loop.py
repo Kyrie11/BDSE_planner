@@ -175,3 +175,104 @@ def test_closed_loop_command_can_override_multiple_db_dirs(tmp_path: Path):
     )
     _env, cmd = build_nuplan_command(args, [])
     assert "scenario_builder.db_files=[/cache/train_boston,/cache/train_pittsburgh]" in cmd
+
+
+def test_closed_loop_raw_data_root_override_rewrites_nested_db_dirs(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    root = tmp_path / "bdse_val_v2" / "val"
+    nested = root / "city_bucket"
+    nested.mkdir(parents=True)
+    (nested / "log_a.db").write_bytes(b"sqlite-placeholder")
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=None,
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator=None,
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [f"scenario_builder.data_root={root}"])
+    assert f"scenario_builder.data_root={root}" not in cmd
+    assert f"scenario_builder.db_files=[{nested}]" in cmd
+    assert "scenario_filter.log_names=null" in cmd
+
+
+def test_closed_loop_nuplan_db_root_rewrites_direct_db_dir_to_db_files(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    root = tmp_path / "val"
+    root.mkdir()
+    (root / "log_a.db").write_bytes(b"sqlite-placeholder")
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=str(root),
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator=None,
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, [])
+    assert f"scenario_builder.db_files=[{root}]" in cmd
+    assert "scenario_filter.log_names=null" in cmd
+
+
+def test_closed_loop_does_not_clear_explicit_log_names(tmp_path: Path):
+    ckpt = tmp_path / "m.pt"
+    cfg = tmp_path / "c.yaml"
+    root = tmp_path / "val"
+    root.mkdir()
+    (root / "log_a.db").write_bytes(b"sqlite-placeholder")
+    ckpt.write_bytes(b"x")
+    cfg.write_text("{}")
+    args = argparse.Namespace(
+        checkpoint=str(ckpt),
+        config=str(cfg),
+        device="cpu",
+        nuplan_data_root=None,
+        nuplan_map_root=None,
+        nuplan_exp_root=None,
+        nuplan_db_root=str(root),
+        nuplan_db_files=None,
+        hydra_full_error=False,
+        nuplan_module="nuplan.planning.script.run_simulation",
+        challenge="closed_loop_nonreactive_agents",
+        output_dir="out",
+        experiment_uid="eid",
+        scenario_builder="nuplan",
+        scenario_filter=None,
+        worker="sequential",
+        metric_aggregator=None,
+        disable_splitter=False,
+    )
+    _env, cmd = build_nuplan_command(args, ["scenario_filter.log_names=[log_a]"])
+    assert "scenario_filter.log_names=null" not in cmd
+    assert "scenario_filter.log_names=[log_a]" in cmd
