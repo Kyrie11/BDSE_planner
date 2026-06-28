@@ -1,7 +1,6 @@
-# Hydra planner config for nuPlan closed-loop simulation.
-# Usage: add override `hydra.searchpath=[pkg://bdse.nuplan_config] planner=bdse_planner`.
-_target_: bdse.planner.nuplan_planner.BDSEnuPlanPlanner
-_convert_: all
-checkpoint: ${oc.env:BDSE_CHECKPOINT,null}
-config_path: ${oc.env:BDSE_CONFIG,null}
-device: ${oc.env:BDSE_DEVICE,auto}
+bdse_planner:
+  _target_: bdse.planner.nuplan_planner.BDSEnuPlanPlanner
+  _convert_: all
+  checkpoint: ${oc.env:BDSE_CHECKPOINT,null}
+  config_path: ${oc.env:BDSE_CONFIG,null}
+  device: ${oc.env:BDSE_DEVICE,auto}
