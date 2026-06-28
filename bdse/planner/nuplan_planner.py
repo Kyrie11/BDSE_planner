@@ -4,6 +4,26 @@ from typing import Any
 
 import numpy as np
 
+try:  # pragma: no cover - exercised only when nuPlan is installed
+    from nuplan.planning.simulation.planner.abstract_planner import AbstractPlanner
+except Exception:  # pragma: no cover - lightweight/unit-test fallback
+    class AbstractPlanner:  # type: ignore[no-redef]
+        """Small compatibility shim for environments without nuPlan installed.
+
+        nuPlan's real ``AbstractPlanner`` defines ``requires_scenario`` and
+        routes ``compute_trajectory`` through ``compute_planner_trajectory``
+        while recording runtimes.  The shim keeps the public method available
+        for tests and local debugging without importing nuPlan.
+        """
+
+        requires_scenario: bool = False
+
+        def compute_trajectory(self, current_input: Any):
+            return self.compute_planner_trajectory(current_input)
+
+        def generate_planner_report(self, clear_stats: bool = True):
+            return None
+
 from bdse.config import load_config
 from bdse.utils import angle_wrap, configure_torch_for_device, resolve_torch_device, torch_load_any
 from bdse.data.cache_schema import RuntimeFeatures
@@ -371,7 +391,9 @@ class BDSEPlannerCore:
         return action, trajectory, diagnostics
 
 
-class BDSEnuPlanPlanner:
+class BDSEnuPlanPlanner(AbstractPlanner):
+    requires_scenario: bool = False
+
     def __init__(
         self,
         model: Any | None = None,
@@ -422,7 +444,14 @@ class BDSEnuPlanPlanner:
     def initialize(self, initialization: Any) -> None:
         self.initialization = initialization
 
-    def compute_trajectory(self, current_input: Any):
+    def compute_planner_trajectory(self, current_input: Any):
+        """Compute a nuPlan-compatible trajectory from runtime-only inputs.
+
+        nuPlan calls ``compute_trajectory()``, which is implemented by
+        ``AbstractPlanner`` and delegates here while recording planner runtime.
+        Keeping the BDSE logic in this method makes the class compatible with
+        nuPlan's planner builder and reporting utilities.
+        """
         runtime = self._runtime_from_planner_input(current_input)
         _, trajectory, _ = self.core.plan_from_runtime(runtime)
         return self._to_nuplan_trajectory(trajectory, current_input)
