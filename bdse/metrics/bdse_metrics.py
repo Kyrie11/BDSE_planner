@@ -42,6 +42,8 @@ def compute_bdse_diagnostics(
     inference_pairs: np.ndarray | None = None,
     queried_atom_count: int | None = None,
     query_diagnostics: dict[str, Any] | None = None,
+    dense_predicted_base: np.ndarray | None = None,
+    dense_predicted_atom_costs: np.ndarray | None = None,
 ) -> BDSEMetricResult:
     cfg = cfg or {}
     valid = candidates.valid_mask.astype(bool)
@@ -50,7 +52,12 @@ def compute_bdse_diagnostics(
     J_margin = _finite_cost_for_margin(J)
     teacher_M = J_margin[None, :] - J_margin[:, None]
     M_B = budgeted_margin(predicted_base, predicted_atom_costs, selected_atoms)
-    full_action = full_interface_action(predicted_base, predicted_atom_costs, valid, cfg)
+    if dense_predicted_base is not None and dense_predicted_atom_costs is not None:
+        full_action = full_interface_action(dense_predicted_base, dense_predicted_atom_costs, valid, cfg)
+        sparse_full_action = full_interface_action(predicted_base, predicted_atom_costs, valid, cfg)
+    else:
+        full_action = full_interface_action(predicted_base, predicted_atom_costs, valid, cfg)
+        sparse_full_action = full_action
     budget_vs_full = int(action_index == full_action)
     teacher_regret = float(J[action_index] - J[a_star]) if valid[action_index] else float("inf")
     query_pairs = pairs.pairs[pairs.valid_mask] if inference_pairs is None else np.asarray(inference_pairs, dtype=np.int64).reshape(-1, 2)
@@ -95,6 +102,8 @@ def compute_bdse_diagnostics(
         "teacher_action_match": float(action_index == a_star),
         "full_interface_action_match": float(full_action == a_star),
         "budget_vs_full_match": float(budget_vs_full),
+        "sparse_full_interface_action_match": float(sparse_full_action == a_star),
+        "budget_vs_sparse_full_match": float(action_index == sparse_full_action),
         "preserved_margin_error": float(np.mean(decisive_err)) if decisive_err else 0.0,
         "evidence_sufficiency": suff,
         "decision_sufficiency": float(action_index == a_star),
@@ -111,7 +120,7 @@ def compute_bdse_diagnostics(
         "tournament_pair_atom_query_count": float(qdiag.get("tournament_pair_atom_query_count", 0.0)),
         "selected_certificate_query_count": float(qdiag.get("selected_certificate_query_count", effective_query_count)),
     }
-    return BDSEMetricResult(values=values, details={"full_action": full_action, "a_star": a_star, "selected_atoms": selected_atoms, "query_action_count": query_action_count})
+    return BDSEMetricResult(values=values, details={"full_action": full_action, "sparse_full_action": sparse_full_action, "a_star": a_star, "selected_atoms": selected_atoms, "query_action_count": query_action_count})
 
 
 def aggregate_metric_results(results: list[BDSEMetricResult]) -> dict[str, float]:

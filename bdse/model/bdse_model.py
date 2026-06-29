@@ -622,12 +622,12 @@ class BDSEModel(nn.Module):
             enabled=bool(cfg.get("selector", {}).get("hab_enabled", True)),
             min_family_slots=cfg.get("selector", {}).get("min_family_topm_slots", None),
         )
+        try:
+            mandatory_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E] & active
+        except Exception:
+            mandatory_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
         if bool(cfg.get("selector", {}).get("force_hard_topm", True)):
-            try:
-                hard = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E] & active
-            except Exception:
-                hard = np.zeros((evidence_bank.E,), dtype=bool)
-            forced = np.flatnonzero(hard)
+            forced = np.flatnonzero(mandatory_hard_mask)
             if forced.size:
                 forced_cap = int(cfg.get("selector", {}).get("max_forced_hard_topm", max(1, M // 2)))
                 forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(proposal_logits[int(i)]), int(i)))[:forced_cap], dtype=np.int64)
@@ -691,6 +691,8 @@ class BDSEModel(nn.Module):
             "family_ids": family_ids,
             "family_budget_caps": family_budget.family_caps,
             "family_budgets": family_budget.family_budgets,
+            "mandatory_atom_mask": mandatory_hard_mask.astype(bool),
+            "mandatory_hard_atoms": np.flatnonzero(mandatory_hard_mask).astype(np.int64),
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
@@ -712,6 +714,33 @@ class BDSEModel(nn.Module):
             "runtime_pairs": pairs,
             "runtime_pair_weights": pair_weights,
         }
+
+    def predict_dense_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Diagnostic-only dense BDSE interface.
+
+        Runtime planning must not call this path.  It scores every active atom/action
+        pair so open-loop diagnostics can separately measure dense full-interface
+        reconstruction versus the sparse selected certificate.
+        """
+        cfg = cfg or self.cfg
+        batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=True)
+        self.eval()
+        with torch.no_grad():
+            out = self.forward(batch)
+        J0 = out["J0"][0].detach().cpu().numpy().astype(np.float32)
+        g = out["g"][0].detach().cpu().numpy().astype(np.float32)
+        g_var = out.get("g_var")
+        g_var_np = g_var[0].detach().cpu().numpy().astype(np.float32) if g_var is not None else np.zeros_like(g, dtype=np.float32)
+        valid = np.asarray(candidates.valid_mask, dtype=bool)
+        active = np.asarray(evidence_bank.active_mask, dtype=bool)
+        if active.shape[0] < g.shape[0]:
+            active = np.pad(active, (0, g.shape[0] - active.shape[0]), constant_values=False)
+        active = active[: g.shape[0]]
+        g[~active, :] = 0.0
+        g_var_np[~active, :] = 0.0
+        g[:, ~valid] = 0.0
+        g_var_np[:, ~valid] = 0.0
+        return {"J0": J0, "g": g, "g_var": g_var_np, "dense_atom_count": int(active.sum()), "dense_action_count": int(valid.sum())}
 
     def predict_numpy(self, runtime, candidates, evidence_bank):
         # Legacy API: return only base and sparse-scored local costs.  The runtime

@@ -28,6 +28,123 @@ def _finite_cost_for_margin(cost: np.ndarray) -> np.ndarray:
     return cost
 
 
+def _as_bool_mask(mask: np.ndarray | None, E: int) -> np.ndarray:
+    if mask is None:
+        return np.zeros((E,), dtype=bool)
+    arr = np.asarray(mask, dtype=bool).reshape(-1)
+    if arr.shape[0] < E:
+        arr = np.pad(arr, (0, E - arr.shape[0]), constant_values=False)
+    return arr[:E]
+
+
+def _spent_for(selected: list[int] | np.ndarray, costs: np.ndarray) -> float:
+    total = 0.0
+    for i in np.asarray(selected, dtype=np.int64).reshape(-1):
+        if 0 <= int(i) < costs.shape[0] and np.isfinite(costs[int(i)]):
+            total += float(costs[int(i)])
+    return float(total)
+
+
+def _complete_safety_aware_selection(
+    selected: list[int] | np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+    mandatory_atom_mask: np.ndarray | None = None,
+    mandatory_quota: int = 0,
+    min_selected_atoms: int = 0,
+    force_fill_budget: bool = False,
+    utility: np.ndarray | None = None,
+) -> tuple[list[int], float, dict[str, Any]]:
+    """Post-process greedy acquisition for BDSE-v5.
+
+    The old selector stopped as soon as the LCB/certificate gain became non-positive.
+    That is appropriate for certification, but not for evidence acquisition when the
+    margin model is still being calibrated.  This routine keeps the selected set within
+    budget while (i) forcing safety/hard atoms into the certificate support and (ii)
+    filling a minimum/budget quota with the most useful available atoms.
+    """
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    E = int(costs.shape[0])
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
+    active &= np.isfinite(costs) & (costs > 0)
+    mandatory = _as_bool_mask(mandatory_atom_mask, E) & active
+    util = np.zeros((E,), dtype=np.float32) if utility is None else np.asarray(utility, dtype=np.float32).reshape(-1)
+    if util.shape[0] < E:
+        util = np.pad(util, (0, E - util.shape[0]), constant_values=0.0)
+    util = util[:E]
+
+    out: list[int] = []
+    seen: set[int] = set()
+    for raw in np.asarray(selected, dtype=np.int64).reshape(-1).tolist():
+        i = int(raw)
+        if 0 <= i < E and active[i] and i not in seen:
+            out.append(i)
+            seen.add(i)
+
+    def spent() -> float:
+        return _spent_for(out, costs)
+
+    def can_add(i: int) -> bool:
+        return i not in seen and active[i] and spent() + float(costs[i]) <= float(budget) + 1e-6
+
+    # 1) Mandatory hard/safety atoms first.  If the greedy trace already filled the
+    # budget with non-mandatory atoms, replace the weakest tail atoms.  This makes
+    # hard-evidence recall a structural property rather than a hope learned from BCE.
+    mandatory_order = sorted(np.flatnonzero(mandatory).tolist(), key=lambda i: (-float(util[i]), float(costs[i]), int(i)))
+    forced_added = 0
+    quota = max(0, int(mandatory_quota))
+    for i in mandatory_order:
+        if i in seen:
+            forced_added += 1
+            if quota and forced_added >= quota:
+                break
+            continue
+        while not can_add(i):
+            removable = [j for j in out if not mandatory[j]]
+            if not removable:
+                break
+            # Remove lowest-utility non-mandatory atom first.
+            rm = min(removable, key=lambda j: (float(util[j]), -int(j)))
+            out.remove(rm)
+            seen.remove(rm)
+        if can_add(i):
+            out.append(int(i))
+            seen.add(int(i))
+            forced_added += 1
+        if quota and forced_added >= quota:
+            break
+
+    # 2) Acquisition fill.  Keep querying until a minimum support size is reached;
+    # optionally fill the whole cost budget.  This prevents early stopping caused by
+    # conservative LCBs before the calibration epsilon is reliable.
+    fill_target = max(0, int(min_selected_atoms))
+    fill_budget = bool(force_fill_budget)
+    filler_order = sorted(np.flatnonzero(active).tolist(), key=lambda i: (not bool(mandatory[i]), -float(util[i]), float(costs[i]), int(i)))
+    for i in filler_order:
+        if i in seen:
+            continue
+        if not can_add(i):
+            continue
+        if len(out) < fill_target or fill_budget:
+            out.append(int(i))
+            seen.add(int(i))
+        if not fill_budget and len(out) >= fill_target:
+            break
+
+    final_spent = spent()
+    diag = {
+        "mandatory_available": int(mandatory.sum()),
+        "mandatory_selected": int(sum(1 for i in out if mandatory[i])),
+        "mandatory_quota": int(quota),
+        "min_selected_atoms": int(fill_target),
+        "force_fill_budget": bool(fill_budget),
+        "postfill_selected_atoms": int(len(out)),
+        "postfill_spent_budget": float(final_spent),
+    }
+    return out, float(final_spent), diag
+
+
 def full_interface_margin(J0: np.ndarray, g: np.ndarray) -> np.ndarray:
     J0 = np.asarray(J0, dtype=np.float32)
     g = np.asarray(g, dtype=np.float32)
@@ -517,6 +634,10 @@ def runtime_greedy_selector(
     prior_atom_variance: float | np.ndarray | None = None,
     family_ids: np.ndarray | None = None,
     family_budget_caps: np.ndarray | None = None,
+    mandatory_atom_mask: np.ndarray | None = None,
+    mandatory_quota: int = 0,
+    min_selected_atoms: int = 0,
+    force_fill_budget: bool = False,
     bidirectional_pairs: bool = True,
     reverse_pair_weight: float = 1.0,
     pair_cap_multiplier: float = 1.0,
@@ -643,12 +764,26 @@ def runtime_greedy_selector(
         )
         extra_diag = {}
         mode = "runtime_base_screen_sparse_signed"
+    utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
+    if np.asarray(atom_delta).ndim == 2 and np.asarray(atom_delta).size:
+        utility = np.maximum(np.asarray(atom_delta, dtype=np.float32), 0.0).mean(axis=1)
+    selected, spent_post, post_diag = _complete_safety_aware_selection(
+        selected,
+        atom_budget_costs,
+        budget,
+        atom_active_mask=atom_active_mask,
+        mandatory_atom_mask=mandatory_atom_mask,
+        mandatory_quota=mandatory_quota,
+        min_selected_atoms=min_selected_atoms,
+        force_fill_budget=force_fill_budget,
+        utility=utility,
+    )
     return SelectionResult(
         selected=selected,
         objective_value=current,
         pair_indices=pairs,
         pair_weights=pair_weights,
-        diagnostics={"spent_budget": spent, "budget": float(budget), "mode": mode, "pair_count": int(len(pairs)), **extra_diag},
+        diagnostics={"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": mode, "pair_count": int(len(pairs)), **extra_diag, **post_diag},
     )
 
 
@@ -671,6 +806,10 @@ def runtime_greedy_selector_pair_conditioned(
     prior_atom_variance: float | np.ndarray | None = None,
     family_ids: np.ndarray | None = None,
     family_budget_caps: np.ndarray | None = None,
+    mandatory_atom_mask: np.ndarray | None = None,
+    mandatory_quota: int = 0,
+    min_selected_atoms: int = 0,
+    force_fill_budget: bool = False,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -694,7 +833,12 @@ def runtime_greedy_selector_pair_conditioned(
             budget,
             atom_active_mask,
         )
-        return SelectionResult(selected, current, pair_arr, weights, {"spent_budget": spent, "budget": float(budget), "mode": "runtime_pair_conditioned_empty", "pair_count": 0})
+        selected, spent_post, post_diag = _complete_safety_aware_selection(
+            selected, atom_budget_costs, budget, atom_active_mask=atom_active_mask,
+            mandatory_atom_mask=mandatory_atom_mask, mandatory_quota=mandatory_quota,
+            min_selected_atoms=min_selected_atoms, force_fill_budget=force_fill_budget,
+        )
+        return SelectionResult(selected, current, pair_arr, weights, {"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": "runtime_pair_conditioned_empty", "pair_count": 0, **post_diag})
     a = pair_arr[:, 0]
     b = pair_arr[:, 1]
     J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
@@ -754,12 +898,26 @@ def runtime_greedy_selector_pair_conditioned(
         selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
         extra_diag = {}
         mode = "runtime_pair_conditioned_signed"
+    utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
+    if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
+        utility = np.maximum(np.asarray(delta, dtype=np.float32), 0.0).mean(axis=1)
+    selected, spent_post, post_diag = _complete_safety_aware_selection(
+        selected,
+        atom_budget_costs,
+        budget,
+        atom_active_mask=atom_active_mask,
+        mandatory_atom_mask=mandatory_atom_mask,
+        mandatory_quota=mandatory_quota,
+        min_selected_atoms=min_selected_atoms,
+        force_fill_budget=force_fill_budget,
+        utility=utility,
+    )
     return SelectionResult(
         selected=selected,
         objective_value=current,
         pair_indices=pair_arr,
         pair_weights=weights,
-        diagnostics={"spent_budget": float(spent), "budget": float(budget), "mode": mode, "pair_count": int(len(pair_arr)), **extra_diag},
+        diagnostics={"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": mode, "pair_count": int(len(pair_arr)), **extra_diag, **post_diag},
     )
 
 

@@ -40,6 +40,7 @@ def main() -> None:
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--output", type=str, default="outputs/open_loop_bdse_metrics.json")
+    parser.add_argument("--disable-dense-diagnostic", action="store_true", help="Skip diagnostic-only dense full-interface scoring.")
     parser.add_argument(
         "--device",
         type=str,
@@ -62,6 +63,9 @@ def main() -> None:
     results = []
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
         pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
+        dense = None
+        if not args.disable_dense_diagnostic and hasattr(model, "predict_dense_numpy"):
+            dense = model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
         results.append(
             compute_bdse_diagnostics(
                 sample.candidates,
@@ -75,6 +79,8 @@ def main() -> None:
                 cfg=cfg,
                 inference_pairs=pred.get("rival_pair_indices", sel.pair_indices),
                 query_diagnostics=runtime_query_diagnostics(pred, sel.selected),
+                dense_predicted_base=None if dense is None else dense["J0"],
+                dense_predicted_atom_costs=None if dense is None else dense["g"],
             )
         )
     summary = aggregate_metric_results(results)

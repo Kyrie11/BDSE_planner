@@ -153,12 +153,12 @@ class BDSEPlannerCore:
             enabled=bool(cfg.get("selector", {}).get("hab_enabled", True)),
             min_family_slots=cfg.get("selector", {}).get("min_family_topm_slots", None),
         )
+        try:
+            mandatory_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E] & active
+        except Exception:
+            mandatory_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
         if bool(cfg.get("selector", {}).get("force_hard_topm", True)):
-            try:
-                hard = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E] & active
-            except Exception:
-                hard = np.zeros((evidence_bank.E,), dtype=bool)
-            forced = np.flatnonzero(hard)
+            forced = np.flatnonzero(mandatory_hard_mask)
             if forced.size:
                 forced_cap = int(cfg.get("selector", {}).get("max_forced_hard_topm", max(1, M // 2)))
                 forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(proposal_logits[int(i)]), int(i)))[:forced_cap], dtype=np.int64)
@@ -198,6 +198,8 @@ class BDSEPlannerCore:
             "family_ids": family_ids,
             "family_budget_caps": family_budget.family_caps,
             "family_budgets": family_budget.family_budgets,
+            "mandatory_atom_mask": mandatory_hard_mask.astype(bool),
+            "mandatory_hard_atoms": np.flatnonzero(mandatory_hard_mask).astype(np.int64),
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
@@ -262,6 +264,10 @@ class BDSEPlannerCore:
                 prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
                 family_ids=family_ids,
                 family_budget_caps=family_caps,
+                mandatory_atom_mask=pred.get("mandatory_atom_mask", None),
+                mandatory_quota=int(sel_cfg.get("mandatory_hard_quota", 0)),
+                min_selected_atoms=int(sel_cfg.get("min_selected_atoms", 0)),
+                force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
             )
             tournament = run_pair_conditioned_tournament(
                 J0,
@@ -292,6 +298,10 @@ class BDSEPlannerCore:
                 prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
                 family_ids=family_ids,
                 family_budget_caps=family_caps,
+                mandatory_atom_mask=pred.get("mandatory_atom_mask", None),
+                mandatory_quota=int(sel_cfg.get("mandatory_hard_quota", 0)),
+                min_selected_atoms=int(sel_cfg.get("min_selected_atoms", 0)),
+                force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
                 bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", True)),
                 reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 1.0)),
                 pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),

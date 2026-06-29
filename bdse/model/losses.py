@@ -163,6 +163,10 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
                 query_mask[bidx, ei, action_ids] = True
         g_sparse = np.where(query_mask[bidx], g[bidx], 0.0)
         var_sparse = np.where(query_mask[bidx], g_var_np[bidx], 0.0) if g_var_np is not None else None
+        hard_feature = batch["evidence_features"][bidx, :, 0].detach().cpu().numpy() > 0.5 if "evidence_features" in batch else np.zeros((E,), dtype=bool)
+        mandatory = hard_feature & active[bidx]
+        if "decisive_hard_mask" in batch:
+            mandatory = mandatory | (batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx])
         result = runtime_greedy_selector(
             J0[bidx],
             g_sparse,
@@ -186,6 +190,10 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             prior_atom_variance=prior_var,
             family_ids=fam_ids_np[bidx],
             family_budget_caps=fam_budget.family_caps,
+            mandatory_atom_mask=mandatory,
+            mandatory_quota=int(s_cfg.get("mandatory_hard_quota", 0)),
+            min_selected_atoms=int(s_cfg.get("min_selected_atoms", 0)),
+            force_fill_budget=bool(s_cfg.get("force_fill_budget", False)),
         )
         selected_mask[bidx, result.selected] = True
     device = outputs["J0"].device
@@ -281,6 +289,10 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             delta_arr = delta_arr[:, ok]
             if var_arr is not None:
                 var_arr = var_arr[:, ok]
+        hard_feature = batch["evidence_features"][bidx, :, 0].detach().cpu().numpy() > 0.5 if "evidence_features" in batch else np.zeros((E,), dtype=bool)
+        mandatory = hard_feature & active[bidx]
+        if "decisive_hard_mask" in batch:
+            mandatory = mandatory | (batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx])
         result = runtime_greedy_selector_pair_conditioned(
             J0[bidx],
             delta_arr,
@@ -300,6 +312,10 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             prior_atom_variance=prior_var,
             family_ids=fam_ids_np[bidx],
             family_budget_caps=fam_budget.family_caps,
+            mandatory_atom_mask=mandatory,
+            mandatory_quota=int(s_cfg.get("mandatory_hard_quota", 0)),
+            min_selected_atoms=int(s_cfg.get("min_selected_atoms", 0)),
+            force_fill_budget=bool(s_cfg.get("force_fill_budget", False)),
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)
@@ -417,6 +433,13 @@ def _pair_margin_scale(pair_margins: torch.Tensor, pair_mask: torch.Tensor, defa
     return vals.median().clamp_min(float(default))
 
 
+def _masked_value_scale(values: torch.Tensor, mask: torch.Tensor, default: float = 100.0) -> torch.Tensor:
+    vals = values[mask.bool() & torch.isfinite(values)].detach().abs()
+    if vals.numel() == 0:
+        return values.new_tensor(float(default))
+    return vals.median().clamp_min(float(default))
+
+
 def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     # Losses include large teacher costs and masking sentinels.  Compute them in
     # float32 even when model forward uses CUDA AMP; otherwise fp16 masks such as
@@ -448,8 +471,13 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     pred_atom_delta = out.get("pair_atom_delta", g_b - g_a)
     res_pred = pred_atom_delta.sum(dim=1)
     pair_mask = pair_valid & torch.isfinite(residual_T)
+    pair_scale = _pair_margin_scale(batch["pair_margins"].float(), pair_mask, default=float(train_cfg.get("pair_margin_min_scale", 100.0)))
+    normalize_pair_losses = bool(train_cfg.get("normalize_pair_losses", True))
     if pair_mask.sum() > 0:
-        L_res_terms = F.huber_loss(res_pred[pair_mask], residual_T[pair_mask], delta=1.0, reduction="none")
+        if normalize_pair_losses:
+            L_res_terms = F.huber_loss(res_pred[pair_mask] / pair_scale, residual_T[pair_mask] / pair_scale, delta=float(train_cfg.get("normalized_huber_delta", 1.0)), reduction="none")
+        else:
+            L_res_terms = F.huber_loss(res_pred[pair_mask], residual_T[pair_mask], delta=1.0, reduction="none")
         L_res = (L_res_terms * pair_weights[pair_mask]).sum() / pair_weights[pair_mask].sum().clamp_min(1e-6)
     else:
         L_res = J0.new_tensor(0.0)
@@ -462,7 +490,11 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     e_mask = batch.get("evidence_active", torch.ones_like(out["proposal_logits"]).bool()).bool()
     if teacher_g is not None:
         atom_cost_mask = e_mask[:, :, None] & valid[:, None, :] & torch.isfinite(teacher_g.float())
-        atom_cost_err = F.huber_loss(g, teacher_g.float(), delta=1.0, reduction="none")
+        if bool(train_cfg.get("normalize_atom_cost_loss", True)):
+            atom_scale = _masked_value_scale(teacher_g.float(), atom_cost_mask, default=float(train_cfg.get("atom_cost_min_scale", train_cfg.get("pair_margin_min_scale", 100.0))))
+            atom_cost_err = F.huber_loss(g / atom_scale, teacher_g.float() / atom_scale, delta=float(train_cfg.get("normalized_huber_delta", 1.0)), reduction="none")
+        else:
+            atom_cost_err = F.huber_loss(g, teacher_g.float(), delta=1.0, reduction="none")
         nonzero_g = teacher_g.float().abs() > 1e-6
         atom_zero_w = float(train_cfg.get("atom_zero_weight", train_cfg.get("pair_zero_weight", 0.1)))
         atom_cost_w = atom_zero_w + (1.0 - atom_zero_w) * nonzero_g.float()
@@ -477,7 +509,10 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         nonzero = true_atom_delta.abs() > 1e-6
         zero_w = float(train_cfg.get("pair_zero_weight", 0.1))
         atom_weights = pair_weights[:, None, :] * (zero_w + (1.0 - zero_w) * nonzero.float())
-        L_pair_terms = F.huber_loss(pred_atom_delta, true_atom_delta, delta=1.0, reduction="none")
+        if normalize_pair_losses:
+            L_pair_terms = F.huber_loss(pred_atom_delta / pair_scale, true_atom_delta / pair_scale, delta=float(train_cfg.get("normalized_huber_delta", 1.0)), reduction="none")
+        else:
+            L_pair_terms = F.huber_loss(pred_atom_delta, true_atom_delta, delta=1.0, reduction="none")
         L_pair = _weighted_mean(L_pair_terms, atom_weights, atom_pair_mask)
     else:
         true_atom_delta = None
@@ -493,8 +528,13 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         else:
             v_a, v_b = pair_gather(g_var, pairs)
             pair_var = (v_a + v_b).clamp_min(1e-6)
-        err2 = (pred_atom_delta - true_atom_delta).pow(2)
-        nll = 0.5 * (err2 / pair_var + torch.log(pair_var))
+        if normalize_pair_losses:
+            err2 = ((pred_atom_delta - true_atom_delta) / pair_scale).pow(2)
+            pair_var_norm = (pair_var / pair_scale.pow(2)).clamp_min(1e-6)
+            nll = 0.5 * (err2 / pair_var_norm + torch.log(pair_var_norm))
+        else:
+            err2 = (pred_atom_delta - true_atom_delta).pow(2)
+            nll = 0.5 * (err2 / pair_var + torch.log(pair_var))
         L_unc = _weighted_mean(nll, atom_weights, atom_pair_mask)
     else:
         L_unc = J0.new_tensor(0.0)
@@ -508,7 +548,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     tau_rank = float(train_cfg.get("rank_tau", train_cfg.get("rank_margin", 1.0)))
     if pair_mask.sum() > 0:
         margin_scale_cfg = float(train_cfg.get("pair_margin_scale", 0.0) or 0.0)
-        margin_scale = J0.new_tensor(margin_scale_cfg) if margin_scale_cfg > 0 else _pair_margin_scale(batch["pair_margins"].float(), pair_mask, default=float(train_cfg.get("pair_margin_min_scale", 100.0)))
+        margin_scale = J0.new_tensor(margin_scale_cfg) if margin_scale_cfg > 0 else pair_scale
         rank_terms = F.softplus(-M_hat_E[pair_mask] / (margin_scale * max(tau_rank, 1e-6)))
         L_rank_cls = (pair_weights[pair_mask] * rank_terms).sum() / pair_weights[pair_mask].sum().clamp_min(1e-6)
         target_margin = batch["pair_margins"].float()
@@ -650,7 +690,12 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     # above the configured epsilon_cal so the validation quantile has a training signal.
     if pair_mask.sum() > 0 and eps_cal > 0:
         cal_err = (M_hat_E[pair_mask] - batch["pair_margins"].float()[pair_mask]).abs()
-        L_cal = F.relu(cal_err - eps_cal).mean()
+        if bool(train_cfg.get("normalize_calibration_loss", True)):
+            cal_err = cal_err / pair_scale
+            eps_train = float(train_cfg.get("epsilon_cal_normalized", 1.0))
+        else:
+            eps_train = eps_cal
+        L_cal = F.relu(cal_err - eps_train).mean()
     else:
         L_cal = J0.new_tensor(0.0)
 

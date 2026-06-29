@@ -85,7 +85,7 @@ runtime:
   max_map_polylines: 128
   # Full drivable-area polygon extraction is expensive on nuPlan.  The teacher still
   # has an off-route/off-drivable hard atom via the route-corridor fallback.
-  include_drivable_polygons: false
+  include_drivable_polygons: true
   max_drivable_polygons: 24
   max_polygon_points: 128
   max_route_points: 256
@@ -151,7 +151,7 @@ evidence:
   include_rule_map: true
   include_kinematic: true
   include_hard_atoms: true
-  budget: 16
+  budget: 32
   unit_cost: true
   eps: 1.0e-6
   weights:
@@ -257,12 +257,17 @@ selector:
     1: 4   # feasibility: red light / drivable / route / speed
     2: 6   # reachability interaction: occupancy / collision / TTC
     3: 3   # precedence: gap / yield
-  proposal_top_m: 32
+  proposal_top_m: 64
   # Runtime pair screens are bidirectional by default so a candidate that is
   # worse under the cheap base score can still be promoted by decisive evidence.
   bidirectional_pairs: true
   reverse_pair_weight: 1.0
   runtime_pair_cap_multiplier: 2.0
+  force_hard_topm: true
+  max_forced_hard_topm: 32
+  mandatory_hard_quota: 6
+  min_selected_atoms: 12
+  force_fill_budget: true
   gamma_cap_percentile: 95
   gamma_max_default: 100.0
   lambda_near: 1.0
@@ -278,7 +283,7 @@ selector:
   unqueried_atom_variance: 1.0
   stop_gradient: true
 tournament:
-  L_infer: 16
+  L_infer: 31
   beta_uncertainty: 1.0
   epsilon_cal: 0.0
   use_softmin: true
@@ -292,7 +297,7 @@ fallback:
   safety_lcb_min: 0.0
   proposal_multiplier: 3.0
   rival_stages: [16, 31]
-  budget_stages: [16, 32]
+  budget_stages: [32, 64]
   rule_switch_margin: 0.0
 model:
   hidden_dim: 256
@@ -357,6 +362,11 @@ training:
   hard_action_targets: true
   pair_margin_scale: 0.0
   pair_margin_min_scale: 100.0
+  normalize_pair_losses: true
+  normalize_atom_cost_loss: true
+  normalize_calibration_loss: true
+  normalized_huber_delta: 1.0
+  atom_cost_min_scale: 100.0
   pair_margin_reg_weight: 1.0
   pair_margin_reg_delta: 1.0
   full_action_min_scale: 1.0

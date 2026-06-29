@@ -82,7 +82,7 @@ runtime:
   agent_radius_m: 80.0
   max_agents: 32
   max_map_polylines: 128
-  include_drivable_polygons: false
+  include_drivable_polygons: true
   # No current BDSE evidence atom consumes crosswalk polygons. Keeping this off
   # preserves teacher labels while avoiding expensive nuPlan map scans.
   include_crosswalks: false
@@ -141,7 +141,7 @@ evidence:
   include_rule_map: true
   include_kinematic: true
   include_hard_atoms: true
-  budget: 16
+  budget: 32
   safety:
     # Keep final labels at 10 Hz, but suppress only hard collision frames that are
     # effectively universal across the finite valid candidate bank.  Soft occupancy
@@ -174,6 +174,12 @@ selector:
   progress_rivals: 8
   maneuver_rivals: 12
   runtime_pair_cap_multiplier: 3.0
+  proposal_top_m: 64
+  force_hard_topm: true
+  max_forced_hard_topm: 32
+  mandatory_hard_quota: 6
+  min_selected_atoms: 12
+  force_fill_budget: true
   min_family_topm_slots:
     1: 4   # feasibility: red light / drivable / route / speed
     2: 6   # reachability interaction: occupancy / collision / TTC
@@ -200,6 +206,11 @@ training:
   hard_action_targets: true
   pair_margin_scale: 0.0
   pair_margin_min_scale: 100.0
+  normalize_pair_losses: true
+  normalize_atom_cost_loss: true
+  normalize_calibration_loss: true
+  normalized_huber_delta: 1.0
+  atom_cost_min_scale: 100.0
   pair_margin_reg_weight: 1.0
   pair_margin_reg_delta: 1.0
   full_action_min_scale: 1.0
