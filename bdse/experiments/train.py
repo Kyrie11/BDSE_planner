@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,16 +29,26 @@ from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnosti
 class OnTheFlyDataset(Dataset):
     def __init__(self, source: NuPlanBDSEDataset | PreprocessedBDSEDataset):
         self.source = source
+        self._preprocessed_paths: list[Path] | None = None
+        if isinstance(source, PreprocessedBDSEDataset):
+            # Resolve the index once in the parent process.  DataLoader workers
+            # then receive a compact path list instead of repeatedly calling
+            # build_index() for every sample.  build_index() is cached, but the
+            # per-sample method call and split bookkeeping still show up in long
+            # 50k-sample training runs.
+            self._preprocessed_paths = list(source.build_index())
 
     def __len__(self) -> int:
+        if self._preprocessed_paths is not None:
+            return len(self._preprocessed_paths)
         return len(self.source)
 
     def __getitem__(self, idx: int) -> Sample:
-        if isinstance(self.source, PreprocessedBDSEDataset):
+        if self._preprocessed_paths is not None:
             # Training does not consume label-only futures or candidate JSON metadata.
             # Avoid moving those large unused arrays through DataLoader workers.
             return load_sample_npz(
-                self.source.build_index()[idx],
+                self._preprocessed_paths[idx],
                 include_label_future=False,
                 include_candidate_metadata=False,
             )
@@ -124,6 +135,16 @@ def _checkpoint_stem(output: str | Path) -> Path:
     return out_path.with_suffix("") if out_path.suffix else out_path
 
 
+def _sanitize_best_label(label: str) -> str:
+    text = str(label or "metric").strip()
+    if text.startswith("val_"):
+        text = text[4:]
+    if text.startswith("best_"):
+        text = text[5:]
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_")
+    return text or "metric"
+
+
 def _checkpoint_paths(args: argparse.Namespace, epoch: int | None = None) -> dict[str, Path]:
     stem = _checkpoint_stem(args.output)
     ckpt_dir = Path(args.checkpoint_dir) if getattr(args, "checkpoint_dir", None) else stem.parent / "checkpoints"
@@ -136,6 +157,11 @@ def _checkpoint_paths(args: argparse.Namespace, epoch: int | None = None) -> dic
         # epoch is zero-based internally; filenames are one-based for readability.
         paths["epoch"] = ckpt_dir / f"{stem.name}.epoch_{epoch + 1:04d}.pt"
     return paths
+
+
+def _best_checkpoint_path(args: argparse.Namespace, label: str) -> Path:
+    stem = _checkpoint_stem(args.output)
+    return stem.parent / f"{stem.name}.best_{_sanitize_best_label(label)}.pt"
 
 
 
@@ -188,6 +214,7 @@ def _make_checkpoint(
     best_metric: float | None,
     best_epoch: int | None,
     world_size: int,
+    best_trackers: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     raw_model = model.module if isinstance(model, DDP) else model
     return {
@@ -201,6 +228,7 @@ def _make_checkpoint(
         "metrics": {str(k): float(v) for k, v in metrics.items()},
         "best_metric": None if best_metric is None else float(best_metric),
         "best_epoch": None if best_epoch is None else int(best_epoch),
+        "best_trackers": best_trackers or {},
         "world_size": int(world_size),
         "rng_state": _rng_state(),
     }
@@ -214,9 +242,9 @@ def _load_checkpoint_if_requested(
     scaler: Any,
     device: torch.device,
     is_main: bool,
-) -> tuple[int, float | None, int | None, Path | None]:
+) -> tuple[int, float | None, int | None, dict[str, dict[str, Any]], Path | None]:
     if not args.resume and not args.resume_from:
-        return 0, None, None, None
+        return 0, None, None, {}, None
     paths = _checkpoint_paths(args)
     ckpt_path = Path(args.resume_from) if args.resume_from else paths["latest"]
     if args.resume and not ckpt_path.exists() and paths["final"].exists():
@@ -227,7 +255,7 @@ def _load_checkpoint_if_requested(
             raise FileNotFoundError(f"resume checkpoint not found: {ckpt_path}")
         if is_main:
             print(f"[bdse] --resume requested but no checkpoint found at {paths['latest']}; starting from scratch.", flush=True)
-        return 0, None, None, None
+        return 0, None, None, {}, None
 
     ckpt = _torch_load_any(ckpt_path, map_location=device)
     state = ckpt.get("model", ckpt)
@@ -256,9 +284,16 @@ def _load_checkpoint_if_requested(
     best_metric = None if best_metric is None else float(best_metric)
     best_epoch = ckpt.get("best_epoch") if isinstance(ckpt, dict) else None
     best_epoch = None if best_epoch is None else int(best_epoch)
+    raw_trackers = ckpt.get("best_trackers", {}) if isinstance(ckpt, dict) else {}
+    best_trackers: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_trackers, dict):
+        for label, rec in raw_trackers.items():
+            if not isinstance(rec, dict):
+                continue
+            best_trackers[str(label)] = dict(rec)
     if is_main:
         print(f"[bdse] resumed from {ckpt_path} at epoch={start_epoch}", flush=True)
-    return start_epoch, best_metric, best_epoch, ckpt_path
+    return start_epoch, best_metric, best_epoch, best_trackers, ckpt_path
 
 
 def _aggregate_meters(meters: dict[str, list[float]], device: torch.device, distributed: bool) -> dict[str, float]:
@@ -318,21 +353,66 @@ def _validation_bdse_score(metrics: dict[str, float]) -> float:
     )
 
 
+def _infer_best_mode(metric_name: str, requested_mode: str = "auto") -> str:
+    if requested_mode in {"min", "max"}:
+        return requested_mode
+    name = str(metric_name).lower()
+    if any(tok in name for tok in ("loss", "regret", "error", "mae", "rmse", "latency", "violation")):
+        return "min"
+    return "max"
+
+
+def _canonical_metric_name(requested: str, metrics: dict[str, float]) -> str:
+    req = str(requested).strip()
+    if req in metrics:
+        return req
+    # Most validation diagnostics are logged with a val_ prefix.  Accept the
+    # paper-facing names so commands can stay readable.
+    if not req.startswith("val_") and f"val_{req}" in metrics:
+        return f"val_{req}"
+    if req.startswith("best_"):
+        bare = req[5:]
+        if bare in metrics:
+            return bare
+        if f"val_{bare}" in metrics:
+            return f"val_{bare}"
+    return req
+
+
+def _resolve_best_metric_for_request(metrics: dict[str, float], requested: str, requested_mode: str = "auto") -> tuple[str, float, str, str]:
+    requested = str(requested or "auto")
+    if requested == "auto":
+        if "val_bdse_score" in metrics and np.isfinite(float(metrics["val_bdse_score"])):
+            return "auto", "val_bdse_score", float(metrics["val_bdse_score"]), "max"
+        if "val_teacher_regret" in metrics and np.isfinite(float(metrics["val_teacher_regret"])):
+            return "auto", "val_teacher_regret", float(metrics["val_teacher_regret"]), "min"
+        if "val_loss" in metrics and np.isfinite(float(metrics["val_loss"])):
+            return "auto", "val_loss", float(metrics["val_loss"]), "min"
+        return "auto", "loss", float(metrics.get("loss", float("nan"))), "min"
+    metric_name = _canonical_metric_name(requested, metrics)
+    value = float(metrics.get(metric_name, float("nan")))
+    return _sanitize_best_label(requested), metric_name, value, _infer_best_mode(metric_name, requested_mode)
+
+
 def _resolve_best_metric(metrics: dict[str, float], args: argparse.Namespace) -> tuple[str, float, str]:
-    requested = str(getattr(args, "best_metric", "auto"))
-    requested_mode = str(getattr(args, "best_mode", "auto"))
-    if requested != "auto":
-        metric_name = requested
-        value = float(metrics.get(metric_name, float("nan")))
-        mode = requested_mode if requested_mode in {"min", "max"} else ("min" if "loss" in metric_name or "regret" in metric_name or "error" in metric_name else "max")
-        return metric_name, value, mode
-    if "val_bdse_score" in metrics and np.isfinite(float(metrics["val_bdse_score"])):
-        return "val_bdse_score", float(metrics["val_bdse_score"]), "max"
-    if "val_teacher_regret" in metrics and np.isfinite(float(metrics["val_teacher_regret"])):
-        return "val_teacher_regret", float(metrics["val_teacher_regret"]), "min"
-    if "val_loss" in metrics and np.isfinite(float(metrics["val_loss"])):
-        return "val_loss", float(metrics["val_loss"]), "min"
-    return "loss", float(metrics.get("loss", float("nan"))), "min"
+    _, metric_name, value, mode = _resolve_best_metric_for_request(metrics, str(getattr(args, "best_metric", "auto")), str(getattr(args, "best_mode", "auto")))
+    return metric_name, value, mode
+
+
+def _requested_best_metrics(args: argparse.Namespace) -> list[str]:
+    raw = getattr(args, "best_metrics", None)
+    values = list(raw) if raw else [str(getattr(args, "best_metric", "auto"))]
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in values:
+        label = str(v).strip()
+        if not label:
+            continue
+        key = _sanitize_best_label(label) if label != "auto" else "auto"
+        if key not in seen:
+            out.append(label)
+            seen.add(key)
+    return out or ["auto"]
 
 
 def _make_preprocessed_dataset(
@@ -433,6 +513,7 @@ def _run_validation_open_loop(
     is_main: bool,
     epoch: int,
     strict: bool,
+    dense_diagnostic: bool = False,
 ) -> dict[str, float]:
     was_training = model.training
     model.eval()
@@ -445,6 +526,13 @@ def _run_validation_open_loop(
         try:
             sample = dataset[int(idx)]
             pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
+            qdiag = runtime_query_diagnostics(pred, sel.selected)
+            qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
+            qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
+            dense = None
+            raw_model = model.module if isinstance(model, DDP) else model
+            if dense_diagnostic and hasattr(raw_model, "predict_dense_numpy"):
+                dense = raw_model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
             diag = compute_bdse_diagnostics(
                 sample.candidates,
                 sample.evidence_bank,
@@ -456,7 +544,10 @@ def _run_validation_open_loop(
                 tour.action_index,
                 cfg=cfg,
                 inference_pairs=pred.get("rival_pair_indices", sel.pair_indices),
-                query_diagnostics=runtime_query_diagnostics(pred, sel.selected),
+                query_diagnostics=qdiag,
+                dense_predicted_base=None if dense is None else dense["J0"],
+                dense_predicted_atom_costs=None if dense is None else dense["g"],
+                certificate_margin_matrix=tour.margins,
             )
             for k, v in diag.values.items():
                 meters.setdefault(k, []).append(float(v))
@@ -496,13 +587,50 @@ def _save_training_checkpoints(
     metrics: dict[str, float],
     best_metric: float | None,
     best_epoch: int | None,
+    best_trackers: dict[str, dict[str, Any]],
     world_size: int,
     is_main: bool,
-) -> tuple[float | None, int | None]:
-    metric_name, metric, metric_mode = _resolve_best_metric(metrics, args)
-    improved = np.isfinite(metric) and _is_better(metric, best_metric, metric_mode)
-    new_best_metric = metric if improved else best_metric
-    new_best_epoch = int(epoch) if improved else best_epoch
+) -> tuple[float | None, int | None, dict[str, dict[str, Any]]]:
+    requests = _requested_best_metrics(args)
+    requested_mode = str(getattr(args, "best_mode", "auto"))
+    current_specs: list[tuple[str, str, float, str]] = [
+        _resolve_best_metric_for_request(metrics, req, requested_mode) for req in requests
+    ]
+
+    # Backward-compatible primary best: the first requested metric also controls
+    # <stem>.best.pt and the historical best_metric/best_epoch fields.
+    primary_label, primary_metric_name, primary_value, primary_mode = current_specs[0]
+    primary_improved = np.isfinite(primary_value) and _is_better(primary_value, best_metric, primary_mode)
+    new_best_metric = primary_value if primary_improved else best_metric
+    new_best_epoch = int(epoch) if primary_improved else best_epoch
+
+    # Update metric-specific trackers independently, e.g. best_auto,
+    # best_teacher_action_match, best_full_interface_action_match, best_teacher_regret.
+    new_trackers: dict[str, dict[str, Any]] = {str(k): dict(v) for k, v in (best_trackers or {}).items()}
+    improved_labels: list[str] = []
+    for label, metric_name, value, mode in current_specs:
+        rec = new_trackers.get(label, {})
+        prev = rec.get("best_value", None)
+        prev_float = None if prev is None else float(prev)
+        improved = np.isfinite(value) and _is_better(float(value), prev_float, mode)
+        if improved:
+            new_trackers[label] = {
+                "request": label,
+                "metric_name": metric_name,
+                "best_value": float(value),
+                "best_epoch": int(epoch),
+                "mode": mode,
+            }
+            improved_labels.append(label)
+        elif label not in new_trackers:
+            new_trackers[label] = {
+                "request": label,
+                "metric_name": metric_name,
+                "best_value": None,
+                "best_epoch": None,
+                "mode": mode,
+            }
+
     ckpt = _make_checkpoint(
         model=model,
         optimizer=optimizer,
@@ -514,22 +642,30 @@ def _save_training_checkpoints(
         best_metric=new_best_metric,
         best_epoch=new_best_epoch,
         world_size=world_size,
+        best_trackers=new_trackers,
     )
     if is_main:
         paths = _checkpoint_paths(args, epoch)
         _torch_save_atomic(ckpt, paths["latest"])
         if int(args.save_every_n_epochs) > 0 and ((epoch + 1) % int(args.save_every_n_epochs) == 0):
             _torch_save_atomic(ckpt, paths["epoch"])
-        if bool(args.save_best) and improved:
-            _torch_save_atomic(ckpt, paths["best"])
+        saved_specific: list[str] = []
+        if bool(args.save_best):
+            if primary_improved:
+                _torch_save_atomic(ckpt, paths["best"])
+            for label in improved_labels:
+                path = _best_checkpoint_path(args, label)
+                _torch_save_atomic(ckpt, path)
+                saved_specific.append(f"{label}:{path}")
         print(
             f"[bdse] saved latest={paths['latest']} "
             f"epoch_ckpt={paths.get('epoch') if int(args.save_every_n_epochs) > 0 else '-'} "
-            f"best={paths['best'] if improved and bool(args.save_best) else '(unchanged)'} "
-            f"best_metric={metric_name} mode={metric_mode} best_value={new_best_metric}",
+            f"primary_best={paths['best'] if primary_improved and bool(args.save_best) else '(unchanged)'} "
+            f"metric_bests={saved_specific if saved_specific else '(unchanged)'} "
+            f"primary_metric={primary_metric_name} mode={primary_mode} best_value={new_best_metric}",
             flush=True,
         )
-    return new_best_metric, new_best_epoch
+    return new_best_metric, new_best_epoch, new_trackers
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -557,8 +693,9 @@ def main() -> None:
     parser.add_argument("--save-every-n-epochs", type=int, default=1, help="Save an epoch checkpoint every N epochs. Set 0 to disable per-epoch files.")
     parser.add_argument("--save-best", dest="save_best", action="store_true", default=True, help="Save <output_stem>.best.pt using --best-metric.")
     parser.add_argument("--no-save-best", dest="save_best", action="store_false", help="Disable best checkpoint saving.")
-    parser.add_argument("--best-metric", type=str, default="auto", help="Metric used for best checkpoint selection. 'auto' prefers val_bdse_score, then val_teacher_regret, then val_loss, then loss.")
-    parser.add_argument("--best-mode", type=str, default="auto", choices=["auto", "min", "max"], help="Whether lower or higher --best-metric is better. Use auto for the default validation-aware behavior.")
+    parser.add_argument("--best-metric", type=str, default="auto", help="Primary metric used for backward-compatible <output_stem>.best.pt. 'auto' prefers val_bdse_score, then val_teacher_regret, then val_loss, then loss.")
+    parser.add_argument("--best-metrics", type=str, nargs="*", default=None, help="Save additional metric-specific best checkpoints in one run, e.g. auto teacher_action_match full_interface_action_match teacher_regret.")
+    parser.add_argument("--best-mode", type=str, default="auto", choices=["auto", "min", "max"], help="Whether lower or higher --best-metric/--best-metrics is better. Use auto for validation-aware defaults.")
     parser.add_argument("--val-split", type=str, nargs="+", default=None, help="Optional validation split/folder(s), e.g. val or val_vegas. Enables validation-best checkpoints.")
     parser.add_argument("--val-preprocessed-dir", type=str, default=None, help="Validation cache root. Defaults to --preprocessed-dir.")
     parser.add_argument("--val-max-scenarios", type=int, default=None, help="Cap validation samples, e.g. 1000 for fast per-epoch validation.")
@@ -567,6 +704,7 @@ def main() -> None:
     parser.add_argument("--val-num-workers", type=int, default=None, help="Validation DataLoader workers for val loss. Defaults to training num_workers.")
     parser.add_argument("--val-every-n-epochs", type=int, default=1, help="Run validation every N epochs. Set 0 to disable validation even when --val-split is provided.")
     parser.add_argument("--val-mode", type=str, default="open_loop", choices=["loss", "open_loop", "both"], help="Validation signal. open_loop computes BDSE decision diagnostics; both also reports val loss.")
+    parser.add_argument("--val-dense-diagnostic", action="store_true", help="During open-loop validation, also run dense full-interface scoring so val_full_interface_action_match is a true dense diagnostic. Slower but useful for metric-specific best checkpoints.")
     parser.add_argument("--val-strict", action="store_true", help="Raise validation exceptions instead of counting failed validation samples.")
     parser.add_argument("--log-file", type=str, default=None, help="Optional JSONL file for per-epoch train/validation metrics. Defaults to <output_stem>.train_log.jsonl.")
     args = parser.parse_args()
@@ -675,7 +813,7 @@ def main() -> None:
             print(
                 f"[bdse] validation_samples={len(val_dataset)} val_split={args.val_split} "
                 f"val_mode={args.val_mode} val_every_n_epochs={args.val_every_n_epochs} "
-                f"val_best_metric={args.best_metric}",
+                f"val_best_metrics={_requested_best_metrics(args)}",
                 flush=True,
             )
     if distributed:
@@ -702,7 +840,7 @@ def main() -> None:
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     else:
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-    start_epoch, best_metric, best_epoch, _ = _load_checkpoint_if_requested(
+    start_epoch, best_metric, best_epoch, best_trackers, _ = _load_checkpoint_if_requested(
         args=args, model=model, optimizer=opt, scaler=scaler, device=device, is_main=is_main
     )
     log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
@@ -770,6 +908,7 @@ def main() -> None:
                         is_main=is_main,
                         epoch=epoch,
                         strict=bool(args.val_strict),
+                        dense_diagnostic=bool(args.val_dense_diagnostic),
                     )
                 )
             epoch_metrics.update(val_metrics)
@@ -778,7 +917,7 @@ def main() -> None:
             log_row = {"epoch": int(epoch), **{str(k): float(v) for k, v in epoch_metrics.items()}}
             with log_file.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(log_row, sort_keys=True) + "\n")
-        best_metric, best_epoch = _save_training_checkpoints(
+        best_metric, best_epoch, best_trackers = _save_training_checkpoints(
             args=args,
             model=model,
             optimizer=opt,
@@ -788,6 +927,7 @@ def main() -> None:
             metrics=epoch_metrics,
             best_metric=best_metric,
             best_epoch=best_epoch,
+            best_trackers=best_trackers,
             world_size=world_size,
             is_main=is_main,
         )
@@ -797,8 +937,8 @@ def main() -> None:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         raw_model = model.module if isinstance(model, DDP) else model
-        final_metrics = {"best_metric": best_metric, "best_epoch": best_epoch}
-        torch.save({"model": raw_model.state_dict(), "cfg": cfg, "metrics": final_metrics}, out_path)
+        final_metrics = {"best_metric": best_metric, "best_epoch": best_epoch, "best_trackers": best_trackers}
+        torch.save({"model": raw_model.state_dict(), "cfg": cfg, "metrics": final_metrics, "best_trackers": best_trackers}, out_path)
         print(f"[bdse] saved final model={out_path} best_epoch={best_epoch} best_{args.best_metric}={best_metric}", flush=True)
     if distributed and dist.is_initialized():
         dist.barrier()

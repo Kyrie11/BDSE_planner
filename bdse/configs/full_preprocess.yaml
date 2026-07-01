@@ -210,6 +210,13 @@ training:
   normalize_atom_cost_loss: true
   normalize_calibration_loss: true
   normalized_huber_delta: 1.0
+  # Keep heteroscedastic uncertainty calibrated without letting the normalized
+  # NLL dominate action learning.  The previous implicit 1e-6 normalized floor
+  # produced L_unc values in the millions on v5 training logs.
+  uncertainty_normalized_var_floor: 0.05
+  uncertainty_normalized_var_ceiling: 20.0
+  uncertainty_nll_clamp: 20.0
+  uncertainty_nll_min: 0.0
   atom_cost_min_scale: 100.0
   pair_margin_reg_weight: 1.0
   pair_margin_reg_delta: 1.0

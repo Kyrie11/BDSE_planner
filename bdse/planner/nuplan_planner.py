@@ -333,7 +333,9 @@ class BDSEPlannerCore:
 
     def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
         candidates = generate_candidate_bank(runtime, self.cfg)
-        if bool(self.cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)):
+        if bool(self.cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)) and not bool(
+            self.cfg.get("runtime", {}).get("skip_candidate_aware_agent_selection", False)
+        ):
             from bdse.data.feature_builder import resort_runtime_agents_for_candidates
 
             runtime2 = resort_runtime_agents_for_candidates(runtime, candidates, self.cfg)
@@ -349,6 +351,7 @@ class BDSEPlannerCore:
         if bool(fcfg.get("enabled", True)):
             L_stages = list(fcfg.get("rival_stages", [base_L, min(31, max(candidates.K - 1, 1))]))
             B_stages = list(fcfg.get("budget_stages", [base_budget, min(int(self.cfg.get("evidence", {}).get("max_atoms", 128)), max(base_budget * 2, base_budget + 1))]))
+            max_extra_stages = fcfg.get("max_additional_stages", None)
             for L in L_stages:
                 for B in B_stages:
                     M = int(max(int(self.cfg.get("selector", {}).get("proposal_top_m", base_M)), min(int(self.cfg.get("evidence", {}).get("max_atoms", 128)), int(float(fcfg.get("proposal_multiplier", 3.0)) * int(B)))))
@@ -356,6 +359,10 @@ class BDSEPlannerCore:
                     cfg_stage = self._stage_cfg(int(B), int(M), int(L))
                     if name != "base":
                         stages.append((name, cfg_stage))
+                        if max_extra_stages is not None and len(stages) - 1 >= int(max_extra_stages):
+                            break
+                if max_extra_stages is not None and len(stages) - 1 >= int(max_extra_stages):
+                    break
         best = None
         stage_records = []
         triggered = False

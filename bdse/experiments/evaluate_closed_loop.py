@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import subprocess
 import sys
@@ -83,7 +84,23 @@ def _strip_hydra_wrapping(value: str) -> str:
 
 def _canonical_override_value(group: str, value: str) -> str:
     raw = _strip_hydra_wrapping(value)
-    return _NUPLAN_OVERRIDE_ALIASES.get(group, {}).get(raw, raw)
+    aliases = _NUPLAN_OVERRIDE_ALIASES.get(group, {})
+    if raw in aliases:
+        return aliases[raw]
+
+    # Hydra fails during config composition when a known nuPlan group name is
+    # misspelled by even one character, e.g.
+    # ``simulation_closed_loop_nonreactive_agen``.  Treat only the small set of
+    # official BDSE-supported choices as candidates; arbitrary user configs are
+    # passed through unchanged.
+    canonical_values = sorted(set(aliases.values()))
+    for canonical in canonical_values:
+        if canonical.startswith(raw) and len(raw) >= len(canonical) - 3:
+            return canonical
+    close = difflib.get_close_matches(raw, canonical_values, n=1, cutoff=0.94)
+    if close:
+        return close[0]
+    return raw
 
 
 def _canonical_challenge_name(challenge: str) -> str:
@@ -147,6 +164,22 @@ def _normalize_known_nuplan_overrides(overrides: list[str]) -> list[str]:
                 break
         normalized.append(new_item)
     return normalized
+
+
+def _ensure_challenge_metric_overrides(overrides: list[str], challenge: str) -> list[str]:
+    """Inject challenge-consistent metric groups unless the user already did.
+
+    nuPlan's default_simulation config requires a concrete ``simulation_metric``
+    group.  Depending on the local devkit checkout, forgetting it (or passing a
+    singular/truncated spelling after ``--``) raises a Hydra MissingConfigException
+    before BDSEPlanner is constructed.  The wrapper already knows the intended
+    challenge, so make the launched command self-consistent.
+    """
+    spec = _CANONICAL_NUPLAN_CHALLENGES[_canonical_challenge_name(challenge)]
+    out = list(overrides)
+    if not _has_override(out, "simulation_metric"):
+        out.append(f"simulation_metric={spec['simulation_metric']}")
+    return out
 
 
 def _split_overrides(raw: list[str]) -> list[str]:
@@ -331,6 +364,7 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
         base.append(f"metric_aggregator={_canonical_override_value('metric_aggregator', args.metric_aggregator)}")
 
     final_overrides = _normalize_known_nuplan_overrides(list(overrides))
+    final_overrides = _ensure_challenge_metric_overrides(final_overrides, challenge)
 
     # nuPlan's official scenario_builder=nuplan config derives its default DB
     # path from NUPLAN_DATA_ROOT as ``${NUPLAN_DATA_ROOT}/nuplan-v1.1/trainval``.

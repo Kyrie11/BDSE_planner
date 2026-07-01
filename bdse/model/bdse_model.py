@@ -539,39 +539,49 @@ class BDSEModel(nn.Module):
         atom_ids_flat, action_ids_rep, q = compute_query_features_for_pairs(evidence_bank.atoms, candidates, runtime, atom_indices, action_ids, cfg)
         qfd = int(self.cfg.get("model", {}).get("query_feature_dim", 12))
         q_dense = np.zeros((E, candidates.K, qfd), dtype=np.float32)
-        for row, (ei, ai) in enumerate(zip(atom_ids_flat.tolist(), action_ids_rep.tolist())):
-            q_dense[int(ei), int(ai), : min(qfd, q.shape[1])] = q[row, : min(qfd, q.shape[1])]
-        flat_atoms = []
-        flat_a = []
-        flat_b = []
-        flat_q_a = []
-        flat_q_b = []
-        flat_pos = []
-        for pidx, (a, b) in enumerate(pair_indices.tolist()):
-            if not (0 <= int(a) < candidates.K and 0 <= int(b) < candidates.K):
-                continue
-            for ei in atom_indices.tolist():
-                flat_atoms.append(int(ei))
-                flat_a.append(int(a))
-                flat_b.append(int(b))
-                flat_q_a.append(q_dense[int(ei), int(a)])
-                flat_q_b.append(q_dense[int(ei), int(b)])
-                flat_pos.append((int(ei), int(pidx)))
-        if not flat_atoms:
+        if len(atom_ids_flat):
+            d = min(qfd, q.shape[1])
+            q_dense[np.asarray(atom_ids_flat, dtype=np.int64), np.asarray(action_ids_rep, dtype=np.int64), :d] = q[:, :d]
+
+        a_all = pair_indices[:, 0]
+        b_all = pair_indices[:, 1]
+        valid_pairs = (a_all >= 0) & (a_all < candidates.K) & (b_all >= 0) & (b_all < candidates.K)
+        pidx_valid = np.flatnonzero(valid_pairs).astype(np.int64)
+        if pidx_valid.size == 0:
             return out, var_out
+
+        # Flatten the Top-M atom x pair grid without Python list construction.
+        # Closed-loop profiling showed this function can be called repeatedly per
+        # planner step and can easily evaluate tens of thousands of atom-pair
+        # scores; vectorizing the index grid avoids a large CPU bottleneck before
+        # the batched MLP call.
+        A = int(atom_indices.size)
+        P_valid = int(pidx_valid.size)
+        atoms_grid = np.repeat(atom_indices.astype(np.int64), P_valid)
+        pidx_grid = np.tile(pidx_valid, A)
+        a_grid = np.tile(a_all[pidx_valid].astype(np.int64), A)
+        b_grid = np.tile(b_all[pidx_valid].astype(np.int64), A)
+        qa = q_dense[atoms_grid, a_grid]
+        qb = q_dense[atoms_grid, b_grid]
+
         device = next(self.parameters()).device
-        atom_t = torch.as_tensor(np.asarray(flat_atoms, dtype=np.int64)[None], device=device)
-        a_t = torch.as_tensor(np.asarray(flat_a, dtype=np.int64)[None], device=device)
-        b_t = torch.as_tensor(np.asarray(flat_b, dtype=np.int64)[None], device=device)
-        qa_t = torch.as_tensor(np.asarray(flat_q_a, dtype=np.float32)[None], device=device)
-        qb_t = torch.as_tensor(np.asarray(flat_q_b, dtype=np.float32)[None], device=device)
+        runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
+        model_cfg = self.cfg.get("model", {}) if isinstance(self.cfg, dict) else {}
+        chunk = int(runtime_cfg.get("pair_score_chunk", model_cfg.get("runtime_pair_score_chunk", 65536)))
+        chunk = max(1, chunk)
         with torch.no_grad():
-            vals, variances = self.score_sparse_pairs(context, atom_t, a_t, b_t, qa_t, qb_t, return_uncertainty=True)
-            vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
-            var_np = variances[0].detach().cpu().numpy().astype(np.float32)
-        for row, (ei, pidx) in enumerate(flat_pos):
-            out[ei, pidx] = vals_np[row]
-            var_out[ei, pidx] = var_np[row]
+            for q0 in range(0, int(atoms_grid.size), chunk):
+                q1 = min(int(atoms_grid.size), q0 + chunk)
+                atom_t = torch.as_tensor(atoms_grid[q0:q1][None], dtype=torch.long, device=device)
+                a_t = torch.as_tensor(a_grid[q0:q1][None], dtype=torch.long, device=device)
+                b_t = torch.as_tensor(b_grid[q0:q1][None], dtype=torch.long, device=device)
+                qa_t = torch.as_tensor(qa[q0:q1][None], dtype=torch.float32, device=device)
+                qb_t = torch.as_tensor(qb[q0:q1][None], dtype=torch.float32, device=device)
+                vals, variances = self.score_sparse_pairs(context, atom_t, a_t, b_t, qa_t, qb_t, return_uncertainty=True)
+                vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
+                var_np = variances[0].detach().cpu().numpy().astype(np.float32)
+                out[atoms_grid[q0:q1], pidx_grid[q0:q1]] = vals_np
+                var_out[atoms_grid[q0:q1], pidx_grid[q0:q1]] = var_np
         return out, var_out
 
     def predict_certificate_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> dict[str, Any]:

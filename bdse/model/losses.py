@@ -530,11 +530,32 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             pair_var = (v_a + v_b).clamp_min(1e-6)
         if normalize_pair_losses:
             err2 = ((pred_atom_delta - true_atom_delta) / pair_scale).pow(2)
-            pair_var_norm = (pair_var / pair_scale.pow(2)).clamp_min(1e-6)
+            # ``pair_var`` is predicted in raw teacher-cost units, while the
+            # supervised pair losses above are normalized by a scene margin scale.
+            # A tiny normalized variance floor (1e-6) makes the NLL dominate the
+            # total objective by 5-8 orders of magnitude early in training and was
+            # observed to destabilize the action head after the variance collapses.
+            # Use an explicit normalized variance range so uncertainty remains a
+            # calibration regularizer rather than the main optimization target.
+            pair_var_norm = pair_var / pair_scale.pow(2)
+            pair_var_norm = pair_var_norm.clamp_min(float(train_cfg.get("uncertainty_normalized_var_floor", 5e-2)))
+            var_ceiling = train_cfg.get("uncertainty_normalized_var_ceiling", 20.0)
+            if var_ceiling is not None and float(var_ceiling) > 0:
+                pair_var_norm = pair_var_norm.clamp_max(float(var_ceiling))
             nll = 0.5 * (err2 / pair_var_norm + torch.log(pair_var_norm))
         else:
             err2 = (pred_atom_delta - true_atom_delta).pow(2)
-            nll = 0.5 * (err2 / pair_var + torch.log(pair_var))
+            pair_var_raw = pair_var.clamp_min(float(train_cfg.get("uncertainty_raw_var_floor", 1e-3)))
+            raw_ceiling = train_cfg.get("uncertainty_raw_var_ceiling", None)
+            if raw_ceiling is not None and float(raw_ceiling) > 0:
+                pair_var_raw = pair_var_raw.clamp_max(float(raw_ceiling))
+            nll = 0.5 * (err2 / pair_var_raw + torch.log(pair_var_raw))
+        nll_max = train_cfg.get("uncertainty_nll_clamp", 20.0)
+        if nll_max is not None and float(nll_max) > 0:
+            nll = nll.clamp_max(float(nll_max))
+        nll_min = train_cfg.get("uncertainty_nll_min", 0.0)
+        if nll_min is not None:
+            nll = nll.clamp_min(float(nll_min))
         L_unc = _weighted_mean(nll, atom_weights, atom_pair_mask)
     else:
         L_unc = J0.new_tensor(0.0)
