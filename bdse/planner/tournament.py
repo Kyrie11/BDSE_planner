@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from bdse.planner.pair_screen import build_rival_sets_from_base
-from bdse.planner.selector import budgeted_margin, full_interface_margin
+from bdse.planner.selector import budgeted_margin, full_interface_margin, margin_normalization_scale
 from bdse.utils import softmin_np
 
 
@@ -179,6 +179,8 @@ def _pair_delta_margin_matrix(
     pair_atom_delta: np.ndarray,
     selected_atoms: list[int] | np.ndarray,
     valid_mask: np.ndarray,
+    normalize_margins: bool = False,
+    margin_scale: float | None = None,
 ) -> np.ndarray:
     """Build a valid-valid antisymmetric sparse pair-margin matrix.
 
@@ -193,9 +195,18 @@ def _pair_delta_margin_matrix(
     """
     J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
     K = J0.shape[0]
-    M = J0[None, :] - J0[:, None]
-    np.fill_diagonal(M, 0.0)
     pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    scale = 1.0
+    if bool(normalize_margins):
+        if margin_scale is not None and np.isfinite(float(margin_scale)) and float(margin_scale) > 0:
+            scale = float(margin_scale)
+        elif pair_arr.size:
+            ok_pairs = pair_arr[(pair_arr[:, 0] >= 0) & (pair_arr[:, 0] < K) & (pair_arr[:, 1] >= 0) & (pair_arr[:, 1] < K)]
+            scale = margin_normalization_scale(J0[ok_pairs[:, 1]] - J0[ok_pairs[:, 0]], min_scale=100.0) if ok_pairs.size else 100.0
+        else:
+            scale = 100.0
+    M = (J0[None, :] - J0[:, None]) / max(scale, 1e-6)
+    np.fill_diagonal(M, 0.0)
     delta = np.asarray(pair_atom_delta, dtype=np.float32)
     selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
     selected = selected[(selected >= 0) & (selected < delta.shape[0])] if delta.ndim == 2 else np.zeros((0,), dtype=np.int64)
@@ -206,7 +217,7 @@ def _pair_delta_margin_matrix(
         for pidx, (a_raw, b_raw) in enumerate(pair_arr.tolist()):
             a, b = int(a_raw), int(b_raw)
             if 0 <= a < K and 0 <= b < K and a != b:
-                directed[(a, b)] = J0[b] - J0[a] + float(support[pidx])
+                directed[(a, b)] = (J0[b] - J0[a]) / max(scale, 1e-6) + float(support[pidx])
 
     done: set[tuple[int, int]] = set()
     for (a, b), value_ab in directed.items():
@@ -283,7 +294,19 @@ def run_pair_conditioned_tournament(
         progress_rivals=int(sc.get("progress_rivals", 0)),
         maneuver_rivals=int(sc.get("maneuver_rivals", 0)),
     )
-    M_B = _pair_delta_margin_matrix(predicted_base_cost, pair_indices, pair_atom_delta, selected_atoms, valid_mask)
+    normalize_margins = bool(cfg.get("model", {}).get("pair_margin_normalized", False))
+    pair_margin_scale = cfg.get("runtime_pair_margin_scale", None)
+    if pair_margin_scale is None:
+        pair_margin_scale = cfg.get("pair_margin_scale", None)
+    M_B = _pair_delta_margin_matrix(
+        predicted_base_cost,
+        pair_indices,
+        pair_atom_delta,
+        selected_atoms,
+        valid_mask,
+        normalize_margins=normalize_margins,
+        margin_scale=pair_margin_scale,
+    )
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
     M_eval = M_B - epsilon_cal
     sigma = _pair_sigma_matrix(pair_indices, pair_atom_variance, selected_atoms, M_B.shape[0])
@@ -322,6 +345,8 @@ def run_pair_conditioned_tournament(
             "safety_lcb_min": safety_lcb_min,
             "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             "pair_conditioned": True,
+            "normalized_margins": bool(normalize_margins),
+            "margin_scale": float(pair_margin_scale) if pair_margin_scale is not None else 1.0,
         },
     )
 

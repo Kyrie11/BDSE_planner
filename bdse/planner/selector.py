@@ -45,6 +45,45 @@ def _spent_for(selected: list[int] | np.ndarray, costs: np.ndarray) -> float:
     return float(total)
 
 
+def margin_normalization_scale(values: np.ndarray, min_scale: float = 100.0) -> float:
+    """Robust scalar used to convert raw teacher/base costs into margin units.
+
+    Runtime does not know teacher costs, so it uses the current base rival-margin
+    spread.  Training uses the same minimum scale on supervised pair margins.
+    """
+    arr = np.asarray(values, dtype=np.float32).reshape(-1)
+    arr = np.abs(arr[np.isfinite(arr)])
+    if arr.size == 0:
+        return float(min_scale)
+    return float(max(float(np.median(arr)), float(min_scale)))
+
+
+def structural_safety_mask(
+    hard_mask: np.ndarray | None,
+    family_ids: np.ndarray | None,
+    active_mask: np.ndarray | None,
+    include_feasibility: bool = True,
+) -> np.ndarray:
+    """Atoms that are kept by rule/guard rather than learned interaction ranking."""
+    E = 0
+    for arr in (hard_mask, family_ids, active_mask):
+        if arr is not None:
+            E = max(E, int(np.asarray(arr).reshape(-1).shape[0]))
+    if E == 0:
+        return np.zeros((0,), dtype=bool)
+    out = _as_bool_mask(hard_mask, E)
+    if include_feasibility and family_ids is not None:
+        fam = np.asarray(family_ids, dtype=np.int64).reshape(-1)
+        if fam.shape[0] < E:
+            fam = np.pad(fam, (0, E - fam.shape[0]), constant_values=0)
+        # FAMILY_NAMES['feasibility'] == 1.  Keep the numeric dependency local so
+        # selector.py stays independent from evidence_queries.
+        out |= fam[:E] == 1
+    if active_mask is not None:
+        out &= _as_bool_mask(active_mask, E)
+    return out
+
+
 def _complete_safety_aware_selection(
     selected: list[int] | np.ndarray,
     atom_budget_costs: np.ndarray,
@@ -810,6 +849,8 @@ def runtime_greedy_selector_pair_conditioned(
     mandatory_quota: int = 0,
     min_selected_atoms: int = 0,
     force_fill_budget: bool = False,
+    normalize_margins: bool = False,
+    margin_scale: float | None = None,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -842,7 +883,11 @@ def runtime_greedy_selector_pair_conditioned(
     a = pair_arr[:, 0]
     b = pair_arr[:, 1]
     J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
-    base_delta = J0[b] - J0[a]
+    base_delta_raw = J0[b] - J0[a]
+    scale = 1.0
+    if bool(normalize_margins):
+        scale = float(margin_scale) if margin_scale is not None and np.isfinite(float(margin_scale)) and float(margin_scale) > 0 else margin_normalization_scale(base_delta_raw, min_scale=100.0)
+    base_delta = (base_delta_raw / max(scale, 1e-6)).astype(np.float32)
     flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
     safety_b = flags[b] if flags.shape[0] > int(np.max(b, initial=0)) else np.zeros_like(base_delta, dtype=bool)
     caps = np.where(
@@ -917,7 +962,7 @@ def runtime_greedy_selector_pair_conditioned(
         objective_value=current,
         pair_indices=pair_arr,
         pair_weights=weights,
-        diagnostics={"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": mode, "pair_count": int(len(pair_arr)), **extra_diag, **post_diag},
+        diagnostics={"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": mode, "pair_count": int(len(pair_arr)), "normalized_margins": bool(normalize_margins), "margin_scale": float(scale), **extra_diag, **post_diag},
     )
 
 
@@ -967,14 +1012,19 @@ def select_by_mode(
         order = []
         for fam in sorted(set(fams)):
             order.extend([i for i, f in enumerate(fams) if f == fam])
-    elif mode in {"interaction_only", "rule_map_only", "risk_only"}:
+    elif mode in {"proposal_top", "hard_safety_only", "interaction_only", "rule_map_only", "risk_only"}:
         fams = atom_families or ["all"] * E
-        want = "interaction" if mode == "interaction_only" else "rule_map"
-        if mode == "risk_only":
+        if mode == "proposal_top":
+            magnitude = np.abs(predicted_atom_costs[:, valid_mask]).mean(axis=1)
+            order = sorted(range(E), key=lambda i: (-float(magnitude[i]), i))
+        elif mode == "hard_safety_only":
+            order = [i for i, f in enumerate(fams) if f in {"hard", "safety", "feasibility", "rule_map"}]
+        elif mode == "risk_only":
             magnitude = np.abs(predicted_atom_costs[:, valid_mask]).max(axis=1)
             order = sorted(range(E), key=lambda i: (-float(magnitude[i]), i))
         else:
-            order = [i for i, f in enumerate(fams) if f == want]
+            want_set = {"interaction", "reachability_interaction", "precedence"} if mode == "interaction_only" else {"rule_map", "feasibility"}
+            order = [i for i, f in enumerate(fams) if f in want_set]
     else:
         raise ValueError(f"Unknown selector mode: {mode}")
     selected: list[int] = []

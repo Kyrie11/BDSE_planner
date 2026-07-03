@@ -67,6 +67,7 @@ def main() -> None:
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
         pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
         qdiag = runtime_query_diagnostics(pred, sel.selected)
+        qdiag.update({k: v for k, v in getattr(tour, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
         qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
         qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
         dense = None

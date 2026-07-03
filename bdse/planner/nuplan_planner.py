@@ -34,7 +34,13 @@ from bdse.planner.evidence_queries import compute_query_features_for_pairs
 from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
-from bdse.planner.selector import runtime_greedy_selector, runtime_greedy_selector_pair_conditioned
+from bdse.planner.selector import (
+    SelectionResult,
+    runtime_greedy_selector,
+    runtime_greedy_selector_pair_conditioned,
+    select_by_mode,
+    structural_safety_mask,
+)
 from bdse.planner.tournament import run_tournament, run_pair_conditioned_tournament, selected_pair_sigma_from_action_variance
 
 
@@ -154,9 +160,15 @@ class BDSEPlannerCore:
             min_family_slots=cfg.get("selector", {}).get("min_family_topm_slots", None),
         )
         try:
-            mandatory_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E] & active
+            raw_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E]
         except Exception:
-            mandatory_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
+            raw_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
+        mandatory_hard_mask = structural_safety_mask(
+            raw_hard_mask,
+            family_ids,
+            active,
+            include_feasibility=bool(cfg.get("selector", {}).get("structural_safety_include_feasibility", True)),
+        )
         if bool(cfg.get("selector", {}).get("force_hard_topm", True)):
             forced = np.flatnonzero(mandatory_hard_mask)
             if forced.size:
@@ -230,6 +242,90 @@ class BDSEPlannerCore:
             cfg["tournament"]["L_infer"] = int(L_infer)
         return cfg
 
+
+    def _run_baseline_stage(self, mode: str, pred: dict[str, Any], runtime: RuntimeFeatures, candidates, evidence_bank, stage_cfg: dict[str, Any], atom_active: np.ndarray, family_ids: np.ndarray, runtime_flags: np.ndarray):
+        """Internal planner baselines for mechanism ablations.
+
+        These modes intentionally avoid the learned BDSE greedy selector so that
+        closed-loop runs can isolate whether gains come from pair-conditioned
+        interaction selection rather than simply using more evidence.
+        """
+        mode = str(mode or "bdse").lower().replace("-", "_")
+        J0 = np.asarray(pred["J0"], dtype=np.float32)
+        valid = np.asarray(candidates.valid_mask, dtype=bool)
+        costs = np.asarray(evidence_bank.budget_costs(), dtype=np.float32)
+        budget = float(stage_cfg.get("evidence", {}).get("budget", 16))
+        atom_families = [str(getattr(a, "family", "all")) for a in evidence_bank.atoms]
+        zero_g = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
+
+        if mode in {"oracle", "oracle_budget", "teacher_oracle"}:
+            raise RuntimeError("oracle_budget is only available in offline diagnostics where teacher labels are present; use bdse.experiments.diagnostics/evaluate_open_loop oracle metrics.")
+
+        if mode in {"base_only", "no_evidence", "no_selector"}:
+            selection = SelectionResult([], 0.0, np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32), {"mode": mode, "spent_budget": 0.0})
+            tournament = run_tournament(J0, zero_g, selection.selected, valid, runtime_flags, stage_cfg, candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids)
+            pred = dict(pred)
+            pred["g"] = zero_g
+            pred["baseline_mode"] = mode
+            return pred, selection, tournament
+
+        if mode in {"dense_full", "full_evidence", "dense_full_evidence"}:
+            if self.model is not None and hasattr(self.model, "predict_dense_numpy"):
+                dense = self.model.predict_dense_numpy(runtime, candidates, evidence_bank, stage_cfg)
+                g_dense = np.asarray(dense["g"], dtype=np.float32)
+                J_dense = np.asarray(dense["J0"], dtype=np.float32)
+            else:
+                g_dense = np.asarray(pred.get("g", zero_g), dtype=np.float32)
+                J_dense = J0
+            active = np.asarray(evidence_bank.active_mask, dtype=bool)
+            selected = np.flatnonzero(active).astype(np.int64).tolist()
+            selection = SelectionResult(selected, 0.0, np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32), {"mode": mode, "spent_budget": float(costs[active].sum())})
+            tournament = run_tournament(J_dense, g_dense, selection.selected, valid, runtime_flags, stage_cfg, candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids)
+            pred = dict(pred)
+            pred.update({"J0": J_dense, "g": g_dense, "baseline_mode": mode, "top_m_atoms": np.asarray(selected, dtype=np.int64), "queried_actions": np.flatnonzero(valid).astype(np.int64)})
+            return pred, selection, tournament
+
+        if mode in {"hard_safety_only", "hard_only", "safety_only"}:
+            mandatory = np.asarray(pred.get("mandatory_atom_mask", np.zeros((evidence_bank.E,), dtype=bool)), dtype=bool)
+            order = np.flatnonzero(mandatory & atom_active).astype(np.int64).tolist()
+            selected: list[int] = []
+            spent = 0.0
+            for i in order:
+                c = float(costs[int(i)])
+                if np.isfinite(c) and spent + c <= budget + 1e-6:
+                    selected.append(int(i)); spent += c
+            selection = SelectionResult(selected, 0.0, np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32), {"mode": mode, "spent_budget": float(spent)})
+            tournament = run_tournament(J0, np.asarray(pred.get("g", zero_g), dtype=np.float32), selection.selected, valid, runtime_flags, stage_cfg, candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids)
+            pred = dict(pred); pred["baseline_mode"] = mode
+            return pred, selection, tournament
+
+        selector_mode = {
+            "random_budget": "random",
+            "random": "random",
+            "proposal_top": "proposal_top",
+            "top_proposal": "proposal_top",
+            "interaction_only": "interaction_only",
+            "rule_map_only": "rule_map_only",
+            "risk_only": "risk_only",
+            "diversity": "diversity",
+        }.get(mode, None)
+        if selector_mode is None:
+            raise ValueError(f"Unknown planner.baseline_mode={mode!r}")
+        selection = select_by_mode(
+            selector_mode,
+            J0,
+            np.asarray(pred.get("g", zero_g), dtype=np.float32),
+            costs,
+            valid,
+            runtime_flags,
+            budget,
+            atom_families=atom_families,
+            seed=int(stage_cfg.get("seed", 17)),
+        )
+        tournament = run_tournament(J0, np.asarray(pred.get("g", zero_g), dtype=np.float32), selection.selected, valid, runtime_flags, stage_cfg, candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids)
+        pred = dict(pred); pred["baseline_mode"] = mode
+        return pred, selection, tournament
+
     def _run_certificate_stage(self, runtime: RuntimeFeatures, candidates, evidence_bank, stage_cfg: dict[str, Any]) -> tuple[dict[str, Any], Any, Any, np.ndarray]:
         pred = self._predict_runtime_certificate(runtime, candidates, evidence_bank, stage_cfg)
         J0, g = pred["J0"], pred["g"]
@@ -243,6 +339,10 @@ class BDSEPlannerCore:
         atom_active &= evidence_bank.active_mask
         family_ids = np.asarray(pred.get("family_ids", family_ids_from_atoms(evidence_bank.atoms, max_atoms=evidence_bank.E)), dtype=np.int64)
         family_caps = pred.get("family_budget_caps", None)
+        baseline_mode = str(stage_cfg.get("planner", {}).get("baseline_mode", "bdse")).lower().replace("-", "_")
+        if baseline_mode not in {"", "bdse", "pair_conditioned", "bdse_pair_conditioned"}:
+            pred_b, selection_b, tournament_b = self._run_baseline_stage(baseline_mode, pred, runtime, candidates, evidence_bank, stage_cfg, atom_active, family_ids, runtime_flags)
+            return pred_b, selection_b, tournament_b, atom_active
         use_pair_conditioned = bool(stage_cfg.get("runtime", {}).get("use_pair_conditioned_margins", stage_cfg.get("model", {}).get("pair_conditioned", True)))
         if use_pair_conditioned and "pair_atom_delta" in pred and "pair_indices" in pred:
             selection = runtime_greedy_selector_pair_conditioned(
@@ -254,8 +354,8 @@ class BDSEPlannerCore:
                 candidates.valid_mask,
                 runtime_flags,
                 budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
-                gamma_max=float(sel_cfg.get("gamma_max_default", 100.0)),
-                eta_pred=float(sel_cfg.get("eta_pred", 1.0)),
+                gamma_max=float(sel_cfg.get("normalized_gamma_max", 5.0) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("gamma_max_default", 100.0)),
+                eta_pred=float(sel_cfg.get("normalized_eta_pred", 0.1) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("eta_pred", 1.0)),
                 atom_active_mask=atom_active,
                 pair_atom_variance=pred.get("pair_atom_var", None),
                 beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
@@ -268,7 +368,11 @@ class BDSEPlannerCore:
                 mandatory_quota=int(sel_cfg.get("mandatory_hard_quota", 0)),
                 min_selected_atoms=int(sel_cfg.get("min_selected_atoms", 0)),
                 force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
+                normalize_margins=bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)),
+                margin_scale=float(pred.get("pair_margin_scale", 100.0)),
             )
+            tournament_cfg = dict(stage_cfg)
+            tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
             tournament = run_pair_conditioned_tournament(
                 J0,
                 pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
@@ -276,7 +380,7 @@ class BDSEPlannerCore:
                 selection.selected,
                 candidates.valid_mask,
                 runtime_flags,
-                stage_cfg,
+                tournament_cfg,
                 pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
                 candidate_trajectories=candidates.trajectories,
                 maneuver_ids=candidates.maneuver_ids,
@@ -369,6 +473,7 @@ class BDSEPlannerCore:
         for idx, (stage_name, cfg_stage) in enumerate(stages):
             pred, selection, tournament, atom_active = self._run_certificate_stage(runtime, candidates, evidence_bank, cfg_stage)
             qdiag = runtime_query_diagnostics(pred, selection.selected)
+            qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
             stage_records.append({
                 "stage": stage_name,
                 "action": int(tournament.action_index),
@@ -406,6 +511,7 @@ class BDSEPlannerCore:
                 stage_name = stage_name + "+conservative"
         trajectory = candidates.trajectories[action]
         qdiag = runtime_query_diagnostics(pred, selection.selected)
+        qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
         diagnostics = {
             "action_index": action,
             "selected_atoms": selection.selected,

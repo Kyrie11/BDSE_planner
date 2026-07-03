@@ -88,6 +88,9 @@ def main() -> None:
                 continue
             seen.add((a, b))
             true_margin = float(sample.teacher.J_T[b] - sample.teacher.J_T[a])
+            if bool(cfg.get("model", {}).get("pair_margin_normalized", False)):
+                scale = float(tour.diagnostics.get("margin_scale", pred.get("pair_margin_scale", 100.0)))
+                true_margin = true_margin / max(scale, 1e-6)
             pred_margin = float(M_pred[a, b])
             err = max(0.0, pred_margin - true_margin)
             residuals.append(err)
@@ -106,7 +109,8 @@ def main() -> None:
         "pair_count": int(len(residuals)),
         "safety_pair_count": int(len(safety_residuals)),
         "device": str(device),
-        "recommendation": "Set tournament.epsilon_cal to epsilon_cal. This is a one-sided over-confidence quantile, not an absolute residual.",
+        "normalized_margins": bool(cfg.get("model", {}).get("pair_margin_normalized", False)),
+        "recommendation": "Set tournament.epsilon_cal to epsilon_cal. If normalized_margins=true, this epsilon is dimensionless and should stay close to O(1), not raw teacher-cost units.",
     }
     path = Path(args.output)
     path.parent.mkdir(parents=True, exist_ok=True)

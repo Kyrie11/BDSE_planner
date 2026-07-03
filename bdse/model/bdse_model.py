@@ -15,6 +15,7 @@ from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, compute_quer
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.hab import max_family_id, select_topm_atoms_hab
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
+from bdse.planner.selector import margin_normalization_scale, structural_safety_mask
 
 EVIDENCE_TYPE_TO_ID = TYPE_NAMES
 FAMILY_TO_ID = FAMILY_NAMES
@@ -47,6 +48,11 @@ class BDSEModel(nn.Module):
         self.num_families = max(configured_families, int(max_family_id()) + 1)
         self.pair_conditioned = bool(mcfg.get("pair_conditioned", True))
         self.pair_delta_scale = float(mcfg.get("pair_delta_scale", 1.0))
+        # Pair-conditioned deltas are trained/deployed in a normalized margin
+        # space by default.  This keeps hard feasibility penalties (often 1e4)
+        # out of the learnable interaction-margin scale and makes calibration
+        # epsilon dimensionless.
+        self.pair_margin_normalized = bool(mcfg.get("pair_margin_normalized", True))
         self.var_floor = float(mcfg.get("variance_floor", 1e-4))
         self.scene = SceneEncoder(
             h,
@@ -84,8 +90,13 @@ class BDSEModel(nn.Module):
         # It predicts signed atom-level deltas d_i(a,b) directly and enforces
         # antisymmetry by scoring both orders and subtracting.  The non-negative
         # local g_i(a) head remains for backward-compatible cost diagnostics.
-        self.pair_head = nn.Sequential(nn.LayerNorm(h * 6), nn.Linear(h * 6, h), nn.ReLU(), nn.Linear(h, 1))
-        self.pair_var_head = nn.Sequential(nn.LayerNorm(h * 6), nn.Linear(h * 6, h), nn.ReLU(), nn.Linear(h, 1))
+        # Relation-aware pair head.  Besides the ordered action/evidence/query
+        # embeddings used by earlier versions, include explicit pair-difference and
+        # pair-product terms.  The head still enforces antisymmetry by subtracting
+        # the score of the reversed order.
+        self.pair_feature_blocks = 10
+        self.pair_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
+        self.pair_var_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
 
         # Hierarchical Atom Builder (HAB): family gate pi_tau followed by an
         # atom proposal conditioned on family embedding and candidate-set summary.
@@ -303,7 +314,7 @@ class BDSEModel(nn.Module):
         q_a = self.query_proj(self._fit_last_dim(query_a_features.float(), self.query_proj[0].in_features))
         q_b = self.query_proj(self._fit_last_dim(query_b_features.float(), self.query_proj[0].in_features))
         s_h = scene[:, None, :].expand(B, Q, H)
-        return torch.cat([a_h, b_h, e_h, q_a, q_b, s_h], dim=-1)
+        return torch.cat([a_h, b_h, e_h, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
 
     def score_sparse_pairs(
         self,
@@ -447,8 +458,8 @@ class BDSEModel(nn.Module):
                 q_b = self.query_proj(torch.gather(q_raw_e, 2, idx_b_q))
                 e_hp = e_h.expand(B, Ce, Cp, H)
                 s_h = scene[:, None, None, :].expand(B, Ce, Cp, H)
-                z_ab = torch.cat([a_h, b_h, e_hp, q_a, q_b, s_h], dim=-1)
-                z_ba = torch.cat([b_h, a_h, e_hp, q_b, q_a, s_h], dim=-1)
+                z_ab = torch.cat([a_h, b_h, e_hp, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
+                z_ba = torch.cat([b_h, a_h, e_hp, q_b, q_a, s_h, a_h - b_h, a_h * b_h, q_a - q_b, q_a * q_b], dim=-1)
                 delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
                 var = self._positive_variance(self.pair_var_head(z_ab).squeeze(-1), self.var_floor)
                 var = var + self._positive_variance(self.pair_var_head(z_ba).squeeze(-1), self.var_floor)
@@ -633,9 +644,15 @@ class BDSEModel(nn.Module):
             min_family_slots=cfg.get("selector", {}).get("min_family_topm_slots", None),
         )
         try:
-            mandatory_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E] & active
+            raw_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E]
         except Exception:
-            mandatory_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
+            raw_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
+        mandatory_hard_mask = structural_safety_mask(
+            raw_hard_mask,
+            family_ids,
+            active,
+            include_feasibility=bool(cfg.get("selector", {}).get("structural_safety_include_feasibility", True)),
+        )
         if bool(cfg.get("selector", {}).get("force_hard_topm", True)):
             forced = np.flatnonzero(mandatory_hard_mask)
             if forced.size:
@@ -688,6 +705,15 @@ class BDSEModel(nn.Module):
             g_var_sparse[atom_ids, action_ids_rep] = var_np
         selector_pair_delta, selector_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, pairs, cfg)
         rival_pair_delta, rival_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, rival_pairs, cfg)
+        normalize_pairs = bool(cfg.get("model", {}).get("pair_margin_normalized", self.pair_margin_normalized))
+        if normalize_pairs and len(pairs):
+            pair_margin_scale = margin_normalization_scale(J0[pairs[:, 1]] - J0[pairs[:, 0]], min_scale=100.0)
+        else:
+            pair_margin_scale = 1.0
+        if normalize_pairs and len(rival_pairs):
+            rival_pair_margin_scale = margin_normalization_scale(J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]], min_scale=100.0)
+        else:
+            rival_pair_margin_scale = pair_margin_scale
         valid_mask = np.asarray(candidates.valid_mask, dtype=bool)
         g_sparse[:, ~valid_mask] = 0.0
         g_var_sparse[:, ~valid_mask] = 0.0
@@ -718,6 +744,9 @@ class BDSEModel(nn.Module):
             "pair_atom_delta": selector_pair_delta,
             "pair_atom_var": selector_pair_var,
             "pair_indices": pairs,
+            "pair_margin_scale": float(pair_margin_scale),
+            "rival_pair_margin_scale": float(rival_pair_margin_scale),
+            "pair_margin_normalized": bool(normalize_pairs),
             "rival_pair_atom_delta": rival_pair_delta,
             "rival_pair_atom_var": rival_pair_var,
             "rival_pair_indices": rival_pairs,

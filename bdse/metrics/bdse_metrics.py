@@ -232,6 +232,10 @@ def compute_bdse_diagnostics(
             M_B = M_B_from_g
     else:
         M_B = M_B_from_g
+    qdiag = query_diagnostics or {}
+    cert_is_normalized = bool(qdiag.get("normalized_margins", False)) or bool(cfg.get("model", {}).get("pair_margin_normalized", False) and certificate_margin_matrix is not None)
+    cert_scale = float(qdiag.get("margin_scale", 100.0)) if cert_is_normalized else 1.0
+    teacher_M_cert = teacher_M / max(cert_scale, 1e-6) if cert_is_normalized else teacher_M
     if dense_predicted_base is not None and dense_predicted_atom_costs is not None:
         full_action = full_interface_action(dense_predicted_base, dense_predicted_atom_costs, valid, cfg)
         dense_M = _cost_margin_matrix(dense_predicted_base, dense_predicted_atom_costs, valid)
@@ -256,7 +260,6 @@ def compute_bdse_diagnostics(
         effective_query_count = float(query_atom_count * len(query_pairs))
     else:
         effective_query_count = float(query_atom_count * query_action_count)
-    qdiag = query_diagnostics or {}
     critical_sets = _critical_atom_sets(evidence_bank, teacher, pairs, cfg)
     selected_set = set(map(int, selected_atoms))
     topm_raw = qdiag.get("top_m_atoms", [])
@@ -266,7 +269,7 @@ def compute_bdse_diagnostics(
         topm_set = set()
     hard_denom = critical_sets["hard_decisive"] if critical_sets["hard_decisive"] else critical_sets["hard"]
     hard_recall = _recall(selected_set, hard_denom)
-    suff = evidence_sufficiency(teacher_M, M_B, pairs.pairs[pairs.valid_mask], pairs.weights[pairs.valid_mask])
+    suff = evidence_sufficiency(teacher_M_cert, M_B, pairs.pairs[pairs.valid_mask], pairs.weights[pairs.valid_mask])
     selector_ratio = np.nan
     if runtime_selected_atoms_for_oracle_value is not None and oracle_selected_atoms is not None and len(pairs.pairs):
         F_run = oracle_objective_value(runtime_selected_atoms_for_oracle_value, teacher.J_base, teacher.g_evid, pairs.pairs, pairs.margins, pairs.weights)
@@ -275,7 +278,7 @@ def compute_bdse_diagnostics(
     decisive_err = []
     for b in np.flatnonzero(valid):
         if b != a_star:
-            decisive_err.append(abs(float(M_B[a_star, b] - teacher_M[a_star, b])))
+            decisive_err.append(abs(float(M_B[a_star, b] - teacher_M_cert[a_star, b])))
 
     pair_metrics: dict[str, float] = {}
     pair_masks = _pair_group_masks(evidence_bank, teacher, pairs, cfg)
@@ -292,7 +295,7 @@ def compute_bdse_diagnostics(
         "pair_sign_acc_near_tie": "pair_sign_acc_near_tie",
     }
     for raw_prefix, final_prefix in rename_groups.items():
-        vals = _pair_group_metrics(final_prefix, teacher_M, M_B, pair_arr, pair_masks.get(raw_prefix, np.zeros((len(pair_arr),), dtype=bool)), weights)
+        vals = _pair_group_metrics(final_prefix, teacher_M_cert, M_B, pair_arr, pair_masks.get(raw_prefix, np.zeros((len(pair_arr),), dtype=bool)), weights)
         pair_metrics.update(vals)
         dense_vals = _pair_group_metrics("dense_" + final_prefix, teacher_M, dense_M, pair_arr, pair_masks.get(raw_prefix, np.zeros((len(pair_arr),), dtype=bool)), weights)
         pair_metrics.update(dense_vals)
