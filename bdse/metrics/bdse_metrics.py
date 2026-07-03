@@ -10,7 +10,7 @@ from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, orac
 from bdse.planner.tournament import full_interface_action
 
 
-@dataclass(slots=True)
+@dataclass()
 class BDSEMetricResult:
     values: dict[str, float]
     details: dict[str, Any]

@@ -7,7 +7,7 @@ from typing import Iterable
 import numpy as np
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class DBFileRecord:
     split: str
     folder: str

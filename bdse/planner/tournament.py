@@ -42,7 +42,7 @@ def selected_pair_sigma_from_action_variance(
     return np.sqrt(np.maximum(action_var[:, None] + action_var[None, :], 0.0)).astype(np.float32)
 
 
-@dataclass(slots=True)
+@dataclass()
 class TournamentResult:
     action_index: int
     scores: np.ndarray

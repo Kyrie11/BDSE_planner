@@ -20,7 +20,7 @@ MANEUVER_IDS = {
 }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class DynamicFeasibility:
     max_accel: float
     max_decel: float

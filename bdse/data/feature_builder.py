@@ -137,13 +137,13 @@ def _iter_tracked_objects(container: Any) -> list[Any]:
         return []
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _CachedTrackedFrame:
     tokens: tuple[str, ...]
     boxes: np.ndarray
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _CachedEgoFrame:
     state: np.ndarray
 

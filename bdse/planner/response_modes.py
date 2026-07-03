@@ -8,7 +8,7 @@ import numpy as np
 from bdse.data.cache_schema import LabelOnlyFuture, RuntimeFeatures
 
 
-@dataclass(slots=True)
+@dataclass()
 class ResponseMode:
     name: str
     probability: float
