@@ -8,7 +8,7 @@ import numpy as np
 from bdse.planner.evidence_queries import FAMILY_NAMES, certificate_family
 
 
-@dataclass()
+@dataclass(slots=True)
 class FamilyBudgetResult:
     family_pi: np.ndarray
     family_budgets: np.ndarray

@@ -9,7 +9,7 @@ from bdse.data.cache_schema import CandidateBank, LabelOnlyFuture, Sample
 from bdse.utils import nearest_polyline_distance
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class QualityDecision:
     keep: bool
     reasons: tuple[str, ...]

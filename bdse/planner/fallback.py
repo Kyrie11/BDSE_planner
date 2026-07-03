@@ -32,7 +32,7 @@ def _crosses_polyline(path_xy: np.ndarray, line_xy: np.ndarray) -> bool:
     return False
 
 
-@dataclass()
+@dataclass(slots=True)
 class FallbackResult:
     action_index: int
     tournament: TournamentResult

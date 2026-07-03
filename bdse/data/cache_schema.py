@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 
-@dataclass()
+@dataclass(slots=True)
 class RuntimeFeatures:
     ego_history: np.ndarray
     agent_history: np.ndarray
@@ -34,7 +34,7 @@ class RuntimeFeatures:
         }
 
 
-@dataclass()
+@dataclass(slots=True)
 class LabelOnlyFuture:
     logged_ego: np.ndarray
     logged_agents: np.ndarray
@@ -43,7 +43,7 @@ class LabelOnlyFuture:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass()
+@dataclass(slots=True)
 class CandidateBank:
     trajectories: np.ndarray
     valid_mask: np.ndarray
@@ -64,7 +64,7 @@ class CandidateBank:
         return np.flatnonzero(self.valid_mask.astype(bool))
 
 
-@dataclass()
+@dataclass(slots=True)
 class EvidenceAtom:
     atom_id: int
     type: str
@@ -82,7 +82,7 @@ class EvidenceAtom:
     cheap_features: dict[str, float] = field(default_factory=dict)
 
 
-@dataclass()
+@dataclass(slots=True)
 class EvidenceBank:
     atoms: list[EvidenceAtom]
     query_features: np.ndarray
@@ -109,7 +109,7 @@ class EvidenceBank:
         return [a.family for a in self.atoms]
 
 
-@dataclass()
+@dataclass(slots=True)
 class TeacherLabels:
     J_base: np.ndarray
     g_evid: np.ndarray
@@ -130,7 +130,7 @@ class TeacherLabels:
             raise AssertionError("J_T must equal J_base_T + J_evid_T")
 
 
-@dataclass()
+@dataclass(slots=True)
 class PairLabels:
     pairs: np.ndarray
     margins: np.ndarray
@@ -161,7 +161,7 @@ class PairLabels:
             raise AssertionError("Pair weights must be non-negative")
 
 
-@dataclass()
+@dataclass(slots=True)
 class Sample:
     scenario_token: str
     timestamp_us: int

@@ -8,7 +8,7 @@ import numpy as np
 from bdse.planner.pair_screen import build_runtime_pairs_from_base
 
 
-@dataclass()
+@dataclass(slots=True)
 class SelectionResult:
     selected: list[int]
     objective_value: float

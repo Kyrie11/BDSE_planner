@@ -22,7 +22,7 @@ from bdse.data.label_builder import build_training_sample_from_scenario
 from bdse.data.quality import quality_decision
 from bdse.data.scenario_sampler import DBFileRecord, db_files_for_nuplan_builder, discover_db_files, normalize_split_name, select_records
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ScenarioIndexRecord:
     db_path: Path
     split: str
@@ -32,7 +32,7 @@ class ScenarioIndexRecord:
     iteration: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DevkitScenarioIndexRecord:
     scenario: Any
     split: str

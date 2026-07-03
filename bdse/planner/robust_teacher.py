@@ -10,7 +10,7 @@ from bdse.planner.evidence_atoms import normalize_atom_costs, raw_local_costs_wi
 from bdse.planner.response_modes import ResponseMode, build_response_modes, mode_to_label_future
 
 
-@dataclass()
+@dataclass(slots=True)
 class RobustTeacherComponents:
     feasibility_level: np.ndarray
     J_quality: np.ndarray
