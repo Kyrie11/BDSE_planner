@@ -45,7 +45,7 @@ def _spent_for(selected: list[int] | np.ndarray, costs: np.ndarray) -> float:
     return float(total)
 
 
-def margin_normalization_scale(values: np.ndarray, min_scale: float = 100.0) -> float:
+def margin_normalization_scale(values: np.ndarray, min_scale: float = 100.0, quantile: float = 0.75) -> float:
     """Robust scalar used to convert raw teacher/base costs into margin units.
 
     Runtime does not know teacher costs, so it uses the current base rival-margin
@@ -55,7 +55,8 @@ def margin_normalization_scale(values: np.ndarray, min_scale: float = 100.0) -> 
     arr = np.abs(arr[np.isfinite(arr)])
     if arr.size == 0:
         return float(min_scale)
-    return float(max(float(np.median(arr)), float(min_scale)))
+    q = float(np.clip(float(quantile), 0.5, 0.99))
+    return float(max(float(np.quantile(arr, q)), float(min_scale)))
 
 
 def structural_safety_mask(
@@ -851,6 +852,8 @@ def runtime_greedy_selector_pair_conditioned(
     force_fill_budget: bool = False,
     normalize_margins: bool = False,
     margin_scale: float | None = None,
+    proposal_scores: np.ndarray | None = None,
+    proposal_fill_weight: float = 0.0,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -946,6 +949,15 @@ def runtime_greedy_selector_pair_conditioned(
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         utility = np.maximum(np.asarray(delta, dtype=np.float32), 0.0).mean(axis=1)
+    if proposal_scores is not None and float(proposal_fill_weight) > 0.0:
+        prop = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
+        if prop.shape[0] < utility.shape[0]:
+            prop = np.pad(prop, (0, utility.shape[0] - prop.shape[0]), constant_values=-60.0)
+        prop = prop[: utility.shape[0]]
+        # Convert logits/scores to a bounded acquisition prior. This is used only
+        # for post-fill tie breaking and cannot override the hard budget/active masks.
+        prop_prior = 1.0 / (1.0 + np.exp(-np.clip(prop, -20.0, 20.0)))
+        utility = utility + float(proposal_fill_weight) * prop_prior.astype(np.float32)
     selected, spent_post, post_diag = _complete_safety_aware_selection(
         selected,
         atom_budget_costs,

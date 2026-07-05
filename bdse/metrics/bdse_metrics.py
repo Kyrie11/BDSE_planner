@@ -234,7 +234,10 @@ def compute_bdse_diagnostics(
         M_B = M_B_from_g
     qdiag = query_diagnostics or {}
     cert_is_normalized = bool(qdiag.get("normalized_margins", False)) or bool(cfg.get("model", {}).get("pair_margin_normalized", False) and certificate_margin_matrix is not None)
-    cert_scale = float(qdiag.get("margin_scale", 100.0)) if cert_is_normalized else 1.0
+    mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+    tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    scale_default = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 100.0)))
+    cert_scale = float(qdiag.get("margin_scale", scale_default)) if cert_is_normalized else 1.0
     teacher_M_cert = teacher_M / max(cert_scale, 1e-6) if cert_is_normalized else teacher_M
     if dense_predicted_base is not None and dense_predicted_atom_costs is not None:
         full_action = full_interface_action(dense_predicted_base, dense_predicted_atom_costs, valid, cfg)

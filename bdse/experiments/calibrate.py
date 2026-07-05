@@ -89,7 +89,10 @@ def main() -> None:
             seen.add((a, b))
             true_margin = float(sample.teacher.J_T[b] - sample.teacher.J_T[a])
             if bool(cfg.get("model", {}).get("pair_margin_normalized", False)):
-                scale = float(tour.diagnostics.get("margin_scale", pred.get("pair_margin_scale", 100.0)))
+                mcfg = cfg.get("model", {})
+                tcfg = cfg.get("training", {})
+                scale_default = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 100.0)))
+                scale = float(tour.diagnostics.get("margin_scale", pred.get("pair_margin_scale", scale_default)))
                 true_margin = true_margin / max(scale, 1e-6)
             pred_margin = float(M_pred[a, b])
             err = max(0.0, pred_margin - true_margin)

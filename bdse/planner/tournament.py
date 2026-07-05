@@ -181,6 +181,8 @@ def _pair_delta_margin_matrix(
     valid_mask: np.ndarray,
     normalize_margins: bool = False,
     margin_scale: float | None = None,
+    norm_min_scale: float = 100.0,
+    norm_quantile: float = 0.75,
 ) -> np.ndarray:
     """Build a valid-valid antisymmetric sparse pair-margin matrix.
 
@@ -202,9 +204,9 @@ def _pair_delta_margin_matrix(
             scale = float(margin_scale)
         elif pair_arr.size:
             ok_pairs = pair_arr[(pair_arr[:, 0] >= 0) & (pair_arr[:, 0] < K) & (pair_arr[:, 1] >= 0) & (pair_arr[:, 1] < K)]
-            scale = margin_normalization_scale(J0[ok_pairs[:, 1]] - J0[ok_pairs[:, 0]], min_scale=100.0) if ok_pairs.size else 100.0
+            scale = margin_normalization_scale(J0[ok_pairs[:, 1]] - J0[ok_pairs[:, 0]], min_scale=float(norm_min_scale), quantile=float(norm_quantile)) if ok_pairs.size else float(norm_min_scale)
         else:
-            scale = 100.0
+            scale = float(norm_min_scale)
     M = (J0[None, :] - J0[:, None]) / max(scale, 1e-6)
     np.fill_diagonal(M, 0.0)
     delta = np.asarray(pair_atom_delta, dtype=np.float32)
@@ -295,9 +297,18 @@ def run_pair_conditioned_tournament(
         maneuver_rivals=int(sc.get("maneuver_rivals", 0)),
     )
     normalize_margins = bool(cfg.get("model", {}).get("pair_margin_normalized", False))
+    mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+    tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    norm_min_scale = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 100.0)))
+    norm_quantile = float(mcfg.get("margin_normalization_quantile", 0.75))
     pair_margin_scale = cfg.get("runtime_pair_margin_scale", None)
     if pair_margin_scale is None:
         pair_margin_scale = cfg.get("pair_margin_scale", None)
+    if pair_margin_scale is None and bool(normalize_margins):
+        pair_arr_scale = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2) if np.asarray(pair_indices).size else np.zeros((0, 2), dtype=np.int64)
+        J0_scale = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+        ok = pair_arr_scale[(pair_arr_scale[:, 0] >= 0) & (pair_arr_scale[:, 0] < J0_scale.shape[0]) & (pair_arr_scale[:, 1] >= 0) & (pair_arr_scale[:, 1] < J0_scale.shape[0])] if pair_arr_scale.size else np.zeros((0, 2), dtype=np.int64)
+        pair_margin_scale = margin_normalization_scale(J0_scale[ok[:, 1]] - J0_scale[ok[:, 0]], min_scale=norm_min_scale, quantile=norm_quantile) if ok.size else norm_min_scale
     M_B = _pair_delta_margin_matrix(
         predicted_base_cost,
         pair_indices,
@@ -306,6 +317,8 @@ def run_pair_conditioned_tournament(
         valid_mask,
         normalize_margins=normalize_margins,
         margin_scale=pair_margin_scale,
+        norm_min_scale=norm_min_scale,
+        norm_quantile=norm_quantile,
     )
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
     M_eval = M_B - epsilon_cal

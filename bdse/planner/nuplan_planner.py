@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import json
+import os
+from pathlib import Path
+
 import numpy as np
 
 try:  # pragma: no cover - exercised only when nuPlan is installed
@@ -370,6 +374,8 @@ class BDSEPlannerCore:
                 force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
                 normalize_margins=bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)),
                 margin_scale=float(pred.get("pair_margin_scale", 100.0)),
+                proposal_scores=pred.get("proposal_logits", None),
+                proposal_fill_weight=float(sel_cfg.get("proposal_fill_weight", 0.25)),
             )
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
@@ -528,6 +534,23 @@ class BDSEPlannerCore:
         return action, trajectory, diagnostics
 
 
+
+def _json_safe(obj: Any):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return str(obj)
+
+
 class BDSEnuPlanPlanner(AbstractPlanner):
     requires_scenario: bool = False
 
@@ -590,7 +613,24 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         nuPlan's planner builder and reporting utilities.
         """
         runtime = self._runtime_from_planner_input(current_input)
-        _, trajectory, _ = self.core.plan_from_runtime(runtime)
+        action, trajectory, diagnostics = self.core.plan_from_runtime(runtime)
+        diag_path = os.environ.get("BDSE_CLOSED_LOOP_DIAG", "")
+        if diag_path:
+            try:
+                iteration = getattr(current_input, "iteration", None)
+                row = {
+                    "planner": self._name,
+                    "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
+                    "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
+                    "action_index": int(action),
+                    "diagnostics": _json_safe(diagnostics),
+                }
+                path = Path(diag_path).expanduser()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(row, sort_keys=True) + "\n")
+            except Exception:
+                pass
         return self._to_nuplan_trajectory(trajectory, current_input)
 
     def _runtime_from_planner_input(self, current_input: Any) -> RuntimeFeatures:

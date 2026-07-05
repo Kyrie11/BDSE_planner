@@ -706,14 +706,37 @@ class BDSEModel(nn.Module):
         selector_pair_delta, selector_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, pairs, cfg)
         rival_pair_delta, rival_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, rival_pairs, cfg)
         normalize_pairs = bool(cfg.get("model", {}).get("pair_margin_normalized", self.pair_margin_normalized))
+        mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+        tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+        min_scale = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 100.0)))
+        q_scale = float(mcfg.get("margin_normalization_quantile", 0.75))
         if normalize_pairs and len(pairs):
-            pair_margin_scale = margin_normalization_scale(J0[pairs[:, 1]] - J0[pairs[:, 0]], min_scale=100.0)
+            pair_margin_scale = margin_normalization_scale(J0[pairs[:, 1]] - J0[pairs[:, 0]], min_scale=min_scale, quantile=q_scale)
         else:
             pair_margin_scale = 1.0
         if normalize_pairs and len(rival_pairs):
-            rival_pair_margin_scale = margin_normalization_scale(J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]], min_scale=100.0)
+            rival_pair_margin_scale = margin_normalization_scale(J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]], min_scale=min_scale, quantile=q_scale)
         else:
             rival_pair_margin_scale = pair_margin_scale
+
+        def _local_pair_delta(pair_arr: np.ndarray, scale: float) -> np.ndarray:
+            pair_arr = np.asarray(pair_arr, dtype=np.int64).reshape(-1, 2) if np.asarray(pair_arr).size else np.zeros((0, 2), dtype=np.int64)
+            if pair_arr.size == 0:
+                return np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            a = np.clip(pair_arr[:, 0], 0, candidates.K - 1)
+            b = np.clip(pair_arr[:, 1], 0, candidates.K - 1)
+            local = g_sparse[:, b] - g_sparse[:, a]
+            return (local / max(float(scale), 1e-6)).astype(np.float32) if normalize_pairs else local.astype(np.float32)
+
+        if bool(mcfg.get("pair_head_residual_over_local", False)):
+            selector_pair_delta = _local_pair_delta(pairs, pair_margin_scale) + selector_pair_delta
+            rival_pair_delta = _local_pair_delta(rival_pairs, rival_pair_margin_scale) + rival_pair_delta
+        else:
+            w_local = float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0)) if isinstance(cfg, dict) else 0.0
+            if w_local > 0.0:
+                w_local = min(max(w_local, 0.0), 1.0)
+                selector_pair_delta = (1.0 - w_local) * selector_pair_delta + w_local * _local_pair_delta(pairs, pair_margin_scale)
+                rival_pair_delta = (1.0 - w_local) * rival_pair_delta + w_local * _local_pair_delta(rival_pairs, rival_pair_margin_scale)
         valid_mask = np.asarray(candidates.valid_mask, dtype=bool)
         g_sparse[:, ~valid_mask] = 0.0
         g_var_sparse[:, ~valid_mask] = 0.0
