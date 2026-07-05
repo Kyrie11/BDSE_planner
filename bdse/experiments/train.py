@@ -833,7 +833,7 @@ def main() -> None:
         print(f"[bdse] device={device} distributed={distributed} cuda_available={cuda_available} amp={bool(args.amp and device.type == 'cuda')}", flush=True)
     model = BDSEModel(cfg).to(device)
     if distributed:
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     opt = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
     use_amp = bool(args.amp and device.type == "cuda")
     if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
