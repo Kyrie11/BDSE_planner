@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import itertools
 import json
 import os
 from pathlib import Path
+import threading
+import time
 
 import numpy as np
 
@@ -46,6 +49,36 @@ from bdse.planner.selector import (
     structural_safety_mask,
 )
 from bdse.planner.tournament import run_tournament, run_pair_conditioned_tournament, selected_pair_sigma_from_action_variance
+
+
+_PLANNER_DEVICE_LOCK = threading.Lock()
+_PLANNER_DEVICE_COUNTER = itertools.count()
+
+
+def _maybe_shard_planner_device(device: str | None) -> str | None:
+    """Optionally distribute per-simulation planner instances across visible CUDA devices.
+
+    nuPlan builds one planner object per simulation.  With device="cuda", PyTorch
+    otherwise puts every object on cuda:0.  Set BDSE_SHARD_PLANNERS_ACROSS_GPUS=1
+    to assign cuda:0, cuda:1, ... round-robin inside a single nuPlan process.
+    """
+    requested = str(device or "auto").strip().lower()
+    enabled = str(os.environ.get("BDSE_SHARD_PLANNERS_ACROSS_GPUS", "0")).lower() in {"1", "true", "yes", "on"}
+    if not enabled or requested not in {"cuda", "auto", "gpu"}:
+        return device
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return device
+        n = int(torch.cuda.device_count())
+        if n <= 1:
+            return device
+        with _PLANNER_DEVICE_LOCK:
+            idx = next(_PLANNER_DEVICE_COUNTER) % n
+        return f"cuda:{idx}"
+    except Exception:
+        return device
 
 
 def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | np.ndarray | None = None) -> dict[str, int]:
@@ -442,17 +475,28 @@ class BDSEPlannerCore:
         return False
 
     def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
+        profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
+        timing_core: dict[str, float] = {}
+        t = time.perf_counter()
         candidates = generate_candidate_bank(runtime, self.cfg)
+        if profile_enabled:
+            timing_core["candidate_generation_s"] = float(time.perf_counter() - t)
         if bool(self.cfg.get("preprocess", {}).get("candidate_aware_agent_selection", False)) and not bool(
             self.cfg.get("runtime", {}).get("skip_candidate_aware_agent_selection", False)
         ):
             from bdse.data.feature_builder import resort_runtime_agents_for_candidates
 
+            t = time.perf_counter()
             runtime2 = resort_runtime_agents_for_candidates(runtime, candidates, self.cfg)
             if runtime2 is not runtime:
                 runtime = runtime2
                 candidates = generate_candidate_bank(runtime, self.cfg)
+            if profile_enabled:
+                timing_core["candidate_aware_agent_resort_s"] = float(time.perf_counter() - t)
+        t = time.perf_counter()
         evidence_bank = enumerate_evidence_atoms(runtime, candidates, self.cfg)
+        if profile_enabled:
+            timing_core["evidence_enumeration_s"] = float(time.perf_counter() - t)
         base_budget = int(self.cfg.get("evidence", {}).get("budget", 16))
         base_M = int(self.cfg.get("selector", {}).get("proposal_top_m", max(2 * base_budget, base_budget + 1)))
         base_L = int(self.cfg.get("tournament", {}).get("L_infer", 16))
@@ -477,7 +521,11 @@ class BDSEPlannerCore:
         stage_records = []
         triggered = False
         for idx, (stage_name, cfg_stage) in enumerate(stages):
+            t_stage = time.perf_counter()
             pred, selection, tournament, atom_active = self._run_certificate_stage(runtime, candidates, evidence_bank, cfg_stage)
+            stage_elapsed = float(time.perf_counter() - t_stage)
+            if profile_enabled:
+                timing_core["certificate_stages_s"] = timing_core.get("certificate_stages_s", 0.0) + stage_elapsed
             qdiag = runtime_query_diagnostics(pred, selection.selected)
             qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
             stage_records.append({
@@ -490,6 +538,7 @@ class BDSEPlannerCore:
                 "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
                 **qdiag,
                 "hab": pred.get("hab_diagnostics", {}),
+                **({"stage_elapsed_s": stage_elapsed} if profile_enabled else {}),
             })
             best = (stage_name, cfg_stage, pred, selection, tournament, atom_active)
             if idx == 0 and not self._needs_fallback(tournament, candidates, cfg_stage):
@@ -530,6 +579,7 @@ class BDSEPlannerCore:
             "fallback_stage": stage_name,
             "fallback_triggered": bool(triggered),
             "fallback_stage_records": stage_records,
+            **({"timing_core": timing_core} if profile_enabled else {}),
         }
         return action, trajectory, diagnostics
 
@@ -563,6 +613,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         device: str = "auto",
     ):
         cfg = cfg or load_config(config_path)
+        device = _maybe_shard_planner_device(device)
         self.device = resolve_torch_device(device, context="BDSEnuPlanPlanner")
         configure_torch_for_device(self.device)
         if model is None and checkpoint:
@@ -612,8 +663,23 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         Keeping the BDSE logic in this method makes the class compatible with
         nuPlan's planner builder and reporting utilities.
         """
+        t0 = time.perf_counter()
         runtime = self._runtime_from_planner_input(current_input)
+        t1 = time.perf_counter()
         action, trajectory, diagnostics = self.core.plan_from_runtime(runtime)
+        t2 = time.perf_counter()
+        out_traj = self._to_nuplan_trajectory(trajectory, current_input)
+        t3 = time.perf_counter()
+        if os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}:
+            diagnostics = dict(diagnostics)
+            timing = dict(diagnostics.get("timing", {}))
+            timing.update({
+                "runtime_from_planner_input_s": float(t1 - t0),
+                "core_plan_s": float(t2 - t1),
+                "to_nuplan_trajectory_s": float(t3 - t2),
+                "compute_planner_trajectory_total_s": float(t3 - t0),
+            })
+            diagnostics["timing"] = timing
         diag_path = os.environ.get("BDSE_CLOSED_LOOP_DIAG", "")
         if diag_path:
             try:
@@ -631,7 +697,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
                     f.write(json.dumps(row, sort_keys=True) + "\n")
             except Exception:
                 pass
-        return self._to_nuplan_trajectory(trajectory, current_input)
+        return out_traj
 
     def _runtime_from_planner_input(self, current_input: Any) -> RuntimeFeatures:
         if isinstance(current_input, RuntimeFeatures):

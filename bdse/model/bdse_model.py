@@ -580,7 +580,7 @@ class BDSEModel(nn.Module):
         model_cfg = self.cfg.get("model", {}) if isinstance(self.cfg, dict) else {}
         chunk = int(runtime_cfg.get("pair_score_chunk", model_cfg.get("runtime_pair_score_chunk", 65536)))
         chunk = max(1, chunk)
-        with torch.no_grad():
+        with torch.inference_mode():
             for q0 in range(0, int(atoms_grid.size), chunk):
                 q1 = min(int(atoms_grid.size), q0 + chunk)
                 atom_t = torch.as_tensor(atoms_grid[q0:q1][None], dtype=torch.long, device=device)
@@ -599,7 +599,7 @@ class BDSEModel(nn.Module):
         cfg = cfg or self.cfg
         batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=False)
         self.eval()
-        with torch.no_grad():
+        with torch.inference_mode():
             ctx = self.encode_context(batch)
         J0 = ctx["J0"][0].detach().cpu().numpy().astype(np.float32)
         proposal_logits = ctx["proposal_logits"][0].detach().cpu().numpy().astype(np.float32)
@@ -690,23 +690,53 @@ class BDSEModel(nn.Module):
             action_ids = np.unique(pairs.reshape(-1))
         else:
             action_ids = np.flatnonzero(candidates.valid_mask)[: max(1, int(cfg.get("tournament", {}).get("L_infer", 16)))]
-        atom_ids, action_ids_rep, q = compute_query_features_for_pairs(evidence_bank.atoms, candidates, runtime, topm, action_ids, cfg)
+        runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
+        mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+        use_pair_runtime = bool(runtime_cfg.get("use_pair_conditioned_margins", self.pair_conditioned))
+        hybrid_local_weight = float(runtime_cfg.get("pair_delta_hybrid_local_weight", 0.0))
+        need_action_sparse = (
+            not use_pair_runtime
+            or bool(mcfg.get("pair_head_residual_over_local", False))
+            or hybrid_local_weight > 0.0
+        )
         g_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         g_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
-        if len(atom_ids):
-            atom_t = torch.from_numpy(atom_ids[None].astype(np.int64)).to(next(self.parameters()).device)
-            act_t = torch.from_numpy(action_ids_rep[None].astype(np.int64)).to(next(self.parameters()).device)
-            q_t = torch.from_numpy(q[None].astype(np.float32)).to(next(self.parameters()).device)
-            with torch.no_grad():
-                vals, var = self.score_sparse_queries(ctx, atom_t, act_t, q_t, return_uncertainty=True)
-                vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
-                var_np = var[0].detach().cpu().numpy().astype(np.float32)
-            g_sparse[atom_ids, action_ids_rep] = vals_np
-            g_var_sparse[atom_ids, action_ids_rep] = var_np
-        selector_pair_delta, selector_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, pairs, cfg)
-        rival_pair_delta, rival_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, rival_pairs, cfg)
+        if need_action_sparse:
+            atom_ids, action_ids_rep, q = compute_query_features_for_pairs(evidence_bank.atoms, candidates, runtime, topm, action_ids, cfg)
+            if len(atom_ids):
+                atom_t = torch.from_numpy(atom_ids[None].astype(np.int64)).to(next(self.parameters()).device)
+                act_t = torch.from_numpy(action_ids_rep[None].astype(np.int64)).to(next(self.parameters()).device)
+                q_t = torch.from_numpy(q[None].astype(np.float32)).to(next(self.parameters()).device)
+                with torch.inference_mode():
+                    vals, var = self.score_sparse_queries(ctx, atom_t, act_t, q_t, return_uncertainty=True)
+                    vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
+                    var_np = var[0].detach().cpu().numpy().astype(np.float32)
+                g_sparse[atom_ids, action_ids_rep] = vals_np
+                g_var_sparse[atom_ids, action_ids_rep] = var_np
+        else:
+            atom_ids = np.zeros((0,), dtype=np.int64)
+            action_ids_rep = np.zeros((0,), dtype=np.int64)
+
+        # Score selector pairs and tournament-rival pairs in one GPU call over the
+        # unique pair union. The previous runtime called _score_pair_indices_numpy
+        # twice, recomputing query features and launching the pair MLP twice.
+        if len(pairs) or len(rival_pairs):
+            all_pairs = np.concatenate([pairs.reshape(-1, 2), rival_pairs.reshape(-1, 2)], axis=0)
+            unique_pairs, inverse = np.unique(all_pairs, axis=0, return_inverse=True)
+            all_pair_delta, all_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, unique_pairs, cfg)
+            n_selector_pairs = int(len(pairs))
+            selector_inv = inverse[:n_selector_pairs]
+            rival_inv = inverse[n_selector_pairs:]
+            selector_pair_delta = all_pair_delta[:, selector_inv] if n_selector_pairs else np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            selector_pair_var = all_pair_var[:, selector_inv] if n_selector_pairs else np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            rival_pair_delta = all_pair_delta[:, rival_inv] if len(rival_pairs) else np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            rival_pair_var = all_pair_var[:, rival_inv] if len(rival_pairs) else np.zeros((evidence_bank.E, 0), dtype=np.float32)
+        else:
+            selector_pair_delta = np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            selector_pair_var = np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            rival_pair_delta = np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            rival_pair_var = np.zeros((evidence_bank.E, 0), dtype=np.float32)
         normalize_pairs = bool(cfg.get("model", {}).get("pair_margin_normalized", self.pair_margin_normalized))
-        mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
         tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
         min_scale = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 100.0)))
         q_scale = float(mcfg.get("margin_normalization_quantile", 0.75))
