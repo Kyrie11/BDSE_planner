@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import os
+import time
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -326,8 +329,28 @@ class BDSEModel(nn.Module):
         query_b_features: torch.Tensor,
         return_uncertainty: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        z_ab = self._sparse_pair_features(context, atom_indices, action_a_indices, action_b_indices, query_a_features, query_b_features)
-        z_ba = self._sparse_pair_features(context, atom_indices, action_b_indices, action_a_indices, query_b_features, query_a_features)
+        # Runtime closed-loop inference calls this for small but frequent
+        # atom-pair batches.  Build the AB and BA tensors from shared gathers and
+        # shared query projections instead of calling _sparse_pair_features twice;
+        # this is algebraically identical but removes two query_proj forwards and
+        # redundant gather work per planner tick.
+        action_h = context["action_h"]
+        evid_h = context["evidence_h"]
+        scene = context["scene"]
+        B, Q = atom_indices.shape
+        H = action_h.shape[-1]
+        a_idx = action_a_indices.long().clamp_min(0).clamp_max(action_h.shape[1] - 1)
+        b_idx = action_b_indices.long().clamp_min(0).clamp_max(action_h.shape[1] - 1)
+        e_idx = atom_indices.long().clamp_min(0).clamp_max(evid_h.shape[1] - 1)
+        a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, Q, H))
+        b_h = torch.gather(action_h, 1, b_idx[..., None].expand(B, Q, H))
+        e_h = torch.gather(evid_h, 1, e_idx[..., None].expand(B, Q, H))
+        q_a = self.query_proj(self._fit_last_dim(query_a_features.float(), self.query_proj[0].in_features))
+        q_b = self.query_proj(self._fit_last_dim(query_b_features.float(), self.query_proj[0].in_features))
+        s_h = scene[:, None, :].expand(B, Q, H)
+
+        z_ab = torch.cat([a_h, b_h, e_h, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
+        z_ba = torch.cat([b_h, a_h, e_h, q_b, q_a, s_h, a_h - b_h, a_h * b_h, q_a - q_b, q_a * q_b], dim=-1)
         delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
         if not return_uncertainty:
             return delta
@@ -597,10 +620,19 @@ class BDSEModel(nn.Module):
 
     def predict_certificate_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = cfg or self.cfg
+        profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
+        model_timing: dict[str, float] = {}
+        t_model = time.perf_counter()
         batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=False)
+        if profile_enabled:
+            model_timing["model_make_batch_s"] = float(time.perf_counter() - t_model)
+            t_model = time.perf_counter()
         self.eval()
         with torch.inference_mode():
             ctx = self.encode_context(batch)
+        if profile_enabled:
+            model_timing["model_encode_context_s"] = float(time.perf_counter() - t_model)
+            t_model = time.perf_counter()
         J0 = ctx["J0"][0].detach().cpu().numpy().astype(np.float32)
         proposal_logits = ctx["proposal_logits"][0].detach().cpu().numpy().astype(np.float32)
         family_logits = ctx["family_logits"][0].detach().cpu().numpy().astype(np.float32)
@@ -702,6 +734,7 @@ class BDSEModel(nn.Module):
         g_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         g_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         if need_action_sparse:
+            t_sparse = time.perf_counter()
             atom_ids, action_ids_rep, q = compute_query_features_for_pairs(evidence_bank.atoms, candidates, runtime, topm, action_ids, cfg)
             if len(atom_ids):
                 atom_t = torch.from_numpy(atom_ids[None].astype(np.int64)).to(next(self.parameters()).device)
@@ -713,6 +746,8 @@ class BDSEModel(nn.Module):
                     var_np = var[0].detach().cpu().numpy().astype(np.float32)
                 g_sparse[atom_ids, action_ids_rep] = vals_np
                 g_var_sparse[atom_ids, action_ids_rep] = var_np
+            if profile_enabled:
+                model_timing["model_action_sparse_s"] = float(time.perf_counter() - t_sparse)
         else:
             atom_ids = np.zeros((0,), dtype=np.int64)
             action_ids_rep = np.zeros((0,), dtype=np.int64)
@@ -721,9 +756,14 @@ class BDSEModel(nn.Module):
         # unique pair union. The previous runtime called _score_pair_indices_numpy
         # twice, recomputing query features and launching the pair MLP twice.
         if len(pairs) or len(rival_pairs):
+            t_pair = time.perf_counter()
             all_pairs = np.concatenate([pairs.reshape(-1, 2), rival_pairs.reshape(-1, 2)], axis=0)
             unique_pairs, inverse = np.unique(all_pairs, axis=0, return_inverse=True)
             all_pair_delta, all_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, unique_pairs, cfg)
+            if profile_enabled:
+                model_timing["model_pair_scoring_s"] = float(time.perf_counter() - t_pair)
+                model_timing["model_unique_pair_count"] = float(len(unique_pairs))
+                model_timing["model_pair_atom_score_count"] = float(len(topm) * len(unique_pairs))
             n_selector_pairs = int(len(pairs))
             selector_inv = inverse[:n_selector_pairs]
             rival_inv = inverse[n_selector_pairs:]
@@ -770,7 +810,7 @@ class BDSEModel(nn.Module):
         valid_mask = np.asarray(candidates.valid_mask, dtype=bool)
         g_sparse[:, ~valid_mask] = 0.0
         g_var_sparse[:, ~valid_mask] = 0.0
-        return {
+        result = {
             "J0": J0,
             "g": g_sparse,
             "g_var": g_var_sparse,
@@ -806,6 +846,9 @@ class BDSEModel(nn.Module):
             "runtime_pairs": pairs,
             "runtime_pair_weights": pair_weights,
         }
+        if profile_enabled:
+            result["model_timing"] = model_timing
+        return result
 
     def predict_dense_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         """Diagnostic-only dense BDSE interface.

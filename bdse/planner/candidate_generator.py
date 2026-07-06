@@ -169,8 +169,13 @@ def _prune_candidate_pool(
     term_progress = route_progress_along_polyline(traj_arr[:, -1, :2], route) if len(route) >= 2 else np.arange(len(trajectories), dtype=np.float32)
     route_dev = np.zeros((len(trajectories),), dtype=np.float32)
     if len(route) >= 2:
-        for i, tr in enumerate(trajectories):
-            route_dev[i] = float(np.square(nearest_polyline_distance(tr[:, :2], route)).mean())
+        # Same score as the old per-trajectory loop, but one vectorized
+        # nearest-polyline call over [N*T, 2].  Candidate pruning runs every
+        # planner tick and this removes many Python calls without changing the
+        # selected ordering except for unavoidable float32 roundoff.
+        n_traj, n_time = traj_arr.shape[:2]
+        d_all = nearest_polyline_distance(traj_arr[:, :, :2].reshape(-1, 2), route).reshape(n_traj, n_time)
+        route_dev = np.square(d_all).mean(axis=1).astype(np.float32)
     speeds = np.asarray([float(tr[-1, 3]) for tr in trajectories], dtype=np.float32)
     v_med = float(np.nanmedian(speeds[np.isfinite(speeds)])) if speeds.size else 0.0
 

@@ -538,6 +538,7 @@ class BDSEPlannerCore:
                 "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
                 **qdiag,
                 "hab": pred.get("hab_diagnostics", {}),
+                **({"model_timing": pred.get("model_timing", {})} if profile_enabled else {}),
                 **({"stage_elapsed_s": stage_elapsed} if profile_enabled else {}),
             })
             best = (stage_name, cfg_stage, pred, selection, tournament, atom_active)
@@ -574,6 +575,7 @@ class BDSEPlannerCore:
             "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
             **qdiag,
             "hab": pred.get("hab_diagnostics", {}),
+            **({"model_timing": pred.get("model_timing", {})} if profile_enabled else {}),
             "selector": selection.diagnostics,
             "tournament": tournament.diagnostics,
             "fallback_stage": stage_name,

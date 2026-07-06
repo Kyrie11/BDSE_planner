@@ -151,12 +151,11 @@ def compute_query_features_for_pairs(
 
     sub_atoms = [atoms[int(i)] for i in atom_ids]
     q_sub = compute_query_features(sub_atoms, candidates, runtime, cfg)
-    out_atoms: list[int] = []
-    out_actions: list[int] = []
-    out_q: list[np.ndarray] = []
-    for si, global_i in enumerate(atom_ids.tolist()):
-        for a in action_ids.tolist():
-            out_atoms.append(int(global_i))
-            out_actions.append(int(a))
-            out_q.append(q_sub[si, int(a)])
-    return np.asarray(out_atoms, dtype=np.int64), np.asarray(out_actions, dtype=np.int64), np.asarray(out_q, dtype=np.float32)
+    # Preserve the previous atom-major ordering while avoiding Python list
+    # construction for the Top-M x action grid used at every closed-loop tick.
+    A = int(atom_ids.size)
+    U = int(action_ids.size)
+    out_atoms = np.repeat(atom_ids.astype(np.int64), U)
+    out_actions = np.tile(action_ids.astype(np.int64), A)
+    out_q = q_sub[np.arange(A, dtype=np.int64)[:, None], action_ids[None, :]].reshape(A * U, ATOM_QUERY_DIM)
+    return out_atoms, out_actions, np.asarray(out_q, dtype=np.float32)
