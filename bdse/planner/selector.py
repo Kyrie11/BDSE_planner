@@ -95,6 +95,7 @@ def _complete_safety_aware_selection(
     min_selected_atoms: int = 0,
     force_fill_budget: bool = False,
     utility: np.ndarray | None = None,
+    prioritize_mandatory_fill: bool = True,
 ) -> tuple[list[int], float, dict[str, Any]]:
     """Post-process greedy acquisition for BDSE-v5.
 
@@ -160,7 +161,14 @@ def _complete_safety_aware_selection(
     # conservative LCBs before the calibration epsilon is reliable.
     fill_target = max(0, int(min_selected_atoms))
     fill_budget = bool(force_fill_budget)
-    filler_order = sorted(np.flatnonzero(active).tolist(), key=lambda i: (not bool(mandatory[i]), -float(util[i]), float(costs[i]), int(i)))
+    if bool(prioritize_mandatory_fill):
+        filler_key = lambda i: (not bool(mandatory[i]), -float(util[i]), float(costs[i]), int(i))
+    else:
+        # Safety/hard evidence can be inserted structurally through mandatory_quota.
+        # After that quota, do not let all hard atoms consume the residual budget;
+        # use the learned interaction/proposal utility to fill the remaining slots.
+        filler_key = lambda i: (-float(util[i]), float(costs[i]), int(i))
+    filler_order = sorted(np.flatnonzero(active).tolist(), key=filler_key)
     for i in filler_order:
         if i in seen:
             continue
@@ -179,6 +187,7 @@ def _complete_safety_aware_selection(
         "mandatory_quota": int(quota),
         "min_selected_atoms": int(fill_target),
         "force_fill_budget": bool(fill_budget),
+        "prioritize_mandatory_fill": bool(prioritize_mandatory_fill),
         "postfill_selected_atoms": int(len(out)),
         "postfill_spent_budget": float(final_spent),
     }
@@ -678,6 +687,7 @@ def runtime_greedy_selector(
     mandatory_quota: int = 0,
     min_selected_atoms: int = 0,
     force_fill_budget: bool = False,
+    prioritize_mandatory_fill: bool = True,
     bidirectional_pairs: bool = True,
     reverse_pair_weight: float = 1.0,
     pair_cap_multiplier: float = 1.0,
@@ -817,6 +827,7 @@ def runtime_greedy_selector(
         min_selected_atoms=min_selected_atoms,
         force_fill_budget=force_fill_budget,
         utility=utility,
+        prioritize_mandatory_fill=prioritize_mandatory_fill,
     )
     return SelectionResult(
         selected=selected,
@@ -854,6 +865,7 @@ def runtime_greedy_selector_pair_conditioned(
     margin_scale: float | None = None,
     proposal_scores: np.ndarray | None = None,
     proposal_fill_weight: float = 0.0,
+    prioritize_mandatory_fill: bool = True,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -881,6 +893,7 @@ def runtime_greedy_selector_pair_conditioned(
             selected, atom_budget_costs, budget, atom_active_mask=atom_active_mask,
             mandatory_atom_mask=mandatory_atom_mask, mandatory_quota=mandatory_quota,
             min_selected_atoms=min_selected_atoms, force_fill_budget=force_fill_budget,
+            prioritize_mandatory_fill=prioritize_mandatory_fill,
         )
         return SelectionResult(selected, current, pair_arr, weights, {"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": "runtime_pair_conditioned_empty", "pair_count": 0, **post_diag})
     a = pair_arr[:, 0]
@@ -948,7 +961,13 @@ def runtime_greedy_selector_pair_conditioned(
         mode = "runtime_pair_conditioned_signed"
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        utility = np.maximum(np.asarray(delta, dtype=np.float32), 0.0).mean(axis=1)
+        # Use the same pair weights as the greedy objective for post-fill ranking.
+        # The previous unweighted mean favored atoms that fired on many irrelevant
+        # pairs, which hurt interaction recall after safety atoms were forced.
+        pos_delta = np.maximum(np.asarray(delta, dtype=np.float32), 0.0)
+        w = np.asarray(weights, dtype=np.float32).reshape(1, -1)
+        denom = max(float(np.sum(np.maximum(w, 0.0))), 1e-6)
+        utility = (pos_delta * np.maximum(w, 0.0)).sum(axis=1) / denom
     if proposal_scores is not None and float(proposal_fill_weight) > 0.0:
         prop = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
         if prop.shape[0] < utility.shape[0]:
@@ -968,6 +987,7 @@ def runtime_greedy_selector_pair_conditioned(
         min_selected_atoms=min_selected_atoms,
         force_fill_budget=force_fill_budget,
         utility=utility,
+        prioritize_mandatory_fill=prioritize_mandatory_fill,
     )
     return SelectionResult(
         selected=selected,

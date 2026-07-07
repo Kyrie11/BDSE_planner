@@ -409,6 +409,7 @@ class BDSEPlannerCore:
                 margin_scale=float(pred.get("pair_margin_scale", 100.0)),
                 proposal_scores=pred.get("proposal_logits", None),
                 proposal_fill_weight=float(sel_cfg.get("proposal_fill_weight", 0.25)),
+                prioritize_mandatory_fill=bool(sel_cfg.get("prioritize_mandatory_fill", True)),
             )
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
@@ -445,6 +446,7 @@ class BDSEPlannerCore:
                 mandatory_quota=int(sel_cfg.get("mandatory_hard_quota", 0)),
                 min_selected_atoms=int(sel_cfg.get("min_selected_atoms", 0)),
                 force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
+                prioritize_mandatory_fill=bool(sel_cfg.get("prioritize_mandatory_fill", True)),
                 bidirectional_pairs=bool(sel_cfg.get("bidirectional_pairs", True)),
                 reverse_pair_weight=float(sel_cfg.get("reverse_pair_weight", 1.0)),
                 pair_cap_multiplier=float(sel_cfg.get("runtime_pair_cap_multiplier", 1.0)),

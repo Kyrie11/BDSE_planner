@@ -204,6 +204,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             mandatory_quota=int(s_cfg.get("mandatory_hard_quota", 0)),
             min_selected_atoms=int(s_cfg.get("min_selected_atoms", 0)),
             force_fill_budget=bool(s_cfg.get("force_fill_budget", False)),
+            prioritize_mandatory_fill=bool(s_cfg.get("prioritize_mandatory_fill", True)),
         )
         selected_mask[bidx, result.selected] = True
     device = outputs["J0"].device
@@ -350,6 +351,7 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             margin_scale=mscale,
             proposal_scores=logits[bidx],
             proposal_fill_weight=float(s_cfg.get("proposal_fill_weight", 0.25)),
+            prioritize_mandatory_fill=bool(s_cfg.get("prioritize_mandatory_fill", True)),
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)

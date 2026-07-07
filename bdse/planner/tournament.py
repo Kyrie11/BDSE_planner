@@ -51,6 +51,20 @@ class TournamentResult:
     diagnostics: dict[str, Any]
 
 
+def _pair_selector_eta(cfg: dict[str, Any]) -> float:
+    """Eta in the same units as the pair-conditioned margin matrix.
+
+    Pair-conditioned deployment may use normalized margins, while the legacy
+    tournament rival builder previously read selector.eta_pred in raw cost units.
+    Keeping this consistent with training prevents a large pair-screen mismatch.
+    """
+    sc = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
+    normalize = bool(cfg.get("model", {}).get("pair_margin_normalized", False)) if isinstance(cfg, dict) else False
+    if normalize:
+        return float(sc.get("normalized_eta_pred", sc.get("eta_pred", 0.1)))
+    return float(sc.get("eta_pred", 1.0))
+
+
 def build_rival_sets(
     predicted_full_margin: np.ndarray,
     valid_mask: np.ndarray,
@@ -290,7 +304,7 @@ def run_pair_conditioned_tournament(
         valid_mask,
         runtime_safety_flags,
         L_infer=int(tc.get("L_infer", 16)),
-        eta0=float(sc.get("eta_pred", 1.0)),
+        eta0=_pair_selector_eta(cfg),
         candidate_trajectories=candidate_trajectories,
         maneuver_ids=maneuver_ids,
         progress_rivals=int(sc.get("progress_rivals", 0)),
@@ -358,6 +372,7 @@ def run_pair_conditioned_tournament(
             "safety_lcb_min": safety_lcb_min,
             "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             "pair_conditioned": True,
+            "selector_eta_used": float(_pair_selector_eta(cfg)),
             "normalized_margins": bool(normalize_margins),
             "margin_scale": float(pair_margin_scale) if pair_margin_scale is not None else 1.0,
         },

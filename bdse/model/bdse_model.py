@@ -618,6 +618,26 @@ class BDSEModel(nn.Module):
                 var_out[atoms_grid[q0:q1], pidx_grid[q0:q1]] = var_np
         return out, var_out
 
+    def _selector_pair_thresholds(self, cfg: dict[str, Any]) -> tuple[float, float]:
+        """Return selector thresholds in the same margin units used by the pair head.
+
+        A normalized pair head predicts d_i(a,b) / scale.  Training already uses
+        selector.normalized_eta_pred / selector.normalized_gamma_max, but the old
+        deployment path used raw eta_pred when constructing the runtime pair graph
+        and tournament rival sets.  That train/deploy mismatch makes the learned
+        selector optimize a different set of comparisons than it saw in training.
+        """
+        sel = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
+        mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+        normalize = bool(mcfg.get("pair_margin_normalized", self.pair_margin_normalized))
+        if normalize:
+            eta = float(sel.get("normalized_eta_pred", sel.get("eta_pred", 0.1)))
+            gamma = float(sel.get("normalized_gamma_max", sel.get("gamma_max_default", 5.0)))
+        else:
+            eta = float(sel.get("eta_pred", 1.0))
+            gamma = float(sel.get("gamma_max_default", sel.get("gamma_max", 100.0)))
+        return eta, gamma
+
     def predict_certificate_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = cfg or self.cfg
         profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
@@ -638,12 +658,13 @@ class BDSEModel(nn.Module):
         family_logits = ctx["family_logits"][0].detach().cpu().numpy().astype(np.float32)
         family_pi = ctx["family_pi"][0].detach().cpu().numpy().astype(np.float32)
         flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
+        selector_eta, selector_gamma = self._selector_pair_thresholds(cfg)
         pairs, pair_weights = build_runtime_pairs_from_base(
             J0,
             candidates.valid_mask,
             flags,
             L0=int(cfg.get("tournament", {}).get("L_infer", 16)),
-            eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+            eta0=selector_eta,
             lambda_near=float(cfg.get("selector", {}).get("lambda_near", 1.0)),
             lambda_safety=float(cfg.get("selector", {}).get("lambda_safety", 2.0)),
             bidirectional_pairs=bool(cfg.get("selector", {}).get("bidirectional_pairs", True)),
@@ -700,7 +721,7 @@ class BDSEModel(nn.Module):
             candidates.valid_mask,
             flags,
             L_infer=int(cfg.get("tournament", {}).get("L_infer", 16)),
-            eta0=float(cfg.get("selector", {}).get("eta_pred", 1.0)),
+            eta0=selector_eta,
             candidate_trajectories=candidates.trajectories,
             maneuver_ids=candidates.maneuver_ids,
             progress_rivals=int(cfg.get("selector", {}).get("progress_rivals", 4)),
@@ -840,6 +861,8 @@ class BDSEModel(nn.Module):
             "pair_margin_scale": float(pair_margin_scale),
             "rival_pair_margin_scale": float(rival_pair_margin_scale),
             "pair_margin_normalized": bool(normalize_pairs),
+            "selector_eta_used": float(selector_eta),
+            "selector_gamma_used": float(selector_gamma),
             "rival_pair_atom_delta": rival_pair_delta,
             "rival_pair_atom_var": rival_pair_var,
             "rival_pair_indices": rival_pairs,
