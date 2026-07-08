@@ -304,15 +304,65 @@ class BDSEPlannerCore:
         atom_families = [str(getattr(a, "family", "all")) for a in evidence_bank.atoms]
         zero_g = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
 
+        def _run_selected_tournament(selected_atoms: list[int] | np.ndarray, *, force_action_sparse: bool = False):
+            """Evaluate a baseline-selected evidence subset.
+
+            For paper-facing selector ablations we want the selector to change
+            while the downstream BDSE pair-action margin tournament remains the
+            same as the method. Set runtime.baseline_pair_tournament=true to
+            use neural pair-conditioned margins for the selected baseline atoms.
+            Legacy/action-sparse baselines remain available by leaving that flag
+            false.
+            """
+            runtime_cfg = stage_cfg.get("runtime", {}) if isinstance(stage_cfg, dict) else {}
+            use_pair_baseline = (
+                bool(runtime_cfg.get("baseline_pair_tournament", False))
+                and bool(runtime_cfg.get("use_pair_conditioned_margins", stage_cfg.get("model", {}).get("pair_conditioned", True)))
+                and not bool(force_action_sparse)
+                and ("rival_pair_atom_delta" in pred or "pair_atom_delta" in pred)
+                and ("rival_pair_indices" in pred or "pair_indices" in pred)
+            )
+            if use_pair_baseline:
+                tournament_cfg = dict(stage_cfg)
+                tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
+                result = run_pair_conditioned_tournament(
+                    J0,
+                    pred.get("rival_pair_atom_delta", pred.get("pair_atom_delta")),
+                    pred.get("rival_pair_indices", pred.get("pair_indices")),
+                    selected_atoms,
+                    valid,
+                    runtime_flags,
+                    tournament_cfg,
+                    pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+                    candidate_trajectories=candidates.trajectories,
+                    maneuver_ids=candidates.maneuver_ids,
+                )
+                result.diagnostics["baseline_pair_tournament"] = True
+                return result
+            result = run_tournament(
+                J0,
+                np.asarray(pred.get("g", zero_g), dtype=np.float32),
+                selected_atoms,
+                valid,
+                runtime_flags,
+                stage_cfg,
+                candidate_trajectories=candidates.trajectories,
+                maneuver_ids=candidates.maneuver_ids,
+            )
+            result.diagnostics["baseline_pair_tournament"] = False
+            return result
+
         if mode in {"oracle", "oracle_budget", "teacher_oracle"}:
             raise RuntimeError("oracle_budget is only available in offline diagnostics where teacher labels are present; use bdse.experiments.diagnostics/evaluate_open_loop oracle metrics.")
 
         if mode in {"base_only", "no_evidence", "no_selector"}:
             selection = SelectionResult([], 0.0, np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32), {"mode": mode, "spent_budget": 0.0})
-            tournament = run_tournament(J0, zero_g, selection.selected, valid, runtime_flags, stage_cfg, candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids)
+            # Pair-fair mode still uses the pair-action tournament with an empty evidence set.
+            tournament = _run_selected_tournament(selection.selected)
             pred = dict(pred)
             pred["g"] = zero_g
             pred["baseline_mode"] = mode
+            pred["baseline_pair_tournament"] = bool(tournament.diagnostics.get("baseline_pair_tournament", False))
             return pred, selection, tournament
 
         if mode in {"dense_full", "full_evidence", "dense_full_evidence"}:
@@ -341,8 +391,8 @@ class BDSEPlannerCore:
                 if np.isfinite(c) and spent + c <= budget + 1e-6:
                     selected.append(int(i)); spent += c
             selection = SelectionResult(selected, 0.0, np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32), {"mode": mode, "spent_budget": float(spent)})
-            tournament = run_tournament(J0, np.asarray(pred.get("g", zero_g), dtype=np.float32), selection.selected, valid, runtime_flags, stage_cfg, candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids)
-            pred = dict(pred); pred["baseline_mode"] = mode
+            tournament = _run_selected_tournament(selection.selected)
+            pred = dict(pred); pred["baseline_mode"] = mode; pred["baseline_pair_tournament"] = bool(tournament.diagnostics.get("baseline_pair_tournament", False))
             return pred, selection, tournament
 
         selector_mode = {
@@ -368,8 +418,8 @@ class BDSEPlannerCore:
             atom_families=atom_families,
             seed=int(stage_cfg.get("seed", 17)),
         )
-        tournament = run_tournament(J0, np.asarray(pred.get("g", zero_g), dtype=np.float32), selection.selected, valid, runtime_flags, stage_cfg, candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids)
-        pred = dict(pred); pred["baseline_mode"] = mode
+        tournament = _run_selected_tournament(selection.selected)
+        pred = dict(pred); pred["baseline_mode"] = mode; pred["baseline_pair_tournament"] = bool(tournament.diagnostics.get("baseline_pair_tournament", False))
         return pred, selection, tournament
 
     def _run_certificate_stage(self, runtime: RuntimeFeatures, candidates, evidence_bank, stage_cfg: dict[str, Any]) -> tuple[dict[str, Any], Any, Any, np.ndarray]:
