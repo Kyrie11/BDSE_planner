@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -12,6 +13,34 @@ from bdse.data.feature_builder import (
     _agent_selection_order,
 )
 from bdse.utils import transform_states_to_local
+
+
+_ROUTE_GLOBAL_CACHE: dict[tuple[int, tuple[str, ...]], np.ndarray] = {}
+_ROUTE_GLOBAL_CACHE_MAX = 4096
+
+
+def _route_cache_key(initialization: Any) -> tuple[int, tuple[str, ...]]:
+    route_ids = tuple(str(x) for x in (list(_safe_getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []))
+    map_api = _safe_getattr(initialization, "map_api", None) if initialization is not None else None
+    return (id(map_api), route_ids)
+
+
+def _cached_route_global(initialization: Any) -> np.ndarray | None:
+    key = _route_cache_key(initialization)
+    arr = _ROUTE_GLOBAL_CACHE.get(key)
+    if arr is None or arr.size < 4:
+        return None
+    return arr
+
+
+def _store_route_global(initialization: Any, route_global: np.ndarray) -> None:
+    arr = np.asarray(route_global, dtype=np.float32).reshape(-1, 2)
+    if len(arr) < 2:
+        return
+    key = _route_cache_key(initialization)
+    if len(_ROUTE_GLOBAL_CACHE) >= _ROUTE_GLOBAL_CACHE_MAX:
+        _ROUTE_GLOBAL_CACHE.pop(next(iter(_ROUTE_GLOBAL_CACHE)))
+    _ROUTE_GLOBAL_CACHE[key] = arr
 
 
 def _state_to_array(state: Any) -> np.ndarray:
@@ -142,6 +171,7 @@ def _traffic_lights_from_input(current_input: Any) -> list[dict[str, Any]]:
     return out
 
 
+@lru_cache(maxsize=None)
 def _semantic_map_layer(name: str) -> Any | None:
     try:
         mod = __import__("nuplan.common.maps.maps_datatypes", fromlist=["SemanticMapLayer"])
@@ -384,6 +414,16 @@ def _get_map_object_any_layer(map_api: Any, object_id: str) -> Any | None:
 
 
 def _route_from_map_api(initialization: Any, current_state: np.ndarray | None, cfg: dict[str, Any]) -> np.ndarray:
+    max_pts = int(cfg.get("runtime", {}).get("max_route_points", 512))
+
+    # Route roadblock IDs and map baselines are static for a nuPlan scenario, but
+    # this adapter is called at every closed-loop simulation tick.  Avoid repeated
+    # map_api.get_map_object / baseline extraction; only redo the cheap global->local
+    # transform for the current ego pose.
+    cached_global = _cached_route_global(initialization)
+    if cached_global is not None:
+        return _to_local_xy(cached_global, current_state)[:max_pts]
+
     edge_groups = _route_edges_by_roadblock(initialization)
     pieces = _stitch_route_edge_sequence(edge_groups, current_state)
     if pieces:
@@ -397,8 +437,9 @@ def _route_from_map_api(initialization: Any, current_state: np.ndarray | None, c
             else:
                 route_global.extend(list(pts))
         if len(route_global) >= 2:
-            route_local = _to_local_xy(np.asarray(route_global, dtype=np.float32), current_state)
-            max_pts = int(cfg.get("runtime", {}).get("max_route_points", 512))
+            route_global_arr = np.asarray(route_global, dtype=np.float32)
+            _store_route_global(initialization, route_global_arr)
+            route_local = _to_local_xy(route_global_arr, current_state)
             return route_local[:max_pts]
     return make_default_route_centerline(float(cfg.get("runtime", {}).get("route_horizon_m", 160.0)))
 
