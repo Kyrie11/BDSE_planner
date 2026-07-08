@@ -659,6 +659,9 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         print(f"BDSEnuPlanPlanner device: {self.device}")
         self.core = BDSEPlannerCore(model=model, cfg=cfg)
         self._name = "BDSEPlanner"
+        self._cached_local_trajectory = None
+        self._cached_action_index = 0
+        self._cached_replan_iteration_index = None
 
     def name(self) -> str:
         return self._name
@@ -674,48 +677,123 @@ class BDSEnuPlanPlanner(AbstractPlanner):
     def initialize(self, initialization: Any) -> None:
         self.initialization = initialization
 
+    def _current_iteration_index(self, current_input: Any) -> int:
+        iteration = getattr(current_input, "iteration", None)
+        try:
+            return int(getattr(iteration, "index", -1)) if iteration is not None else -1
+        except Exception:
+            return -1
+
+    def _write_closed_loop_diag(self, current_input: Any, action: int, diagnostics: dict[str, Any]) -> None:
+        diag_path = os.environ.get("BDSE_CLOSED_LOOP_DIAG", "")
+        if not diag_path:
+            return
+        try:
+            iteration = getattr(current_input, "iteration", None)
+            row = {
+                "planner": self._name,
+                "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
+                "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
+                "action_index": int(action),
+                "diagnostics": _json_safe(diagnostics),
+            }
+            path = Path(diag_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, sort_keys=True) + "\n")
+        except Exception:
+            pass
+
+    def _planner_replan_interval_ticks(self) -> int:
+        pcfg = self.core.cfg.get("planner", {}) if isinstance(self.core.cfg, dict) else {}
+        # Keep exact old behavior unless the fast closed-loop config opts in.
+        if os.environ.get("BDSE_FORCE_REPLAN_EVERY_TICK", "0").lower() in {"1", "true", "yes", "on"}:
+            return 1
+        env_value = os.environ.get("BDSE_REPLAN_INTERVAL_TICKS", "").strip()
+        if env_value:
+            try:
+                return max(1, int(env_value))
+            except Exception:
+                pass
+        try:
+            return max(1, int(pcfg.get("replan_interval_ticks", 1)))
+        except Exception:
+            return 1
+
+    def _can_reuse_cached_plan(self, current_input: Any) -> bool:
+        if getattr(self, "_cached_local_trajectory", None) is None:
+            return False
+        interval = self._planner_replan_interval_ticks()
+        if interval <= 1:
+            return False
+        idx = self._current_iteration_index(current_input)
+        last_idx = getattr(self, "_cached_replan_iteration_index", None)
+        if last_idx is None or idx < 0 or idx <= int(last_idx):
+            # A reset/non-monotonic index usually means a new scenario/simulation.
+            return False
+        return (idx - int(last_idx)) < interval
+
     def compute_planner_trajectory(self, current_input: Any):
         """Compute a nuPlan-compatible trajectory from runtime-only inputs.
 
-        nuPlan calls ``compute_trajectory()``, which is implemented by
-        ``AbstractPlanner`` and delegates here while recording planner runtime.
-        Keeping the BDSE logic in this method makes the class compatible with
-        nuPlan's planner builder and reporting utilities.
+        When ``planner.replan_interval_ticks > 1`` the expensive BDSE core is
+        evaluated only every N simulator ticks; intermediate ticks reuse the last
+        local rollout and convert it relative to the *current* ego state.  This is
+        a standard closed-loop evaluation speedup for slow research planners and
+        keeps the old every-tick behavior by default.
         """
+        profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
         t0 = time.perf_counter()
+        idx = self._current_iteration_index(current_input)
+
+        if self._can_reuse_cached_plan(current_input):
+            trajectory = np.asarray(getattr(self, "_cached_local_trajectory"), dtype=np.float32)
+            action = int(getattr(self, "_cached_action_index", 0))
+            t1 = time.perf_counter()
+            out_traj = self._to_nuplan_trajectory(trajectory, current_input)
+            t2 = time.perf_counter()
+            diagnostics: dict[str, Any] = {
+                "action_index": action,
+                "cached_plan": True,
+                "reuse_from_iteration_index": int(getattr(self, "_cached_replan_iteration_index", -1)),
+                "replan_interval_ticks": self._planner_replan_interval_ticks(),
+            }
+            if profile_enabled:
+                diagnostics["timing"] = {
+                    "runtime_from_planner_input_s": 0.0,
+                    "core_plan_s": 0.0,
+                    "to_nuplan_trajectory_s": float(t2 - t1),
+                    "compute_planner_trajectory_total_s": float(t2 - t0),
+                }
+                diagnostics["timing_core"] = {"cached_plan_s": float(t2 - t0)}
+            self._write_closed_loop_diag(current_input, action, diagnostics)
+            return out_traj
+
+        t_runtime = time.perf_counter()
         runtime = self._runtime_from_planner_input(current_input)
         t1 = time.perf_counter()
         action, trajectory, diagnostics = self.core.plan_from_runtime(runtime)
         t2 = time.perf_counter()
         out_traj = self._to_nuplan_trajectory(trajectory, current_input)
         t3 = time.perf_counter()
-        if os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}:
+        # Cache the local rollout, not the absolute nuPlan trajectory, so reuse
+        # remains anchored to the current ego state at the next simulator tick.
+        self._cached_local_trajectory = np.asarray(trajectory, dtype=np.float32).copy()
+        self._cached_action_index = int(action)
+        self._cached_replan_iteration_index = int(idx)
+        if profile_enabled:
             diagnostics = dict(diagnostics)
             timing = dict(diagnostics.get("timing", {}))
             timing.update({
-                "runtime_from_planner_input_s": float(t1 - t0),
+                "runtime_from_planner_input_s": float(t1 - t_runtime),
                 "core_plan_s": float(t2 - t1),
                 "to_nuplan_trajectory_s": float(t3 - t2),
                 "compute_planner_trajectory_total_s": float(t3 - t0),
             })
             diagnostics["timing"] = timing
-        diag_path = os.environ.get("BDSE_CLOSED_LOOP_DIAG", "")
-        if diag_path:
-            try:
-                iteration = getattr(current_input, "iteration", None)
-                row = {
-                    "planner": self._name,
-                    "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
-                    "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
-                    "action_index": int(action),
-                    "diagnostics": _json_safe(diagnostics),
-                }
-                path = Path(diag_path).expanduser()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(row, sort_keys=True) + "\n")
-            except Exception:
-                pass
+            diagnostics["cached_plan"] = False
+            diagnostics["replan_interval_ticks"] = self._planner_replan_interval_ticks()
+        self._write_closed_loop_diag(current_input, int(action), diagnostics)
         return out_traj
 
     def _runtime_from_planner_input(self, current_input: Any) -> RuntimeFeatures:

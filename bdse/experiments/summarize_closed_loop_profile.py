@@ -66,9 +66,11 @@ def main() -> None:
         return
 
     diag_rows = [r.get("diagnostics", {}) for r in rows]
-    fallback = collections.Counter(str(d.get("fallback_stage", "")) for d in diag_rows)
+    cached = sum(1 for d in diag_rows if bool(d.get("cached_plan", False)))
+    fallback = collections.Counter(str(d.get("fallback_stage", "")) for d in diag_rows if not bool(d.get("cached_plan", False)))
     triggered = sum(1 for d in diag_rows if bool(d.get("fallback_triggered", False)))
-    print(f"fallback_triggered={triggered}/{len(rows)} ({triggered / max(len(rows), 1):.1%})")
+    print(f"cached_plan={cached}/{len(rows)} ({cached / max(len(rows), 1):.1%})")
+    print(f"fallback_triggered={triggered}/{len(rows)} ({triggered / max(len(rows), 1):.1%}); non_cached_denominator={len(rows) - cached}")
     print("fallback_stage_counts=", dict(fallback.most_common()))
 
     print("\n[timing: diagnostics.timing]")
@@ -85,9 +87,10 @@ def main() -> None:
     for key in model_keys:
         print(f"{key}: {_stats(_values(diag_rows, ('model_timing', key)))}")
 
-    print("\n[counts]")
+    print("\n[counts: non-cached rows only]")
+    non_cached_diag_rows = [d for d in diag_rows if not bool(d.get("cached_plan", False))]
     for key in ["queried_action_count", "proposal_atom_count", "runtime_pair_count", "tournament_pair_count", "effective_query_count", "total_sparse_query_count"]:
-        print(f"{key}: {_stats(_values(diag_rows, (key,)))}")
+        print(f"{key}: {_stats(_values(non_cached_diag_rows, (key,)))}")
 
     slow = []
     for i, row in enumerate(rows):
