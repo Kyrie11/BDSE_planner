@@ -41,59 +41,117 @@ class FallbackResult:
     diagnostics: dict[str, Any]
 
 
+def _trajectory_curvature_batch(xy: np.ndarray) -> np.ndarray:
+    """Vectorized variant of ``compute_curvature`` for a K x T x 2 trajectory bank."""
+    pts = np.nan_to_num(np.asarray(xy, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
+    if pts.ndim != 3 or pts.shape[1] < 3:
+        return np.zeros(pts.shape[:2], dtype=np.float32)
+    dx = np.gradient(pts[:, :, 0], axis=1)
+    dy = np.gradient(pts[:, :, 1], axis=1)
+    ddx = np.gradient(dx, axis=1)
+    ddy = np.gradient(dy, axis=1)
+    denom = np.maximum((dx * dx + dy * dy) ** 1.5, 1e-6)
+    return ((dx * ddy - dy * ddx) / denom).astype(np.float32)
+
+
 def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
-    flags = np.zeros((candidates.K,), dtype=bool)
+    """Return conservative per-candidate safety flags.
+
+    This function is called several times per closed-loop tick.  The previous
+    implementation recomputed route distances, kinematic derivatives, and
+    agent constant-velocity distances inside a Python loop for every candidate.
+    In the fallback rule-rerank path it was accidentally called once per
+    candidate again, creating an O(K^2) hotspot.  Keep the same conservative
+    semantics but compute candidate-bank terms in batches.
+    """
+    K = int(candidates.K)
+    flags = np.zeros((K,), dtype=bool)
+    valid_mask = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)[:K]
+    if K <= 0 or not bool(valid_mask.any()):
+        return flags
+
+    traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
+    if traj.ndim != 3 or traj.shape[0] != K or traj.shape[2] < 4:
+        return flags
+    T = int(traj.shape[1])
+    xy_all = traj[:, :, :2]
+
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
     width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
+    route_dist = nearest_polyline_distance(xy_all.reshape(-1, 2), route).reshape(K, T)
+    off_route = (route_dist > width + 1.0).any(axis=1)
+
     speed_limit = float(runtime.map_features.get("speed_limit_mps", 13.4))
+    speed_bad = (traj[:, :, 3] > speed_limit + 2.0).any(axis=1)
+
     dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
-    for a in range(candidates.K):
-        if not candidates.valid_mask[a]:
+    v = traj[:, :, 3]
+    if T >= 2:
+        acc = np.gradient(v, dt, axis=1).astype(np.float32)
+        jerk = np.gradient(acc, dt, axis=1).astype(np.float32)
+    else:
+        acc = np.zeros_like(v, dtype=np.float32)
+        jerk = np.zeros_like(v, dtype=np.float32)
+    curv = _trajectory_curvature_batch(xy_all)
+    dyn_bad = (np.abs(acc) > 4.0).any(axis=1) | (np.abs(jerk) > 8.0).any(axis=1) | (np.abs(curv) > 0.35).any(axis=1)
+
+    red_light_bad = np.zeros((K,), dtype=bool)
+    for sl in runtime.map_features.get("stop_lines", []) if runtime.map_features else []:
+        status_red = bool(sl.get("red", False)) or ("red" in str(sl.get("status", "")).lower())
+        if not status_red:
             continue
-        traj = candidates.trajectories[a]
-        off_route = bool((nearest_polyline_distance(traj[:, :2], route) > width + 1.0).any())
-        speed_bad = bool((traj[:, 3] > speed_limit + 2.0).any())
-        red_light_bad = False
-        for sl in runtime.map_features.get("stop_lines", []) if runtime.map_features else []:
-            status_red = bool(sl.get("red", False)) or ("red" in str(sl.get("status", "")).lower())
-            if not status_red:
+        line_xy = np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)
+        if len(line_xy) < 2:
+            continue
+        for a in np.flatnonzero(valid_mask & ~red_light_bad):
+            if _crosses_polyline(xy_all[int(a)], line_xy):
+                red_light_bad[int(a)] = True
+
+    agent_bad = np.zeros((K,), dtype=bool)
+    agent_valid = np.asarray(runtime.agent_valid, dtype=bool).reshape(-1)
+    if agent_valid.size and getattr(runtime, "current_agents", None) is not None:
+        times = traj[:, :, 4] if traj.shape[2] > 4 else np.arange(T, dtype=np.float32)[None, :] * dt
+        for j in np.flatnonzero(agent_valid):
+            cur = np.asarray(runtime.current_agents[int(j)], dtype=np.float32).reshape(-1)
+            if cur.size < 4:
                 continue
-            xy = np.asarray(sl.get("xy", []), dtype=np.float32).reshape(-1, 2)
-            if len(xy) >= 2 and _crosses_polyline(traj[:, :2], xy):
-                red_light_bad = True
-                break
-        v = traj[:, 3]
-        acc = finite_difference(v, dt)
-        jerk = finite_difference(acc, dt)
-        curv = compute_curvature(traj[:, :2])
-        dyn_bad = bool((np.abs(acc) > 4.0).any() or (np.abs(jerk) > 8.0).any() or (np.abs(curv) > 0.35).any())
-        agent_bad = False
-        for j, valid in enumerate(runtime.agent_valid.astype(bool)):
-            if not valid:
-                continue
-            cur = runtime.current_agents[j]
-            vx = float(cur[5]) if cur.shape[0] > 5 else float(cur[3]) * np.cos(float(cur[2]))
-            vy = float(cur[6]) if cur.shape[0] > 6 else float(cur[3]) * np.sin(float(cur[2]))
-            times = traj[:, 4]
-            pred = cur[:2][None, :] + np.stack([vx * times, vy * times], axis=1)
-            if np.linalg.norm(traj[:, :2] - pred, axis=1).min() < 1.5:
-                agent_bad = True
-                break
-        flags[a] = off_route or speed_bad or dyn_bad or agent_bad or red_light_bad
-    return flags
+            vx = float(cur[5]) if cur.size > 5 else float(cur[3]) * np.cos(float(cur[2]))
+            vy = float(cur[6]) if cur.size > 6 else float(cur[3]) * np.sin(float(cur[2]))
+            pred_x = float(cur[0]) + vx * times
+            pred_y = float(cur[1]) + vy * times
+            dx = xy_all[:, :, 0] - pred_x
+            dy = xy_all[:, :, 1] - pred_y
+            agent_bad |= ((dx * dx + dy * dy).min(axis=1) < 1.5 * 1.5)
+
+    flags = valid_mask & (off_route | speed_bad | dyn_bad | agent_bad | red_light_bad)
+    return flags.astype(bool)
 
 
-def rule_based_runtime_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
+def rule_based_runtime_scores(
+    runtime: RuntimeFeatures,
+    candidates: CandidateBank,
+    cfg: dict[str, Any],
+    safety_flags: np.ndarray | None = None,
+) -> np.ndarray:
+    """Fast rule fallback scores.
+
+    ``safety_flags`` may be supplied by the caller to avoid recomputing the same
+    O(K * T * agents) safety check.  This fixes the main closed-loop hotspot in
+    the fallback rule-rerank branch while preserving the previous scoring rule.
+    """
     scores = np.full((candidates.K,), np.inf, dtype=np.float32)
+    valid_mask = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)[: candidates.K]
+    if not bool(valid_mask.any()):
+        return scores
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
-    for a in range(candidates.K):
-        if not candidates.valid_mask[a]:
-            continue
-        traj = candidates.trajectories[a]
-        route_cost = np.square(nearest_polyline_distance(traj[:, :2], route)).mean()
-        progress_reward = max(float(traj[-1, 0]), 0.0)
-        safety = runtime_safety_flags_from_runtime(runtime, candidates, cfg)[a]
-        scores[a] = float(route_cost - 0.1 * progress_reward + 100.0 * float(safety))
+    traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
+    route_dist = nearest_polyline_distance(traj[:, :, :2].reshape(-1, 2), route).reshape(candidates.K, traj.shape[1])
+    route_cost = np.square(route_dist).mean(axis=1)
+    progress_reward = np.maximum(traj[:, -1, 0], 0.0)
+    if safety_flags is None:
+        safety_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
+    safety_flags = np.asarray(safety_flags, dtype=bool).reshape(-1)[: candidates.K]
+    scores[valid_mask] = (route_cost[valid_mask] - 0.1 * progress_reward[valid_mask] + 100.0 * safety_flags[valid_mask].astype(np.float32)).astype(np.float32)
     return scores
 
 

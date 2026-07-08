@@ -561,12 +561,16 @@ class BDSEPlannerCore:
         assert best is not None
         stage_name, cfg_stage, pred, selection, tournament, atom_active = best
         action = int(tournament.action_index)
+        t_post = time.perf_counter()
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg_stage)
+        if profile_enabled:
+            timing_core["final_safety_flags_s"] = float(time.perf_counter() - t_post)
         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
             from bdse.planner.fallback import rule_based_runtime_scores, conservative_fallback_action
+            t_rule = time.perf_counter()
             top_k = int(fcfg.get("rule_rerank_top_k", 5))
             top_actions = [int(a) for a in np.argsort(-tournament.scores)[:top_k] if candidates.valid_mask[int(a)]]
-            rule_cost = rule_based_runtime_scores(runtime, candidates, cfg_stage)
+            rule_cost = rule_based_runtime_scores(runtime, candidates, cfg_stage, safety_flags=runtime_flags)
             safe_top = [a for a in top_actions if not runtime_flags[a]]
             if safe_top:
                 best_rule = min(safe_top, key=lambda a: (float(rule_cost[a]), a))
@@ -576,6 +580,8 @@ class BDSEPlannerCore:
             elif runtime_flags[action]:
                 action = int(conservative_fallback_action(candidates))
                 stage_name = stage_name + "+conservative"
+            if profile_enabled:
+                timing_core["rule_rerank_s"] = float(time.perf_counter() - t_rule)
         trajectory = candidates.trajectories[action]
         qdiag = runtime_query_diagnostics(pred, selection.selected)
         qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
