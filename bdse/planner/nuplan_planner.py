@@ -662,6 +662,8 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         self._cached_local_trajectory = None
         self._cached_action_index = 0
         self._cached_replan_iteration_index = None
+        self._cached_replan_time_s = None
+        self._cached_replan_ego_pose = None
 
     def name(self) -> str:
         return self._name
@@ -720,6 +722,34 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         except Exception:
             return 1
 
+    def _planner_cache_cfg(self) -> dict[str, Any]:
+        pcfg = self.core.cfg.get("planner", {}) if isinstance(self.core.cfg, dict) else {}
+        return pcfg if isinstance(pcfg, dict) else {}
+
+    def _current_ego_pose_time(self, current_input: Any) -> tuple[tuple[float, float, float] | None, float | None]:
+        """Best-effort extraction of current rear-axle global pose and simulation time."""
+        try:
+            history = getattr(current_input, "history", None)
+            ego_states = getattr(history, "ego_states", None)
+            if ego_states is None or len(ego_states) == 0:
+                return None, None
+            state = ego_states[-1]
+            rear = getattr(state, "rear_axle", state)
+            pose = (float(getattr(rear, "x")), float(getattr(rear, "y")), float(getattr(rear, "heading")))
+            tp = getattr(state, "time_point", None)
+            time_s = None
+            if tp is not None and hasattr(tp, "time_s"):
+                time_s = float(getattr(tp, "time_s"))
+            elif tp is not None and hasattr(tp, "time_us"):
+                time_s = float(getattr(tp, "time_us")) * 1e-6
+            else:
+                iteration = getattr(current_input, "iteration", None)
+                if iteration is not None and hasattr(iteration, "time_s"):
+                    time_s = float(getattr(iteration, "time_s"))
+            return pose, time_s
+        except Exception:
+            return None, None
+
     def _can_reuse_cached_plan(self, current_input: Any) -> bool:
         if getattr(self, "_cached_local_trajectory", None) is None:
             return False
@@ -731,7 +761,32 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         if last_idx is None or idx < 0 or idx <= int(last_idx):
             # A reset/non-monotonic index usually means a new scenario/simulation.
             return False
-        return (idx - int(last_idx)) < interval
+        if (idx - int(last_idx)) >= interval:
+            return False
+
+        # Optional guards make longer replan intervals safer: reuse the cached
+        # rollout only while the ego has not moved/rotated too far from the state
+        # where the expensive BDSE certificate was computed.  These guards are
+        # disabled only if explicitly set to <=0 in the config/env.
+        pcfg = self._planner_cache_cfg()
+        max_dist = float(os.environ.get("BDSE_REPLAN_CACHE_MAX_DISTANCE_M", pcfg.get("replan_cache_max_distance_m", 8.0)))
+        max_heading = float(os.environ.get("BDSE_REPLAN_CACHE_MAX_HEADING_RAD", pcfg.get("replan_cache_max_heading_rad", 0.8)))
+        max_elapsed = float(os.environ.get("BDSE_REPLAN_CACHE_MAX_ELAPSED_S", pcfg.get("replan_cache_max_elapsed_s", 2.5)))
+        if max_dist > 0.0 or max_heading > 0.0 or max_elapsed > 0.0:
+            pose, time_s = self._current_ego_pose_time(current_input)
+            last_pose = getattr(self, "_cached_replan_ego_pose", None)
+            last_time = getattr(self, "_cached_replan_time_s", None)
+            if pose is not None and last_pose is not None:
+                dx = float(pose[0]) - float(last_pose[0])
+                dy = float(pose[1]) - float(last_pose[1])
+                if max_dist > 0.0 and (dx * dx + dy * dy) ** 0.5 > max_dist:
+                    return False
+                if max_heading > 0.0 and abs(float(angle_wrap(float(pose[2]) - float(last_pose[2])))) > max_heading:
+                    return False
+            if time_s is not None and last_time is not None:
+                if max_elapsed > 0.0 and float(time_s) - float(last_time) > max_elapsed:
+                    return False
+        return True
 
     def compute_planner_trajectory(self, current_input: Any):
         """Compute a nuPlan-compatible trajectory from runtime-only inputs.
@@ -757,6 +812,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
                 "cached_plan": True,
                 "reuse_from_iteration_index": int(getattr(self, "_cached_replan_iteration_index", -1)),
                 "replan_interval_ticks": self._planner_replan_interval_ticks(),
+                "cache_guarded": True,
             }
             if profile_enabled:
                 diagnostics["timing"] = {
@@ -781,6 +837,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         self._cached_local_trajectory = np.asarray(trajectory, dtype=np.float32).copy()
         self._cached_action_index = int(action)
         self._cached_replan_iteration_index = int(idx)
+        self._cached_replan_ego_pose, self._cached_replan_time_s = self._current_ego_pose_time(current_input)
         if profile_enabled:
             diagnostics = dict(diagnostics)
             timing = dict(diagnostics.get("timing", {}))
