@@ -20,6 +20,8 @@ planner:
 preprocess:
   candidate_aware_agent_selection: false
 runtime:
+  skip_stop_line_query_without_red_light: true
+  stop_line_cache_tile_m: 25.0
   include_drivable_polygons: false
   skip_candidate_aware_agent_selection: true
   use_pair_conditioned_margins: true

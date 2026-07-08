@@ -333,6 +333,15 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
     if args.hydra_full_error:
         env_overrides.append("HYDRA_FULL_ERROR=1")
 
+    # Avoid CPU oversubscription when nuPlan runs multiple simulation workers.
+    # Also shard planner instances across visible GPUs unless the user already
+    # selected a policy in the environment.
+    for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        if key not in os.environ:
+            env_overrides.append(f"{key}=1")
+    if "BDSE_SHARD_PLANNERS_ACROSS_GPUS" not in os.environ and str(args.device).lower().startswith(("cuda", "auto")):
+        env_overrides.append("BDSE_SHARD_PLANNERS_ACROSS_GPUS=1")
+
     challenge = _canonical_challenge_name(args.challenge)
     output_dir = _challenge_scoped_output_dir(args.output_dir, challenge)
     base = [

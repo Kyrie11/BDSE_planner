@@ -18,6 +18,12 @@ from bdse.utils import transform_states_to_local
 _ROUTE_GLOBAL_CACHE: dict[tuple[int, tuple[str, ...]], np.ndarray] = {}
 _ROUTE_GLOBAL_CACHE_MAX = 4096
 
+# Closed-loop optimization: nuPlan map queries are expensive and this adapter is
+# called at every simulation tick. Stop-line geometry is static over a local map
+# patch, while only the red/unknown status changes with traffic-light data.
+_STOP_LINE_GLOBAL_CACHE: dict[tuple[int, int, int, int], list[dict[str, Any]]] = {}
+_STOP_LINE_GLOBAL_CACHE_MAX = 4096
+
 
 def _route_cache_key(initialization: Any) -> tuple[int, tuple[str, ...]]:
     route_ids = tuple(str(x) for x in (list(_safe_getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []))
@@ -41,6 +47,43 @@ def _store_route_global(initialization: Any, route_global: np.ndarray) -> None:
     if len(_ROUTE_GLOBAL_CACHE) >= _ROUTE_GLOBAL_CACHE_MAX:
         _ROUTE_GLOBAL_CACHE.pop(next(iter(_ROUTE_GLOBAL_CACHE)))
     _ROUTE_GLOBAL_CACHE[key] = arr
+
+
+def _traffic_has_red_light(traffic_lights: list[dict[str, Any]]) -> bool:
+    return any("red" in str(t.get("status", "")).lower() for t in traffic_lights)
+
+
+def _red_lane_connector_ids(traffic_lights: list[dict[str, Any]]) -> set[str]:
+    return {str(t.get("lane_connector_id", "")) for t in traffic_lights if "red" in str(t.get("status", "")).lower()}
+
+
+def _stop_line_cache_key(map_api: Any, current_state: np.ndarray, radius: float, tile_m: float) -> tuple[int, int, int, int]:
+    tile = max(float(tile_m), 1.0)
+    return (
+        id(map_api),
+        int(np.floor(float(current_state[0]) / tile)),
+        int(np.floor(float(current_state[1]) / tile)),
+        int(round(float(radius))),
+    )
+
+
+def _store_stop_lines_global(key: tuple[int, int, int, int], records: list[dict[str, Any]]) -> None:
+    if len(_STOP_LINE_GLOBAL_CACHE) >= _STOP_LINE_GLOBAL_CACHE_MAX:
+        _STOP_LINE_GLOBAL_CACHE.pop(next(iter(_STOP_LINE_GLOBAL_CACHE)))
+    _STOP_LINE_GLOBAL_CACHE[key] = records
+
+
+def _stop_line_records_to_local(records: list[dict[str, Any]], current_state: np.ndarray, red_ids: set[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        xy_global = np.asarray(rec.get("xy_global", np.zeros((0, 2), dtype=np.float32)), dtype=np.float32).reshape(-1, 2)
+        if len(xy_global) < 2:
+            continue
+        obj_id = str(rec.get("id", ""))
+        conn_ids = tuple(str(x) for x in rec.get("conn_ids", ()))
+        is_red = bool(red_ids and (obj_id in red_ids or any(cid in red_ids for cid in conn_ids)))
+        out.append({"xy": _to_local_xy(xy_global, current_state), "red": is_red, "status": "red" if is_red else "unknown", "id": obj_id})
+    return out
 
 
 def _state_to_array(state: Any) -> np.ndarray:
@@ -448,30 +491,44 @@ def _stop_lines_from_map_api(initialization: Any, current_state: np.ndarray | No
     map_api = _safe_getattr(initialization, "map_api", None) if initialization is not None else None
     if map_api is None or current_state is None:
         return []
+
+    runtime_cfg = cfg.get("runtime", {})
+    # Most ticks have no red-light constraint. In that case querying nearby
+    # STOP_LINE objects does not change BDSE runtime evidence, but it can
+    # dominate closed-loop latency in nuPlan. Set this false for visualization.
+    if bool(runtime_cfg.get("skip_stop_line_query_without_red_light", True)) and not _traffic_has_red_light(traffic_lights):
+        return []
+
     layer = _semantic_map_layer("STOP_LINE")
     if layer is None:
         return []
+    radius = float(runtime_cfg.get("map_radius_m", 100.0))
+    tile_m = float(runtime_cfg.get("stop_line_cache_tile_m", 25.0))
+    key = _stop_line_cache_key(map_api, current_state, radius, tile_m)
+    red_ids = _red_lane_connector_ids(traffic_lights)
+    cached = _STOP_LINE_GLOBAL_CACHE.get(key)
+    if cached is not None:
+        return _stop_line_records_to_local(cached, current_state, red_ids)
+
     try:
         point_mod = __import__("nuplan.common.actor_state.state_representation", fromlist=["Point2D"])
         Point2D = getattr(point_mod, "Point2D")
         center = Point2D(float(current_state[0]), float(current_state[1]))
     except Exception:
         center = current_state[:2]
-    radius = float(cfg.get("runtime", {}).get("map_radius_m", 100.0))
     try:
         prox = map_api.get_proximal_map_objects(center, radius, [layer])
         objs = prox.get(layer, []) if isinstance(prox, dict) else []
     except Exception:
         objs = []
-    red_ids = {str(t.get("lane_connector_id", "")) for t in traffic_lights if "red" in str(t.get("status", "")).lower()}
-    out: list[dict[str, Any]] = []
+
+    records: list[dict[str, Any]] = []
     for obj in list(objs):
         xy = _xy_array_from_geometry(obj)
         if len(xy) < 2:
             continue
-        local = _to_local_xy(xy, current_state)
         obj_id = str(getattr(obj, "id", getattr(obj, "token", "")))
-        conn_ids = []
+        conn_ids: list[str] = []
         for attr in ("lane_connector_id", "lane_connector_ids", "lane_connector_fid", "lane_connector_fids"):
             val = getattr(obj, attr, None)
             if val is None:
@@ -480,10 +537,9 @@ def _stop_lines_from_map_api(initialization: Any, current_state: np.ndarray | No
                 conn_ids.extend(str(v) for v in val)
             else:
                 conn_ids.append(str(val))
-        is_red = bool(red_ids and (obj_id in red_ids or any(cid in red_ids for cid in conn_ids)))
-        out.append({"xy": local.astype(np.float32), "red": is_red, "status": "red" if is_red else "unknown", "id": obj_id})
-    return out
-
+        records.append({"xy_global": np.asarray(xy, dtype=np.float32).reshape(-1, 2), "id": obj_id, "conn_ids": tuple(conn_ids)})
+    _store_stop_lines_global(key, records)
+    return _stop_line_records_to_local(records, current_state, red_ids)
 
 def _map_features_from_initialization(initialization: Any, cfg: dict[str, Any], current_state: np.ndarray | None = None, traffic_lights: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     # Runtime-safe map context from nuPlan initialization.  This must not read

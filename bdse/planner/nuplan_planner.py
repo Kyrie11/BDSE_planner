@@ -53,6 +53,15 @@ from bdse.planner.tournament import run_tournament, run_pair_conditioned_tournam
 
 _PLANNER_DEVICE_LOCK = threading.Lock()
 _PLANNER_DEVICE_COUNTER = itertools.count()
+_NUPLAN_IMPORT_CACHE: dict[str, Any] = {}
+
+
+def _cached_import(module: str, name: str) -> Any:
+    key = f"{module}:{name}"
+    if key not in _NUPLAN_IMPORT_CACHE:
+        mod = __import__(module, fromlist=[name])
+        _NUPLAN_IMPORT_CACHE[key] = getattr(mod, name)
+    return _NUPLAN_IMPORT_CACHE[key]
 
 
 def _maybe_shard_planner_device(device: str | None) -> str | None:
@@ -727,17 +736,15 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         if traj_arr.ndim != 2 or traj_arr.shape[1] < 5 or len(traj_arr) == 0:
             raise ValueError(f"Expected BDSE trajectory with shape [T,5+], got {traj_arr.shape}")
         try:
-            traj_mod = __import__("nuplan.planning.simulation.trajectory.interpolated_trajectory", fromlist=["InterpolatedTrajectory"])
-            InterpolatedTrajectory = getattr(traj_mod, "InterpolatedTrajectory")
+            InterpolatedTrajectory = _cached_import("nuplan.planning.simulation.trajectory.interpolated_trajectory", "InterpolatedTrajectory")
             history = getattr(current_input, "history", None)
             ego_states = getattr(history, "ego_states", None)
             if ego_states is not None and len(ego_states) >= 2:
                 try:
-                    transform_mod = __import__(
+                    transform_predictions_to_states = _cached_import(
                         "nuplan.planning.simulation.planner.ml_planner.transform_utils",
-                        fromlist=["transform_predictions_to_states"],
+                        "transform_predictions_to_states",
                     )
-                    transform_predictions_to_states = getattr(transform_mod, "transform_predictions_to_states")
                     times = np.asarray(traj_arr[:, 4], dtype=np.float32)
                     if len(times) > 1:
                         diffs = np.diff(times)
@@ -773,12 +780,10 @@ class BDSEnuPlanPlanner(AbstractPlanner):
                     # the final boundary if manual conversion also fails.
                     pass
 
-            state_mod = __import__("nuplan.common.actor_state.ego_state", fromlist=["EgoState"])
-            time_mod = __import__("nuplan.common.actor_state.state_representation", fromlist=["TimePoint", "StateSE2", "StateVector2D"])
-            EgoState = getattr(state_mod, "EgoState")
-            TimePoint = getattr(time_mod, "TimePoint")
-            StateSE2 = getattr(time_mod, "StateSE2")
-            StateVector2D = getattr(time_mod, "StateVector2D")
+            EgoState = _cached_import("nuplan.common.actor_state.ego_state", "EgoState")
+            TimePoint = _cached_import("nuplan.common.actor_state.state_representation", "TimePoint")
+            StateSE2 = _cached_import("nuplan.common.actor_state.state_representation", "StateSE2")
+            StateVector2D = _cached_import("nuplan.common.actor_state.state_representation", "StateVector2D")
             last = ego_states[-1] if ego_states is not None and len(ego_states) else None
             start_us = int(getattr(getattr(last, "time_point", None), "time_us", 0))
             rear = getattr(last, "rear_axle", last)
@@ -802,8 +807,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
                 vehicle_params = getattr(vehicle_params, "vehicle_parameters", None)
             if vehicle_params is None:
                 try:
-                    vp_mod = __import__("nuplan.common.actor_state.vehicle_parameters", fromlist=["get_pacifica_parameters"])
-                    vehicle_params = getattr(vp_mod, "get_pacifica_parameters")()
+                    vehicle_params = _cached_import("nuplan.common.actor_state.vehicle_parameters", "get_pacifica_parameters")()
                 except Exception:
                     vehicle_params = None
             for k, row in enumerate(traj_arr):
