@@ -583,6 +583,18 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         quantile=_margin_norm_quantile(cfg),
     )
     normalize_pair_losses = bool(train_cfg.get("normalize_pair_losses", True))
+    pair_target_clip = float(train_cfg.get(
+        "pair_target_clip_normalized" if normalize_pair_losses else "pair_target_clip",
+        0.0,
+    ))
+    residual_target_clip = float(train_cfg.get(
+        "residual_target_clip_normalized" if normalize_pair_losses else "residual_target_clip",
+        pair_target_clip,
+    ))
+    margin_target_clip = float(train_cfg.get(
+        "full_pair_margin_clip_normalized" if normalize_pair_losses else "full_pair_margin_clip",
+        residual_target_clip,
+    ))
 
     e_mask = batch.get("evidence_active", torch.ones_like(out["proposal_logits"]).bool()).bool()
     safety_atom_mask = _safety_atom_mask_from_batch(batch, e_mask, cfg)
@@ -629,6 +641,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     )
 
     residual_target_norm = residual_T / pair_scale.clamp_min(1e-6)
+    if residual_target_clip > 0:
+        residual_target_norm = residual_target_norm.clamp(-residual_target_clip, residual_target_clip)
     residual_weight = decision_w
     if pair_train_mask.sum() > 0:
         if normalize_pair_losses:
@@ -670,6 +684,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         tg_a, tg_b = pair_gather(teacher_g.float(), pairs)
         true_atom_delta_raw = tg_b - tg_a
         true_atom_delta = true_atom_delta_raw / pair_scale[:, None, :].clamp_min(1e-6) if normalize_pair_losses else true_atom_delta_raw
+        if pair_target_clip > 0:
+            true_atom_delta = true_atom_delta.clamp(-pair_target_clip, pair_target_clip)
         atom_pair_mask = pair_atom_train_mask[:, :, None] & pair_train_mask[:, None, :]
         nonzero = true_atom_delta.abs() > 1e-6
         zero_w = float(train_cfg.get("pair_zero_weight", 0.1))
@@ -729,6 +745,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         rank_terms = F.softplus(-M_hat_E[pair_train_mask] / max(tau_rank, 1e-6))
         L_rank_cls = (decision_w[pair_train_mask] * rank_terms).sum() / decision_w[pair_train_mask].sum().clamp_min(1e-6)
         target_margin_norm = batch["pair_margins"].float() / pair_scale.clamp_min(1e-6) if normalize_pair_losses else batch["pair_margins"].float()
+        if margin_target_clip > 0:
+            target_margin_norm = target_margin_norm.clamp(-margin_target_clip, margin_target_clip)
         reg_terms = F.huber_loss(
             M_hat_E[pair_train_mask],
             target_margin_norm[pair_train_mask],
@@ -819,13 +837,15 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
 
     use_pair_act = bool(cfg.get("runtime", {}).get("use_pair_conditioned_margins", cfg.get("model", {}).get("pair_conditioned", True)))
     if enable_action_loss and pair_act_weight_cfg > 0.0 and use_pair_act and "pair_atom_delta" in out:
+        exclude_safety_from_pair_action = bool(train_cfg.get("exclude_safety_atoms_from_pair_action_loss", True))
+        pair_action_atom_mask = e_mask & ((~safety_atom_mask) if exclude_safety_from_pair_action else torch.ones_like(safety_atom_mask, dtype=torch.bool))
         if cur_epoch < predicted_selector_start and target_sel is not None:
-            # Oracle-to-predicted curriculum: early action supervision uses the
-            # oracle interaction certificate, but excludes structural safety
-            # atoms so the pair head is not trained to imitate hard-penalty deltas.
-            pair_selected_mask = target_sel.bool() & e_mask & (~safety_atom_mask)
+            # Oracle-to-predicted curriculum: early action supervision can either
+            # exclude structural safety atoms (legacy behavior) or include clipped
+            # hard/safety margins for metric-aligned deployment training.
+            pair_selected_mask = target_sel.bool() & pair_action_atom_mask
         else:
-            pair_selected_mask = _predicted_pair_certificate_masks(out, batch, cfg) & (~safety_atom_mask)
+            pair_selected_mask = _predicted_pair_certificate_masks(out, batch, cfg) & pair_action_atom_mask
         logits_pair = _pair_conditioned_tournament_scores(
             finite_J0,
             pred_atom_delta,
@@ -893,6 +913,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     # above the configured epsilon_cal so the validation quantile has a training signal.
     if pair_mask.sum() > 0 and eps_cal > 0:
         target_margin_for_cal = batch["pair_margins"].float() / pair_scale.clamp_min(1e-6) if normalize_pair_losses else batch["pair_margins"].float()
+        if margin_target_clip > 0:
+            target_margin_for_cal = target_margin_for_cal.clamp(-margin_target_clip, margin_target_clip)
         cal_err = (M_hat_E[pair_mask] - target_margin_for_cal[pair_mask]).abs()
         if bool(train_cfg.get("normalize_calibration_loss", True)):
             eps_train = float(train_cfg.get("epsilon_cal_normalized", 1.0))

@@ -417,6 +417,9 @@ class BDSEPlannerCore:
             budget,
             atom_families=atom_families,
             seed=int(stage_cfg.get("seed", 17)),
+            atom_active_mask=atom_active,
+            proposal_scores=pred.get("proposal_logits", None),
+            mandatory_atom_mask=pred.get("mandatory_atom_mask", None),
         )
         tournament = _run_selected_tournament(selection.selected)
         pred = dict(pred); pred["baseline_mode"] = mode; pred["baseline_pair_tournament"] = bool(tournament.diagnostics.get("baseline_pair_tournament", False))

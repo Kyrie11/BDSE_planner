@@ -1008,11 +1008,21 @@ def select_by_mode(
     budget: float,
     atom_families: list[str] | None = None,
     seed: int = 17,
+    atom_active_mask: np.ndarray | None = None,
+    proposal_scores: np.ndarray | None = None,
+    mandatory_atom_mask: np.ndarray | None = None,
     **kwargs,
 ) -> SelectionResult:
     E = int(predicted_atom_costs.shape[0])
-    costs = np.asarray(atom_budget_costs, dtype=np.float32)
-    max_count = int(budget) if np.allclose(costs, 1.0) else E
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    costs = costs[:E]
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).reshape(-1)
+    if active.shape[0] < E:
+        active = np.pad(active, (0, E - active.shape[0]), constant_values=False)
+    active = active[:E] & np.isfinite(costs) & (costs > 0)
+    max_count = int(budget) if active.any() and np.allclose(costs[active], 1.0) else E
     if mode == "full_prescore_ablation":
         return full_prescore_greedy_selector(
             predicted_base_cost,
@@ -1035,37 +1045,57 @@ def select_by_mode(
         )
     if mode == "random":
         rng = np.random.default_rng(seed)
-        order = rng.permutation(E).tolist()
+        order = rng.permutation(np.flatnonzero(active)).astype(np.int64).tolist()
     elif mode == "top_magnitude":
         magnitude = np.abs(predicted_atom_costs[:, valid_mask]).mean(axis=1)
-        order = sorted(range(E), key=lambda i: (-float(magnitude[i]), i))
+        order = sorted(np.flatnonzero(active).tolist(), key=lambda i: (-float(magnitude[i]), i))
     elif mode == "diversity":
-        fams = atom_families or ["all"] * E
+        fams = (atom_families or ["all"] * E)[:E]
         order = []
         for fam in sorted(set(fams)):
-            order.extend([i for i, f in enumerate(fams) if f == fam])
+            order.extend([i for i, f in enumerate(fams) if active[i] and f == fam])
     elif mode in {"proposal_top", "hard_safety_only", "interaction_only", "rule_map_only", "risk_only"}:
-        fams = atom_families or ["all"] * E
+        fams = (atom_families or ["all"] * E)[:E]
         if mode == "proposal_top":
-            magnitude = np.abs(predicted_atom_costs[:, valid_mask]).mean(axis=1)
-            order = sorted(range(E), key=lambda i: (-float(magnitude[i]), i))
+            if proposal_scores is not None:
+                scores = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
+                if scores.shape[0] < E:
+                    scores = np.pad(scores, (0, E - scores.shape[0]), constant_values=-np.inf)
+                scores = scores[:E]
+                order = sorted(np.flatnonzero(active).tolist(), key=lambda i: (-float(scores[i]), i))
+            else:
+                magnitude = np.abs(predicted_atom_costs[:, valid_mask]).mean(axis=1)
+                order = sorted(np.flatnonzero(active).tolist(), key=lambda i: (-float(magnitude[i]), i))
         elif mode == "hard_safety_only":
-            order = [i for i, f in enumerate(fams) if f in {"hard", "safety", "feasibility", "rule_map"}]
+            fam_order = [i for i, f in enumerate(fams) if active[i] and f in {"hard", "safety", "feasibility", "rule_map"}]
+            if mandatory_atom_mask is not None:
+                mandatory = np.asarray(mandatory_atom_mask, dtype=bool).reshape(-1)
+                if mandatory.shape[0] < E:
+                    mandatory = np.pad(mandatory, (0, E - mandatory.shape[0]), constant_values=False)
+                mandatory = mandatory[:E]
+                mand_order = [i for i in np.flatnonzero(active & mandatory).tolist() if i not in set(fam_order)]
+                order = np.flatnonzero(active & mandatory).tolist() + fam_order
+            else:
+                order = fam_order
         elif mode == "risk_only":
             magnitude = np.abs(predicted_atom_costs[:, valid_mask]).max(axis=1)
-            order = sorted(range(E), key=lambda i: (-float(magnitude[i]), i))
+            order = sorted(np.flatnonzero(active).tolist(), key=lambda i: (-float(magnitude[i]), i))
         else:
             want_set = {"interaction", "reachability_interaction", "precedence"} if mode == "interaction_only" else {"rule_map", "feasibility"}
-            order = [i for i, f in enumerate(fams) if f in want_set]
+            order = [i for i, f in enumerate(fams) if active[i] and f in want_set]
     else:
         raise ValueError(f"Unknown selector mode: {mode}")
     selected: list[int] = []
+    selected_set: set[int] = set()
     spent = 0.0
     for i in order:
-        c = float(costs[i])
-        if spent + c <= budget + 1e-6:
+        if i < 0 or i >= E or int(i) in selected_set or not bool(active[int(i)]):
+            continue
+        c = float(costs[int(i)])
+        if np.isfinite(c) and spent + c <= budget + 1e-6:
             selected.append(int(i))
+            selected_set.add(int(i))
             spent += c
-        if len(selected) >= max_count and np.allclose(costs, 1.0):
+        if len(selected) >= max_count and active.any() and np.allclose(costs[active], 1.0):
             break
     return SelectionResult(selected=selected, objective_value=0.0, pair_indices=np.zeros((0, 2), dtype=np.int64), pair_weights=np.zeros((0,), dtype=np.float32), diagnostics={"spent_budget": spent, "mode": mode})

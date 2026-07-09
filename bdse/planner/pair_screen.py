@@ -39,6 +39,7 @@ def _maneuver_array(maneuver_ids: np.ndarray | None, K: int) -> np.ndarray:
 
 def _add_enhanced_decisive_pairs(
     pair_set: dict[tuple[int, int], float],
+    critical_pair_set: set[tuple[int, int]] | None,
     J0: np.ndarray,
     valid_idx: np.ndarray,
     valid: np.ndarray,
@@ -69,6 +70,8 @@ def _add_enhanced_decisive_pairs(
             return
         key = (int(a), int(b))
         pair_set[key] = max(float(w), pair_set.get(key, 0.0))
+        if critical_pair_set is not None:
+            critical_pair_set.add(key)
 
     safe_like = np.asarray([i for i in valid_idx.tolist() if int(man[i]) in SAFE_LIKE_MANEUVER_IDS], dtype=np.int64)
     progressive = np.asarray([i for i in valid_idx.tolist() if int(man[i]) in PROGRESSIVE_MANEUVER_IDS], dtype=np.int64)
@@ -132,6 +135,7 @@ def build_runtime_pairs_from_base(
     top = valid_idx[np.argsort(J0[valid_idx])[: min(max(int(L0), 1), valid_idx.size)]]
     pair_set: dict[tuple[int, int], float] = {}
     safety_pair_set: dict[tuple[int, int], float] = {}
+    critical_pair_set: set[tuple[int, int]] = set()
 
     def _base_order(a: int, b: int) -> tuple[int, int]:
         if (float(J0[b]), int(b)) < (float(J0[a]), int(a)):
@@ -173,9 +177,11 @@ def build_runtime_pairs_from_base(
                 w = 1.0 + float(lambda_safety)
                 safety_pair_set[key] = max(w, safety_pair_set.get(key, 0.0))
                 pair_set[key] = max(w, pair_set.get(key, 0.0))
+                critical_pair_set.add(key)
 
     _add_enhanced_decisive_pairs(
         pair_set,
+        critical_pair_set,
         J0,
         valid_idx,
         valid,
@@ -191,11 +197,19 @@ def build_runtime_pairs_from_base(
     items = sorted(pair_set.items(), key=lambda kv: (abs(float(J0[kv[0][1]] - J0[kv[0][0]])), kv[0][0], kv[0][1]))
     max_pairs = max(int(L0) * max(int(L0), 1), int(L0))
     max_pairs = int(np.ceil(max_pairs * max(1.0, float(pair_cap_multiplier))))
-    if preserve_safety_pairs and safety_pair_set:
-        safety_items = sorted(safety_pair_set.items(), key=lambda kv: (float(J0[kv[0][0]]), float(J0[kv[0][1]]), kv[0][0], kv[0][1]))
-        safety_keys = {k for k, _ in safety_items}
-        regular_items = [kv for kv in items if kv[0] not in safety_keys]
-        items = safety_items + regular_items[:max_pairs]
+    if preserve_safety_pairs and (safety_pair_set or critical_pair_set):
+        # Preserve safety and enhanced stop/go-progress pairs before spending the
+        # remaining pair budget on small-base-gap pairs.  Without this, far but
+        # decisive stop-vs-go comparisons can be evicted from the runtime screen.
+        critical_items = [
+            (k, pair_set[k])
+            for k in sorted(critical_pair_set, key=lambda k: (float(J0[k[0]]), float(J0[k[1]]), k[0], k[1]))
+            if k in pair_set
+        ]
+        critical_keys = {k for k, _ in critical_items}
+        regular_items = [kv for kv in items if kv[0] not in critical_keys]
+        remaining = max(0, max_pairs - len(critical_items))
+        items = critical_items + regular_items[:remaining]
     else:
         items = items[:max_pairs]
     pairs = np.asarray([k for k, _ in items], dtype=np.int64)
@@ -235,22 +249,32 @@ def build_rival_sets_from_base(
         if not valid[a] or not np.isfinite(J0[a]):
             rivals.append([])
             continue
-        cand = [int(b) for b in top.tolist() if int(b) != a]
-        cand += [int(b) for b in valid_idx.tolist() if int(b) != a and abs(float(J0[b] - J0[a])) < float(eta0)]
-        cand += [int(b) for b in valid_idx.tolist() if int(b) != a and bool(safety[b])]
-        # Decisive non-base rivals: every action compares against conservative
-        # stop/yield options and against progress extremes, so tournament can
-        # choose between stop/proceed rather than only among base-near actions.
-        cand += [b for b in safe_like if b != a]
+        base_cand = [int(b) for b in top.tolist() if int(b) != a]
+        base_cand += [int(b) for b in valid_idx.tolist() if int(b) != a and abs(float(J0[b] - J0[a])) < float(eta0)]
+        safety_cand = [int(b) for b in valid_idx.tolist() if int(b) != a and bool(safety[b])]
+        # Decisive non-base rivals are preserved first, then base-near/top-L
+        # rivals fill the remainder.  This keeps safety/progress alternatives in
+        # every local tournament even if their base scores are far apart.
+        critical = safety_cand + [b for b in safe_like if b != a]
         if int(man[a]) in SAFE_LIKE_MANEUVER_IDS:
-            cand += [b for b in high_prog if b != a]
+            critical += [b for b in high_prog if b != a]
         else:
-            cand += [b for b in low_prog if b != a]
-        limit = max(int(L_infer), int(safety[valid_idx].sum()) if valid_idx.size else 0, len(safe_like))
-        seen = []
-        for b in sorted(set(cand), key=lambda x: (abs(float(J0[x] - J0[a])), x)):
-            seen.append(b)
-            if len(seen) >= max(1, limit):
-                break
+            critical += [b for b in low_prog if b != a]
+        limit = max(int(L_infer), len(set(safety_cand)), len(set(safe_like)))
+        seen: list[int] = []
+        seen_set: set[int] = set()
+
+        def add_ordered(seq, *, sort_key, max_total: int | None = None):
+            for b in sorted(set(seq), key=sort_key):
+                if max_total is not None and len(seen) >= max_total:
+                    break
+                if b == a or b in seen_set:
+                    continue
+                seen.append(int(b))
+                seen_set.add(int(b))
+
+        add_ordered(critical, sort_key=lambda x: (bool(safety[x]), abs(float(J0[x] - J0[a])), x), max_total=None)
+        target = max(1, max(limit, len(seen)))
+        add_ordered(base_cand, sort_key=lambda x: (abs(float(J0[x] - J0[a])), x), max_total=target)
         rivals.append(seen)
     return rivals
