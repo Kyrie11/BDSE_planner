@@ -320,7 +320,7 @@ def _append_custom_db_safety_overrides(overrides: list[str]) -> list[str]:
 
 def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tuple[list[str], list[str]]:
     env_overrides = [
-        f"BDSE_CHECKPOINT={str(Path(args.checkpoint).resolve())}",
+        f"BDSE_CHECKPOINT={str(Path(args.checkpoint).resolve()) if args.checkpoint else ''}",
         f"BDSE_CONFIG={str(Path(args.config).resolve()) if args.config else ''}",
         f"BDSE_DEVICE={args.device}",
     ]
@@ -429,7 +429,7 @@ def main() -> None:
         )
     )
     parser.add_argument("--config", type=str, default="bdse/configs/full_preprocess.yaml")
-    parser.add_argument("--checkpoint", type=str, required=True)
+    parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--device", type=str, default="auto", help="Planner device passed to BDSEnuPlanPlanner. auto uses CUDA when available.")
     parser.add_argument("--challenge", type=str, default="closed_loop_nonreactive_agents")
     parser.add_argument("--output-dir", type=str, default="outputs/closed_loop_bdse")
@@ -467,7 +467,7 @@ def main() -> None:
     parser.add_argument("overrides", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
-    if not Path(args.checkpoint).exists():
+    if args.checkpoint and not Path(args.checkpoint).exists():
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
     if args.config and not Path(args.config).exists():
         raise FileNotFoundError(f"BDSE config not found: {args.config}")

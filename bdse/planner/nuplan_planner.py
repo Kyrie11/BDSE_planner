@@ -355,6 +355,31 @@ class BDSEPlannerCore:
         if mode in {"oracle", "oracle_budget", "teacher_oracle"}:
             raise RuntimeError("oracle_budget is only available in offline diagnostics where teacher labels are present; use bdse.experiments.diagnostics/evaluate_open_loop oracle metrics.")
 
+        if mode in {"external_policy", "external_score", "external_baseline"}:
+            selected_arr = np.asarray(pred.get("external_selected_atoms", pred.get("top_m_atoms", [])), dtype=np.int64).reshape(-1)
+            selected: list[int] = []
+            spent = 0.0
+            for i in selected_arr.tolist():
+                if int(i) < 0 or int(i) >= evidence_bank.E or not bool(atom_active[int(i)]):
+                    continue
+                c = float(costs[int(i)]) if np.isfinite(float(costs[int(i)])) else 1.0
+                if spent + c <= budget + 1e-6:
+                    selected.append(int(i)); spent += c
+            selection = SelectionResult(selected, float(spent), pred.get("runtime_pairs", np.zeros((0, 2), dtype=np.int64)), pred.get("runtime_pair_weights", np.zeros((0,), dtype=np.float32)), {"mode": mode, "spent_budget": float(spent), "external_variant": str(pred.get("external_variant", "unknown"))})
+            # External baselines output a final candidate score under the same
+            # evidence budget.  The tournament therefore uses J0 directly while
+            # selection is retained for query/budget accounting.
+            tournament = run_tournament(
+                J0, zero_g, selection.selected, valid, runtime_flags, stage_cfg,
+                candidate_trajectories=candidates.trajectories, maneuver_ids=candidates.maneuver_ids,
+            )
+            pred = dict(pred)
+            pred["g"] = zero_g
+            pred["baseline_mode"] = mode
+            pred["baseline_pair_tournament"] = False
+            pred["external_spent_budget"] = float(spent)
+            return pred, selection, tournament
+
         if mode in {"base_only", "no_evidence", "no_selector"}:
             selection = SelectionResult([], 0.0, np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32), {"mode": mode, "spent_budget": 0.0})
             # Pair-fair mode still uses the pair-action tournament with an empty evidence set.
@@ -688,23 +713,14 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         device = _maybe_shard_planner_device(device)
         self.device = resolve_torch_device(device, context="BDSEnuPlanPlanner")
         configure_torch_for_device(self.device)
-        if model is None and checkpoint:
-            from bdse.model.bdse_model import BDSEModel
-
+        external_enabled = bool((cfg.get("external_baseline", {}) or {}).get("enabled", False))
+        if model is None and (checkpoint or external_enabled):
             # Load checkpoint tensors on CPU first to avoid accidentally putting
             # optimizer/RNG payloads from full training checkpoints on GPU.  Then
             # move only the model module to the resolved planner device.
-            model = BDSEModel(cfg)
-            ckpt = torch_load_any(checkpoint, map_location="cpu")
-            state = ckpt.get("model", ckpt)
-            current = model.state_dict()
-            compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
-            missing = sorted(set(current) - set(compatible))
-            if missing:
-                print(f"BDSEnuPlanPlanner loaded {len(compatible)}/{len(current)} compatible tensors; missing/new tensors include: {missing[:8]}")
-            model.load_state_dict(compatible, strict=False)
-            model.to(self.device)
-            model.eval()
+            from bdse.external_baselines.model_factory import load_model_for_config
+
+            model = load_model_for_config(checkpoint, cfg, self.device)
         elif model is not None and hasattr(model, "to"):
             model.to(self.device)
             if hasattr(model, "eval"):

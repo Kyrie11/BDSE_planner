@@ -10,32 +10,22 @@ from tqdm import tqdm
 from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
-from bdse.model.bdse_model import BDSEModel
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
-from bdse.utils import configure_torch_for_device, resolve_torch_device, torch_load_any
+from bdse.utils import configure_torch_for_device, resolve_torch_device
+from bdse.external_baselines.model_factory import load_model_for_config
 
 
-def load_model(checkpoint: str, cfg, device: torch.device):
-    # Keep deserialization on CPU so checkpoints saved from any device are safe
-    # to load, then explicitly move the module to the requested evaluation device.
-    model = BDSEModel(cfg)
-    ckpt = torch_load_any(checkpoint, map_location="cpu")
-    state = ckpt.get("model", ckpt)
-    current = model.state_dict()
-    compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
-    missing = sorted(set(current) - set(compatible))
-    if missing:
-        print(f"Loaded {len(compatible)}/{len(current)} compatible tensors; missing/new tensors include: {missing[:8]}")
-    model.load_state_dict(compatible, strict=False)
-    model.to(device)
-    model.eval()
-    return model
+def load_model(checkpoint: str | None, cfg, device: torch.device):
+    # Supports both native BDSE checkpoints and budget-compatible external
+    # baseline adapters.  PDM-Closed is rule-based and may be evaluated without
+    # a checkpoint; trainable external baselines and BDSE require one.
+    return load_model_for_config(checkpoint, cfg, device)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--checkpoint", type=str, required=True)
+    parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--split", type=str, nargs="+", default=["val"])
     parser.add_argument("--preprocessed-dir", type=str, default=None)
     parser.add_argument("--max-files", type=int, default=None)
