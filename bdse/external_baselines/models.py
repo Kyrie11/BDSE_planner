@@ -332,8 +332,11 @@ class ExternalBaselineModel(nn.Module):
         logits = self.proposal_head(token + scene[:, None, :]).squeeze(-1)
         # Keep the neural proposal aligned with cheap hard/active priors.
         hard_bonus = 5.0 * ev[..., 0].clamp(0.0, 1.0)
-        logits = logits + hard_bonus
-        logits = logits.masked_fill(~active, -1e9)
+        # Under AMP the proposal head can produce fp16 logits.  fp16 cannot
+        # represent -1e9, so do mask/sentinel arithmetic in fp32 while leaving
+        # the network forward itself unchanged.
+        logits = (logits + hard_bonus).float()
+        logits = logits.masked_fill(~active, logits.new_tensor(-1e9))
         return token, logits, active
 
     def _top_budget_mask(self, logits: torch.Tensor, active: torch.Tensor, budget_costs: torch.Tensor) -> torch.Tensor:
@@ -424,8 +427,12 @@ class ExternalBaselineModel(nn.Module):
             j = self.cost_head(cand_ctx).squeeze(-1)
         else:  # pragma: no cover
             raise AssertionError(self.variant)
+        # Cost masking also runs inside autocast.  Keep the sentinel value at
+        # 1e6 for the training objective, but cast to fp32 first because fp16
+        # max is only 65504.
+        j = j.float()
         j = torch.nan_to_num(j, nan=0.0, posinf=1e6, neginf=-1e6)
-        j = j.masked_fill(~valid, 1e6)
+        j = j.masked_fill(~valid, j.new_tensor(1e6))
         return {
             "J0": j,
             "proposal_logits": prop_logits,
