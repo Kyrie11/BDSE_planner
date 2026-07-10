@@ -745,69 +745,8 @@ class BDSEModel(nn.Module):
             action_ids = np.flatnonzero(candidates.valid_mask)[: max(1, int(cfg.get("tournament", {}).get("L_infer", 16)))]
         runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
         mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
-        scfg = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
         use_pair_runtime = bool(runtime_cfg.get("use_pair_conditioned_margins", self.pair_conditioned))
         hybrid_local_weight = float(runtime_cfg.get("pair_delta_hybrid_local_weight", 0.0))
-        normalize_pairs = bool(mcfg.get("pair_margin_normalized", self.pair_margin_normalized))
-        tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
-        min_scale = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 100.0)))
-        q_scale = float(mcfg.get("margin_normalization_quantile", 0.75))
-
-        # Runtime v11 option: optimize the evidence budget on the same pair graph
-        # that will be consumed by the final tournament.  The old selector covered
-        # only the cheap base-screened pairs and then used a different rival graph
-        # for the action tournament, which created a train/deploy decision gap.
-        selection_pairs = np.asarray(pairs, dtype=np.int64).reshape(-1, 2) if len(pairs) else np.zeros((0, 2), dtype=np.int64)
-        selection_pair_weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1) if len(pair_weights) else np.zeros((0,), dtype=np.float32)
-        selector_pair_union_enabled = False
-        if bool(scfg.get("use_tournament_pair_union", False)) and len(rival_pairs):
-            selector_pair_union_enabled = True
-            raw_selection = np.concatenate([selection_pairs, rival_pairs.reshape(-1, 2)], axis=0) if len(selection_pairs) else rival_pairs.reshape(-1, 2)
-            selection_pairs = np.unique(raw_selection.astype(np.int64), axis=0)
-            if normalize_pairs and len(selection_pairs):
-                selection_scale_for_weights = margin_normalization_scale(
-                    J0[selection_pairs[:, 1]] - J0[selection_pairs[:, 0]],
-                    min_scale=min_scale,
-                    quantile=q_scale,
-                )
-            else:
-                selection_scale_for_weights = 1.0
-            weight_map: dict[tuple[int, int], float] = {}
-            for idx, (a_raw, b_raw) in enumerate(np.asarray(pairs, dtype=np.int64).reshape(-1, 2).tolist() if len(pairs) else []):
-                key = (int(a_raw), int(b_raw))
-                w = float(pair_weights[idx]) if idx < len(pair_weights) else 1.0
-                weight_map[key] = max(weight_map.get(key, 0.0), w)
-            tournament_pair_weight = float(scfg.get("tournament_pair_weight", 1.0))
-            for a_raw, b_raw in rival_pairs.reshape(-1, 2).tolist():
-                key = (int(a_raw), int(b_raw))
-                weight_map[key] = weight_map.get(key, 0.0) + tournament_pair_weight
-            near_bonus = float(scfg.get("tournament_near_pair_weight", 0.0))
-            safety_bonus = float(scfg.get("tournament_safety_pair_weight", scfg.get("lambda_safety", 2.0)))
-            weights = []
-            for a_raw, b_raw in selection_pairs.tolist():
-                a_i, b_i = int(a_raw), int(b_raw)
-                w = float(weight_map.get((a_i, b_i), 1.0))
-                if 0 <= b_i < len(flags) and bool(flags[b_i]):
-                    w += safety_bonus
-                if 0 <= a_i < len(J0) and 0 <= b_i < len(J0):
-                    raw_margin = float(J0[b_i] - J0[a_i])
-                    norm_margin = raw_margin / max(float(selection_scale_for_weights), 1e-6) if normalize_pairs else raw_margin
-                    if abs(norm_margin) <= float(selector_eta):
-                        w += near_bonus
-                weights.append(max(w, 1e-3))
-            selection_pair_weights = np.asarray(weights, dtype=np.float32)
-
-        if normalize_pairs and len(selection_pairs):
-            pair_margin_scale = margin_normalization_scale(J0[selection_pairs[:, 1]] - J0[selection_pairs[:, 0]], min_scale=min_scale, quantile=q_scale)
-        else:
-            pair_margin_scale = 1.0
-        if bool(runtime_cfg.get("shared_pair_margin_scale", False)):
-            rival_pair_margin_scale = pair_margin_scale
-        elif normalize_pairs and len(rival_pairs):
-            rival_pair_margin_scale = margin_normalization_scale(J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]], min_scale=min_scale, quantile=q_scale)
-        else:
-            rival_pair_margin_scale = pair_margin_scale
-
         need_action_sparse = (
             not use_pair_runtime
             or bool(mcfg.get("pair_head_residual_over_local", False))
@@ -835,19 +774,18 @@ class BDSEModel(nn.Module):
             action_ids_rep = np.zeros((0,), dtype=np.int64)
 
         # Score selector pairs and tournament-rival pairs in one GPU call over the
-        # unique pair union.  With selector.use_tournament_pair_union=true, the
-        # selector graph itself is the decision/tournament graph, while query
-        # accounting still reports the original cheap runtime-pair count.
-        if len(selection_pairs) or len(rival_pairs):
+        # unique pair union. The previous runtime called _score_pair_indices_numpy
+        # twice, recomputing query features and launching the pair MLP twice.
+        if len(pairs) or len(rival_pairs):
             t_pair = time.perf_counter()
-            all_pairs = np.concatenate([selection_pairs.reshape(-1, 2), rival_pairs.reshape(-1, 2)], axis=0)
+            all_pairs = np.concatenate([pairs.reshape(-1, 2), rival_pairs.reshape(-1, 2)], axis=0)
             unique_pairs, inverse = np.unique(all_pairs, axis=0, return_inverse=True)
             all_pair_delta, all_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, unique_pairs, cfg)
             if profile_enabled:
                 model_timing["model_pair_scoring_s"] = float(time.perf_counter() - t_pair)
                 model_timing["model_unique_pair_count"] = float(len(unique_pairs))
                 model_timing["model_pair_atom_score_count"] = float(len(topm) * len(unique_pairs))
-            n_selector_pairs = int(len(selection_pairs))
+            n_selector_pairs = int(len(pairs))
             selector_inv = inverse[:n_selector_pairs]
             rival_inv = inverse[n_selector_pairs:]
             selector_pair_delta = all_pair_delta[:, selector_inv] if n_selector_pairs else np.zeros((evidence_bank.E, 0), dtype=np.float32)
@@ -859,6 +797,18 @@ class BDSEModel(nn.Module):
             selector_pair_var = np.zeros((evidence_bank.E, 0), dtype=np.float32)
             rival_pair_delta = np.zeros((evidence_bank.E, 0), dtype=np.float32)
             rival_pair_var = np.zeros((evidence_bank.E, 0), dtype=np.float32)
+        normalize_pairs = bool(cfg.get("model", {}).get("pair_margin_normalized", self.pair_margin_normalized))
+        tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+        min_scale = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 100.0)))
+        q_scale = float(mcfg.get("margin_normalization_quantile", 0.75))
+        if normalize_pairs and len(pairs):
+            pair_margin_scale = margin_normalization_scale(J0[pairs[:, 1]] - J0[pairs[:, 0]], min_scale=min_scale, quantile=q_scale)
+        else:
+            pair_margin_scale = 1.0
+        if normalize_pairs and len(rival_pairs):
+            rival_pair_margin_scale = margin_normalization_scale(J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]], min_scale=min_scale, quantile=q_scale)
+        else:
+            rival_pair_margin_scale = pair_margin_scale
 
         def _local_pair_delta(pair_arr: np.ndarray, scale: float) -> np.ndarray:
             pair_arr = np.asarray(pair_arr, dtype=np.int64).reshape(-1, 2) if np.asarray(pair_arr).size else np.zeros((0, 2), dtype=np.int64)
@@ -870,13 +820,13 @@ class BDSEModel(nn.Module):
             return (local / max(float(scale), 1e-6)).astype(np.float32) if normalize_pairs else local.astype(np.float32)
 
         if bool(mcfg.get("pair_head_residual_over_local", False)):
-            selector_pair_delta = _local_pair_delta(selection_pairs, pair_margin_scale) + selector_pair_delta
+            selector_pair_delta = _local_pair_delta(pairs, pair_margin_scale) + selector_pair_delta
             rival_pair_delta = _local_pair_delta(rival_pairs, rival_pair_margin_scale) + rival_pair_delta
         else:
             w_local = float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0)) if isinstance(cfg, dict) else 0.0
             if w_local > 0.0:
                 w_local = min(max(w_local, 0.0), 1.0)
-                selector_pair_delta = (1.0 - w_local) * selector_pair_delta + w_local * _local_pair_delta(selection_pairs, pair_margin_scale)
+                selector_pair_delta = (1.0 - w_local) * selector_pair_delta + w_local * _local_pair_delta(pairs, pair_margin_scale)
                 rival_pair_delta = (1.0 - w_local) * rival_pair_delta + w_local * _local_pair_delta(rival_pairs, rival_pair_margin_scale)
         valid_mask = np.asarray(candidates.valid_mask, dtype=bool)
         g_sparse[:, ~valid_mask] = 0.0
@@ -900,15 +850,14 @@ class BDSEModel(nn.Module):
             # as a backward-compatible alias for the total number of sparse model
             # scores actually evaluated in this runtime certificate stage.
             "action_atom_query_count": int(len(atom_ids)),
-            "selector_pair_atom_query_count": int(len(topm) * len(selection_pairs)),
+            "selector_pair_atom_query_count": int(len(topm) * len(pairs)),
             "tournament_pair_atom_query_count": int(len(topm) * len(rival_pairs)),
             "runtime_pair_count": int(len(pairs)),
-            "selector_pair_count": int(len(selection_pairs)),
             "tournament_pair_count": int(len(rival_pairs)),
-            "queried_pair_count": int(len(atom_ids) + len(topm) * len(selection_pairs) + len(topm) * len(rival_pairs)),
+            "queried_pair_count": int(len(atom_ids) + len(topm) * len(pairs) + len(topm) * len(rival_pairs)),
             "pair_atom_delta": selector_pair_delta,
             "pair_atom_var": selector_pair_var,
-            "pair_indices": selection_pairs,
+            "pair_indices": pairs,
             "pair_margin_scale": float(pair_margin_scale),
             "rival_pair_margin_scale": float(rival_pair_margin_scale),
             "pair_margin_normalized": bool(normalize_pairs),
@@ -918,9 +867,7 @@ class BDSEModel(nn.Module):
             "rival_pair_atom_var": rival_pair_var,
             "rival_pair_indices": rival_pairs,
             "runtime_pairs": pairs,
-            "runtime_pair_weights": selection_pair_weights,
-            "runtime_base_pair_weights": pair_weights,
-            "selector_pair_union_enabled": bool(selector_pair_union_enabled),
+            "runtime_pair_weights": pair_weights,
         }
         if profile_enabled:
             result["model_timing"] = model_timing
