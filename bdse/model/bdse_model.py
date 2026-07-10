@@ -24,6 +24,142 @@ EVIDENCE_TYPE_TO_ID = TYPE_NAMES
 FAMILY_TO_ID = FAMILY_NAMES
 
 
+def _robust_rank_cost_np(cost: np.ndarray, valid_mask: np.ndarray, *, clip: float = 4.0) -> np.ndarray:
+    """Return a robust dimensionless cost where lower remains better.
+
+    The runtime base prior is intentionally rank/scale normalized: the BDSE pair
+    head is trained in normalized margin units, so injecting raw handcrafted
+    costs would either be ignored or dominate depending on arbitrary units.
+    Robust normalization makes the base prior a decision prior, not a hidden
+    full-cost oracle.
+    """
+    c = np.asarray(cost, dtype=np.float32).reshape(-1).copy()
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    if valid.shape[0] < c.shape[0]:
+        valid = np.pad(valid, (0, c.shape[0] - valid.shape[0]), constant_values=False)
+    valid = valid[: c.shape[0]] & np.isfinite(c)
+    out = np.zeros_like(c, dtype=np.float32)
+    if int(valid.sum()) <= 1:
+        out[~valid] = np.inf
+        return out
+    vals = c[valid].astype(np.float32)
+    med = float(np.median(vals))
+    q25, q75 = np.percentile(vals, [25.0, 75.0])
+    iqr = float(q75 - q25)
+    mad = float(np.median(np.abs(vals - med)))
+    scale = max(iqr / 1.349, 1.4826 * mad, 1e-3)
+    out[valid] = ((c[valid] - med) / scale).astype(np.float32)
+    if clip and clip > 0:
+        out[valid] = np.clip(out[valid], -float(clip), float(clip)).astype(np.float32)
+    out[~valid] = np.inf
+    return out
+
+
+def _trajectory_decision_prior_cost_np(candidates: Any, runtime_flags: np.ndarray | None, cfg: dict[str, Any]) -> np.ndarray:
+    """Cheap route-progress/comfort prior over the existing candidate bank.
+
+    This is a base-action prior J_prior(a), not an evidence query.  It uses only
+    candidate geometry and runtime hard flags, so it preserves the fixed evidence
+    budget while giving BDSE a stronger prior for progress/route tracking.  The
+    learned evidence selector still decides which budgeted atoms can overturn or
+    certify this prior.
+    """
+    traj = np.asarray(getattr(candidates, "trajectories", np.zeros((0, 1, 3), dtype=np.float32)), dtype=np.float32)
+    valid = np.asarray(getattr(candidates, "valid_mask", np.ones((traj.shape[0],), dtype=bool)), dtype=bool).reshape(-1)
+    K = int(traj.shape[0]) if traj.ndim >= 3 else int(valid.shape[0])
+    if K <= 0:
+        return np.zeros((0,), dtype=np.float32)
+    if traj.ndim < 3 or traj.shape[0] != K or traj.shape[1] < 1:
+        out = np.zeros((K,), dtype=np.float32); out[~valid[:K]] = np.inf; return out
+    xy = traj[..., :2]
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    if xy.shape[1] > 1:
+        dxy = np.diff(xy, axis=1)
+        step = np.linalg.norm(dxy, axis=-1)
+    else:
+        step = np.zeros((K, 1), dtype=np.float32)
+    progress = xy[:, -1, 0]
+    lateral = xy[..., 1]
+    lateral_mean = np.mean(np.abs(lateral), axis=1)
+    lateral_final = np.abs(lateral[:, -1])
+    path_len = step.sum(axis=1)
+    speed = step / max(dt, 1e-3)
+    speed_mean = speed.mean(axis=1) if speed.size else np.zeros((K,), dtype=np.float32)
+    speed_final = speed[:, -1] if speed.ndim == 2 and speed.shape[1] else np.zeros((K,), dtype=np.float32)
+    acc = np.diff(speed, axis=1) if speed.ndim == 2 and speed.shape[1] > 1 else np.zeros((K, 1), dtype=np.float32)
+    jerk = np.diff(acc, axis=1) if acc.ndim == 2 and acc.shape[1] > 1 else np.zeros((K, 1), dtype=np.float32)
+    acc_rms = np.sqrt(np.mean(acc * acc, axis=1)) if acc.size else np.zeros((K,), dtype=np.float32)
+    jerk_rms = np.sqrt(np.mean(jerk * jerk, axis=1)) if jerk.size else np.zeros((K,), dtype=np.float32)
+    comfort = 0.25 * acc_rms + 0.10 * jerk_rms
+    yaw = traj[..., 2] if traj.shape[-1] > 2 else np.zeros((K, traj.shape[1]), dtype=np.float32)
+    yaw_delta = np.arctan2(np.sin(np.diff(yaw, axis=1)), np.cos(np.diff(yaw, axis=1))) if yaw.shape[1] > 1 else np.zeros((K, 1), dtype=np.float32)
+    curvature = np.mean(np.abs(yaw_delta), axis=1) if yaw_delta.size else np.zeros((K,), dtype=np.float32)
+    pcfg = ((cfg.get("runtime", {}) or {}).get("base_prior", {}) or {}) if isinstance(cfg, dict) else {}
+    cost = (
+        float(pcfg.get("lateral_mean_weight", 2.0)) * lateral_mean
+        + float(pcfg.get("lateral_final_weight", 0.75)) * lateral_final
+        + float(pcfg.get("comfort_weight", 0.5)) * comfort
+        + float(pcfg.get("curvature_weight", 0.25)) * curvature
+        - float(pcfg.get("progress_weight", 0.05)) * progress
+        - float(pcfg.get("path_length_weight", 0.01)) * path_len
+    )
+    cost += np.where(speed_mean < float(pcfg.get("low_speed_threshold", 0.3)), float(pcfg.get("low_speed_penalty", 0.15)), 0.0)
+    cost += np.where(speed_final < float(pcfg.get("low_final_speed_threshold", -1.0)), float(pcfg.get("low_final_speed_penalty", 0.0)), 0.0)
+    if runtime_flags is not None:
+        flags = np.asarray(runtime_flags, dtype=bool).reshape(-1)
+        if flags.shape[0] < K:
+            flags = np.pad(flags, (0, K - flags.shape[0]), constant_values=False)
+        cost += flags[:K].astype(np.float32) * float(pcfg.get("unsafe_penalty", 1000.0))
+    if valid.shape[0] < K:
+        valid = np.pad(valid, (0, K - valid.shape[0]), constant_values=False)
+    cost = np.asarray(cost, dtype=np.float32)
+    cost[~valid[:K]] = np.inf
+    return cost
+
+
+def _apply_runtime_base_prior_np(J0: np.ndarray, candidates: Any, runtime_flags: np.ndarray | None, cfg: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
+    runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
+    pcfg = runtime_cfg.get("base_prior", {}) or {}
+    if not bool(pcfg.get("enabled", False)):
+        return np.asarray(J0, dtype=np.float32), {"base_prior_enabled": False}
+    valid = np.asarray(getattr(candidates, "valid_mask", np.isfinite(J0)), dtype=bool).reshape(-1)
+    J0_in = np.asarray(J0, dtype=np.float32).reshape(-1)
+    if valid.shape[0] < J0_in.shape[0]:
+        valid = np.pad(valid, (0, J0_in.shape[0] - valid.shape[0]), constant_values=False)
+    valid = valid[: J0_in.shape[0]]
+    prior_raw = _trajectory_decision_prior_cost_np(candidates, runtime_flags, cfg)
+    if prior_raw.shape[0] < J0_in.shape[0]:
+        prior_raw = np.pad(prior_raw, (0, J0_in.shape[0] - prior_raw.shape[0]), constant_values=np.inf)
+    prior_raw = prior_raw[: J0_in.shape[0]]
+    clip = float(pcfg.get("z_clip", 4.0))
+    learned_z = _robust_rank_cost_np(J0_in, valid, clip=clip)
+    prior_z = _robust_rank_cost_np(prior_raw, valid, clip=clip)
+    w = min(max(float(pcfg.get("weight", 0.5)), 0.0), 1.0)
+    mode = str(pcfg.get("mode", "blend")).lower()
+    if mode == "prior_only":
+        blended_z = prior_z
+    elif mode == "learned_only":
+        blended_z = learned_z
+    else:
+        blended_z = (1.0 - w) * learned_z + w * prior_z
+    mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+    tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    min_scale = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 20000.0)))
+    scale = max(float(pcfg.get("scale", min_scale)), 1e-6) * float(pcfg.get("scale_multiplier", 1.0))
+    J0_out = (blended_z * scale).astype(np.float32)
+    J0_out[~valid] = np.inf
+    diag = {
+        "base_prior_enabled": True,
+        "base_prior_mode": mode,
+        "base_prior_weight": float(w),
+        "base_prior_scale": float(scale),
+        "base_prior_best_action": int(np.nanargmin(np.where(valid & np.isfinite(prior_raw), prior_raw, np.inf))) if bool((valid & np.isfinite(prior_raw)).any()) else -1,
+        "learned_base_best_action": int(np.nanargmin(np.where(valid & np.isfinite(J0_in), J0_in, np.inf))) if bool((valid & np.isfinite(J0_in)).any()) else -1,
+        "base_prior_replaced_best": bool(np.nanargmin(np.where(valid & np.isfinite(prior_raw), prior_raw, np.inf)) != np.nanargmin(np.where(valid & np.isfinite(J0_in), J0_in, np.inf))) if bool((valid & np.isfinite(prior_raw) & np.isfinite(J0_in)).any()) else False,
+    }
+    return J0_out, diag
+
+
 class BDSEModel(nn.Module):
     """Neural BDSE interface model.
 
@@ -658,6 +794,10 @@ class BDSEModel(nn.Module):
         family_logits = ctx["family_logits"][0].detach().cpu().numpy().astype(np.float32)
         family_pi = ctx["family_pi"][0].detach().cpu().numpy().astype(np.float32)
         flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
+        # v12: an evidence-free, robustly normalized decision prior becomes part
+        # of J0.  This keeps the fixed evidence budget intact while giving the
+        # budgeted residual evidence a stronger progress/route anchor.
+        J0, base_prior_diag = _apply_runtime_base_prior_np(J0, candidates, flags, cfg)
         selector_eta, selector_gamma = self._selector_pair_thresholds(cfg)
         pairs, pair_weights = build_runtime_pairs_from_base(
             J0,
@@ -921,6 +1061,7 @@ class BDSEModel(nn.Module):
             "runtime_pair_weights": selection_pair_weights,
             "runtime_base_pair_weights": pair_weights,
             "selector_pair_union_enabled": bool(selector_pair_union_enabled),
+            **base_prior_diag,
         }
         if profile_enabled:
             result["model_timing"] = model_timing
