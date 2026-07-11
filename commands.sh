@@ -4,7 +4,7 @@ set -euo pipefail
 # Run from repository root after replacing bdse/ with BDSE_optimized_v13_scur.zip contents.
 # This script only launches <=20-scenario closed-loop jobs.
 
-export BDSE_VAL_CACHE=${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/}
+export BDSE_VAL_CACHE=${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/}
 export NUPLAN_ROOT=${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}
 export V11_CKPT=${V11_CKPT:-outputs/v11_train/bdse_v11_ta_selector.best.pt}
 export CL_WORKERS_PER_RUN=${CL_WORKERS_PER_RUN:-2}
