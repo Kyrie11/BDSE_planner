@@ -313,6 +313,73 @@ def _greedy_cover_from_pair_delta(
     return selected, float(current), float(spent)
 
 
+def _selector_pair_caps(
+    base_delta: np.ndarray,
+    safety_b: np.ndarray,
+    gamma_max: float,
+    eta_pred: float,
+    cap_mode: str = "legacy_abs",
+    boundary_cap: float | None = None,
+    base_margin_cap_multiplier: float = 1.0,
+) -> np.ndarray:
+    """Caps for evidence selection over pair-conditioned margins.
+
+    The legacy cap ``abs(base)+eta`` can spend budget on already-easy pairs.
+    For fixed-budget decision evidence, the useful target is usually the
+    decision boundary: query atoms until a pair is certified just beyond zero,
+    not until its already-large margin becomes even larger.  Safety pairs remain
+    high-cap because hard feasibility evidence can legitimately dominate.
+    """
+    bd = np.asarray(base_delta, dtype=np.float32).reshape(-1)
+    sb = np.asarray(safety_b, dtype=bool).reshape(-1)
+    if sb.shape[0] != bd.shape[0]:
+        sb = np.zeros_like(bd, dtype=bool)
+    mode = str(cap_mode or "legacy_abs").lower()
+    eta = max(float(eta_pred), 1e-3)
+    gamma = max(float(gamma_max), eta)
+    if boundary_cap is None:
+        boundary = eta
+    else:
+        boundary = max(float(boundary_cap), 1e-3)
+    if mode in {"boundary", "flip", "near_boundary", "decision_boundary"}:
+        non_safety = np.full_like(bd, boundary, dtype=np.float32)
+    elif mode in {"soft_boundary", "hybrid_boundary"}:
+        non_safety = np.minimum(
+            np.maximum(np.abs(bd) * max(float(base_margin_cap_multiplier), 0.0) + eta, eta),
+            boundary,
+        ).astype(np.float32)
+    else:
+        non_safety = np.minimum(np.maximum(np.abs(bd) + eta, 1e-3), gamma).astype(np.float32)
+    return np.where(sb, gamma, non_safety).astype(np.float32)
+
+
+def _flip_gain_atom_utility(
+    delta: np.ndarray,
+    base_delta: np.ndarray,
+    caps: np.ndarray,
+    weights: np.ndarray,
+) -> np.ndarray:
+    """Single-step boundary gain for post-fill atom ranking.
+
+    Post-fill previously used a mean positive delta and could select atoms that
+    fire on many irrelevant pairs.  This utility mirrors the selector objective:
+    how much would this atom improve the capped boundary certificate from the
+    current base margin?
+    """
+    d = np.asarray(delta, dtype=np.float32)
+    if d.ndim != 2 or d.size == 0:
+        return np.zeros((d.shape[0] if d.ndim else 0,), dtype=np.float32)
+    base = np.asarray(base_delta, dtype=np.float32).reshape(1, -1)
+    caps_arr = np.asarray(caps, dtype=np.float32).reshape(1, -1)
+    w = np.asarray(weights, dtype=np.float32).reshape(1, -1)
+    if base.shape[1] != d.shape[1]:
+        return np.maximum(d, 0.0).mean(axis=1).astype(np.float32)
+    before = np.minimum(caps_arr, np.maximum(base, 0.0))
+    after = np.minimum(caps_arr, np.maximum(base + d, 0.0))
+    gain = np.maximum(after - before, 0.0) * np.maximum(w, 0.0)
+    denom = max(float(np.sum(np.maximum(w, 0.0))), 1e-6)
+    return (gain.sum(axis=1) / denom).astype(np.float32)
+
 
 def _greedy_cover_from_pair_support(
     atom_support: np.ndarray,
@@ -866,6 +933,9 @@ def runtime_greedy_selector_pair_conditioned(
     proposal_scores: np.ndarray | None = None,
     proposal_fill_weight: float = 0.0,
     prioritize_mandatory_fill: bool = True,
+    selector_cap_mode: str = "legacy_abs",
+    boundary_certificate_cap: float | None = None,
+    base_margin_cap_multiplier: float = 1.0,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -906,11 +976,15 @@ def runtime_greedy_selector_pair_conditioned(
     base_delta = (base_delta_raw / max(scale, 1e-6)).astype(np.float32)
     flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
     safety_b = flags[b] if flags.shape[0] > int(np.max(b, initial=0)) else np.zeros_like(base_delta, dtype=bool)
-    caps = np.where(
+    caps = _selector_pair_caps(
+        base_delta,
         safety_b,
-        float(gamma_max),
-        np.minimum(np.maximum(np.abs(base_delta) + float(eta_pred), 1e-3), float(gamma_max)),
-    ).astype(np.float32)
+        gamma_max=float(gamma_max),
+        eta_pred=float(eta_pred),
+        cap_mode=selector_cap_mode,
+        boundary_cap=boundary_certificate_cap,
+        base_margin_cap_multiplier=base_margin_cap_multiplier,
+    )
     delta = np.asarray(pair_atom_delta, dtype=np.float32)
     if delta.ndim != 2 or delta.shape[1] != pair_arr.shape[0]:
         delta = np.zeros((E, pair_arr.shape[0]), dtype=np.float32)
@@ -961,13 +1035,7 @@ def runtime_greedy_selector_pair_conditioned(
         mode = "runtime_pair_conditioned_signed"
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        # Use the same pair weights as the greedy objective for post-fill ranking.
-        # The previous unweighted mean favored atoms that fired on many irrelevant
-        # pairs, which hurt interaction recall after safety atoms were forced.
-        pos_delta = np.maximum(np.asarray(delta, dtype=np.float32), 0.0)
-        w = np.asarray(weights, dtype=np.float32).reshape(1, -1)
-        denom = max(float(np.sum(np.maximum(w, 0.0))), 1e-6)
-        utility = (pos_delta * np.maximum(w, 0.0)).sum(axis=1) / denom
+        utility = _flip_gain_atom_utility(delta, base_delta, caps, weights)
     if proposal_scores is not None and float(proposal_fill_weight) > 0.0:
         prop = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
         if prop.shape[0] < utility.shape[0]:

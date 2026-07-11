@@ -352,6 +352,9 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             proposal_scores=logits[bidx],
             proposal_fill_weight=float(s_cfg.get("proposal_fill_weight", 0.25)),
             prioritize_mandatory_fill=bool(s_cfg.get("prioritize_mandatory_fill", True)),
+            selector_cap_mode=str(s_cfg.get("selector_cap_mode", "legacy_abs")),
+            boundary_certificate_cap=s_cfg.get("boundary_certificate_cap", None),
+            base_margin_cap_multiplier=float(s_cfg.get("base_margin_cap_multiplier", 1.0)),
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)

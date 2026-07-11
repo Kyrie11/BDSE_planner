@@ -249,6 +249,7 @@ def _apply_certificate_utility_refinement(
     runtime_safety_flags: np.ndarray,
     cfg: dict[str, Any],
     candidate_trajectories: np.ndarray | None = None,
+    margins: np.ndarray | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Lexicographic action refinement: certificate first, utility second.
 
@@ -289,6 +290,29 @@ def _apply_certificate_utility_refinement(
         mask = np.zeros((n,), dtype=bool)
         mask[order] = True
         eligible = eligible & mask
+
+    pair_cert_used = False
+    pair_cert_kept = int(eligible.sum())
+    current_for_cert = int(action) if 0 <= int(action) < n else int(np.argmax(np.where(finite, scores, -np.inf)))
+    if bool(uc.get("pair_certificate_enabled", False)) and margins is not None and 0 <= current_for_cert < n:
+        M = np.asarray(margins, dtype=np.float32)
+        if M.ndim == 2 and M.shape[0] >= n and M.shape[1] >= n:
+            tol = max(float(uc.get("pair_margin_tolerance", 0.05)), 0.0)
+            cert_mask = np.zeros((n,), dtype=bool)
+            cand0 = np.flatnonzero(eligible).astype(np.int64)
+            for c in cand0.tolist():
+                if int(c) == current_for_cert:
+                    cert_mask[int(c)] = True
+                else:
+                    # M[c,current] > 0 means candidate c is pair-certified better
+                    # than the current certificate action.  A small negative
+                    # tolerance permits near-tie utility refinement but prevents
+                    # utility from overriding a decisive evidence margin.
+                    cert_mask[int(c)] = bool(np.isfinite(M[int(c), current_for_cert]) and float(M[int(c), current_for_cert]) >= -tol)
+            if bool(cert_mask.any()):
+                eligible = eligible & cert_mask
+                pair_cert_used = True
+                pair_cert_kept = int(eligible.sum())
     if int(eligible.sum()) <= 0:
         return int(action), {"utility_refinement_enabled": True, "utility_refinement_applied": False, "utility_refinement_reason": "empty_band", "utility_score_slack": float(slack)}
     utility_cost = _trajectory_utility_cost_np(candidate_trajectories, valid, flags, cfg)
@@ -312,6 +336,8 @@ def _apply_certificate_utility_refinement(
         "utility_current_score": float(scores[current]) if 0 <= current < n else float("nan"),
         "utility_best_cost": float(utility_cost[best_util]),
         "utility_current_cost": float(utility_cost[current]) if 0 <= current < n and np.isfinite(utility_cost[current]) else float("inf"),
+        "utility_pair_certificate_used": bool(pair_cert_used),
+        "utility_pair_certificate_kept": int(pair_cert_kept),
     }
     return chosen, diag
 
@@ -359,6 +385,7 @@ def run_tournament(
         runtime_safety_flags,
         cfg,
         candidate_trajectories=candidate_trajectories,
+        margins=M_eval,
     )
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")
@@ -557,6 +584,7 @@ def run_pair_conditioned_tournament(
         runtime_safety_flags,
         cfg,
         candidate_trajectories=candidate_trajectories,
+        margins=M_eval,
     )
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")

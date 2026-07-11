@@ -497,6 +497,9 @@ class BDSEPlannerCore:
                 proposal_scores=pred.get("proposal_logits", None),
                 proposal_fill_weight=float(sel_cfg.get("proposal_fill_weight", 0.25)),
                 prioritize_mandatory_fill=bool(sel_cfg.get("prioritize_mandatory_fill", True)),
+                selector_cap_mode=str(sel_cfg.get("selector_cap_mode", "legacy_abs")),
+                boundary_certificate_cap=sel_cfg.get("boundary_certificate_cap", None),
+                base_margin_cap_multiplier=float(sel_cfg.get("base_margin_cap_multiplier", 1.0)),
             )
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
