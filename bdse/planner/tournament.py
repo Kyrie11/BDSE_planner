@@ -174,6 +174,147 @@ def _apply_safety_score_guard(
     return guarded, action, diag
 
 
+
+
+def _trajectory_utility_cost_np(
+    candidate_trajectories: np.ndarray | None,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    cfg: dict[str, Any],
+) -> np.ndarray:
+    """Deployment-time utility cost for certificate-constrained tie breaking.
+
+    Lower is better.  Unlike evidence atoms, this uses only the already generated
+    candidate geometry.  It is intentionally used *after* the BDSE safety/evidence
+    tournament as a utility selector among actions whose certificate scores are
+    already indistinguishable under a configured slack.  This preserves the fixed
+    evidence budget and avoids turning utility into an unconstrained override.
+    """
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    K = int(valid.shape[0])
+    out = np.full((K,), np.inf, dtype=np.float32)
+    traj = None if candidate_trajectories is None else np.asarray(candidate_trajectories, dtype=np.float32)
+    if traj is None or traj.ndim < 3 or traj.shape[0] < K or traj.shape[1] < 1:
+        out[valid] = 0.0
+        return out
+    tr = np.nan_to_num(traj[:K], nan=0.0, posinf=1e6, neginf=-1e6)
+    xy = tr[..., :2]
+    if xy.shape[1] > 1:
+        dxy = np.diff(xy, axis=1)
+        step = np.linalg.norm(dxy, axis=-1)
+    else:
+        step = np.zeros((K, 1), dtype=np.float32)
+    progress = xy[:, -1, 0].astype(np.float32)
+    path_len = step.sum(axis=1).astype(np.float32)
+    lateral = xy[..., 1]
+    lateral_mean = np.mean(np.abs(lateral), axis=1).astype(np.float32)
+    lateral_final = np.abs(lateral[:, -1]).astype(np.float32)
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1)) if isinstance(cfg, dict) else 0.1
+    speed = step / max(dt, 1e-3)
+    speed_mean = speed.mean(axis=1).astype(np.float32) if speed.size else np.zeros((K,), dtype=np.float32)
+    speed_final = speed[:, -1].astype(np.float32) if speed.ndim == 2 and speed.shape[1] else np.zeros((K,), dtype=np.float32)
+    acc = np.diff(speed, axis=1) if speed.ndim == 2 and speed.shape[1] > 1 else np.zeros((K, 1), dtype=np.float32)
+    jerk = np.diff(acc, axis=1) if acc.ndim == 2 and acc.shape[1] > 1 else np.zeros((K, 1), dtype=np.float32)
+    acc_rms = np.sqrt(np.mean(acc * acc, axis=1)).astype(np.float32) if acc.size else np.zeros((K,), dtype=np.float32)
+    jerk_rms = np.sqrt(np.mean(jerk * jerk, axis=1)).astype(np.float32) if jerk.size else np.zeros((K,), dtype=np.float32)
+    comfort = 0.25 * acc_rms + 0.10 * jerk_rms
+    yaw = tr[..., 2] if tr.shape[-1] > 2 else np.zeros((K, tr.shape[1]), dtype=np.float32)
+    yaw_delta = np.arctan2(np.sin(np.diff(yaw, axis=1)), np.cos(np.diff(yaw, axis=1))) if yaw.shape[1] > 1 else np.zeros((K, 1), dtype=np.float32)
+    curvature = np.mean(np.abs(yaw_delta), axis=1).astype(np.float32) if yaw_delta.size else np.zeros((K,), dtype=np.float32)
+
+    uc = ((cfg.get("tournament", {}) or {}).get("utility_refinement", {}) or {}) if isinstance(cfg, dict) else {}
+    cost = (
+        float(uc.get("lateral_mean_weight", 1.25)) * lateral_mean
+        + float(uc.get("lateral_final_weight", 0.60)) * lateral_final
+        + float(uc.get("comfort_weight", 0.35)) * comfort
+        + float(uc.get("curvature_weight", 0.25)) * curvature
+        - float(uc.get("progress_weight", 0.14)) * progress
+        - float(uc.get("path_length_weight", 0.015)) * path_len
+        - float(uc.get("speed_weight", 0.02)) * speed_mean
+    ).astype(np.float32)
+    cost += np.where(speed_mean < float(uc.get("low_speed_threshold", 0.35)), float(uc.get("low_speed_penalty", 0.20)), 0.0).astype(np.float32)
+    cost += np.where(speed_final < float(uc.get("low_final_speed_threshold", -1.0)), float(uc.get("low_final_speed_penalty", 0.0)), 0.0).astype(np.float32)
+    flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    if flags.shape[0] < K:
+        flags = np.pad(flags, (0, K - flags.shape[0]), constant_values=False)
+    cost += flags[:K].astype(np.float32) * float(uc.get("unsafe_penalty", 1000.0))
+    out[valid[:K]] = cost[valid[:K]]
+    return out.astype(np.float32)
+
+
+def _apply_certificate_utility_refinement(
+    scores: np.ndarray,
+    action: int,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    cfg: dict[str, Any],
+    candidate_trajectories: np.ndarray | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Lexicographic action refinement: certificate first, utility second.
+
+    BDSE's budgeted tournament score is treated as a safety/decision certificate.
+    When several valid unflagged candidates are within ``score_slack`` of the best
+    certificate score, their evidence distinction is too small to justify picking
+    a low-progress action.  Within that certified equivalence set, choose the
+    lowest deployment utility cost.  This is not a post-hoc rule override: actions
+    outside the certificate band remain ineligible.
+    """
+    tc = cfg.get("tournament", {}) if isinstance(cfg, dict) else {}
+    uc = tc.get("utility_refinement", {}) or {}
+    if not bool(uc.get("enabled", False)):
+        return int(action), {"utility_refinement_enabled": False}
+    scores = np.asarray(scores, dtype=np.float32).reshape(-1)
+    n = int(scores.shape[0])
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    if valid.shape[0] < n:
+        valid = np.pad(valid, (0, n - valid.shape[0]), constant_values=False)
+    if flags.shape[0] < n:
+        flags = np.pad(flags, (0, n - flags.shape[0]), constant_values=False)
+    valid = valid[:n]
+    flags = flags[:n]
+    finite = valid & np.isfinite(scores)
+    if not bool(finite.any()):
+        return int(action), {"utility_refinement_enabled": True, "utility_refinement_applied": False, "utility_refinement_reason": "no_finite"}
+    best_score = float(np.max(scores[finite]))
+    slack = max(float(uc.get("score_slack", 0.25)), 0.0)
+    eligible = finite & (scores >= best_score - slack)
+    if bool(uc.get("require_unflagged", True)):
+        safe_eligible = eligible & ~flags
+        if bool(safe_eligible.any()):
+            eligible = safe_eligible
+    top_k = int(uc.get("top_k", 0))
+    if top_k > 0 and int(eligible.sum()) > top_k:
+        order = np.argsort(-np.where(eligible, scores, -np.inf))[:top_k]
+        mask = np.zeros((n,), dtype=bool)
+        mask[order] = True
+        eligible = eligible & mask
+    if int(eligible.sum()) <= 0:
+        return int(action), {"utility_refinement_enabled": True, "utility_refinement_applied": False, "utility_refinement_reason": "empty_band", "utility_score_slack": float(slack)}
+    utility_cost = _trajectory_utility_cost_np(candidate_trajectories, valid, flags, cfg)
+    cand = np.flatnonzero(eligible & np.isfinite(utility_cost)).astype(np.int64)
+    if cand.size == 0:
+        return int(action), {"utility_refinement_enabled": True, "utility_refinement_applied": False, "utility_refinement_reason": "no_utility"}
+    # Stable deterministic tie-break: utility cost, then higher certificate score, then index.
+    best_util = int(sorted(cand.tolist(), key=lambda a: (float(utility_cost[a]), -float(scores[a]), int(a)))[0])
+    current = int(action) if 0 <= int(action) < n else int(np.argmax(np.where(finite, scores, -np.inf)))
+    min_improvement = float(uc.get("min_utility_improvement", 0.0))
+    applied = bool(best_util != current and float(utility_cost[best_util]) <= float(utility_cost[current]) - min_improvement)
+    chosen = int(best_util) if applied else int(current)
+    diag = {
+        "utility_refinement_enabled": True,
+        "utility_refinement_applied": bool(applied),
+        "utility_refinement_action_before": int(current),
+        "utility_refinement_action_after": int(chosen),
+        "utility_score_slack": float(slack),
+        "utility_band_size": int(cand.size),
+        "utility_best_score": float(scores[best_util]),
+        "utility_current_score": float(scores[current]) if 0 <= current < n else float("nan"),
+        "utility_best_cost": float(utility_cost[best_util]),
+        "utility_current_cost": float(utility_cost[current]) if 0 <= current < n and np.isfinite(utility_cost[current]) else float("inf"),
+    }
+    return chosen, diag
+
 def run_tournament(
     predicted_base_cost: np.ndarray,
     predicted_atom_costs: np.ndarray,
@@ -211,6 +352,14 @@ def run_tournament(
         sigma=sigma,
     )
     scores, action, safety_guard_diag = _apply_safety_score_guard(scores, valid_mask, runtime_safety_flags, cfg)
+    action, utility_refinement_diag = _apply_certificate_utility_refinement(
+        scores,
+        action,
+        valid_mask,
+        runtime_safety_flags,
+        cfg,
+        candidate_trajectories=candidate_trajectories,
+    )
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")
     safety_idx = np.flatnonzero(np.asarray(runtime_safety_flags, dtype=bool) & np.asarray(valid_mask, dtype=bool))
@@ -236,6 +385,7 @@ def run_tournament(
             "safety_lcb_min": safety_lcb_min,
             "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             **safety_guard_diag,
+            **utility_refinement_diag,
         },
     )
 
@@ -400,6 +550,14 @@ def run_pair_conditioned_tournament(
         sigma=sigma,
     )
     scores, action, safety_guard_diag = _apply_safety_score_guard(scores, valid_mask, runtime_safety_flags, cfg)
+    action, utility_refinement_diag = _apply_certificate_utility_refinement(
+        scores,
+        action,
+        valid_mask,
+        runtime_safety_flags,
+        cfg,
+        candidate_trajectories=candidate_trajectories,
+    )
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")
     safety_idx = np.flatnonzero(np.asarray(runtime_safety_flags, dtype=bool) & np.asarray(valid_mask, dtype=bool))
@@ -425,6 +583,7 @@ def run_pair_conditioned_tournament(
             "safety_lcb_min": safety_lcb_min,
             "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             **safety_guard_diag,
+            **utility_refinement_diag,
             "pair_conditioned": True,
             "selector_eta_used": float(_pair_selector_eta(cfg)),
             "normalized_margins": bool(normalize_margins),
