@@ -503,6 +503,8 @@ class BDSEPlannerCore:
                 flip_bonus=float(sel_cfg.get("flip_bonus", 0.0)),
                 flip_window=float(sel_cfg.get("flip_window", 0.5)),
                 certify_margin=float(sel_cfg.get("certify_margin", 0.0)),
+                flip_mode=str(sel_cfg.get("flip_mode", "hard")),
+                flip_temperature=float(sel_cfg.get("flip_temperature", 0.08)),
             )
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))

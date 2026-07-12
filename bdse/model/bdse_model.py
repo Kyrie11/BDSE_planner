@@ -937,6 +937,61 @@ class BDSEModel(nn.Module):
                 weights.append(max(w, 1e-3))
             selection_pair_weights = np.asarray(weights, dtype=np.float32)
 
+        # v16: keep the selector pair graph focused on plausible winner/rival
+        # decisions.  v15 increased selected decisive recall but diffused the
+        # budget over many non-decision pairs; in closed-loop this also raised GPU
+        # memory use.  This filter is deployment-only and uses only base cost,
+        # cheap safety flags, and candidate geometry.  It preserves safety pairs
+        # while prioritizing pairs involving top base/progress anchors and pairs
+        # near the action-order boundary.
+        max_selector_pairs = int(scfg.get("max_selector_pairs", 0))
+        if max_selector_pairs > 0 and len(selection_pairs) > max_selector_pairs:
+            valid_for_filter = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
+            valid_idx_filter = np.flatnonzero(valid_for_filter & np.isfinite(J0)).astype(np.int64)
+            anchor_topk = max(1, int(scfg.get("selector_anchor_topk", 6)))
+            anchors: set[int] = set()
+            if valid_idx_filter.size:
+                base_order = valid_idx_filter[np.argsort(J0[valid_idx_filter])[: min(anchor_topk, valid_idx_filter.size)]]
+                anchors.update(map(int, base_order.tolist()))
+            progress_anchor_topk = max(0, int(scfg.get("selector_progress_anchor_topk", 4)))
+            if progress_anchor_topk > 0 and getattr(candidates, "trajectories", None) is not None and valid_idx_filter.size:
+                traj = np.asarray(candidates.trajectories, dtype=np.float32)
+                if traj.ndim >= 3 and traj.shape[0] >= candidates.K and traj.shape[2] >= 1:
+                    prog = np.nan_to_num(traj[: candidates.K, -1, 0], nan=0.0, posinf=0.0, neginf=0.0)
+                    safe_valid = valid_idx_filter[~np.asarray(flags, dtype=bool).reshape(-1)[: candidates.K][valid_idx_filter]]
+                    pool = safe_valid if safe_valid.size else valid_idx_filter
+                    prog_order = pool[np.argsort(-prog[pool])[: min(progress_anchor_topk, pool.size)]]
+                    anchors.update(map(int, prog_order.tolist()))
+            if anchors and len(selection_pairs):
+                pair_arr_filter = np.asarray(selection_pairs, dtype=np.int64).reshape(-1, 2)
+                a_f = pair_arr_filter[:, 0]
+                b_f = pair_arr_filter[:, 1]
+                base_gap = J0[b_f] - J0[a_f]
+                if normalize_pairs:
+                    scale_for_filter = margin_normalization_scale(base_gap, min_scale=min_scale, quantile=q_scale)
+                    norm_gap = base_gap / max(float(scale_for_filter), 1e-6)
+                else:
+                    norm_gap = base_gap
+                flags_arr = np.asarray(flags, dtype=bool).reshape(-1)
+                if flags_arr.shape[0] < candidates.K:
+                    flags_arr = np.pad(flags_arr, (0, candidates.K - flags_arr.shape[0]), constant_values=False)
+                anchors_mask = np.asarray([(int(x) in anchors) or (int(y) in anchors) for x, y in pair_arr_filter.tolist()], dtype=bool)
+                safety_mask = flags_arr[np.clip(a_f, 0, candidates.K - 1)] | flags_arr[np.clip(b_f, 0, candidates.K - 1)]
+                near_mask = np.abs(norm_gap) <= float(scfg.get("selector_filter_near_eta_mult", 2.0)) * max(float(selector_eta), 1e-6)
+                base_w = np.asarray(selection_pair_weights, dtype=np.float32).reshape(-1)
+                if base_w.shape[0] != pair_arr_filter.shape[0]:
+                    base_w = np.ones((pair_arr_filter.shape[0],), dtype=np.float32)
+                score_filter = (
+                    base_w
+                    + float(scfg.get("selector_filter_anchor_bonus", 2.0)) * anchors_mask.astype(np.float32)
+                    + float(scfg.get("selector_filter_safety_bonus", 4.0)) * safety_mask.astype(np.float32)
+                    + float(scfg.get("selector_filter_near_bonus", 1.0)) * near_mask.astype(np.float32)
+                )
+                order = sorted(range(pair_arr_filter.shape[0]), key=lambda i: (-float(score_filter[i]), abs(float(norm_gap[i])), int(a_f[i]), int(b_f[i])))
+                keep = np.asarray(order[: max_selector_pairs], dtype=np.int64)
+                selection_pairs = pair_arr_filter[keep]
+                selection_pair_weights = base_w[keep].astype(np.float32)
+
         if normalize_pairs and len(selection_pairs):
             pair_margin_scale = margin_normalization_scale(J0[selection_pairs[:, 1]] - J0[selection_pairs[:, 0]], min_scale=min_scale, quantile=q_scale)
         else:

@@ -362,6 +362,8 @@ def _flip_rank_value(
     flip_bonus: float = 0.0,
     flip_window: float = 0.5,
     certify_margin: float = 0.0,
+    flip_mode: str = "hard",
+    flip_temperature: float = 0.08,
 ) -> float:
     """Capped pair certificate plus an explicit action-order flip bonus.
 
@@ -389,9 +391,26 @@ def _flip_rank_value(
     if bonus > 0.0 and m.size:
         window = max(float(flip_window), 1e-6)
         cert = float(certify_margin)
-        near = (np.abs(base) <= window) | ((base < cert) & (base > -2.0 * window))
-        crossed = near & (base <= cert) & (m > cert)
-        val += bonus * float(np.sum(np.maximum(w, 0.0) * crossed.astype(np.float32), dtype=np.float64))
+        mode = str(flip_mode or "hard").lower()
+        wpos = np.maximum(w, 0.0)
+        if mode in {"smooth", "soft", "soft_crossing", "smooth_flip"}:
+            # Continuous crossing utility: reward atoms that move a near-boundary
+            # pair toward the certified side, without the brittle all-or-nothing
+            # discontinuity of the hard crossing bonus.  This makes greedy
+            # acquisition less sensitive to one atom barely crossing zero and
+            # better aligned with noisy pair-margin predictions.
+            temp = max(float(flip_temperature), 1e-4)
+            x0 = np.clip((base - cert) / temp, -30.0, 30.0)
+            x1 = np.clip((m - cert) / temp, -30.0, 30.0)
+            s0 = 1.0 / (1.0 + np.exp(-x0))
+            s1 = 1.0 / (1.0 + np.exp(-x1))
+            near_weight = np.exp(-np.minimum(np.abs(base - cert) / window, 30.0))
+            improve = np.maximum(s1 - s0, 0.0) * near_weight
+            val += bonus * float(np.sum(wpos * improve.astype(np.float32), dtype=np.float64))
+        else:
+            near = (np.abs(base - cert) <= window) | ((base < cert) & (base > cert - 2.0 * window))
+            crossed = near & (base <= cert) & (m > cert)
+            val += bonus * float(np.sum(wpos * crossed.astype(np.float32), dtype=np.float64))
     return float(val)
 
 
@@ -407,6 +426,8 @@ def _greedy_flip_rank_from_pair_delta(
     flip_bonus: float = 0.75,
     flip_window: float = 0.5,
     certify_margin: float = 0.0,
+    flip_mode: str = "hard",
+    flip_temperature: float = 0.08,
 ) -> tuple[list[int], float, float]:
     """Greedy selector that explicitly values action-order boundary flips.
 
@@ -437,6 +458,8 @@ def _greedy_flip_rank_from_pair_delta(
             flip_bonus=float(flip_bonus),
             flip_window=float(flip_window),
             certify_margin=float(certify_margin),
+            flip_mode=str(flip_mode),
+            flip_temperature=float(flip_temperature),
         )
 
     current = value(margin)
@@ -475,6 +498,8 @@ def _flip_gain_atom_utility(
     flip_bonus: float = 0.0,
     flip_window: float = 0.5,
     certify_margin: float = 0.0,
+    flip_mode: str = "hard",
+    flip_temperature: float = 0.08,
 ) -> np.ndarray:
     """Single-step gain for post-fill atom ranking under the selector objective."""
     d = np.asarray(delta, dtype=np.float32)
@@ -483,10 +508,10 @@ def _flip_gain_atom_utility(
     base = np.asarray(base_delta, dtype=np.float32).reshape(-1)
     if base.shape[0] != d.shape[1]:
         return np.maximum(d, 0.0).mean(axis=1).astype(np.float32)
-    before = _flip_rank_value(base, base, caps, weights, flip_bonus=flip_bonus, flip_window=flip_window, certify_margin=certify_margin)
+    before = _flip_rank_value(base, base, caps, weights, flip_bonus=flip_bonus, flip_window=flip_window, certify_margin=certify_margin, flip_mode=flip_mode, flip_temperature=flip_temperature)
     gains = []
     for i in range(d.shape[0]):
-        after = _flip_rank_value(base + d[i], base, caps, weights, flip_bonus=flip_bonus, flip_window=flip_window, certify_margin=certify_margin)
+        after = _flip_rank_value(base + d[i], base, caps, weights, flip_bonus=flip_bonus, flip_window=flip_window, certify_margin=certify_margin, flip_mode=flip_mode, flip_temperature=flip_temperature)
         gains.append(max(float(after - before), 0.0))
     denom = max(float(np.sum(np.maximum(np.asarray(weights, dtype=np.float32).reshape(-1), 0.0))), 1e-6)
     return (np.asarray(gains, dtype=np.float32) / denom).astype(np.float32)
@@ -1050,6 +1075,8 @@ def runtime_greedy_selector_pair_conditioned(
     flip_bonus: float = 0.0,
     flip_window: float = 0.5,
     certify_margin: float = 0.0,
+    flip_mode: str = "hard",
+    flip_temperature: float = 0.08,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -1157,12 +1184,14 @@ def runtime_greedy_selector_pair_conditioned(
                 flip_bonus=float(flip_bonus),
                 flip_window=float(flip_window),
                 certify_margin=float(certify_margin),
+                flip_mode=str(flip_mode),
+                flip_temperature=float(flip_temperature),
             )
             mode = "runtime_pair_conditioned_flip_rank"
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin)}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature)}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         utility = _flip_gain_atom_utility(
@@ -1173,6 +1202,8 @@ def runtime_greedy_selector_pair_conditioned(
             flip_bonus=float(flip_bonus),
             flip_window=float(flip_window),
             certify_margin=float(certify_margin),
+            flip_mode=str(flip_mode),
+            flip_temperature=float(flip_temperature),
         )
     if proposal_scores is not None and float(proposal_fill_weight) > 0.0:
         prop = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)

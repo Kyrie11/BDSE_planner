@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run from repository root after replacing bdse/ with BDSE_optimized_v15_fliprank.zip contents.
+# Run from repository root after replacing bdse/ with BDSE_optimized_v16_anchor_smooth.zip contents.
 # This script only launches <=20-scenario closed-loop jobs. 100/500-scenario jobs are intentionally not included.
-# Set RUN_FINETUNE=1 to continue finetuning from the v11 checkpoint after the zero-retrain test.
+# Set RUN_FINETUNE=1 only after the zero-retrain v16 run shows improved open-loop/20-scenario signals.
 
 export BDSE_TRAIN_CACHE=${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/}
 export BDSE_VAL_CACHE=${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}
 export NUPLAN_ROOT=${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}
 export V11_CKPT=${V11_CKPT:-outputs/v11_train/bdse_v11_ta_selector.best.pt}
-export V15_CKPT=${V15_CKPT:-outputs/v15_train/bdse_v15_fliprank.best.pt}
+export V16_CKPT=${V16_CKPT:-outputs/v16_train/bdse_v16_anchor_smooth.best.pt}
 export CL_WORKERS_PER_RUN=${CL_WORKERS_PER_RUN:-2}
 export PYTHONUNBUFFERED=1
+# Avoid CUDA memory fragmentation during closed-loop runs.
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
-mkdir -p outputs/open_loop outputs/closed_loop outputs/v15_logs outputs/v15_train
+mkdir -p outputs/open_loop outputs/closed_loop outputs/v16_logs outputs/v16_train
 
 if [[ ! -f "$V11_CKPT" ]]; then
   echo "Missing checkpoint: $V11_CKPT" >&2
@@ -49,16 +51,16 @@ run_open_loop() {
       --device cuda \
       --output "outputs/open_loop/open_loop_${tag}.json" \
       --per-sample-output "outputs/open_loop/open_loop_${tag}.jsonl" \
-      > "outputs/v15_logs/${tag}.open_loop.out" 2>&1
+      > "outputs/v16_logs/${tag}.open_loop.out" 2>&1
   )
 }
 
-# Zero-retrain test using the trained v11 checkpoint.
-run_open_loop 0 v15_fliprank_selector_keep_prior bdse/configs/v15_bdse_fliprank_selector_keep_prior_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 1 v15_hybrid_fliprank_selector_keep_prior bdse/configs/v15_bdse_hybrid_fliprank_selector_keep_prior_fast_cl.yaml "$V11_CKPT" &
+# Zero-retrain test using the trained v11 checkpoint. Two GPUs: two jobs at a time.
+run_open_loop 0 v16_anchor_smooth_selector_keep_prior bdse/configs/v16_bdse_anchor_smooth_selector_keep_prior_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 1 v16_anchor_smooth_scur_tau35 bdse/configs/v16_bdse_anchor_smooth_scur_tau35_fast_cl.yaml "$V11_CKPT" &
 wait
-run_open_loop 0 v15_fliprank_scur_tau35 bdse/configs/v15_bdse_fliprank_scur_tau35_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 1 v15_fliprank_progress_tau50 bdse/configs/v15_bdse_fliprank_progress_tau50_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 0 v16_anchor_smooth_progress_tau50 bdse/configs/v16_bdse_anchor_smooth_progress_tau50_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 1 v16_anchor_smooth_safety_tau35 bdse/configs/v16_bdse_anchor_smooth_safety_tau35_fast_cl.yaml "$V11_CKPT" &
 wait
 
 python - <<'PY'
@@ -66,15 +68,15 @@ import json
 paths = [
     ('v11_trained', 'outputs/open_loop/open_loop_v11_ta_selector_best.json'),
     ('v12_w50', 'outputs/open_loop/open_loop_v12_rule_prior_w50.json'),
-    ('v13_tau50', 'outputs/open_loop/open_loop_v13_scur_tau50.json'),
     ('v14_tau20', 'outputs/open_loop/open_loop_v14_flipcap_scur_tau20_eps0.json'),
-    ('v14_selector_only', 'outputs/open_loop/open_loop_v14_flipcap_selector_only_tau20_eps0.json'),
-    ('v15_selector_keep_prior', 'outputs/open_loop/open_loop_v15_fliprank_selector_keep_prior.json'),
-    ('v15_hybrid_selector_keep_prior', 'outputs/open_loop/open_loop_v15_hybrid_fliprank_selector_keep_prior.json'),
     ('v15_scur_tau35', 'outputs/open_loop/open_loop_v15_fliprank_scur_tau35.json'),
-    ('v15_progress_tau50', 'outputs/open_loop/open_loop_v15_fliprank_progress_tau50.json'),
+    ('v15_finetuned', 'outputs/open_loop/open_loop_v15_finetuned_fliprank_scur_tau35.json'),
+    ('v16_selector', 'outputs/open_loop/open_loop_v16_anchor_smooth_selector_keep_prior.json'),
+    ('v16_scur_tau35', 'outputs/open_loop/open_loop_v16_anchor_smooth_scur_tau35.json'),
+    ('v16_progress_tau50', 'outputs/open_loop/open_loop_v16_anchor_smooth_progress_tau50.json'),
+    ('v16_safety_tau35', 'outputs/open_loop/open_loop_v16_anchor_smooth_safety_tau35.json'),
 ]
-keys = ['teacher_action_match','decision_sufficiency','budget_vs_full_match','teacher_regret','fallback_would_trigger_rate','pair_sign_acc_winner_rival','pair_sign_acc_interaction','pair_sign_acc_hard','selected_interaction_decisive_recall','selected_hard_decisive_recall','selected_decisive_atom_recall','total_sparse_query_count']
+keys = ['teacher_action_match','decision_sufficiency','budget_vs_full_match','teacher_regret','fallback_would_trigger_rate','pair_sign_acc_winner_rival','pair_sign_acc_interaction','pair_sign_acc_hard','selected_interaction_decisive_recall','selected_hard_decisive_recall','selected_decisive_atom_recall','selector_pair_count','runtime_pair_count','total_sparse_query_count']
 for name, path in paths:
     try:
         d = json.load(open(path))
@@ -114,15 +116,17 @@ run_closed_loop_20() {
       scenario_filter.shuffle=false \
       worker.max_workers="$CL_WORKERS_PER_RUN" \
       run_metric=true \
-      > "outputs/v15_logs/${tag}.closed_loop_20.out" 2>&1
+      > "outputs/v16_logs/${tag}.closed_loop_20.out" 2>&1
   )
 }
 
-# At most four closed-loop jobs concurrently.
-run_closed_loop_20 0 v15_fliprank_selector_keep_prior bdse/configs/v15_bdse_fliprank_selector_keep_prior_fast_cl.yaml "$V11_CKPT" &
-run_closed_loop_20 1 v15_hybrid_fliprank_selector_keep_prior bdse/configs/v15_bdse_hybrid_fliprank_selector_keep_prior_fast_cl.yaml "$V11_CKPT" &
-run_closed_loop_20 0 v15_fliprank_scur_tau35 bdse/configs/v15_bdse_fliprank_scur_tau35_fast_cl.yaml "$V11_CKPT" &
-run_closed_loop_20 1 v15_fliprank_progress_tau50 bdse/configs/v15_bdse_fliprank_progress_tau50_fast_cl.yaml "$V11_CKPT" &
+# v15 OOM was caused by launching multiple backgrounded inner nohup jobs. Here each job blocks within its subshell.
+# Run at most two closed-loop jobs concurrently: one per A30. This is safer than four jobs for pair-conditioned BDSE.
+run_closed_loop_20 0 v16_anchor_smooth_selector_keep_prior bdse/configs/v16_bdse_anchor_smooth_selector_keep_prior_fast_cl.yaml "$V11_CKPT" &
+run_closed_loop_20 1 v16_anchor_smooth_scur_tau35 bdse/configs/v16_bdse_anchor_smooth_scur_tau35_fast_cl.yaml "$V11_CKPT" &
+wait
+run_closed_loop_20 0 v16_anchor_smooth_progress_tau50 bdse/configs/v16_bdse_anchor_smooth_progress_tau50_fast_cl.yaml "$V11_CKPT" &
+run_closed_loop_20 1 v16_anchor_smooth_safety_tau35 bdse/configs/v16_bdse_anchor_smooth_safety_tau35_fast_cl.yaml "$V11_CKPT" &
 wait
 
 python -m bdse.tools.collect_closed_loop_metrics \
@@ -133,22 +137,22 @@ python -m bdse.tools.collect_closed_loop_metrics \
   outputs/closed_loop/v12_rule_prior_w50_20 \
   outputs/closed_loop/v13_scur_tau50_20 \
   outputs/closed_loop/v14_flipcap_scur_tau20_eps0_20 \
-  outputs/closed_loop/v14_flipcap_selector_only_tau20_eps0_20 \
+  outputs/closed_loop/v15_finetuned_fliprank_scur_tau35_20 \
   outputs/closed_loop/external_pdm_closed_20 \
   outputs/closed_loop/external_gameformer_20 \
   outputs/closed_loop/external_dtpp_20 \
   outputs/closed_loop/external_plantf_20 \
   outputs/closed_loop/external_pluto_20 \
-  outputs/closed_loop/v15_fliprank_selector_keep_prior_20 \
-  outputs/closed_loop/v15_hybrid_fliprank_selector_keep_prior_20 \
-  outputs/closed_loop/v15_fliprank_scur_tau35_20 \
-  outputs/closed_loop/v15_fliprank_progress_tau50_20 \
-  --csv outputs/closed_loop/v15_20_compare.csv
+  outputs/closed_loop/v16_anchor_smooth_selector_keep_prior_20 \
+  outputs/closed_loop/v16_anchor_smooth_scur_tau35_20 \
+  outputs/closed_loop/v16_anchor_smooth_progress_tau50_20 \
+  outputs/closed_loop/v16_anchor_smooth_safety_tau35_20 \
+  --csv outputs/closed_loop/v16_20_compare.csv
 
 if [[ "${RUN_FINETUNE:-0}" == "1" ]]; then
-  echo "[finetune] continuing from $V11_CKPT with v15 flip-rank selector loss"
+  echo "[finetune] continuing from $V11_CKPT with v16 anchor-smooth selector objective"
   CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 -m bdse.experiments.train \
-    --config bdse/configs/v15_bdse_fliprank_train.yaml \
+    --config bdse/configs/v16_bdse_anchor_smooth_train.yaml \
     --split train_boston train_pittsburgh train_singapore train_vegas_2 \
     --preprocessed-dir "$BDSE_TRAIN_CACHE" \
     --max-scenarios 50000 \
@@ -165,19 +169,19 @@ if [[ "${RUN_FINETUNE:-0}" == "1" ]]; then
     --val-every-n-epochs 1 \
     --best-metric val_loss \
     --best-metrics val_loss teacher_action_match full_interface_action_match teacher_regret pair_sign_acc_interaction pair_sign_acc_hard pair_sign_acc_winner_rival selected_interaction_decisive_recall selected_hard_decisive_recall budget_vs_full_match fallback_would_trigger_rate \
-    --epochs 40 \
+    --epochs 15 \
     --resume-from "$V11_CKPT" \
     --save-every-n-epochs 0 \
-    --log-file outputs/v15_train/bdse_v15_fliprank.train_log.jsonl \
-    --output outputs/v15_train/bdse_v15_fliprank.pt \
-    > outputs/v15_train/bdse_v15_fliprank.detached.out 2>&1
+    --log-file outputs/v16_train/bdse_v16_anchor_smooth.train_log.jsonl \
+    --output outputs/v16_train/bdse_v16_anchor_smooth.pt \
+    > outputs/v16_train/bdse_v16_anchor_smooth.detached.out 2>&1
 
-  run_open_loop 0 v15_finetuned_fliprank_scur_tau35 bdse/configs/v15_bdse_fliprank_scur_tau35_fast_cl.yaml "$V15_CKPT"
-  run_closed_loop_20 0 v15_finetuned_fliprank_scur_tau35 bdse/configs/v15_bdse_fliprank_scur_tau35_fast_cl.yaml "$V15_CKPT"
+  run_open_loop 0 v16_finetuned_anchor_smooth_scur_tau35 bdse/configs/v16_bdse_anchor_smooth_scur_tau35_fast_cl.yaml "$V16_CKPT"
+  run_closed_loop_20 0 v16_finetuned_anchor_smooth_scur_tau35 bdse/configs/v16_bdse_anchor_smooth_scur_tau35_fast_cl.yaml "$V16_CKPT"
 fi
 
 echo "Done. Key outputs:"
-echo "  outputs/open_loop/open_loop_v15_*.json"
-echo "  outputs/closed_loop/v15_*_20"
-echo "  outputs/closed_loop/v15_20_compare.csv"
-echo "Optional finetune: RUN_FINETUNE=1 bash run_v15_fliprank_bdse.sh"
+echo "  outputs/open_loop/open_loop_v16_*.json"
+echo "  outputs/closed_loop/v16_*_20"
+echo "  outputs/closed_loop/v16_20_compare.csv"
+echo "Optional finetune only after zero-retrain improves: RUN_FINETUNE=1 bash run_v16_anchor_smooth_bdse.sh"
