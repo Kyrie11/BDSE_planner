@@ -353,32 +353,143 @@ def _selector_pair_caps(
     return np.where(sb, gamma, non_safety).astype(np.float32)
 
 
+def _flip_rank_value(
+    margin: np.ndarray,
+    base_delta: np.ndarray,
+    caps: np.ndarray,
+    weights: np.ndarray,
+    *,
+    flip_bonus: float = 0.0,
+    flip_window: float = 0.5,
+    certify_margin: float = 0.0,
+) -> float:
+    """Capped pair certificate plus an explicit action-order flip bonus.
+
+    The legacy certificate objective rewards positive margin support.  Even with
+    a small cap, it can still spend budget on small positive increments that never
+    change the pair order.  This objective adds one discrete reward when the
+    selected evidence moves a near-boundary pair from not-certified to certified:
+
+        base_margin <= certify_margin  and  selected_margin > certify_margin.
+
+    This is the runtime counterpart of the paper claim that useful interaction
+    evidence is evidence that can change pair-conditioned action order.
+    """
+    m = np.asarray(margin, dtype=np.float32).reshape(-1)
+    base = np.asarray(base_delta, dtype=np.float32).reshape(-1)
+    cap = np.asarray(caps, dtype=np.float32).reshape(-1)
+    w = np.asarray(weights, dtype=np.float32).reshape(-1)
+    if cap.shape[0] != m.shape[0]:
+        cap = np.zeros_like(m, dtype=np.float32)
+    if w.shape[0] != m.shape[0]:
+        w = np.ones_like(m, dtype=np.float32)
+    cover = np.minimum(np.maximum(cap, 0.0), np.maximum(m, 0.0))
+    val = np.sum(np.maximum(w, 0.0) * cover, dtype=np.float64)
+    bonus = max(float(flip_bonus), 0.0)
+    if bonus > 0.0 and m.size:
+        window = max(float(flip_window), 1e-6)
+        cert = float(certify_margin)
+        near = (np.abs(base) <= window) | ((base < cert) & (base > -2.0 * window))
+        crossed = near & (base <= cert) & (m > cert)
+        val += bonus * float(np.sum(np.maximum(w, 0.0) * crossed.astype(np.float32), dtype=np.float64))
+    return float(val)
+
+
+def _greedy_flip_rank_from_pair_delta(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    caps: np.ndarray,
+    pair_weights: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+    *,
+    flip_bonus: float = 0.75,
+    flip_window: float = 0.5,
+    certify_margin: float = 0.0,
+) -> tuple[list[int], float, float]:
+    """Greedy selector that explicitly values action-order boundary flips.
+
+    It uses signed atom deltas.  A selected atom receives gain not only for capped
+    positive support, but also for making a previously non-certified near-boundary
+    pair become certified.  This avoids the v14 failure mode where recall improved
+    slightly but atoms did not reliably affect final winner-vs-rival order.
+    """
+    margin = np.asarray(base_margin, dtype=np.float32).reshape(-1).copy()
+    base = margin.copy()
+    caps_arr = np.asarray(caps, dtype=np.float32).reshape(-1)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    atom_delta = np.asarray(atom_delta, dtype=np.float32)
+    E = int(atom_delta.shape[0]) if atom_delta.ndim == 2 else int(np.asarray(atom_budget_costs).shape[0])
+    if atom_delta.ndim != 2 or atom_delta.shape[1] != margin.shape[0]:
+        atom_delta = np.zeros((E, margin.shape[0]), dtype=np.float32)
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).reshape(-1).copy()
+    if active.shape[0] < E:
+        active = np.pad(active, (0, E - active.shape[0]), constant_values=False)
+    active = active[:E]
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+
+    def value(m: np.ndarray) -> float:
+        return _flip_rank_value(
+            m, base, caps_arr, weights,
+            flip_bonus=float(flip_bonus),
+            flip_window=float(flip_window),
+            certify_margin=float(certify_margin),
+        )
+
+    current = value(margin)
+    selected: list[int] = []
+    spent = 0.0
+    while bool(active.any()):
+        best: tuple[int, float, float] | None = None
+        best_key = (-np.inf, -np.inf, np.inf)
+        for i in np.flatnonzero(active):
+            idx = int(i)
+            c = float(costs[idx])
+            if not np.isfinite(c) or spent + c > float(budget) + 1e-6:
+                continue
+            gain = float(value(margin + atom_delta[idx]) - current)
+            key = (gain / max(c, 1e-6), gain, -idx)
+            if key > best_key:
+                best_key = key
+                best = (idx, gain, c)
+        if best is None or best_key[1] <= 1e-9:
+            break
+        idx, gain, c = best
+        selected.append(idx)
+        active[idx] = False
+        spent += c
+        margin += atom_delta[idx]
+        current += float(gain)
+    return selected, float(current), float(spent)
+
+
 def _flip_gain_atom_utility(
     delta: np.ndarray,
     base_delta: np.ndarray,
     caps: np.ndarray,
     weights: np.ndarray,
+    *,
+    flip_bonus: float = 0.0,
+    flip_window: float = 0.5,
+    certify_margin: float = 0.0,
 ) -> np.ndarray:
-    """Single-step boundary gain for post-fill atom ranking.
-
-    Post-fill previously used a mean positive delta and could select atoms that
-    fire on many irrelevant pairs.  This utility mirrors the selector objective:
-    how much would this atom improve the capped boundary certificate from the
-    current base margin?
-    """
+    """Single-step gain for post-fill atom ranking under the selector objective."""
     d = np.asarray(delta, dtype=np.float32)
     if d.ndim != 2 or d.size == 0:
         return np.zeros((d.shape[0] if d.ndim else 0,), dtype=np.float32)
-    base = np.asarray(base_delta, dtype=np.float32).reshape(1, -1)
-    caps_arr = np.asarray(caps, dtype=np.float32).reshape(1, -1)
-    w = np.asarray(weights, dtype=np.float32).reshape(1, -1)
-    if base.shape[1] != d.shape[1]:
+    base = np.asarray(base_delta, dtype=np.float32).reshape(-1)
+    if base.shape[0] != d.shape[1]:
         return np.maximum(d, 0.0).mean(axis=1).astype(np.float32)
-    before = np.minimum(caps_arr, np.maximum(base, 0.0))
-    after = np.minimum(caps_arr, np.maximum(base + d, 0.0))
-    gain = np.maximum(after - before, 0.0) * np.maximum(w, 0.0)
-    denom = max(float(np.sum(np.maximum(w, 0.0))), 1e-6)
-    return (gain.sum(axis=1) / denom).astype(np.float32)
+    before = _flip_rank_value(base, base, caps, weights, flip_bonus=flip_bonus, flip_window=flip_window, certify_margin=certify_margin)
+    gains = []
+    for i in range(d.shape[0]):
+        after = _flip_rank_value(base + d[i], base, caps, weights, flip_bonus=flip_bonus, flip_window=flip_window, certify_margin=certify_margin)
+        gains.append(max(float(after - before), 0.0))
+    denom = max(float(np.sum(np.maximum(np.asarray(weights, dtype=np.float32).reshape(-1), 0.0))), 1e-6)
+    return (np.asarray(gains, dtype=np.float32) / denom).astype(np.float32)
 
 
 def _greedy_cover_from_pair_support(
@@ -936,6 +1047,9 @@ def runtime_greedy_selector_pair_conditioned(
     selector_cap_mode: str = "legacy_abs",
     boundary_certificate_cap: float | None = None,
     base_margin_cap_multiplier: float = 1.0,
+    flip_bonus: float = 0.0,
+    flip_window: float = 0.5,
+    certify_margin: float = 0.0,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -1030,12 +1144,36 @@ def runtime_greedy_selector_pair_conditioned(
         )
         mode = "runtime_pair_conditioned_lcb_uncertainty"
     else:
-        selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
-        extra_diag = {}
-        mode = "runtime_pair_conditioned_signed"
+        cap_mode_l = str(selector_cap_mode or "legacy_abs").lower()
+        if cap_mode_l in {"flip_rank", "fliprank", "flip_boundary_rank"}:
+            selected, current, spent = _greedy_flip_rank_from_pair_delta(
+                delta,
+                base_delta,
+                caps,
+                weights,
+                atom_budget_costs,
+                budget,
+                atom_active_mask,
+                flip_bonus=float(flip_bonus),
+                flip_window=float(flip_window),
+                certify_margin=float(certify_margin),
+            )
+            mode = "runtime_pair_conditioned_flip_rank"
+        else:
+            selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
+            mode = "runtime_pair_conditioned_signed"
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin)}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        utility = _flip_gain_atom_utility(delta, base_delta, caps, weights)
+        utility = _flip_gain_atom_utility(
+            delta,
+            base_delta,
+            caps,
+            weights,
+            flip_bonus=float(flip_bonus),
+            flip_window=float(flip_window),
+            certify_margin=float(certify_margin),
+        )
     if proposal_scores is not None and float(proposal_fill_weight) > 0.0:
         prop = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
         if prop.shape[0] < utility.shape[0]:

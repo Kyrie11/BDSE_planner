@@ -500,6 +500,9 @@ class BDSEPlannerCore:
                 selector_cap_mode=str(sel_cfg.get("selector_cap_mode", "legacy_abs")),
                 boundary_certificate_cap=sel_cfg.get("boundary_certificate_cap", None),
                 base_margin_cap_multiplier=float(sel_cfg.get("base_margin_cap_multiplier", 1.0)),
+                flip_bonus=float(sel_cfg.get("flip_bonus", 0.0)),
+                flip_window=float(sel_cfg.get("flip_window", 0.5)),
+                certify_margin=float(sel_cfg.get("certify_margin", 0.0)),
             )
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
