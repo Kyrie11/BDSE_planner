@@ -517,6 +517,209 @@ def _flip_gain_atom_utility(
     return (np.asarray(gains, dtype=np.float32) / denom).astype(np.float32)
 
 
+
+def _softmin_np_local(vals: np.ndarray, tau: float) -> float:
+    vals = np.asarray(vals, dtype=np.float32).reshape(-1)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return 0.0
+    if float(tau) <= 0.0:
+        return float(np.min(vals))
+    t = max(float(tau), 1e-6)
+    m = float(np.min(vals))
+    # stable -tau*log(sum(exp(-x/tau)))
+    return float(m - t * np.log(np.sum(np.exp(-(vals - m) / t))))
+
+
+def _action_rank_value(
+    margin: np.ndarray,
+    base_delta: np.ndarray,
+    caps: np.ndarray,
+    weights: np.ndarray,
+    pair_indices: np.ndarray,
+    *,
+    certificate_weight: float = 1.0,
+    action_score_weight: float = 1.0,
+    action_gap_weight: float = 0.5,
+    action_flip_weight: float = 0.5,
+    action_softmin_tau: float = 0.2,
+    certify_margin: float = 0.0,
+) -> float:
+    """Selector objective aligned with the final pair-conditioned tournament.
+
+    FlipRank rewarded any near-boundary pair crossing.  In closed loop this can
+    spread a fixed evidence budget over pairs that never affect the chosen action.
+    This action-rank objective keeps the capped certificate term but adds a
+    differentiable proxy for the final tournament score: build a soft-min score
+    for each action from its outgoing queried pair margins, then reward the best
+    action score and the best-vs-second gap.  A small action-flip term rewards
+    cases where the selected evidence changes the best action under this pair
+    graph.  The objective remains teacher-free and fixed-budget.
+    """
+    m = np.asarray(margin, dtype=np.float32).reshape(-1)
+    base = np.asarray(base_delta, dtype=np.float32).reshape(-1)
+    cap = np.asarray(caps, dtype=np.float32).reshape(-1)
+    w = np.asarray(weights, dtype=np.float32).reshape(-1)
+    pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    P = int(min(m.shape[0], base.shape[0], cap.shape[0], w.shape[0], pair_arr.shape[0]))
+    if P <= 0:
+        return 0.0
+    m = m[:P]; base = base[:P]; cap = cap[:P]; w = w[:P]; pair_arr = pair_arr[:P]
+    wpos = np.maximum(w, 0.0)
+
+    cover = np.minimum(np.maximum(cap, 0.0), np.maximum(m, 0.0))
+    val = float(max(float(certificate_weight), 0.0)) * float(np.sum(wpos * cover, dtype=np.float64))
+
+    actions = np.unique(pair_arr[:, 0])
+    if actions.size == 0:
+        return float(val)
+
+    def scores_for(x: np.ndarray) -> dict[int, float]:
+        out: dict[int, float] = {}
+        for a_raw in actions.tolist():
+            a = int(a_raw)
+            mask = pair_arr[:, 0] == a
+            if not bool(mask.any()):
+                continue
+            # pair weights should influence the score without changing margin units;
+            # repeat high-weight pairs by subtracting log-weight inside softmin.
+            vals = x[mask].astype(np.float32)
+            wm = np.maximum(wpos[mask], 1e-3).astype(np.float32)
+            vals_eff = vals - float(action_softmin_tau) * np.log(wm)
+            out[a] = _softmin_np_local(vals_eff, float(action_softmin_tau))
+        return out
+
+    s_cur = scores_for(m)
+    if s_cur:
+        cur_vals = np.asarray(list(s_cur.values()), dtype=np.float32)
+        order = np.sort(cur_vals)
+        top = float(order[-1])
+        second = float(order[-2]) if order.size >= 2 else 0.0
+        val += max(float(action_score_weight), 0.0) * top
+        val += max(float(action_gap_weight), 0.0) * max(top - second, 0.0)
+        flip_w = max(float(action_flip_weight), 0.0)
+        if flip_w > 0.0:
+            s_base = scores_for(base)
+            if s_base:
+                best_base = max(s_base, key=lambda a: (float(s_base[a]), -int(a)))
+                best_cur = max(s_cur, key=lambda a: (float(s_cur[a]), -int(a)))
+                if int(best_cur) != int(best_base):
+                    # Reward action-level flips only when the new winner is at least
+                    # certified against the old one by the queried pair graph when
+                    # that directed pair is available.
+                    ok = True
+                    idx = np.flatnonzero((pair_arr[:, 0] == int(best_cur)) & (pair_arr[:, 1] == int(best_base)))
+                    if idx.size:
+                        ok = bool(np.max(m[idx]) >= float(certify_margin))
+                    if ok:
+                        val += flip_w
+    return float(val)
+
+
+def _greedy_action_rank_from_pair_delta(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    caps: np.ndarray,
+    pair_weights: np.ndarray,
+    pair_indices: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+    *,
+    certificate_weight: float = 1.0,
+    action_score_weight: float = 1.0,
+    action_gap_weight: float = 0.5,
+    action_flip_weight: float = 0.5,
+    action_softmin_tau: float = 0.2,
+    certify_margin: float = 0.0,
+) -> tuple[list[int], float, float]:
+    margin = np.asarray(base_margin, dtype=np.float32).reshape(-1).copy()
+    base = margin.copy()
+    caps_arr = np.asarray(caps, dtype=np.float32).reshape(-1)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    atom_delta = np.asarray(atom_delta, dtype=np.float32)
+    E = int(atom_delta.shape[0]) if atom_delta.ndim == 2 else int(np.asarray(atom_budget_costs).shape[0])
+    if atom_delta.ndim != 2 or atom_delta.shape[1] != margin.shape[0]:
+        atom_delta = np.zeros((E, margin.shape[0]), dtype=np.float32)
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).reshape(-1).copy()
+    if active.shape[0] < E:
+        active = np.pad(active, (0, E - active.shape[0]), constant_values=False)
+    active = active[:E]
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+
+    def value(m: np.ndarray) -> float:
+        return _action_rank_value(
+            m,
+            base,
+            caps_arr,
+            weights,
+            pair_arr,
+            certificate_weight=certificate_weight,
+            action_score_weight=action_score_weight,
+            action_gap_weight=action_gap_weight,
+            action_flip_weight=action_flip_weight,
+            action_softmin_tau=action_softmin_tau,
+            certify_margin=certify_margin,
+        )
+
+    current = value(margin)
+    selected: list[int] = []
+    spent = 0.0
+    while bool(active.any()):
+        best: tuple[int, float, float] | None = None
+        best_key = (-np.inf, -np.inf, np.inf)
+        for i in np.flatnonzero(active):
+            idx = int(i)
+            c = float(costs[idx])
+            if not np.isfinite(c) or spent + c > float(budget) + 1e-6:
+                continue
+            gain = float(value(margin + atom_delta[idx]) - current)
+            key = (gain / max(c, 1e-6), gain, -idx)
+            if key > best_key:
+                best_key = key
+                best = (idx, gain, c)
+        if best is None or best_key[1] <= 1e-9:
+            break
+        idx, gain, c = best
+        selected.append(idx)
+        active[idx] = False
+        spent += c
+        margin += atom_delta[idx]
+        current += float(gain)
+    return selected, float(current), float(spent)
+
+
+def _action_rank_atom_utility(
+    delta: np.ndarray,
+    base_delta: np.ndarray,
+    caps: np.ndarray,
+    weights: np.ndarray,
+    pair_indices: np.ndarray,
+    *,
+    certificate_weight: float = 1.0,
+    action_score_weight: float = 1.0,
+    action_gap_weight: float = 0.5,
+    action_flip_weight: float = 0.5,
+    action_softmin_tau: float = 0.2,
+    certify_margin: float = 0.0,
+) -> np.ndarray:
+    d = np.asarray(delta, dtype=np.float32)
+    if d.ndim != 2 or d.size == 0:
+        return np.zeros((d.shape[0] if d.ndim else 0,), dtype=np.float32)
+    base = np.asarray(base_delta, dtype=np.float32).reshape(-1)
+    if base.shape[0] != d.shape[1]:
+        return np.maximum(d, 0.0).mean(axis=1).astype(np.float32)
+    before = _action_rank_value(base, base, caps, weights, pair_indices, certificate_weight=certificate_weight, action_score_weight=action_score_weight, action_gap_weight=action_gap_weight, action_flip_weight=action_flip_weight, action_softmin_tau=action_softmin_tau, certify_margin=certify_margin)
+    gains = []
+    for i in range(d.shape[0]):
+        after = _action_rank_value(base + d[i], base, caps, weights, pair_indices, certificate_weight=certificate_weight, action_score_weight=action_score_weight, action_gap_weight=action_gap_weight, action_flip_weight=action_flip_weight, action_softmin_tau=action_softmin_tau, certify_margin=certify_margin)
+        gains.append(max(float(after - before), 0.0))
+    return np.asarray(gains, dtype=np.float32)
+
+
 def _greedy_cover_from_pair_support(
     atom_support: np.ndarray,
     base_support: np.ndarray,
@@ -1077,6 +1280,11 @@ def runtime_greedy_selector_pair_conditioned(
     certify_margin: float = 0.0,
     flip_mode: str = "hard",
     flip_temperature: float = 0.08,
+    action_rank_certificate_weight: float = 1.0,
+    action_rank_score_weight: float = 0.0,
+    action_rank_gap_weight: float = 0.0,
+    action_rank_flip_weight: float = 0.0,
+    action_rank_softmin_tau: float = 0.2,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -1172,7 +1380,25 @@ def runtime_greedy_selector_pair_conditioned(
         mode = "runtime_pair_conditioned_lcb_uncertainty"
     else:
         cap_mode_l = str(selector_cap_mode or "legacy_abs").lower()
-        if cap_mode_l in {"flip_rank", "fliprank", "flip_boundary_rank"}:
+        if cap_mode_l in {"action_rank", "action_flip_rank", "tournament_rank"}:
+            selected, current, spent = _greedy_action_rank_from_pair_delta(
+                delta,
+                base_delta,
+                caps,
+                weights,
+                pair_arr,
+                atom_budget_costs,
+                budget,
+                atom_active_mask,
+                certificate_weight=float(action_rank_certificate_weight),
+                action_score_weight=float(action_rank_score_weight),
+                action_gap_weight=float(action_rank_gap_weight),
+                action_flip_weight=float(action_rank_flip_weight),
+                action_softmin_tau=float(action_rank_softmin_tau),
+                certify_margin=float(certify_margin),
+            )
+            mode = "runtime_pair_conditioned_action_rank"
+        elif cap_mode_l in {"flip_rank", "fliprank", "flip_boundary_rank"}:
             selected, current, spent = _greedy_flip_rank_from_pair_delta(
                 delta,
                 base_delta,
@@ -1191,20 +1417,31 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature)}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau)}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        utility = _flip_gain_atom_utility(
-            delta,
-            base_delta,
-            caps,
-            weights,
-            flip_bonus=float(flip_bonus),
-            flip_window=float(flip_window),
-            certify_margin=float(certify_margin),
-            flip_mode=str(flip_mode),
-            flip_temperature=float(flip_temperature),
-        )
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank"}:
+            utility = _action_rank_atom_utility(
+                delta, base_delta, caps, weights, pair_arr,
+                certificate_weight=float(action_rank_certificate_weight),
+                action_score_weight=float(action_rank_score_weight),
+                action_gap_weight=float(action_rank_gap_weight),
+                action_flip_weight=float(action_rank_flip_weight),
+                action_softmin_tau=float(action_rank_softmin_tau),
+                certify_margin=float(certify_margin),
+            )
+        else:
+            utility = _flip_gain_atom_utility(
+                delta,
+                base_delta,
+                caps,
+                weights,
+                flip_bonus=float(flip_bonus),
+                flip_window=float(flip_window),
+                certify_margin=float(certify_margin),
+                flip_mode=str(flip_mode),
+                flip_temperature=float(flip_temperature),
+            )
     if proposal_scores is not None and float(proposal_fill_weight) > 0.0:
         prop = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
         if prop.shape[0] < utility.shape[0]:

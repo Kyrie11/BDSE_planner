@@ -42,7 +42,7 @@ run_open_loop() {
   (
     export CUDA_VISIBLE_DEVICES="$gpu"
     echo "[open-loop] $tag on GPU $gpu"
-    python -m bdse.experiments.evaluate_open_loop \
+    nohup python -m bdse.experiments.evaluate_open_loop \
       --config "$cfg" \
       --checkpoint "$ckpt" \
       --split val \
@@ -51,7 +51,7 @@ run_open_loop() {
       --device cuda \
       --output "outputs/open_loop/open_loop_${tag}.json" \
       --per-sample-output "outputs/open_loop/open_loop_${tag}.jsonl" \
-      > "outputs/v16_logs/${tag}.open_loop.out" 2>&1
+      > "outputs/v16_logs/${tag}.open_loop.out" 2>&1 &
   )
 }
 
@@ -95,7 +95,7 @@ run_closed_loop_20() {
   (
     export CUDA_VISIBLE_DEVICES="$gpu"
     echo "[closed-loop-20] $tag on GPU $gpu"
-    python -m bdse.experiments.evaluate_closed_loop \
+    nohup python -m bdse.experiments.evaluate_closed_loop \
       --config "$cfg" \
       --checkpoint "$ckpt" \
       --device cuda \
@@ -116,7 +116,7 @@ run_closed_loop_20() {
       scenario_filter.shuffle=false \
       worker.max_workers="$CL_WORKERS_PER_RUN" \
       run_metric=true \
-      > "outputs/v16_logs/${tag}.closed_loop_20.out" 2>&1
+      > "outputs/v16_logs/${tag}.closed_loop_20.out" 2>&1 &
   )
 }
 

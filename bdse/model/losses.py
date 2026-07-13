@@ -360,6 +360,11 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             certify_margin=float(s_cfg.get("certify_margin", 0.0)),
             flip_mode=str(s_cfg.get("flip_mode", "hard")),
             flip_temperature=float(s_cfg.get("flip_temperature", 0.08)),
+            action_rank_certificate_weight=float(s_cfg.get("action_rank_certificate_weight", 1.0)),
+            action_rank_score_weight=float(s_cfg.get("action_rank_score_weight", 0.0)),
+            action_rank_gap_weight=float(s_cfg.get("action_rank_gap_weight", 0.0)),
+            action_rank_flip_weight=float(s_cfg.get("action_rank_flip_weight", 0.0)),
+            action_rank_softmin_tau=float(s_cfg.get("action_rank_softmin_tau", 0.2)),
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)
