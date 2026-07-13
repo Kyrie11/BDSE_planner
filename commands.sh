@@ -7,8 +7,9 @@ set -euo pipefail
 #   2) finetuning from v11 best must warm-start weights, not resume epoch=30.
 
 export BDSE_TRAIN_CACHE=${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/}
-export BDSE_VAL_CACHE=${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}
+export BDSE_VAL_CACHE=${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_2}
 export NUPLAN_ROOT=${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}
+export NUPLAN_DB_ROOT=${NUPLAN_DB_ROOT:-$NUPLAN_ROOT/data/cache/val}
 export V11_CKPT=${V11_CKPT:-outputs/v11_train/bdse_v11_ta_selector.best.pt}
 export V18_CKPT=${V18_CKPT:-outputs/v18_train/bdse_v18_true_actionrank.best.pt}
 export CL_WORKERS_PER_RUN=${CL_WORKERS_PER_RUN:-2}
@@ -120,7 +121,7 @@ run_closed_loop_20() {
       --nuplan-data-root "$NUPLAN_ROOT" \
       --nuplan-map-root "$NUPLAN_ROOT/maps" \
       --nuplan-exp-root "$NUPLAN_ROOT/exp" \
-      --nuplan-db-root "$NUPLAN_ROOT/data/cache/val/" \
+      --nuplan-db-root "$NUPLAN_DB_ROOT" \
       -- \
       scenario_filter.limit_total_scenarios=20 \
       scenario_filter.shuffle=false \

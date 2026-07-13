@@ -131,7 +131,10 @@ def test_closed_loop_command_can_override_nuplan_db_root(tmp_path: Path):
         nuplan_data_root="/data0/senzeyu2/dataset/nuplan",
         nuplan_map_root="/data0/senzeyu2/dataset/nuplan/maps",
         nuplan_exp_root="/data0/senzeyu2/dataset/nuplan/exp",
-        nuplan_db_root="/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/val",
+        # Use a synthetic non-existing DB root so this unit test only verifies
+        # command construction. Existing local DB roots are covered separately
+        # by the db_files rewrite tests below.
+        nuplan_db_root=str(tmp_path / "nuplan_val_db_root"),
         nuplan_db_files=None,
         hydra_full_error=False,
         nuplan_module="nuplan.planning.script.run_simulation",
@@ -145,7 +148,7 @@ def test_closed_loop_command_can_override_nuplan_db_root(tmp_path: Path):
         disable_splitter=False,
     )
     _env, cmd = build_nuplan_command(args, [])
-    assert "scenario_builder.data_root=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/val" in cmd
+    assert f"scenario_builder.data_root={tmp_path / 'nuplan_val_db_root'}" in cmd
 
 
 def test_closed_loop_command_can_override_multiple_db_dirs(tmp_path: Path):

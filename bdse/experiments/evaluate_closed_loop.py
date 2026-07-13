@@ -377,9 +377,9 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
 
     # nuPlan's official scenario_builder=nuplan config derives its default DB
     # path from NUPLAN_DATA_ROOT as ``${NUPLAN_DATA_ROOT}/nuplan-v1.1/trainval``.
-    # BDSE preprocessing commonly writes nuPlan-compatible DB caches elsewhere
-    # (for example data/cache/bdse_val_v2/val).  Forward an explicit DB root or
-    # DB file/dir list to ScenarioBuilder so closed-loop evaluation does not fall
+    # Closed-loop simulation must use nuPlan log DB files, which may live in a
+    # separate validation DB root from BDSE's preprocessed tensor/npz caches.
+    # Forward an explicit DB root or DB file/dir list to ScenarioBuilder so closed-loop evaluation does not fall
     # back to a missing raw trainval directory.  User-supplied raw Hydra overrides
     # after ``--`` still take precedence.
     if getattr(args, "nuplan_db_files", None):
