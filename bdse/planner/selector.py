@@ -567,7 +567,30 @@ def _action_rank_value(
     m = m[:P]; base = base[:P]; cap = cap[:P]; w = w[:P]; pair_arr = pair_arr[:P]
     wpos = np.maximum(w, 0.0)
 
-    cover = np.minimum(np.maximum(cap, 0.0), np.maximum(m, 0.0))
+    # Match run_pair_conditioned_tournament(): if both directions are queried,
+    # the final margin matrix uses an antisymmetric projection instead of trusting
+    # two independent directed predictions.  The selector should value evidence
+    # in the same geometry, otherwise it can optimize pair signs that will be
+    # projected away before the tournament action is chosen.
+    def antisym_project(x: np.ndarray) -> np.ndarray:
+        y = np.asarray(x, dtype=np.float32).reshape(-1).copy()
+        pos = {(int(a), int(b)): int(i) for i, (a, b) in enumerate(pair_arr.tolist())}
+        seen: set[tuple[int, int]] = set()
+        for (a, b), i in pos.items():
+            if (a, b) in seen or (b, a) in seen:
+                continue
+            j = pos.get((b, a), None)
+            if j is not None:
+                v = 0.5 * (float(x[i]) - float(x[j]))
+                y[i] = v
+                y[j] = -v
+                seen.add((a, b)); seen.add((b, a))
+        return y
+
+    m_eval = antisym_project(m)
+    base_eval = antisym_project(base)
+
+    cover = np.minimum(np.maximum(cap, 0.0), np.maximum(m_eval, 0.0))
     val = float(max(float(certificate_weight), 0.0)) * float(np.sum(wpos * cover, dtype=np.float64))
 
     actions = np.unique(pair_arr[:, 0])
@@ -589,7 +612,7 @@ def _action_rank_value(
             out[a] = _softmin_np_local(vals_eff, float(action_softmin_tau))
         return out
 
-    s_cur = scores_for(m)
+    s_cur = scores_for(m_eval)
     if s_cur:
         cur_vals = np.asarray(list(s_cur.values()), dtype=np.float32)
         order = np.sort(cur_vals)
@@ -599,7 +622,7 @@ def _action_rank_value(
         val += max(float(action_gap_weight), 0.0) * max(top - second, 0.0)
         flip_w = max(float(action_flip_weight), 0.0)
         if flip_w > 0.0:
-            s_base = scores_for(base)
+            s_base = scores_for(base_eval)
             if s_base:
                 best_base = max(s_base, key=lambda a: (float(s_base[a]), -int(a)))
                 best_cur = max(s_cur, key=lambda a: (float(s_cur[a]), -int(a)))
@@ -610,7 +633,7 @@ def _action_rank_value(
                     ok = True
                     idx = np.flatnonzero((pair_arr[:, 0] == int(best_cur)) & (pair_arr[:, 1] == int(best_base)))
                     if idx.size:
-                        ok = bool(np.max(m[idx]) >= float(certify_margin))
+                        ok = bool(np.max(m_eval[idx]) >= float(certify_margin))
                     if ok:
                         val += flip_w
     return float(val)
@@ -1285,6 +1308,7 @@ def runtime_greedy_selector_pair_conditioned(
     action_rank_gap_weight: float = 0.0,
     action_rank_flip_weight: float = 0.0,
     action_rank_softmin_tau: float = 0.2,
+    force_uncertainty_objective: bool = False,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -1340,12 +1364,24 @@ def runtime_greedy_selector_pair_conditioned(
     base_support = np.maximum(base_delta, 0.0).astype(np.float32)
     atom_support = np.maximum(delta, 0.0).astype(np.float32)  # legacy/debug only
 
-    use_uncertainty_objective = (
-        pair_atom_variance is not None
-        or abs(float(beta_uncertainty)) > 0.0
-        or abs(float(epsilon_cal)) > 0.0
-        or abs(float(lambda_info)) > 0.0
-        or family_budget_caps is not None
+    cap_mode_l = str(selector_cap_mode or "legacy_abs").lower()
+    action_rank_modes = {"action_rank", "action_flip_rank", "tournament_rank"}
+    flip_rank_modes = {"flip_rank", "fliprank", "flip_boundary_rank"}
+    # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
+    # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
+    # silently bypassing flip_rank/action_rank objectives even when configs asked
+    # for them.  Use the uncertainty objective only for legacy modes or when it
+    # is explicitly forced.
+    use_uncertainty_objective = bool(force_uncertainty_objective) or (
+        cap_mode_l not in action_rank_modes
+        and cap_mode_l not in flip_rank_modes
+        and (
+            pair_atom_variance is not None
+            or abs(float(beta_uncertainty)) > 0.0
+            or abs(float(epsilon_cal)) > 0.0
+            or abs(float(lambda_info)) > 0.0
+            or family_budget_caps is not None
+        )
     )
     if use_uncertainty_objective:
         pair_var = np.asarray(pair_atom_variance, dtype=np.float32) if pair_atom_variance is not None else np.zeros_like(delta, dtype=np.float32)
@@ -1379,8 +1415,7 @@ def runtime_greedy_selector_pair_conditioned(
         )
         mode = "runtime_pair_conditioned_lcb_uncertainty"
     else:
-        cap_mode_l = str(selector_cap_mode or "legacy_abs").lower()
-        if cap_mode_l in {"action_rank", "action_flip_rank", "tournament_rank"}:
+        if cap_mode_l in action_rank_modes:
             selected, current, spent = _greedy_action_rank_from_pair_delta(
                 delta,
                 base_delta,
@@ -1398,7 +1433,7 @@ def runtime_greedy_selector_pair_conditioned(
                 certify_margin=float(certify_margin),
             )
             mode = "runtime_pair_conditioned_action_rank"
-        elif cap_mode_l in {"flip_rank", "fliprank", "flip_boundary_rank"}:
+        elif cap_mode_l in flip_rank_modes:
             selected, current, spent = _greedy_flip_rank_from_pair_delta(
                 delta,
                 base_delta,
@@ -1417,7 +1452,7 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau)}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "force_uncertainty_objective": bool(force_uncertainty_objective)}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank"}:

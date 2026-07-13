@@ -348,6 +348,9 @@ def compute_bdse_diagnostics(
         "selector_pair_atom_query_count": float(qdiag.get("selector_pair_atom_query_count", 0.0)),
         "tournament_pair_atom_query_count": float(qdiag.get("tournament_pair_atom_query_count", 0.0)),
         "selected_certificate_query_count": float(qdiag.get("selected_certificate_query_count", effective_query_count)),
+        "selector_action_rank_active": float(qdiag.get("selector_action_rank_active", 0.0)),
+        "selector_flip_rank_active": float(qdiag.get("selector_flip_rank_active", 0.0)),
+        "selector_lcb_active": float(qdiag.get("selector_lcb_active", 0.0)),
         **pair_metrics,
     }
     return BDSEMetricResult(values=values, details={"full_action": full_action, "sparse_full_action": sparse_full_action, "a_star": a_star, "selected_atoms": selected_atoms, "query_action_count": query_action_count})

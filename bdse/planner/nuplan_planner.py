@@ -510,6 +510,7 @@ class BDSEPlannerCore:
                 action_rank_gap_weight=float(sel_cfg.get("action_rank_gap_weight", 0.0)),
                 action_rank_flip_weight=float(sel_cfg.get("action_rank_flip_weight", 0.0)),
                 action_rank_softmin_tau=float(sel_cfg.get("action_rank_softmin_tau", 0.2)),
+                force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),
             )
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))

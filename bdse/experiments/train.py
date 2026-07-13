@@ -243,6 +243,23 @@ def _load_checkpoint_if_requested(
     device: torch.device,
     is_main: bool,
 ) -> tuple[int, float | None, int | None, dict[str, dict[str, Any]], Path | None]:
+    warm_start_from = getattr(args, "warm_start_from", None)
+    if warm_start_from:
+        ckpt_path = Path(warm_start_from)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"warm-start checkpoint not found: {ckpt_path}")
+        ckpt = _torch_load_any(ckpt_path, map_location=device)
+        state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
+        raw_model = model.module if isinstance(model, DDP) else model
+        missing, unexpected = raw_model.load_state_dict(state, strict=False)
+        if is_main and (missing or unexpected):
+            print(
+                f"[bdse] warm-start loaded with non-strict state_dict: missing={list(missing)[:8]} unexpected={list(unexpected)[:8]}",
+                flush=True,
+            )
+        if is_main:
+            print(f"[bdse] warm-started weights from {ckpt_path}; optimizer/scaler/rng/epoch reset to 0", flush=True)
+        return 0, None, None, {}, ckpt_path
     if not args.resume and not args.resume_from:
         return 0, None, None, {}, None
     paths = _checkpoint_paths(args)
@@ -688,7 +705,8 @@ def main() -> None:
     parser.add_argument("--prefetch-factor", type=int, default=None, help="DataLoader prefetch factor when num_workers > 0. Use 1 to reduce host/pinned-memory pressure.")
     parser.add_argument("--no-pin-memory", action="store_true", help="Disable pinned host memory for DataLoader batches.")
     parser.add_argument("--resume", action="store_true", help="Resume from the latest checkpoint derived from --output, or from --resume-from when provided.")
-    parser.add_argument("--resume-from", type=str, default=None, help="Explicit checkpoint path to resume from.")
+    parser.add_argument("--resume-from", type=str, default=None, help="Explicit checkpoint path to resume from and continue its epoch counter.")
+    parser.add_argument("--warm-start-from", type=str, default=None, help="Load only model weights from a checkpoint and start a new run at epoch 0. Use this for finetuning from a completed best checkpoint.")
     parser.add_argument("--checkpoint-dir", type=str, default=None, help="Directory for per-epoch checkpoints. Defaults to <output_dir>/checkpoints.")
     parser.add_argument("--save-every-n-epochs", type=int, default=1, help="Save an epoch checkpoint every N epochs. Set 0 to disable per-epoch files.")
     parser.add_argument("--save-best", dest="save_best", action="store_true", default=True, help="Save <output_stem>.best.pt using --best-metric.")
@@ -708,6 +726,8 @@ def main() -> None:
     parser.add_argument("--val-strict", action="store_true", help="Raise validation exceptions instead of counting failed validation samples.")
     parser.add_argument("--log-file", type=str, default=None, help="Optional JSONL file for per-epoch train/validation metrics. Defaults to <output_stem>.train_log.jsonl.")
     args = parser.parse_args()
+    if args.warm_start_from and (args.resume or args.resume_from):
+        raise ValueError("Use either --warm-start-from for finetuning or --resume/--resume-from for continuing an interrupted run, not both.")
     cfg = load_config(args.config)
     cfg.setdefault("training", {})
     if args.epochs is not None:
