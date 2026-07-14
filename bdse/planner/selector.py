@@ -413,6 +413,43 @@ def _selector_pair_caps(
     return np.where(sb, gamma, non_safety).astype(np.float32)
 
 
+def _normalized_action_utility_cost(action_utility_cost: np.ndarray | None) -> np.ndarray | None:
+    """Robust [0,4] normalized per-action deployment utility cost.
+
+    Lower values are better.  The selector uses this only as a secondary
+    acquisition prior; certificate/boundary evidence still dominates.
+    """
+    if action_utility_cost is None:
+        return None
+    uc = np.asarray(action_utility_cost, dtype=np.float32).reshape(-1)
+    finite = uc[np.isfinite(uc)]
+    if finite.size == 0:
+        return None
+    lo = float(np.min(finite))
+    hi = float(np.quantile(finite, 0.90)) if finite.size >= 4 else float(np.max(finite))
+    scale = max(hi - lo, float(np.std(finite)), 1e-3)
+    return np.clip((uc - lo) / scale, 0.0, 4.0).astype(np.float32)
+
+
+def _pair_utility_advantage(pair_indices: np.ndarray, action_utility_cost: np.ndarray | None) -> np.ndarray | None:
+    """Positive when a directed pair supports a lower-utility-cost action."""
+    util = _normalized_action_utility_cost(action_utility_cost)
+    if util is None:
+        return None
+    pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    if pair_arr.size == 0:
+        return None
+    a = pair_arr[:, 0]
+    b = pair_arr[:, 1]
+    out = np.zeros((pair_arr.shape[0],), dtype=np.float32)
+    valid = (a >= 0) & (b >= 0) & (a < util.shape[0]) & (b < util.shape[0])
+    if bool(valid.any()):
+        # Positive means action a has lower deployment cost than action b, so
+        # evidence that increases margin a>b is more valuable for closed loop.
+        out[valid] = np.maximum(util[b[valid]] - util[a[valid]], 0.0).astype(np.float32)
+    return out
+
+
 def _flip_rank_value(
     margin: np.ndarray,
     base_delta: np.ndarray,
@@ -606,6 +643,7 @@ def _action_rank_value(
     certify_margin: float = 0.0,
     action_utility_cost: np.ndarray | None = None,
     action_utility_weight: float = 0.0,
+    action_pair_utility_weight: float = 0.0,
 ) -> float:
     """Selector objective aligned with the final pair-conditioned tournament.
 
@@ -652,23 +690,26 @@ def _action_rank_value(
     m_eval = antisym_project(m)
     base_eval = antisym_project(base)
 
+    pair_eff_w = wpos
+    pair_util_w = max(float(action_pair_utility_weight), 0.0)
+    if pair_util_w > 0.0 and action_utility_cost is not None:
+        adv = _pair_utility_advantage(pair_arr, action_utility_cost)
+        if adv is not None and adv.shape[0] >= P:
+            # This is the main v20 change: utility is not only a per-action
+            # tie-break after the tournament.  It also reweights directed
+            # boundary certificates toward actions that the final closed-loop
+            # utility refinement would prefer.
+            pair_eff_w = pair_eff_w * (1.0 + pair_util_w * np.maximum(adv[:P], 0.0))
+
     cover = np.minimum(np.maximum(cap, 0.0), np.maximum(m_eval, 0.0))
-    val = float(max(float(certificate_weight), 0.0)) * float(np.sum(wpos * cover, dtype=np.float64))
+    val = float(max(float(certificate_weight), 0.0)) * float(np.sum(pair_eff_w * cover, dtype=np.float64))
 
     actions = np.unique(pair_arr[:, 0])
     if actions.size == 0:
         return float(val)
 
     utility_weight = max(float(action_utility_weight), 0.0)
-    utility_norm: np.ndarray | None = None
-    if utility_weight > 0.0 and action_utility_cost is not None:
-        uc = np.asarray(action_utility_cost, dtype=np.float32).reshape(-1)
-        finite_uc = uc[np.isfinite(uc)]
-        if finite_uc.size:
-            lo = float(np.min(finite_uc))
-            hi = float(np.quantile(finite_uc, 0.90)) if finite_uc.size >= 4 else float(np.max(finite_uc))
-            scale_u = max(hi - lo, float(np.std(finite_uc)), 1e-3)
-            utility_norm = np.clip((uc - lo) / scale_u, 0.0, 4.0).astype(np.float32)
+    utility_norm = _normalized_action_utility_cost(action_utility_cost) if utility_weight > 0.0 else None
 
     def scores_for(x: np.ndarray) -> dict[int, float]:
         out: dict[int, float] = {}
@@ -737,6 +778,8 @@ def _greedy_action_rank_from_pair_delta(
     certify_margin: float = 0.0,
     action_utility_cost: np.ndarray | None = None,
     action_utility_weight: float = 0.0,
+    action_pair_utility_weight: float = 0.0,
+    action_rank_fast_greedy: bool = False,
 ) -> tuple[list[int], float, float]:
     margin = np.asarray(base_margin, dtype=np.float32).reshape(-1).copy()
     base = margin.copy()
@@ -755,6 +798,69 @@ def _greedy_action_rank_from_pair_delta(
     if costs.shape[0] < E:
         costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
 
+    if bool(action_rank_fast_greedy):
+        # Closed-loop diagnostics showed v19 ActionRank reduced query count but
+        # made the nuPlan loop slow because every greedy step evaluated every
+        # candidate through Python dictionaries and antisymmetry rebuilds.  This
+        # vectorized frontier objective keeps the certificate/flip geometry and
+        # adds utility-aware directed-pair weighting, while avoiding the inner
+        # action-score loop during closed-loop planning.
+        pair_eff_w = np.maximum(weights, 0.0).astype(np.float32)
+        pair_util_w = max(float(action_pair_utility_weight), 0.0)
+        if pair_util_w > 0.0:
+            adv = _pair_utility_advantage(pair_arr, action_utility_cost)
+            if adv is not None and adv.shape[0] == pair_eff_w.shape[0]:
+                pair_eff_w = pair_eff_w * (1.0 + pair_util_w * np.maximum(adv, 0.0).astype(np.float32))
+        cert_w = max(float(certificate_weight), 0.0)
+        flip_w = max(float(action_flip_weight), 0.0)
+        score_w = max(float(action_score_weight), 0.0)
+        gap_w = max(float(action_gap_weight), 0.0)
+        cert = float(certify_margin)
+        selected: list[int] = []
+        spent = 0.0
+        current_cover = np.minimum(np.maximum(caps_arr, 0.0), np.maximum(margin, 0.0))
+        current = cert_w * float(np.sum(pair_eff_w * current_cover, dtype=np.float64))
+        while bool(active.any()):
+            active_idx = np.flatnonzero(active)
+            if active_idx.size == 0:
+                break
+            feasible: list[int] = []
+            for i in active_idx.tolist():
+                c = float(costs[int(i)])
+                if np.isfinite(c) and spent + c <= float(budget) + 1e-6:
+                    feasible.append(int(i))
+            if not feasible:
+                break
+            idx_arr = np.asarray(feasible, dtype=np.int64)
+            trial_margin = margin[None, :] + atom_delta[idx_arr]
+            trial_cover = np.minimum(np.maximum(caps_arr[None, :], 0.0), np.maximum(trial_margin, 0.0))
+            gain_vec = cert_w * np.sum(pair_eff_w[None, :] * (trial_cover - current_cover[None, :]), axis=1, dtype=np.float64).astype(np.float64)
+            if flip_w > 0.0:
+                cap_win = np.maximum(caps_arr[None, :], 1e-3)
+                crossed = (margin[None, :] <= cert) & (trial_margin > cert)
+                near = (np.abs(margin[None, :] - cert) <= cap_win) | ((margin[None, :] < cert) & (margin[None, :] > cert - 2.0 * cap_win))
+                gain_vec += flip_w * np.sum(pair_eff_w[None, :] * (crossed & near).astype(np.float32), axis=1, dtype=np.float64)
+            if score_w > 0.0 or gap_w > 0.0:
+                # Cheap action-rank surrogate: favor atoms that increase margins
+                # on high-priority frontier pairs.  The exact soft-min action
+                # score remains available when action_rank_fast_greedy=false.
+                pos_improve = np.maximum(trial_margin - margin[None, :], 0.0)
+                gain_vec += 0.25 * (score_w + gap_w) * np.sum(pair_eff_w[None, :] * pos_improve, axis=1, dtype=np.float64)
+            ratios = gain_vec / np.maximum(costs[idx_arr].astype(np.float64), 1e-6)
+            # Deterministic tie-breaking: ratio, gain, lower atom index.
+            order = np.lexsort((idx_arr, -gain_vec, -ratios))
+            best_pos = int(order[0]) if order.size else -1
+            if best_pos < 0 or float(gain_vec[best_pos]) <= 1e-9:
+                break
+            idx = int(idx_arr[best_pos])
+            selected.append(idx)
+            active[idx] = False
+            spent += float(costs[idx])
+            margin += atom_delta[idx]
+            current_cover = np.minimum(np.maximum(caps_arr, 0.0), np.maximum(margin, 0.0))
+            current += float(gain_vec[best_pos])
+        return selected, float(current), float(spent)
+
     def value(m: np.ndarray) -> float:
         return _action_rank_value(
             m,
@@ -770,6 +876,7 @@ def _greedy_action_rank_from_pair_delta(
             certify_margin=certify_margin,
             action_utility_cost=action_utility_cost,
             action_utility_weight=action_utility_weight,
+            action_pair_utility_weight=action_pair_utility_weight,
         )
 
     current = value(margin)
@@ -814,6 +921,7 @@ def _action_rank_atom_utility(
     certify_margin: float = 0.0,
     action_utility_cost: np.ndarray | None = None,
     action_utility_weight: float = 0.0,
+    action_pair_utility_weight: float = 0.0,
 ) -> np.ndarray:
     d = np.asarray(delta, dtype=np.float32)
     if d.ndim != 2 or d.size == 0:
@@ -821,10 +929,10 @@ def _action_rank_atom_utility(
     base = np.asarray(base_delta, dtype=np.float32).reshape(-1)
     if base.shape[0] != d.shape[1]:
         return np.maximum(d, 0.0).mean(axis=1).astype(np.float32)
-    before = _action_rank_value(base, base, caps, weights, pair_indices, certificate_weight=certificate_weight, action_score_weight=action_score_weight, action_gap_weight=action_gap_weight, action_flip_weight=action_flip_weight, action_softmin_tau=action_softmin_tau, certify_margin=certify_margin, action_utility_cost=action_utility_cost, action_utility_weight=action_utility_weight)
+    before = _action_rank_value(base, base, caps, weights, pair_indices, certificate_weight=certificate_weight, action_score_weight=action_score_weight, action_gap_weight=action_gap_weight, action_flip_weight=action_flip_weight, action_softmin_tau=action_softmin_tau, certify_margin=certify_margin, action_utility_cost=action_utility_cost, action_utility_weight=action_utility_weight, action_pair_utility_weight=action_pair_utility_weight)
     gains = []
     for i in range(d.shape[0]):
-        after = _action_rank_value(base + d[i], base, caps, weights, pair_indices, certificate_weight=certificate_weight, action_score_weight=action_score_weight, action_gap_weight=action_gap_weight, action_flip_weight=action_flip_weight, action_softmin_tau=action_softmin_tau, certify_margin=certify_margin, action_utility_cost=action_utility_cost, action_utility_weight=action_utility_weight)
+        after = _action_rank_value(base + d[i], base, caps, weights, pair_indices, certificate_weight=certificate_weight, action_score_weight=action_score_weight, action_gap_weight=action_gap_weight, action_flip_weight=action_flip_weight, action_softmin_tau=action_softmin_tau, certify_margin=certify_margin, action_utility_cost=action_utility_cost, action_utility_weight=action_utility_weight, action_pair_utility_weight=action_pair_utility_weight)
         gains.append(max(float(after - before), 0.0))
     return np.asarray(gains, dtype=np.float32)
 
@@ -1401,6 +1509,8 @@ def runtime_greedy_selector_pair_conditioned(
     action_rank_softmin_tau: float = 0.2,
     action_utility_cost: np.ndarray | None = None,
     action_utility_weight: float = 0.0,
+    action_pair_utility_weight: float = 0.0,
+    action_rank_fast_greedy: bool = False,
     decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     decision_family_quota: int = 0,
     force_uncertainty_objective: bool = False,
@@ -1531,6 +1641,8 @@ def runtime_greedy_selector_pair_conditioned(
                 certify_margin=float(certify_margin),
                 action_utility_cost=action_utility_cost,
                 action_utility_weight=float(action_utility_weight),
+                action_pair_utility_weight=float(action_pair_utility_weight),
+                action_rank_fast_greedy=bool(action_rank_fast_greedy),
             )
             mode = "runtime_pair_conditioned_action_rank"
         elif cap_mode_l in flip_rank_modes:
@@ -1552,7 +1664,7 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective)}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective)}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank"}:
@@ -1566,6 +1678,7 @@ def runtime_greedy_selector_pair_conditioned(
                 certify_margin=float(certify_margin),
                 action_utility_cost=action_utility_cost,
                 action_utility_weight=float(action_utility_weight),
+                action_pair_utility_weight=float(action_pair_utility_weight),
             )
         else:
             utility = _flip_gain_atom_utility(
@@ -1599,6 +1712,9 @@ def runtime_greedy_selector_pair_conditioned(
         force_fill_budget=force_fill_budget,
         utility=utility,
         prioritize_mandatory_fill=prioritize_mandatory_fill,
+        family_ids=family_ids,
+        decision_family_ids=decision_family_ids,
+        decision_family_quota=decision_family_quota,
     )
     return SelectionResult(
         selected=selected,

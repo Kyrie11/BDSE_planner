@@ -475,7 +475,10 @@ class BDSEPlannerCore:
         use_pair_conditioned = bool(stage_cfg.get("runtime", {}).get("use_pair_conditioned_margins", stage_cfg.get("model", {}).get("pair_conditioned", True)))
         if use_pair_conditioned and "pair_atom_delta" in pred and "pair_indices" in pred:
             action_utility_cost = None
-            if float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0:
+            if (
+                float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
+                or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
+            ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
                     candidates.valid_mask,
@@ -525,6 +528,8 @@ class BDSEPlannerCore:
                 action_rank_softmin_tau=float(sel_cfg.get("action_rank_softmin_tau", 0.2)),
                 action_utility_cost=action_utility_cost,
                 action_utility_weight=float(sel_cfg.get("action_utility_weight", 0.0)),
+                action_pair_utility_weight=float(sel_cfg.get("action_pair_utility_weight", 0.0)),
+                action_rank_fast_greedy=bool(sel_cfg.get("action_rank_fast_greedy", False)),
                 decision_family_ids=sel_cfg.get("decision_family_ids", [2, 3]),
                 decision_family_quota=int(sel_cfg.get("decision_family_quota", 0)),
                 force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),

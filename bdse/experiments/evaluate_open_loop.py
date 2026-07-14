@@ -59,10 +59,16 @@ def main() -> None:
         qdiag = runtime_query_diagnostics(pred, sel.selected)
         qdiag.update({k: v for k, v in getattr(tour, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
         qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
-        mode = str(getattr(sel, "diagnostics", {}).get("mode", ""))
-        qdiag["selector_action_rank_active"] = float(mode == "runtime_pair_conditioned_action_rank")
+        sel_diag = getattr(sel, "diagnostics", {}) or {}
+        mode = str(sel_diag.get("mode", ""))
+        qdiag["selector_action_rank_active"] = float(mode.startswith("runtime_pair_conditioned_action_rank"))
         qdiag["selector_flip_rank_active"] = float(mode == "runtime_pair_conditioned_flip_rank")
         qdiag["selector_lcb_active"] = float(mode == "runtime_pair_conditioned_lcb_uncertainty")
+        for k, v in sel_diag.items():
+            if isinstance(v, (bool, np.bool_)):
+                qdiag[f"selector_{k}"] = float(bool(v))
+            elif isinstance(v, (int, float, np.integer, np.floating)) and np.isfinite(float(v)):
+                qdiag[f"selector_{k}"] = float(v)
         qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
         dense = None
         if not args.disable_dense_diagnostic and hasattr(model, "predict_dense_numpy"):
