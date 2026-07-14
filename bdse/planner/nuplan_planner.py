@@ -48,7 +48,12 @@ from bdse.planner.selector import (
     select_by_mode,
     structural_safety_mask,
 )
-from bdse.planner.tournament import run_tournament, run_pair_conditioned_tournament, selected_pair_sigma_from_action_variance
+from bdse.planner.tournament import (
+    run_tournament,
+    run_pair_conditioned_tournament,
+    selected_pair_sigma_from_action_variance,
+    _trajectory_utility_cost_np,
+)
 
 
 _PLANNER_DEVICE_LOCK = threading.Lock()
@@ -469,6 +474,14 @@ class BDSEPlannerCore:
             return pred_b, selection_b, tournament_b, atom_active
         use_pair_conditioned = bool(stage_cfg.get("runtime", {}).get("use_pair_conditioned_margins", stage_cfg.get("model", {}).get("pair_conditioned", True)))
         if use_pair_conditioned and "pair_atom_delta" in pred and "pair_indices" in pred:
+            action_utility_cost = None
+            if float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0:
+                action_utility_cost = _trajectory_utility_cost_np(
+                    candidates.trajectories,
+                    candidates.valid_mask,
+                    runtime_flags,
+                    stage_cfg,
+                )
             selection = runtime_greedy_selector_pair_conditioned(
                 J0,
                 pred["pair_atom_delta"],
@@ -510,6 +523,10 @@ class BDSEPlannerCore:
                 action_rank_gap_weight=float(sel_cfg.get("action_rank_gap_weight", 0.0)),
                 action_rank_flip_weight=float(sel_cfg.get("action_rank_flip_weight", 0.0)),
                 action_rank_softmin_tau=float(sel_cfg.get("action_rank_softmin_tau", 0.2)),
+                action_utility_cost=action_utility_cost,
+                action_utility_weight=float(sel_cfg.get("action_utility_weight", 0.0)),
+                decision_family_ids=sel_cfg.get("decision_family_ids", [2, 3]),
+                decision_family_quota=int(sel_cfg.get("decision_family_quota", 0)),
                 force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),
             )
             tournament_cfg = dict(stage_cfg)
