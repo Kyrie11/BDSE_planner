@@ -93,7 +93,7 @@ PY
 # boundary LCB isolates the certificate-cap fix; CLu variants test the new closed-loop-aligned selector.
 run_open_loop 0 v19_lcb_legacy_control_scur_tau35 bdse/configs/v19_bdse_lcb_legacy_control_scur_tau35_fast_cl.yaml "$V11_CKPT" &
 run_open_loop 1 v19_lcb_boundary_control_scur_tau35 bdse/configs/v19_bdse_lcb_boundary_control_scur_tau35_fast_cl.yaml "$V11_CKPT" &
-wait
+
 run_open_loop 0 v19_boundary_actionrank_scur_tau35 bdse/configs/v19_bdse_boundary_actionrank_scur_tau35_fast_cl.yaml "$V11_CKPT" &
 run_open_loop 1 v19_clu_actionrank_scur_tau35 bdse/configs/v19_bdse_clu_actionrank_scur_tau35_fast_cl.yaml "$V11_CKPT" &
 wait
@@ -139,10 +139,9 @@ run_closed_loop() {
 # Keep closed-loop at 20 first so we can test the diagnosis cheaply.
 run_closed_loop 0 v19_lcb_legacy_control_scur_tau35 bdse/configs/v19_bdse_lcb_legacy_control_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
 run_closed_loop 1 v19_lcb_boundary_control_scur_tau35 bdse/configs/v19_bdse_lcb_boundary_control_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
-wait
 run_closed_loop 0 v19_boundary_actionrank_scur_tau35 bdse/configs/v19_bdse_boundary_actionrank_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
-run_closed_loop 1 v19_clu_actionrank_scur_tau35 bdse/configs/v19_bdse_clu_actionrank_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
 wait
+run_closed_loop 1 v19_clu_actionrank_scur_tau35 bdse/configs/v19_bdse_clu_actionrank_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
 run_closed_loop 0 v19_clu_actionrank_progress_tau50 bdse/configs/v19_bdse_clu_actionrank_progress_tau50_fast_cl.yaml "$V11_CKPT" 20 &
 run_closed_loop 1 v19_clu_actionrank_safety_tau30 bdse/configs/v19_bdse_clu_actionrank_safety_tau30_fast_cl.yaml "$V11_CKPT" 20 &
 wait
