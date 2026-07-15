@@ -102,10 +102,9 @@ PY
 
 run_open_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" &
 run_open_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" &
-wait
 run_open_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" &
 wait
+run_open_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" &
 run_open_loop 0 v23_rcabr_progress_tau45 bdse/configs/v23_bdse_rcabr_progress_tau45_fast_cl.yaml "$V11_CKPT" &
 wait
 print_open_loop_compare
@@ -152,10 +151,9 @@ run_closed_loop() {
 
 run_closed_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" 20 &
 run_closed_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" 20 &
-wait
 run_closed_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
-run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 20 &
 wait
+run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 20 &
 run_closed_loop 0 v23_rcabr_progress_tau45 bdse/configs/v23_bdse_rcabr_progress_tau45_fast_cl.yaml "$V11_CKPT" 20 &
 wait
 
