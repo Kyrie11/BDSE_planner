@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run from repository root after replacing bdse/ with BDSE_v22_adaptive_safety_seed.zip contents.
-# v22 goal:
-#   1) keep the v21 safety-gated LCB->ActionRank hybrid, but make the LCB seed budget adaptive;
-#   2) increase LCB seed when safety/fallback/uncertainty risk is high;
-#   3) reserve more ActionRank budget when near-boundary, low-safety pairs are dense;
-#   4) add a decision-family gain boost in ActionRank refinement to better retain interaction evidence;
-#   5) flatten nuPlan closed-loop output paths by using absolute output/log paths.
+# Run from repository root after replacing bdse/ with BDSE_v23_rcabr.zip contents.
+# v23 goal:
+#   1) keep the v22 fixed55 safety-gated hybrid as a control because it was the only v22 branch above LCB;
+#   2) replace raw safety-density adaptive allocation with risk-calibrated safety pressure;
+#   3) reserve ActionRank budget for near-boundary interaction/precedence evidence;
+#   4) fix adaptive-mode post-fill utility so it uses ActionRank utility instead of FlipRank utility;
+#   5) keep closed-loop output paths shallow and distribute runs across two GPUs.
 
 ROOT_DIR="$(pwd)"
 export BDSE_TRAIN_CACHE=${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/}
@@ -21,10 +21,10 @@ export BDSE_PROFILE_CLOSED_LOOP=${BDSE_PROFILE_CLOSED_LOOP:-1}
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
-OUT_ROOT=${OUT_ROOT:-$ROOT_DIR/outputs_v22}
+OUT_ROOT=${OUT_ROOT:-$ROOT_DIR/outputs_v23}
 OPEN_ROOT="$OUT_ROOT/open_loop"
 CL_ROOT="$OUT_ROOT/closed_loop"
-LOG_ROOT="$OUT_ROOT/v22_logs"
+LOG_ROOT="$OUT_ROOT/v23_logs"
 mkdir -p "$OPEN_ROOT" "$CL_ROOT" "$LOG_ROOT"
 
 if [[ ! -f "$V11_CKPT" ]]; then
@@ -74,20 +74,21 @@ from pathlib import Path
 root = Path(sys.argv[1])
 paths = [
     ('v22_lcb_legacy_replan5', root / 'open_loop_v22_lcb_legacy_replan5.json'),
-    ('v22_adaptive_hybrid_scur_tau35', root / 'open_loop_v22_adaptive_hybrid_scur_tau35.json'),
-    ('v22_adaptive_hybrid_safety_tau30', root / 'open_loop_v22_adaptive_hybrid_safety_tau30.json'),
-    ('v22_adaptive_hybrid_progress_tau50', root / 'open_loop_v22_adaptive_hybrid_progress_tau50.json'),
-    ('v22_fixed55_familyboost_ablation', root / 'open_loop_v22_fixed55_familyboost_ablation.json'),
+    ('v23_fixed55_control', root / 'open_loop_v23_fixed55_control.json'),
+    ('v23_rcabr_scur_tau35', root / 'open_loop_v23_rcabr_scur_tau35.json'),
+    ('v23_rcabr_safety_tau30', root / 'open_loop_v23_rcabr_safety_tau30.json'),
+    ('v23_rcabr_progress_tau45', root / 'open_loop_v23_rcabr_progress_tau45.json'),
 ]
 keys = [
     'teacher_action_match','decision_sufficiency','budget_vs_full_match','teacher_regret',
     'fallback_would_trigger_rate','pair_sign_acc_winner_rival','pair_sign_acc_interaction','pair_sign_acc_hard',
     'selected_interaction_decisive_recall','selected_hard_decisive_recall','selected_decisive_atom_recall',
     'selector_hybrid_lcb_action_rank_active','selector_adaptive_lcb_frac','selector_adaptive_lcb_raw_frac',
-    'selector_adaptive_safety_density','selector_adaptive_fallback_risk','selector_adaptive_boundary_density',
-    'selector_adaptive_action_need','selector_hybrid_lcb_seed_atoms','selector_hybrid_action_atoms',
-    'selector_decision_family_selected','selector_decision_family_boost',
-    'selector_pair_atom_query_count','tournament_pair_atom_query_count','total_sparse_query_count','effective_query_count'
+    'selector_adaptive_safety_density','selector_adaptive_safety_pressure','selector_adaptive_unsafe_fallback_risk',
+    'selector_adaptive_fallback_risk','selector_adaptive_boundary_density','selector_adaptive_action_need',
+    'selector_hybrid_lcb_seed_atoms','selector_hybrid_action_atoms','selector_decision_family_selected',
+    'selector_decision_family_boost','selector_pair_atom_query_count','tournament_pair_atom_query_count',
+    'total_sparse_query_count','effective_query_count'
 ]
 for name, path in paths:
     if not path.exists():
@@ -100,14 +101,19 @@ PY
 }
 
 run_open_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 1 v22_adaptive_hybrid_scur_tau35 bdse/configs/v22_bdse_adaptive_hybrid_scur_tau35_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" &
 wait
-run_open_loop 0 v22_adaptive_hybrid_safety_tau30 bdse/configs/v22_bdse_adaptive_hybrid_safety_tau30_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 1 v22_adaptive_hybrid_progress_tau50 bdse/configs/v22_bdse_adaptive_hybrid_progress_tau50_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" &
 wait
-run_open_loop 0 v22_fixed55_familyboost_ablation bdse/configs/v22_bdse_fixed55_familyboost_ablation_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 0 v23_rcabr_progress_tau45 bdse/configs/v23_bdse_rcabr_progress_tau45_fast_cl.yaml "$V11_CKPT" &
 wait
 print_open_loop_compare
+
+if [[ "${OPEN_LOOP_ONLY:-0}" == "1" ]]; then
+  echo "OPEN_LOOP_ONLY=1, skipping closed-loop runs."
+  exit 0
+fi
 
 run_closed_loop() {
   local gpu="$1"
@@ -145,62 +151,61 @@ run_closed_loop() {
 }
 
 run_closed_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" 20 &
-run_closed_loop 1 v22_adaptive_hybrid_scur_tau35 bdse/configs/v22_bdse_adaptive_hybrid_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
+run_closed_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" 20 &
 wait
-run_closed_loop 0 v22_adaptive_hybrid_safety_tau30 bdse/configs/v22_bdse_adaptive_hybrid_safety_tau30_fast_cl.yaml "$V11_CKPT" 20 &
-run_closed_loop 1 v22_adaptive_hybrid_progress_tau50 bdse/configs/v22_bdse_adaptive_hybrid_progress_tau50_fast_cl.yaml "$V11_CKPT" 20 &
+run_closed_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
+run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 20 &
 wait
-run_closed_loop 0 v22_fixed55_familyboost_ablation bdse/configs/v22_bdse_fixed55_familyboost_ablation_fast_cl.yaml "$V11_CKPT" 20 &
+run_closed_loop 0 v23_rcabr_progress_tau45 bdse/configs/v23_bdse_rcabr_progress_tau45_fast_cl.yaml "$V11_CKPT" 20 &
 wait
 
 python -m bdse.tools.collect_closed_loop_metrics \
   "$CL_ROOT/v22_lcb_legacy_replan5_20" \
-  "$CL_ROOT/v22_adaptive_hybrid_scur_tau35_20" \
-  "$CL_ROOT/v22_adaptive_hybrid_safety_tau30_20" \
-  "$CL_ROOT/v22_adaptive_hybrid_progress_tau50_20" \
-  "$CL_ROOT/v22_fixed55_familyboost_ablation_20" \
-  --csv "$CL_ROOT/v22_20_compare.csv"
+  "$CL_ROOT/v23_fixed55_control_20" \
+  "$CL_ROOT/v23_rcabr_scur_tau35_20" \
+  "$CL_ROOT/v23_rcabr_safety_tau30_20" \
+  "$CL_ROOT/v23_rcabr_progress_tau45_20" \
+  --csv "$CL_ROOT/v23_20_compare.csv"
 
 if [[ "${RUN_REPLAN8:-0}" == "1" ]]; then
-  run_closed_loop 0 v22_adaptive_hybrid_scur_tau35_replan8 bdse/configs/v22_bdse_adaptive_hybrid_scur_tau35_replan8_fast_cl.yaml "$V11_CKPT" 20
+  run_closed_loop 0 v23_rcabr_scur_tau35_replan8 bdse/configs/v23_bdse_rcabr_scur_tau35_replan8_fast_cl.yaml "$V11_CKPT" 20
   python -m bdse.tools.collect_closed_loop_metrics \
-    "$CL_ROOT/v22_adaptive_hybrid_scur_tau35_replan8_20" \
-    --csv "$CL_ROOT/v22_replan8_20_compare.csv"
+    "$CL_ROOT/v23_rcabr_scur_tau35_replan8_20" \
+    --csv "$CL_ROOT/v23_replan8_20_compare.csv"
 fi
 
 if [[ "${RUN_CL50:-0}" == "1" ]]; then
   run_closed_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" 50 &
-  run_closed_loop 1 v22_adaptive_hybrid_scur_tau35 bdse/configs/v22_bdse_adaptive_hybrid_scur_tau35_fast_cl.yaml "$V11_CKPT" 50 &
+  run_closed_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" 50 &
   wait
-  run_closed_loop 0 v22_adaptive_hybrid_safety_tau30 bdse/configs/v22_bdse_adaptive_hybrid_safety_tau30_fast_cl.yaml "$V11_CKPT" 50 &
-  run_closed_loop 1 v22_adaptive_hybrid_progress_tau50 bdse/configs/v22_bdse_adaptive_hybrid_progress_tau50_fast_cl.yaml "$V11_CKPT" 50 &
+  run_closed_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" 50 &
+  run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 50 &
   wait
   python -m bdse.tools.collect_closed_loop_metrics \
     "$CL_ROOT/v22_lcb_legacy_replan5_50" \
-    "$CL_ROOT/v22_adaptive_hybrid_scur_tau35_50" \
-    "$CL_ROOT/v22_adaptive_hybrid_safety_tau30_50" \
-    "$CL_ROOT/v22_adaptive_hybrid_progress_tau50_50" \
-    --csv "$CL_ROOT/v22_50_compare.csv"
+    "$CL_ROOT/v23_fixed55_control_50" \
+    "$CL_ROOT/v23_rcabr_scur_tau35_50" \
+    "$CL_ROOT/v23_rcabr_safety_tau30_50" \
+    --csv "$CL_ROOT/v23_50_compare.csv"
 fi
 
 if [[ "${RUN_CL100:-0}" == "1" ]]; then
   run_closed_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" 100 &
-  run_closed_loop 1 v22_adaptive_hybrid_scur_tau35 bdse/configs/v22_bdse_adaptive_hybrid_scur_tau35_fast_cl.yaml "$V11_CKPT" 100 &
+  run_closed_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" 100 &
   wait
-  run_closed_loop 0 v22_adaptive_hybrid_safety_tau30 bdse/configs/v22_bdse_adaptive_hybrid_safety_tau30_fast_cl.yaml "$V11_CKPT" 100 &
-  run_closed_loop 1 v22_adaptive_hybrid_progress_tau50 bdse/configs/v22_bdse_adaptive_hybrid_progress_tau50_fast_cl.yaml "$V11_CKPT" 100 &
+  run_closed_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" 100 &
+  run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 100 &
   wait
   python -m bdse.tools.collect_closed_loop_metrics \
     "$CL_ROOT/v22_lcb_legacy_replan5_100" \
-    "$CL_ROOT/v22_adaptive_hybrid_scur_tau35_100" \
-    "$CL_ROOT/v22_adaptive_hybrid_safety_tau30_100" \
-    "$CL_ROOT/v22_adaptive_hybrid_progress_tau50_100" \
-    --csv "$CL_ROOT/v22_100_compare.csv"
+    "$CL_ROOT/v23_fixed55_control_100" \
+    "$CL_ROOT/v23_rcabr_scur_tau35_100" \
+    "$CL_ROOT/v23_rcabr_safety_tau30_100" \
+    --csv "$CL_ROOT/v23_100_compare.csv"
 fi
 
 echo "Done. Key outputs:"
-echo "  $OPEN_ROOT/open_loop_v22_*.json"
-echo "  $CL_ROOT/v22_20_compare.csv"
+echo "  $OPEN_ROOT/open_loop_v23_*.json"
+echo "  $CL_ROOT/v23_20_compare.csv"
 echo "  $LOG_ROOT/*.diag.jsonl"
-echo "  Closed-loop folders are now rooted at: $CL_ROOT/<tag>_<limit>/closed_loop_nonreactive_agents"
-echo "Optional: RUN_REPLAN8=1 bash run_v22_adaptive_safety_seed.sh ; RUN_CL50=1 bash run_v22_adaptive_safety_seed.sh ; RUN_CL100=1 bash run_v22_adaptive_safety_seed.sh"
+echo "Optional: OPEN_LOOP_ONLY=1 bash run_v23_rcabr.sh ; RUN_REPLAN8=1 bash run_v23_rcabr.sh ; RUN_CL50=1 bash run_v23_rcabr.sh ; RUN_CL100=1 bash run_v23_rcabr.sh"
