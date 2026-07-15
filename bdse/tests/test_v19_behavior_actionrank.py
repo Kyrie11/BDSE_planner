@@ -146,3 +146,42 @@ def test_v20_decision_family_reservation_applies_after_action_rank_greedy():
     selected_families = set(families[np.asarray(sel.selected, dtype=np.int64)].tolist())
     assert selected_families == {2, 3}
     assert int(sel.diagnostics.get("decision_family_selected", 0)) >= 2
+
+
+def test_v21_hybrid_lcb_action_rank_keeps_lcb_seed_before_action_refinement():
+    # The hybrid mode should be distinct from pure ActionRank: it spends an LCB
+    # seed budget first, then uses ActionRank only for residual evidence.  This
+    # guards the v20 failure where utility-calibrated frontier selection hurt
+    # closed-loop safety despite slightly better open-loop teacher match.
+    J0 = np.asarray([0.0, 0.0], dtype=np.float32)
+    pair_indices = np.asarray([[0, 1], [1, 0]], dtype=np.int64)
+    pair_delta = np.asarray([[0.7, -0.7], [0.1, -0.1], [-0.2, 0.8], [-0.1, 0.6]], dtype=np.float32)
+    weights = np.ones((2,), dtype=np.float32)
+    costs = np.ones((4,), dtype=np.float32)
+    valid = np.asarray([True, True])
+    flags = np.asarray([False, False])
+
+    sel = runtime_greedy_selector_pair_conditioned(
+        J0,
+        pair_delta,
+        pair_indices,
+        weights,
+        costs,
+        valid,
+        flags,
+        budget=2,
+        selector_cap_mode="safety_gated_action_rank",
+        hybrid_lcb_budget_frac=0.5,
+        hybrid_lcb_cap_mode="legacy_abs",
+        action_rank_fast_greedy=True,
+        action_rank_certificate_weight=1.0,
+        action_rank_score_weight=0.0,
+        action_rank_gap_weight=0.0,
+        action_rank_flip_weight=0.0,
+        force_fill_budget=False,
+        min_selected_atoms=2,
+    )
+    assert sel.diagnostics["mode"] == "runtime_pair_conditioned_hybrid_lcb_action_rank"
+    assert sel.diagnostics["hybrid_lcb_seed_atoms"] >= 1
+    assert sel.diagnostics["hybrid_action_atoms"] >= 0
+    assert len(sel.selected) == 2

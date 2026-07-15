@@ -478,6 +478,7 @@ class BDSEPlannerCore:
             if (
                 float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
                 or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
+                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank"}
             ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
@@ -530,6 +531,9 @@ class BDSEPlannerCore:
                 action_utility_weight=float(sel_cfg.get("action_utility_weight", 0.0)),
                 action_pair_utility_weight=float(sel_cfg.get("action_pair_utility_weight", 0.0)),
                 action_rank_fast_greedy=bool(sel_cfg.get("action_rank_fast_greedy", False)),
+                hybrid_lcb_budget_frac=float(sel_cfg.get("hybrid_lcb_budget_frac", 0.55)),
+                hybrid_lcb_cap_mode=str(sel_cfg.get("hybrid_lcb_cap_mode", "legacy_abs")),
+                hybrid_protect_lcb_seed=bool(sel_cfg.get("hybrid_protect_lcb_seed", True)),
                 decision_family_ids=sel_cfg.get("decision_family_ids", [2, 3]),
                 decision_family_quota=int(sel_cfg.get("decision_family_quota", 0)),
                 force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),

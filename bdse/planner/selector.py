@@ -397,6 +397,10 @@ def _selector_pair_caps(
         "action_rank",
         "action_flip_rank",
         "tournament_rank",
+        "safety_gated_action_rank",
+        "lcb_action_rank_hybrid",
+        "hybrid_lcb_action_rank",
+        "safe_action_rank",
         "flip_rank",
         "fliprank",
         "flip_boundary_rank",
@@ -904,6 +908,141 @@ def _greedy_action_rank_from_pair_delta(
         margin += atom_delta[idx]
         current += float(gain)
     return selected, float(current), float(spent)
+
+
+def _hybrid_lcb_action_rank_from_pair_delta(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    action_caps: np.ndarray,
+    lcb_caps: np.ndarray,
+    pair_weights: np.ndarray,
+    pair_indices: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+    *,
+    atom_pair_variance: np.ndarray | None = None,
+    beta_uncertainty: float = 0.0,
+    epsilon_cal: float = 0.0,
+    lambda_info: float = 0.0,
+    info_caps: np.ndarray | None = None,
+    prior_atom_variance: np.ndarray | None = None,
+    family_ids: np.ndarray | None = None,
+    family_budget_caps: np.ndarray | None = None,
+    hybrid_lcb_budget_frac: float = 0.55,
+    hybrid_protect_lcb_seed: bool = True,
+    certificate_weight: float = 1.0,
+    action_score_weight: float = 1.0,
+    action_gap_weight: float = 0.5,
+    action_flip_weight: float = 0.5,
+    action_softmin_tau: float = 0.2,
+    certify_margin: float = 0.0,
+    action_utility_cost: np.ndarray | None = None,
+    action_utility_weight: float = 0.0,
+    action_pair_utility_weight: float = 0.0,
+    action_rank_fast_greedy: bool = True,
+) -> tuple[list[int], float, float, dict[str, Any]]:
+    """Safety-gated hybrid selector: LCB seed first, ActionRank refinement second.
+
+    v20 showed that pure Frontier-ActionRank can improve open-loop teacher match
+    while hurting closed-loop safety/progress.  This hybrid keeps the reliable
+    LCB/HAB seed that protects hard/feasibility evidence, then spends the residual
+    budget on utility-calibrated boundary ActionRank evidence.  It remains a
+    budgeted sparse evidence selector and uses only deployment-time predictions.
+    """
+    delta = np.asarray(atom_delta, dtype=np.float32)
+    base = np.asarray(base_margin, dtype=np.float32).reshape(-1)
+    E = int(delta.shape[0]) if delta.ndim == 2 else int(np.asarray(atom_budget_costs).reshape(-1).shape[0])
+    if delta.ndim != 2 or delta.shape[1] != base.shape[0]:
+        delta = np.zeros((E, base.shape[0]), dtype=np.float32)
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).reshape(-1).copy()
+    if active.shape[0] < E:
+        active = np.pad(active, (0, E - active.shape[0]), constant_values=False)
+    active = active[:E]
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    frac = float(np.clip(float(hybrid_lcb_budget_frac), 0.0, 1.0))
+    seed_budget = float(budget) * frac
+    if seed_budget <= 1e-6:
+        seed_sel: list[int] = []
+        seed_value = 0.0
+        seed_spent = 0.0
+        seed_diag: dict[str, Any] = {}
+    else:
+        atom_var = np.asarray(atom_pair_variance, dtype=np.float32) if atom_pair_variance is not None else np.zeros_like(delta, dtype=np.float32)
+        if atom_var.shape != delta.shape:
+            atom_var = np.zeros_like(delta, dtype=np.float32)
+        base_var = np.zeros((base.shape[0],), dtype=np.float32)
+        if isinstance(prior_atom_variance, np.ndarray):
+            prior_pair = prior_atom_variance if np.asarray(prior_atom_variance).shape == delta.shape else None
+        elif prior_atom_variance is not None:
+            prior_pair = np.full_like(delta, float(prior_atom_variance), dtype=np.float32)
+        else:
+            prior_pair = None
+        seed_sel, seed_value, seed_spent, seed_diag = _uncertainty_aware_greedy_from_pair_delta(
+            delta,
+            base,
+            atom_var,
+            base_var,
+            lcb_caps,
+            pair_weights,
+            costs,
+            seed_budget,
+            active,
+            beta_uncertainty=beta_uncertainty,
+            epsilon_cal=epsilon_cal,
+            lambda_info=lambda_info,
+            info_caps=info_caps,
+            prior_atom_pair_var=prior_pair,
+            family_ids=family_ids,
+            family_budget_caps=family_budget_caps,
+        )
+    spent = _spent_for(seed_sel, costs)
+    residual_budget = max(float(budget) - float(spent), 0.0)
+    residual_active = active.copy()
+    for i in seed_sel:
+        if 0 <= int(i) < residual_active.shape[0]:
+            residual_active[int(i)] = False
+    margin_after_seed = base.copy()
+    if seed_sel:
+        idx = np.asarray([i for i in seed_sel if 0 <= int(i) < E], dtype=np.int64)
+        if idx.size:
+            margin_after_seed = margin_after_seed + delta[idx].sum(axis=0)
+    action_sel, action_value, action_spent = _greedy_action_rank_from_pair_delta(
+        delta,
+        margin_after_seed,
+        action_caps,
+        pair_weights,
+        pair_indices,
+        costs,
+        residual_budget,
+        residual_active,
+        certificate_weight=certificate_weight,
+        action_score_weight=action_score_weight,
+        action_gap_weight=action_gap_weight,
+        action_flip_weight=action_flip_weight,
+        action_softmin_tau=action_softmin_tau,
+        certify_margin=certify_margin,
+        action_utility_cost=action_utility_cost,
+        action_utility_weight=action_utility_weight,
+        action_pair_utility_weight=action_pair_utility_weight,
+        action_rank_fast_greedy=action_rank_fast_greedy,
+    )
+    selected = list(map(int, seed_sel)) + [int(i) for i in action_sel if int(i) not in set(map(int, seed_sel))]
+    diag = {
+        "hybrid_lcb_budget_frac": float(frac),
+        "hybrid_lcb_seed_budget": float(seed_budget),
+        "hybrid_lcb_seed_spent": float(spent),
+        "hybrid_lcb_seed_atoms": int(len(seed_sel)),
+        "hybrid_action_spent": float(action_spent),
+        "hybrid_action_atoms": int(len(action_sel)),
+        "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed),
+    }
+    for k, v in (seed_diag or {}).items():
+        if isinstance(v, (int, float, bool, np.integer, np.floating, np.bool_)):
+            diag[f"hybrid_lcb_{k}"] = float(v) if not isinstance(v, (bool, np.bool_)) else bool(v)
+    return selected, float(seed_value + action_value), float(spent + action_spent), diag
 
 
 def _action_rank_atom_utility(
@@ -1442,12 +1581,21 @@ def runtime_greedy_selector(
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(atom_delta).ndim == 2 and np.asarray(atom_delta).size:
         utility = np.maximum(np.asarray(atom_delta, dtype=np.float32), 0.0).mean(axis=1)
+    post_mandatory_atom_mask = mandatory_atom_mask
+    if mode == "runtime_pair_conditioned_hybrid_lcb_action_rank" and bool(hybrid_protect_lcb_seed):
+        E_mask = int(np.asarray(atom_budget_costs).reshape(-1).shape[0])
+        seed_mask = _as_bool_mask(mandatory_atom_mask, E_mask)
+        n_seed = int(hybrid_diag.get("hybrid_lcb_seed_atoms", 0)) if isinstance(hybrid_diag, dict) else 0
+        for ii in list(map(int, selected[:max(0, n_seed)])):
+            if 0 <= ii < E_mask:
+                seed_mask[ii] = True
+        post_mandatory_atom_mask = seed_mask
     selected, spent_post, post_diag = _complete_safety_aware_selection(
         selected,
         atom_budget_costs,
         budget,
         atom_active_mask=atom_active_mask,
-        mandatory_atom_mask=mandatory_atom_mask,
+        mandatory_atom_mask=post_mandatory_atom_mask,
         mandatory_quota=mandatory_quota,
         min_selected_atoms=min_selected_atoms,
         force_fill_budget=force_fill_budget,
@@ -1511,6 +1659,9 @@ def runtime_greedy_selector_pair_conditioned(
     action_utility_weight: float = 0.0,
     action_pair_utility_weight: float = 0.0,
     action_rank_fast_greedy: bool = False,
+    hybrid_lcb_budget_frac: float = 0.55,
+    hybrid_lcb_cap_mode: str = "legacy_abs",
+    hybrid_protect_lcb_seed: bool = True,
     decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     decision_family_quota: int = 0,
     force_uncertainty_objective: bool = False,
@@ -1574,6 +1725,7 @@ def runtime_greedy_selector_pair_conditioned(
 
     cap_mode_l = str(selector_cap_mode or "legacy_abs").lower()
     action_rank_modes = {"action_rank", "action_flip_rank", "tournament_rank"}
+    hybrid_action_lcb_modes = {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank"}
     flip_rank_modes = {"flip_rank", "fliprank", "flip_boundary_rank"}
     # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
     # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
@@ -1582,6 +1734,7 @@ def runtime_greedy_selector_pair_conditioned(
     # is explicitly forced.
     use_uncertainty_objective = bool(force_uncertainty_objective) or (
         cap_mode_l not in action_rank_modes
+        and cap_mode_l not in hybrid_action_lcb_modes
         and cap_mode_l not in flip_rank_modes
         and (
             pair_atom_variance is not None
@@ -1591,6 +1744,7 @@ def runtime_greedy_selector_pair_conditioned(
             or family_budget_caps is not None
         )
     )
+    hybrid_diag: dict[str, Any] = {}
     if use_uncertainty_objective:
         pair_var = np.asarray(pair_atom_variance, dtype=np.float32) if pair_atom_variance is not None else np.zeros_like(delta, dtype=np.float32)
         if pair_var.shape != delta.shape:
@@ -1623,7 +1777,50 @@ def runtime_greedy_selector_pair_conditioned(
         )
         mode = "runtime_pair_conditioned_lcb_uncertainty"
     else:
-        if cap_mode_l in action_rank_modes:
+        if cap_mode_l in hybrid_action_lcb_modes:
+            lcb_caps = _selector_pair_caps(
+                base_delta,
+                safety_b,
+                gamma_max=float(gamma_max),
+                eta_pred=float(eta_pred),
+                cap_mode=str(hybrid_lcb_cap_mode or "legacy_abs"),
+                boundary_cap=boundary_certificate_cap,
+                base_margin_cap_multiplier=base_margin_cap_multiplier,
+            )
+            info_caps = np.where(safety_b, float(gamma_max), np.maximum(float(eta_pred), np.abs(base_delta))).astype(np.float32)
+            selected, current, spent, hybrid_diag = _hybrid_lcb_action_rank_from_pair_delta(
+                delta,
+                base_delta,
+                caps,
+                lcb_caps,
+                weights,
+                pair_arr,
+                atom_budget_costs,
+                budget,
+                atom_active_mask,
+                atom_pair_variance=pair_atom_variance,
+                beta_uncertainty=beta_uncertainty,
+                epsilon_cal=epsilon_cal,
+                lambda_info=lambda_info,
+                info_caps=info_caps,
+                prior_atom_variance=prior_atom_variance,
+                family_ids=family_ids,
+                family_budget_caps=family_budget_caps,
+                hybrid_lcb_budget_frac=float(hybrid_lcb_budget_frac),
+                hybrid_protect_lcb_seed=bool(hybrid_protect_lcb_seed),
+                certificate_weight=float(action_rank_certificate_weight),
+                action_score_weight=float(action_rank_score_weight),
+                action_gap_weight=float(action_rank_gap_weight),
+                action_flip_weight=float(action_rank_flip_weight),
+                action_softmin_tau=float(action_rank_softmin_tau),
+                certify_margin=float(certify_margin),
+                action_utility_cost=action_utility_cost,
+                action_utility_weight=float(action_utility_weight),
+                action_pair_utility_weight=float(action_pair_utility_weight),
+                action_rank_fast_greedy=bool(action_rank_fast_greedy),
+            )
+            mode = "runtime_pair_conditioned_hybrid_lcb_action_rank"
+        elif cap_mode_l in action_rank_modes:
             selected, current, spent = _greedy_action_rank_from_pair_delta(
                 delta,
                 base_delta,
@@ -1664,10 +1861,10 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective)}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank"}:
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
                 certificate_weight=float(action_rank_certificate_weight),
