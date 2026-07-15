@@ -121,9 +121,15 @@ def _challenge_scoped_output_dir(output_dir: str, challenge: str) -> str:
     user control over the root directory while keeping official aggregation semantics.
     """
     out = Path(output_dir).expanduser()
+    if not out.is_absolute():
+        out = Path.cwd() / out
+    # Always pass an absolute path to nuPlan.  When a relative output_dir is
+    # handed to Hydra, nuPlan may chdir into the run directory and then resolve
+    # output_dir again, producing paths like
+    # tag/challenge/outputs/closed_loop/tag/challenge.
     if challenge in str(out):
-        return str(out)
-    return str(out / challenge)
+        return str(out.resolve())
+    return str((out / challenge).resolve())
 
 
 def _replace_simple_override(item: str, key: str, value: str) -> str:

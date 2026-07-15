@@ -454,6 +454,90 @@ def _pair_utility_advantage(pair_indices: np.ndarray, action_utility_cost: np.nd
     return out
 
 
+def _adaptive_hybrid_lcb_fraction(
+    base_margin: np.ndarray,
+    pair_weights: np.ndarray,
+    safety_pair_mask: np.ndarray | None,
+    pair_atom_variance: np.ndarray | None,
+    *,
+    base_frac: float,
+    min_frac: float = 0.45,
+    max_frac: float = 0.80,
+    safety_weight: float = 0.25,
+    fallback_weight: float = 0.20,
+    uncertainty_weight: float = 0.10,
+    boundary_action_weight: float = 0.25,
+    boundary_tau: float = 0.35,
+) -> tuple[float, dict[str, float]]:
+    """Runtime adaptive split between LCB seed and ActionRank refinement.
+
+    The split is intentionally computed from deployment-time quantities only:
+    safety-flag density, fallback-like negative/uncertain margins, near-boundary
+    pair density, and model pair variance.  High safety/fallback risk increases
+    the LCB seed; many low-safety near-boundary pairs reserve more residual
+    budget for ActionRank refinement, where interaction evidence is most useful.
+    """
+    m = np.asarray(base_margin, dtype=np.float32).reshape(-1)
+    w = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    if m.size == 0:
+        out = float(np.clip(float(base_frac), float(min_frac), float(max_frac)))
+        return out, {
+            "adaptive_lcb_frac": out,
+            "adaptive_safety_density": 0.0,
+            "adaptive_fallback_risk": 0.0,
+            "adaptive_boundary_density": 0.0,
+            "adaptive_uncertainty_density": 0.0,
+            "adaptive_action_need": 0.0,
+        }
+    if w.shape[0] < m.shape[0]:
+        w = np.pad(w, (0, m.shape[0] - w.shape[0]), constant_values=1.0)
+    w = np.maximum(w[: m.shape[0]], 0.0).astype(np.float32)
+    denom = float(np.sum(w, dtype=np.float64))
+    if denom <= 1e-9:
+        w = np.ones_like(m, dtype=np.float32)
+        denom = float(w.size)
+    sb = np.zeros_like(m, dtype=bool)
+    if safety_pair_mask is not None:
+        raw = np.asarray(safety_pair_mask, dtype=bool).reshape(-1)
+        if raw.shape[0] < m.shape[0]:
+            raw = np.pad(raw, (0, m.shape[0] - raw.shape[0]), constant_values=False)
+        sb = raw[: m.shape[0]]
+    safety_density = float(np.sum(w * sb.astype(np.float32), dtype=np.float64) / max(denom, 1e-9))
+    # Negative directed margins are a cheap proxy for fallback / wrong-frontier risk.
+    fallback_risk = float(np.sum(w * (m <= 0.0).astype(np.float32), dtype=np.float64) / max(denom, 1e-9))
+    tau = max(float(boundary_tau), 1e-3)
+    near = np.exp(-np.minimum(np.abs(m) / tau, 30.0)).astype(np.float32)
+    boundary_density = float(np.sum(w * near, dtype=np.float64) / max(denom, 1e-9))
+    uncertainty_density = 0.0
+    if pair_atom_variance is not None:
+        pv = np.asarray(pair_atom_variance, dtype=np.float32)
+        if pv.ndim == 2 and pv.shape[1] >= m.shape[0] and pv.shape[0] > 0:
+            v = np.nanmean(np.maximum(pv[:, : m.shape[0]], 0.0), axis=0).astype(np.float32)
+            finite = v[np.isfinite(v)]
+            if finite.size:
+                scale = max(float(np.quantile(finite, 0.90)), float(np.mean(finite)), 1e-6)
+                vn = np.clip(v / scale, 0.0, 2.0) * 0.5
+                uncertainty_density = float(np.sum(w * vn, dtype=np.float64) / max(denom, 1e-9))
+    action_need = float(boundary_density * max(0.0, 1.0 - safety_density))
+    raw_frac = (
+        float(base_frac)
+        + float(safety_weight) * safety_density
+        + float(fallback_weight) * fallback_risk
+        + float(uncertainty_weight) * uncertainty_density
+        - float(boundary_action_weight) * action_need
+    )
+    frac = float(np.clip(raw_frac, float(min_frac), float(max_frac)))
+    return frac, {
+        "adaptive_lcb_frac": frac,
+        "adaptive_lcb_raw_frac": float(raw_frac),
+        "adaptive_safety_density": safety_density,
+        "adaptive_fallback_risk": fallback_risk,
+        "adaptive_boundary_density": boundary_density,
+        "adaptive_uncertainty_density": uncertainty_density,
+        "adaptive_action_need": action_need,
+    }
+
+
 def _flip_rank_value(
     margin: np.ndarray,
     base_delta: np.ndarray,
@@ -784,6 +868,9 @@ def _greedy_action_rank_from_pair_delta(
     action_utility_weight: float = 0.0,
     action_pair_utility_weight: float = 0.0,
     action_rank_fast_greedy: bool = False,
+    family_ids: np.ndarray | None = None,
+    decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
+    decision_family_boost: float = 0.0,
 ) -> tuple[list[int], float, float]:
     margin = np.asarray(base_margin, dtype=np.float32).reshape(-1).copy()
     base = margin.copy()
@@ -824,6 +911,16 @@ def _greedy_action_rank_from_pair_delta(
         spent = 0.0
         current_cover = np.minimum(np.maximum(caps_arr, 0.0), np.maximum(margin, 0.0))
         current = cert_w * float(np.sum(pair_eff_w * current_cover, dtype=np.float64))
+        family_gain_mult = np.ones((E,), dtype=np.float32)
+        family_boost = max(float(decision_family_boost), 0.0)
+        if family_boost > 0.0 and family_ids is not None and decision_family_ids is not None:
+            fam = np.asarray(family_ids, dtype=np.int64).reshape(-1)
+            if fam.shape[0] < E:
+                fam = np.pad(fam, (0, E - fam.shape[0]), constant_values=-999999)
+            decision_set = set(map(int, np.asarray(decision_family_ids, dtype=np.int64).reshape(-1).tolist()))
+            if decision_set:
+                mask = np.asarray([int(x) in decision_set for x in fam[:E]], dtype=bool)
+                family_gain_mult[mask] = 1.0 + family_boost
         while bool(active.any()):
             active_idx = np.flatnonzero(active)
             if active_idx.size == 0:
@@ -850,6 +947,7 @@ def _greedy_action_rank_from_pair_delta(
                 # score remains available when action_rank_fast_greedy=false.
                 pos_improve = np.maximum(trial_margin - margin[None, :], 0.0)
                 gain_vec += 0.25 * (score_w + gap_w) * np.sum(pair_eff_w[None, :] * pos_improve, axis=1, dtype=np.float64)
+            gain_vec = gain_vec * family_gain_mult[idx_arr].astype(np.float64)
             ratios = gain_vec / np.maximum(costs[idx_arr].astype(np.float64), 1e-6)
             # Deterministic tie-breaking: ratio, gain, lower atom index.
             order = np.lexsort((idx_arr, -gain_vec, -ratios))
@@ -931,6 +1029,17 @@ def _hybrid_lcb_action_rank_from_pair_delta(
     family_budget_caps: np.ndarray | None = None,
     hybrid_lcb_budget_frac: float = 0.55,
     hybrid_protect_lcb_seed: bool = True,
+    adaptive_hybrid_lcb_budget: bool = False,
+    adaptive_lcb_min_frac: float = 0.45,
+    adaptive_lcb_max_frac: float = 0.80,
+    adaptive_lcb_safety_weight: float = 0.25,
+    adaptive_lcb_fallback_weight: float = 0.20,
+    adaptive_lcb_uncertainty_weight: float = 0.10,
+    adaptive_lcb_boundary_action_weight: float = 0.25,
+    adaptive_lcb_boundary_tau: float = 0.35,
+    safety_pair_mask: np.ndarray | None = None,
+    decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
+    decision_family_boost: float = 0.0,
     certificate_weight: float = 1.0,
     action_score_weight: float = 1.0,
     action_gap_weight: float = 0.5,
@@ -962,7 +1071,25 @@ def _hybrid_lcb_action_rank_from_pair_delta(
     costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
     if costs.shape[0] < E:
         costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
-    frac = float(np.clip(float(hybrid_lcb_budget_frac), 0.0, 1.0))
+    adaptive_diag: dict[str, float] = {}
+    if bool(adaptive_hybrid_lcb_budget):
+        frac, adaptive_diag = _adaptive_hybrid_lcb_fraction(
+            base,
+            pair_weights,
+            safety_pair_mask,
+            atom_pair_variance,
+            base_frac=float(hybrid_lcb_budget_frac),
+            min_frac=float(adaptive_lcb_min_frac),
+            max_frac=float(adaptive_lcb_max_frac),
+            safety_weight=float(adaptive_lcb_safety_weight),
+            fallback_weight=float(adaptive_lcb_fallback_weight),
+            uncertainty_weight=float(adaptive_lcb_uncertainty_weight),
+            boundary_action_weight=float(adaptive_lcb_boundary_action_weight),
+            boundary_tau=float(adaptive_lcb_boundary_tau),
+        )
+    else:
+        frac = float(np.clip(float(hybrid_lcb_budget_frac), 0.0, 1.0))
+        adaptive_diag = {"adaptive_lcb_frac": float(frac)}
     seed_budget = float(budget) * frac
     if seed_budget <= 1e-6:
         seed_sel: list[int] = []
@@ -1028,6 +1155,9 @@ def _hybrid_lcb_action_rank_from_pair_delta(
         action_utility_weight=action_utility_weight,
         action_pair_utility_weight=action_pair_utility_weight,
         action_rank_fast_greedy=action_rank_fast_greedy,
+        family_ids=family_ids,
+        decision_family_ids=decision_family_ids,
+        decision_family_boost=decision_family_boost,
     )
     selected = list(map(int, seed_sel)) + [int(i) for i in action_sel if int(i) not in set(map(int, seed_sel))]
     diag = {
@@ -1038,6 +1168,9 @@ def _hybrid_lcb_action_rank_from_pair_delta(
         "hybrid_action_spent": float(action_spent),
         "hybrid_action_atoms": int(len(action_sel)),
         "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed),
+        "hybrid_adaptive_lcb_budget": bool(adaptive_hybrid_lcb_budget),
+        "hybrid_decision_family_boost": float(max(float(decision_family_boost), 0.0)),
+        **adaptive_diag,
     }
     for k, v in (seed_diag or {}).items():
         if isinstance(v, (int, float, bool, np.integer, np.floating, np.bool_)):
@@ -1662,6 +1795,15 @@ def runtime_greedy_selector_pair_conditioned(
     hybrid_lcb_budget_frac: float = 0.55,
     hybrid_lcb_cap_mode: str = "legacy_abs",
     hybrid_protect_lcb_seed: bool = True,
+    adaptive_hybrid_lcb_budget: bool = False,
+    adaptive_lcb_min_frac: float = 0.45,
+    adaptive_lcb_max_frac: float = 0.80,
+    adaptive_lcb_safety_weight: float = 0.25,
+    adaptive_lcb_fallback_weight: float = 0.20,
+    adaptive_lcb_uncertainty_weight: float = 0.10,
+    adaptive_lcb_boundary_action_weight: float = 0.25,
+    adaptive_lcb_boundary_tau: float = 0.35,
+    decision_family_boost: float = 0.0,
     decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     decision_family_quota: int = 0,
     force_uncertainty_objective: bool = False,
@@ -1725,7 +1867,7 @@ def runtime_greedy_selector_pair_conditioned(
 
     cap_mode_l = str(selector_cap_mode or "legacy_abs").lower()
     action_rank_modes = {"action_rank", "action_flip_rank", "tournament_rank"}
-    hybrid_action_lcb_modes = {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank"}
+    hybrid_action_lcb_modes = {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank"}
     flip_rank_modes = {"flip_rank", "fliprank", "flip_boundary_rank"}
     # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
     # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
@@ -1808,6 +1950,17 @@ def runtime_greedy_selector_pair_conditioned(
                 family_budget_caps=family_budget_caps,
                 hybrid_lcb_budget_frac=float(hybrid_lcb_budget_frac),
                 hybrid_protect_lcb_seed=bool(hybrid_protect_lcb_seed),
+                adaptive_hybrid_lcb_budget=bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")),
+                adaptive_lcb_min_frac=float(adaptive_lcb_min_frac),
+                adaptive_lcb_max_frac=float(adaptive_lcb_max_frac),
+                adaptive_lcb_safety_weight=float(adaptive_lcb_safety_weight),
+                adaptive_lcb_fallback_weight=float(adaptive_lcb_fallback_weight),
+                adaptive_lcb_uncertainty_weight=float(adaptive_lcb_uncertainty_weight),
+                adaptive_lcb_boundary_action_weight=float(adaptive_lcb_boundary_action_weight),
+                adaptive_lcb_boundary_tau=float(adaptive_lcb_boundary_tau),
+                safety_pair_mask=safety_b,
+                decision_family_ids=decision_family_ids,
+                decision_family_boost=float(decision_family_boost),
                 certificate_weight=float(action_rank_certificate_weight),
                 action_score_weight=float(action_rank_score_weight),
                 action_gap_weight=float(action_rank_gap_weight),
@@ -1861,7 +2014,7 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank"}:

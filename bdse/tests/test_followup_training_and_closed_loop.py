@@ -440,7 +440,9 @@ def test_closed_loop_output_dir_is_challenge_scoped_for_metric_aggregation(tmp_p
         disable_splitter=False,
     )
     _env, cmd = build_nuplan_command(args, [])
-    assert "output_dir=outputs/closed_loop/bdse_debug_one/closed_loop_nonreactive_agents" in cmd
+    out = next(x for x in cmd if x.startswith("output_dir="))
+    assert out.endswith("/outputs/closed_loop/bdse_debug_one/closed_loop_nonreactive_agents")
+    assert not out.endswith("/closed_loop_nonreactive_agents/outputs/closed_loop/bdse_debug_one/closed_loop_nonreactive_agents")
 
 
 def test_closed_loop_output_dir_is_not_double_scoped(tmp_path: Path):
@@ -469,5 +471,7 @@ def test_closed_loop_output_dir_is_not_double_scoped(tmp_path: Path):
         disable_splitter=False,
     )
     _env, cmd = build_nuplan_command(args, [])
-    assert "output_dir=outputs/closed_loop/closed_loop_nonreactive_agents/eid" in cmd
+    out = next(x for x in cmd if x.startswith("output_dir="))
+    assert out.endswith("/outputs/closed_loop/closed_loop_nonreactive_agents/eid")
+    assert out.count("closed_loop_nonreactive_agents") == 1
     assert "closed_loop_nonreactive_agents/eid/closed_loop_nonreactive_agents" not in " ".join(cmd)
