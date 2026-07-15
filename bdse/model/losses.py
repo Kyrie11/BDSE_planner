@@ -365,6 +365,26 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             action_rank_gap_weight=float(s_cfg.get("action_rank_gap_weight", 0.0)),
             action_rank_flip_weight=float(s_cfg.get("action_rank_flip_weight", 0.0)),
             action_rank_softmin_tau=float(s_cfg.get("action_rank_softmin_tau", 0.2)),
+            action_utility_weight=float(s_cfg.get("action_utility_weight", 0.0)),
+            action_pair_utility_weight=float(s_cfg.get("action_pair_utility_weight", 0.0)),
+            action_rank_fast_greedy=bool(s_cfg.get("action_rank_fast_greedy", False)),
+            hybrid_lcb_budget_frac=float(s_cfg.get("hybrid_lcb_budget_frac", 0.55)),
+            hybrid_lcb_cap_mode=str(s_cfg.get("hybrid_lcb_cap_mode", "legacy_abs")),
+            hybrid_protect_lcb_seed=bool(s_cfg.get("hybrid_protect_lcb_seed", True)),
+            hybrid_min_action_budget_frac=float(s_cfg.get("hybrid_min_action_budget_frac", 0.0)),
+            hybrid_max_lcb_seed_atoms=int(s_cfg.get("hybrid_max_lcb_seed_atoms", 0)),
+            adaptive_hybrid_lcb_budget=bool(s_cfg.get("adaptive_hybrid_lcb_budget", False)),
+            adaptive_lcb_min_frac=float(s_cfg.get("adaptive_lcb_min_frac", 0.45)),
+            adaptive_lcb_max_frac=float(s_cfg.get("adaptive_lcb_max_frac", 0.80)),
+            adaptive_lcb_safety_weight=float(s_cfg.get("adaptive_lcb_safety_weight", 0.25)),
+            adaptive_lcb_fallback_weight=float(s_cfg.get("adaptive_lcb_fallback_weight", 0.20)),
+            adaptive_lcb_uncertainty_weight=float(s_cfg.get("adaptive_lcb_uncertainty_weight", 0.10)),
+            adaptive_lcb_boundary_action_weight=float(s_cfg.get("adaptive_lcb_boundary_action_weight", 0.25)),
+            adaptive_lcb_boundary_tau=float(s_cfg.get("adaptive_lcb_boundary_tau", 0.35)),
+            decision_family_boost=float(s_cfg.get("decision_family_boost", 0.0)),
+            decision_family_ids=s_cfg.get("decision_family_ids", [2, 3]),
+            decision_family_quota=int(s_cfg.get("decision_family_quota", 0)),
+            force_uncertainty_objective=bool(s_cfg.get("force_uncertainty_objective", False)),
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)
@@ -562,6 +582,82 @@ def _decision_pair_weights(
         w = w * (1.0 + float(train_cfg.get("decision_weight_hard_crossing_pair", 1.0)) * crossing.float())
     return w.masked_fill(~pair_mask.bool(), 0.0)
 
+
+
+
+def _critical_pair_mask(
+    pairs: torch.Tensor,
+    target_action: torch.Tensor,
+    pair_margins: torch.Tensor,
+    pair_scale: torch.Tensor,
+    pair_mask: torch.Tensor,
+    valid: torch.Tensor,
+    hard_action: torch.Tensor | None,
+    cfg: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return closed-loop-critical pair mask and weights for CACE.
+
+    This supervision focuses on the exact pairs whose evidence must survive a
+    small query budget: teacher-vs-rival decision pairs, near-boundary pairs, and
+    safe-vs-unsafe crossings.  Unlike proposal BCE over all oracle atoms, it
+    supervises the pair-conditioned margin head and proposal head on the same
+    frontier that the closed-loop selector/tournament uses at deployment.
+    """
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    cm = train_cfg.get("critical_evidence", {}) or {}
+    B, P = pair_mask.shape
+    K = valid.shape[1]
+    a = pairs[..., 0].long().clamp(0, K - 1)
+    b = pairs[..., 1].long().clamp(0, K - 1)
+    tgt = target_action.view(B, 1).expand(B, P)
+    teacher_pair = (a == tgt) | (b == tgt)
+    norm_margin = pair_margins.float().abs() / pair_scale.view(B, 1).clamp_min(1e-6)
+    near_tau = float(cm.get("near_margin_tau", train_cfg.get("decision_weight_near_margin", 0.5)))
+    near_pair = norm_margin <= max(near_tau, 1e-6)
+    crossing = torch.zeros_like(pair_mask, dtype=torch.bool)
+    if hard_action is not None:
+        h = hard_action.bool() & valid.bool()
+        ha = torch.gather(h, 1, a)
+        hb = torch.gather(h, 1, b)
+        crossing = ha ^ hb
+    crit = pair_mask.bool() & (teacher_pair | near_pair | crossing)
+    base_w = torch.ones_like(pair_margins.float())
+    base_w = base_w + float(cm.get("teacher_pair_weight", 3.0)) * teacher_pair.float()
+    base_w = base_w + float(cm.get("near_pair_weight", 2.0)) * near_pair.float()
+    base_w = base_w + float(cm.get("hard_crossing_weight", 4.0)) * crossing.float()
+    return crit, base_w.masked_fill(~crit, 0.0)
+
+
+def _critical_atom_targets(
+    true_atom_delta: torch.Tensor,
+    pred_atom_delta: torch.Tensor,
+    critical_pair_mask: torch.Tensor,
+    critical_pair_weights: torch.Tensor,
+    atom_mask: torch.Tensor,
+    interaction_atom_mask: torch.Tensor,
+    cfg: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Atom-level criticality targets derived from positive support on critical pairs."""
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    cm = train_cfg.get("critical_evidence", {}) or {}
+    pos_thr = float(cm.get("positive_support_threshold", 1e-4))
+    # Positive true support means the atom increases the margin of the logged
+    # winner over the rival on at least one closed-loop-critical pair.
+    pair_w = critical_pair_weights[:, None, :]
+    crit_pair = critical_pair_mask[:, None, :]
+    active = atom_mask.bool()
+    true_pos = (true_atom_delta > pos_thr) & crit_pair & active[:, :, None]
+    gain = torch.relu(true_atom_delta) * pair_w * active[:, :, None].float()
+    gain = gain.masked_fill(~crit_pair, 0.0).sum(dim=2)
+    # Normalize per scene for a stable listwise proposal target.
+    gain = gain * (1.0 + float(cm.get("interaction_gain_boost", 2.0)) * interaction_atom_mask.float())
+    target = true_pos.any(dim=2) & active
+    if bool(cm.get("interaction_only", True)):
+        target = target & interaction_atom_mask.bool()
+        gain = gain * interaction_atom_mask.float()
+    # Predicted signed support on the same pair set is used for a ranking loss.
+    pred_gain = (pred_atom_delta * pair_w).masked_fill(~crit_pair, 0.0).sum(dim=2)
+    return target, gain, pred_gain
 
 def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     # Losses include large teacher costs and masking sentinels.  Compute them in
@@ -811,6 +907,61 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_prop_rank = J0.new_tensor(0.0)
     L_prop = L_prop_bce + float(train_cfg.get("proposal_rank_weight", 0.5)) * L_prop_rank
 
+    # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed
+    # that better budget allocation alone cannot recover interaction recall or
+    # closed-loop score.  This term directly trains the pair-conditioned head and
+    # proposal logits on teacher-vs-rival / near-boundary / hard-crossing pairs,
+    # i.e. the evidence that must be preserved under a fixed budget.
+    cm_cfg = train_cfg.get("critical_evidence", {}) or {}
+    enable_cace = bool(cm_cfg.get("enabled", False)) and true_atom_delta is not None
+    if enable_cace and atom_pair_mask is not None:
+        crit_pair_mask, crit_pair_w = _critical_pair_mask(
+            pairs,
+            target_action,
+            batch["pair_margins"].float(),
+            pair_scale,
+            pair_mask,
+            valid,
+            hard_action,
+            cfg,
+        )
+        critical_atom_mask = pair_atom_train_mask
+        crit_target, crit_gain, crit_pred_gain = _critical_atom_targets(
+            true_atom_delta,
+            pred_atom_delta,
+            crit_pair_mask,
+            crit_pair_w,
+            critical_atom_mask,
+            interaction_atom_mask,
+            cfg,
+        )
+        # Pair-head signed support: critical atoms should assign positive mass to
+        # the critical frontier; non-critical active atoms are downweighted but not
+        # ignored, which improves ranking calibration without forcing sparsity.
+        cace_margin = float(cm_cfg.get("atom_margin", 0.05))
+        pos_loss = F.softplus(-(crit_pred_gain - cace_margin))
+        neg_loss = F.softplus(crit_pred_gain - cace_margin)
+        neg_w = float(cm_cfg.get("negative_weight", 0.15))
+        cace_w = torch.where(crit_target, torch.ones_like(crit_pred_gain), torch.full_like(crit_pred_gain, neg_w))
+        cace_mask = critical_atom_mask.bool() & torch.isfinite(crit_pred_gain)
+        L_cace_pair = _weighted_mean(torch.where(crit_target, pos_loss, neg_loss), cace_w, cace_mask)
+
+        # Proposal/listwise target: make the Top-M proposal bank retain these
+        # atoms before the selector budget split happens.
+        prop_logits = out["proposal_logits"]
+        bce_c = F.binary_cross_entropy_with_logits(prop_logits, crit_target.float(), reduction="none")
+        pos_w_c = float(cm_cfg.get("proposal_positive_weight", 10.0))
+        prop_w_c = torch.where(crit_target, torch.full_like(bce_c, pos_w_c), torch.ones_like(bce_c) * neg_w)
+        L_cace_prop_bce = _weighted_mean(bce_c, prop_w_c, e_mask & torch.isfinite(bce_c))
+        dist = crit_gain / crit_gain.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        has_gain = (crit_gain.sum(dim=1) > 1e-6).float()
+        logp_c = F.log_softmax(prop_logits.masked_fill(~e_mask, _neg_mask_value(prop_logits)), dim=1)
+        L_cace_prop_rank = -((dist * logp_c).sum(dim=1) * has_gain).sum() / has_gain.sum().clamp_min(1.0)
+        L_cace_prop = L_cace_prop_bce + float(cm_cfg.get("proposal_rank_weight", 1.0)) * L_cace_prop_rank
+    else:
+        L_cace_pair = J0.new_tensor(0.0)
+        L_cace_prop = J0.new_tensor(0.0)
+
     # Family-listwise loss for the HAB family gate.
     fam_gain = batch.get("family_target_gain")
     family_logits = out.get("family_logits")
@@ -951,6 +1102,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("full_margin", 0.5)) * L_full_margin
         + float(lw.get("hard_feasibility", 0.5)) * L_hard_feas
         + float(lw.get("calibration", 0.0)) * L_cal
+        + float(lw.get("critical_pair", 0.0)) * L_cace_pair
+        + float(lw.get("critical_proposal", 0.0)) * L_cace_prop
     )
     return {
         "loss": total,
@@ -970,4 +1123,6 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_full_margin": L_full_margin if 'L_full_margin' in locals() else J0.new_tensor(0.0),
         "L_hard_feas": L_hard_feas if 'L_hard_feas' in locals() else J0.new_tensor(0.0),
         "L_cal": L_cal,
+        "L_cace_pair": L_cace_pair if 'L_cace_pair' in locals() else J0.new_tensor(0.0),
+        "L_cace_prop": L_cace_prop if 'L_cace_prop' in locals() else J0.new_tensor(0.0),
     }

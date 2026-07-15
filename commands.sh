@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run from repository root after replacing bdse/ with BDSE_v23_rcabr.zip contents.
-# v23 goal:
-#   1) keep the v22 fixed55 safety-gated hybrid as a control because it was the only v22 branch above LCB;
-#   2) replace raw safety-density adaptive allocation with risk-calibrated safety pressure;
-#   3) reserve ActionRank budget for near-boundary interaction/precedence evidence;
-#   4) fix adaptive-mode post-fill utility so it uses ActionRank utility instead of FlipRank utility;
-#   5) keep closed-loop output paths shallow and distribute runs across two GPUs.
+# Run from repository root after replacing bdse/ with BDSE_v24_cace.zip contents.
+# v24 goal:
+#   1) stop relying only on runtime selector post-processing;
+#   2) finetune the pair/proposal heads with CACE: Closed-loop Action-Critical Evidence supervision;
+#   3) keep a guaranteed ActionRank reserve so LCB seed cannot starve interaction evidence;
+#   4) compare v24 trained LCB, fixed50 control, adaptive boundary-reserve, action-heavy, and safety-heavy variants;
+#   5) distribute independent open/closed-loop runs across two GPUs.
 
 ROOT_DIR="$(pwd)"
 export BDSE_TRAIN_CACHE=${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/}
@@ -21,14 +21,15 @@ export BDSE_PROFILE_CLOSED_LOOP=${BDSE_PROFILE_CLOSED_LOOP:-1}
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
-OUT_ROOT=${OUT_ROOT:-$ROOT_DIR/outputs_v23}
+OUT_ROOT=${OUT_ROOT:-$ROOT_DIR/outputs_v24}
+TRAIN_ROOT="$OUT_ROOT/train"
 OPEN_ROOT="$OUT_ROOT/open_loop"
 CL_ROOT="$OUT_ROOT/closed_loop"
-LOG_ROOT="$OUT_ROOT/v23_logs"
-mkdir -p "$OPEN_ROOT" "$CL_ROOT" "$LOG_ROOT"
+LOG_ROOT="$OUT_ROOT/v24_logs"
+mkdir -p "$TRAIN_ROOT" "$OPEN_ROOT" "$CL_ROOT" "$LOG_ROOT"
 
 if [[ ! -f "$V11_CKPT" ]]; then
-  echo "Missing checkpoint: $V11_CKPT" >&2
+  echo "Missing warm-start checkpoint: $V11_CKPT" >&2
   exit 1
 fi
 
@@ -45,6 +46,40 @@ python -m pytest -q \
   bdse/tests/test_followup_training_and_closed_loop.py \
   bdse/tests/test_v19_behavior_actionrank.py \
   bdse/tests/test_v22_adaptive_hybrid_selector.py
+
+TRAIN_OUTPUT="$TRAIN_ROOT/bdse_v24_cace.pt"
+V24_CKPT=${V24_CKPT:-$TRAIN_ROOT/bdse_v24_cace.best.pt}
+
+if [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
+  echo "[train] v24 CACE finetune on 2 GPUs"
+  torchrun --standalone --nproc_per_node=2 -m bdse.experiments.train \
+    --config bdse/configs/v24_bdse_cace_train.yaml \
+    --split train \
+    --preprocessed-dir "$BDSE_TRAIN_CACHE" \
+    --max-scenarios "${TRAIN_MAX_SCENARIOS:-12000}" \
+    --val-split val \
+    --val-preprocessed-dir "$BDSE_VAL_CACHE" \
+    --val-max-scenarios "${VAL_MAX_SCENARIOS:-1000}" \
+    --epochs "${TRAIN_EPOCHS:-6}" \
+    --batch-size "${TRAIN_BATCH_SIZE:-8}" \
+    --num-workers "${TRAIN_NUM_WORKERS:-4}" \
+    --val-num-workers "${VAL_NUM_WORKERS:-2}" \
+    --val-batch-size "${VAL_BATCH_SIZE:-8}" \
+    --val-mode open_loop \
+    --val-every-n-epochs "${VAL_EVERY_N_EPOCHS:-1}" \
+    --best-metrics auto bdse_score teacher_action_match budget_vs_full_match teacher_regret \
+    --warm-start-from "$V11_CKPT" \
+    --output "$TRAIN_OUTPUT" \
+    --amp \
+    --log-file "$LOG_ROOT/v24_cace_train.jsonl" \
+    > "$LOG_ROOT/v24_cace_train.out" 2>&1
+fi
+
+if [[ ! -f "$V24_CKPT" ]]; then
+  echo "Missing v24 checkpoint: $V24_CKPT" >&2
+  echo "Set V24_CKPT=/path/to/checkpoint or run without SKIP_TRAIN=1." >&2
+  exit 1
+fi
 
 run_open_loop() {
   local gpu="$1"
@@ -73,11 +108,11 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 paths = [
-    ('v22_lcb_legacy_replan5', root / 'open_loop_v22_lcb_legacy_replan5.json'),
-    ('v23_fixed55_control', root / 'open_loop_v23_fixed55_control.json'),
-    ('v23_rcabr_scur_tau35', root / 'open_loop_v23_rcabr_scur_tau35.json'),
-    ('v23_rcabr_safety_tau30', root / 'open_loop_v23_rcabr_safety_tau30.json'),
-    ('v23_rcabr_progress_tau45', root / 'open_loop_v23_rcabr_progress_tau45.json'),
+    ('v24_lcb_legacy_cace', root / 'open_loop_v24_lcb_legacy_cace.json'),
+    ('v24_cace_fixed50_control', root / 'open_loop_v24_cace_fixed50_control.json'),
+    ('v24_cace_bbr_scur_tau35', root / 'open_loop_v24_cace_bbr_scur_tau35.json'),
+    ('v24_cace_actionheavy_tau45', root / 'open_loop_v24_cace_actionheavy_tau45.json'),
+    ('v24_cace_safety_tau30', root / 'open_loop_v24_cace_safety_tau30.json'),
 ]
 keys = [
     'teacher_action_match','decision_sufficiency','budget_vs_full_match','teacher_regret',
@@ -86,9 +121,9 @@ keys = [
     'selector_hybrid_lcb_action_rank_active','selector_adaptive_lcb_frac','selector_adaptive_lcb_raw_frac',
     'selector_adaptive_safety_density','selector_adaptive_safety_pressure','selector_adaptive_unsafe_fallback_risk',
     'selector_adaptive_fallback_risk','selector_adaptive_boundary_density','selector_adaptive_action_need',
-    'selector_hybrid_lcb_seed_atoms','selector_hybrid_action_atoms','selector_decision_family_selected',
-    'selector_decision_family_boost','selector_pair_atom_query_count','tournament_pair_atom_query_count',
-    'total_sparse_query_count','effective_query_count'
+    'selector_hybrid_lcb_seed_atoms','selector_hybrid_action_atoms','selector_hybrid_min_action_budget',
+    'selector_hybrid_max_lcb_seed_atoms','selector_decision_family_selected','selector_decision_family_boost',
+    'selector_pair_atom_query_count','tournament_pair_atom_query_count','total_sparse_query_count','effective_query_count'
 ]
 for name, path in paths:
     if not path.exists():
@@ -100,12 +135,13 @@ for name, path in paths:
 PY
 }
 
-run_open_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" &
+run_open_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" &
 wait
-run_open_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" &
-run_open_loop 0 v23_rcabr_progress_tau45 bdse/configs/v23_bdse_rcabr_progress_tau45_fast_cl.yaml "$V11_CKPT" &
+run_open_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" &
+run_open_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" &
+wait
+run_open_loop 0 v24_cace_safety_tau30 bdse/configs/v24_bdse_cace_safety_tau30_fast_cl.yaml "$V24_CKPT" &
 wait
 print_open_loop_compare
 
@@ -149,61 +185,57 @@ run_closed_loop() {
   )
 }
 
-run_closed_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" 20 &
-run_closed_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" 20 &
-run_closed_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" 20 &
+run_closed_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" 20 &
+run_closed_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" 20 &
 wait
-run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 20 &
-run_closed_loop 0 v23_rcabr_progress_tau45 bdse/configs/v23_bdse_rcabr_progress_tau45_fast_cl.yaml "$V11_CKPT" 20 &
+run_closed_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" 20 &
+run_closed_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" 20 &
+wait
+run_closed_loop 0 v24_cace_safety_tau30 bdse/configs/v24_bdse_cace_safety_tau30_fast_cl.yaml "$V24_CKPT" 20 &
 wait
 
 python -m bdse.tools.collect_closed_loop_metrics \
-  "$CL_ROOT/v22_lcb_legacy_replan5_20" \
-  "$CL_ROOT/v23_fixed55_control_20" \
-  "$CL_ROOT/v23_rcabr_scur_tau35_20" \
-  "$CL_ROOT/v23_rcabr_safety_tau30_20" \
-  "$CL_ROOT/v23_rcabr_progress_tau45_20" \
-  --csv "$CL_ROOT/v23_20_compare.csv"
-
-if [[ "${RUN_REPLAN8:-0}" == "1" ]]; then
-  run_closed_loop 0 v23_rcabr_scur_tau35_replan8 bdse/configs/v23_bdse_rcabr_scur_tau35_replan8_fast_cl.yaml "$V11_CKPT" 20
-  python -m bdse.tools.collect_closed_loop_metrics \
-    "$CL_ROOT/v23_rcabr_scur_tau35_replan8_20" \
-    --csv "$CL_ROOT/v23_replan8_20_compare.csv"
-fi
+  "$CL_ROOT/v24_lcb_legacy_cace_20" \
+  "$CL_ROOT/v24_cace_fixed50_control_20" \
+  "$CL_ROOT/v24_cace_bbr_scur_tau35_20" \
+  "$CL_ROOT/v24_cace_actionheavy_tau45_20" \
+  "$CL_ROOT/v24_cace_safety_tau30_20" \
+  --csv "$CL_ROOT/v24_20_compare.csv"
 
 if [[ "${RUN_CL50:-0}" == "1" ]]; then
-  run_closed_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" 50 &
-  run_closed_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" 50 &
+  run_closed_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" 50 &
+  run_closed_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" 50 &
   wait
-  run_closed_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" 50 &
-  run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 50 &
+  run_closed_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" 50 &
+  run_closed_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" 50 &
   wait
   python -m bdse.tools.collect_closed_loop_metrics \
-    "$CL_ROOT/v22_lcb_legacy_replan5_50" \
-    "$CL_ROOT/v23_fixed55_control_50" \
-    "$CL_ROOT/v23_rcabr_scur_tau35_50" \
-    "$CL_ROOT/v23_rcabr_safety_tau30_50" \
-    --csv "$CL_ROOT/v23_50_compare.csv"
+    "$CL_ROOT/v24_lcb_legacy_cace_50" \
+    "$CL_ROOT/v24_cace_fixed50_control_50" \
+    "$CL_ROOT/v24_cace_bbr_scur_tau35_50" \
+    "$CL_ROOT/v24_cace_actionheavy_tau45_50" \
+    --csv "$CL_ROOT/v24_50_compare.csv"
 fi
 
 if [[ "${RUN_CL100:-0}" == "1" ]]; then
-  run_closed_loop 0 v22_lcb_legacy_replan5 bdse/configs/v22_bdse_lcb_legacy_replan5_fast_cl.yaml "$V11_CKPT" 100 &
-  run_closed_loop 1 v23_fixed55_control bdse/configs/v23_bdse_fixed55_control_fast_cl.yaml "$V11_CKPT" 100 &
+  run_closed_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" 100 &
+  run_closed_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" 100 &
   wait
-  run_closed_loop 0 v23_rcabr_scur_tau35 bdse/configs/v23_bdse_rcabr_scur_tau35_fast_cl.yaml "$V11_CKPT" 100 &
-  run_closed_loop 1 v23_rcabr_safety_tau30 bdse/configs/v23_bdse_rcabr_safety_tau30_fast_cl.yaml "$V11_CKPT" 100 &
+  run_closed_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" 100 &
+  run_closed_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" 100 &
   wait
   python -m bdse.tools.collect_closed_loop_metrics \
-    "$CL_ROOT/v22_lcb_legacy_replan5_100" \
-    "$CL_ROOT/v23_fixed55_control_100" \
-    "$CL_ROOT/v23_rcabr_scur_tau35_100" \
-    "$CL_ROOT/v23_rcabr_safety_tau30_100" \
-    --csv "$CL_ROOT/v23_100_compare.csv"
+    "$CL_ROOT/v24_lcb_legacy_cace_100" \
+    "$CL_ROOT/v24_cace_fixed50_control_100" \
+    "$CL_ROOT/v24_cace_bbr_scur_tau35_100" \
+    "$CL_ROOT/v24_cace_actionheavy_tau45_100" \
+    --csv "$CL_ROOT/v24_100_compare.csv"
 fi
 
 echo "Done. Key outputs:"
-echo "  $OPEN_ROOT/open_loop_v23_*.json"
-echo "  $CL_ROOT/v23_20_compare.csv"
+echo "  $TRAIN_ROOT/bdse_v24_cace.best.pt"
+echo "  $OPEN_ROOT/open_loop_v24_*.json"
+echo "  $CL_ROOT/v24_20_compare.csv"
 echo "  $LOG_ROOT/*.diag.jsonl"
-echo "Optional: OPEN_LOOP_ONLY=1 bash run_v23_rcabr.sh ; RUN_REPLAN8=1 bash run_v23_rcabr.sh ; RUN_CL50=1 bash run_v23_rcabr.sh ; RUN_CL100=1 bash run_v23_rcabr.sh"
+echo "Optional fast precheck: TRAIN_MAX_SCENARIOS=3000 VAL_MAX_SCENARIOS=500 TRAIN_EPOCHS=2 OPEN_LOOP_ONLY=1 bash run_v24_cace.sh"
+echo "Optional reuse trained ckpt: SKIP_TRAIN=1 V24_CKPT=$V24_CKPT bash run_v24_cace.sh"

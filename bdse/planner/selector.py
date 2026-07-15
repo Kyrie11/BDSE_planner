@@ -1048,6 +1048,8 @@ def _hybrid_lcb_action_rank_from_pair_delta(
     family_budget_caps: np.ndarray | None = None,
     hybrid_lcb_budget_frac: float = 0.55,
     hybrid_protect_lcb_seed: bool = True,
+    hybrid_min_action_budget_frac: float = 0.0,
+    hybrid_max_lcb_seed_atoms: int = 0,
     adaptive_hybrid_lcb_budget: bool = False,
     adaptive_lcb_min_frac: float = 0.45,
     adaptive_lcb_max_frac: float = 0.80,
@@ -1109,7 +1111,13 @@ def _hybrid_lcb_action_rank_from_pair_delta(
     else:
         frac = float(np.clip(float(hybrid_lcb_budget_frac), 0.0, 1.0))
         adaptive_diag = {"adaptive_lcb_frac": float(frac)}
-    seed_budget = float(budget) * frac
+    # v24: reserve a guaranteed residual ActionRank slice.  v23 still let the
+    # adaptive seed consume most of the budget in closed loop, so the decisive
+    # interaction/refinement stage had only ~5 atoms on average.  This reserve is
+    # a deployment-time budget split, not an oracle label: it only constrains how
+    # much budget the safety seed may spend before ActionRank sees the frontier.
+    min_action_budget = max(0.0, min(float(budget), float(budget) * max(float(hybrid_min_action_budget_frac), 0.0)))
+    seed_budget = min(float(budget) * frac, max(float(budget) - min_action_budget, 0.0))
     if seed_budget <= 1e-6:
         seed_sel: list[int] = []
         seed_value = 0.0
@@ -1144,6 +1152,9 @@ def _hybrid_lcb_action_rank_from_pair_delta(
             family_ids=family_ids,
             family_budget_caps=family_budget_caps,
         )
+    max_seed_atoms = max(0, int(hybrid_max_lcb_seed_atoms))
+    if max_seed_atoms > 0 and len(seed_sel) > max_seed_atoms:
+        seed_sel = list(map(int, seed_sel[:max_seed_atoms]))
     spent = _spent_for(seed_sel, costs)
     residual_budget = max(float(budget) - float(spent), 0.0)
     residual_active = active.copy()
@@ -1182,6 +1193,8 @@ def _hybrid_lcb_action_rank_from_pair_delta(
     diag = {
         "hybrid_lcb_budget_frac": float(frac),
         "hybrid_lcb_seed_budget": float(seed_budget),
+        "hybrid_min_action_budget": float(min_action_budget),
+        "hybrid_max_lcb_seed_atoms": int(max_seed_atoms),
         "hybrid_lcb_seed_spent": float(spent),
         "hybrid_lcb_seed_atoms": int(len(seed_sel)),
         "hybrid_action_spent": float(action_spent),
@@ -1814,6 +1827,8 @@ def runtime_greedy_selector_pair_conditioned(
     hybrid_lcb_budget_frac: float = 0.55,
     hybrid_lcb_cap_mode: str = "legacy_abs",
     hybrid_protect_lcb_seed: bool = True,
+    hybrid_min_action_budget_frac: float = 0.0,
+    hybrid_max_lcb_seed_atoms: int = 0,
     adaptive_hybrid_lcb_budget: bool = False,
     adaptive_lcb_min_frac: float = 0.45,
     adaptive_lcb_max_frac: float = 0.80,
@@ -1969,6 +1984,8 @@ def runtime_greedy_selector_pair_conditioned(
                 family_budget_caps=family_budget_caps,
                 hybrid_lcb_budget_frac=float(hybrid_lcb_budget_frac),
                 hybrid_protect_lcb_seed=bool(hybrid_protect_lcb_seed),
+                hybrid_min_action_budget_frac=float(hybrid_min_action_budget_frac),
+                hybrid_max_lcb_seed_atoms=int(hybrid_max_lcb_seed_atoms),
                 adaptive_hybrid_lcb_budget=bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")),
                 adaptive_lcb_min_frac=float(adaptive_lcb_min_frac),
                 adaptive_lcb_max_frac=float(adaptive_lcb_max_frac),
@@ -2033,7 +2050,7 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank"}:

@@ -534,6 +534,8 @@ class BDSEPlannerCore:
                 hybrid_lcb_budget_frac=float(sel_cfg.get("hybrid_lcb_budget_frac", 0.55)),
                 hybrid_lcb_cap_mode=str(sel_cfg.get("hybrid_lcb_cap_mode", "legacy_abs")),
                 hybrid_protect_lcb_seed=bool(sel_cfg.get("hybrid_protect_lcb_seed", True)),
+                hybrid_min_action_budget_frac=float(sel_cfg.get("hybrid_min_action_budget_frac", 0.0)),
+                hybrid_max_lcb_seed_atoms=int(sel_cfg.get("hybrid_max_lcb_seed_atoms", 0)),
                 adaptive_hybrid_lcb_budget=bool(sel_cfg.get("adaptive_hybrid_lcb_budget", False)),
                 adaptive_lcb_min_frac=float(sel_cfg.get("adaptive_lcb_min_frac", 0.45)),
                 adaptive_lcb_max_frac=float(sel_cfg.get("adaptive_lcb_max_frac", 0.80)),
