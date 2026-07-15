@@ -125,6 +125,14 @@ tournament:
     unsafe_penalty: 1000.0
 training:
   action_conditioned_action_loss_weight: 0.0
+  shared_dense_query_projection: true
+  compute_local_variance: false
+  freeze_unused_local_variance_head: true
+  ddp_find_unused_parameters: false
+  local_forward_atom_chunk: 64
+  pair_forward_atom_chunk: 16
+  pair_forward_pair_chunk: 64
+  query_projection_atom_chunk: 64
   action_loss_start_epoch: 0
   decision_weight_hard_crossing_pair: 2.0
   decision_weight_near_margin: 0.2
