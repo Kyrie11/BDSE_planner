@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run from repository root after replacing bdse/ with BDSE_v24_cace.zip contents.
-# v24 goal:
-#   1) stop relying only on runtime selector post-processing;
-#   2) finetune the pair/proposal heads with CACE: Closed-loop Action-Critical Evidence supervision;
-#   3) keep a guaranteed ActionRank reserve so LCB seed cannot starve interaction evidence;
-#   4) compare v24 trained LCB, fixed50 control, adaptive boundary-reserve, action-heavy, and safety-heavy variants;
-#   5) distribute independent open/closed-loop runs across two GPUs.
+# v25 / DG-CACE:
+#   - keep v24 CACE, but include hard/safety atoms on critical crossings;
+#   - add deployment-gate-aware certificate gap losses;
+#   - calibrate normalized closed-loop fallback thresholds so the fallback stage
+#     does not dominate every replan;
+#   - compare trained LCB, fixed control, adaptive branches, and a no-fallback ablation.
 
 ROOT_DIR="$(pwd)"
 export BDSE_TRAIN_CACHE=${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/}
 export BDSE_VAL_CACHE=${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}
 export NUPLAN_ROOT=${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}
 export NUPLAN_DB_ROOT=${NUPLAN_DB_ROOT:-$NUPLAN_ROOT/data/cache/val}
+export V24_CKPT_IN=${V24_CKPT_IN:-outputs_v24/train/bdse_v24_cace.best.pt}
 export V11_CKPT=${V11_CKPT:-outputs/v11_train/bdse_v11_ta_selector.best.pt}
 export CL_WORKERS_PER_RUN=${CL_WORKERS_PER_RUN:-2}
 export BDSE_REPLAN_INTERVAL_TICKS=${BDSE_REPLAN_INTERVAL_TICKS:-5}
@@ -21,17 +21,12 @@ export BDSE_PROFILE_CLOSED_LOOP=${BDSE_PROFILE_CLOSED_LOOP:-1}
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
-OUT_ROOT=${OUT_ROOT:-$ROOT_DIR/outputs_v24}
+OUT_ROOT=${OUT_ROOT:-$ROOT_DIR/outputs_v25}
 TRAIN_ROOT="$OUT_ROOT/train"
 OPEN_ROOT="$OUT_ROOT/open_loop"
 CL_ROOT="$OUT_ROOT/closed_loop"
-LOG_ROOT="$OUT_ROOT/v24_logs"
+LOG_ROOT="$OUT_ROOT/v25_logs"
 mkdir -p "$TRAIN_ROOT" "$OPEN_ROOT" "$CL_ROOT" "$LOG_ROOT"
-
-if [[ ! -f "$V11_CKPT" ]]; then
-  echo "Missing warm-start checkpoint: $V11_CKPT" >&2
-  exit 1
-fi
 
 python -m py_compile $(find bdse -name '*.py')
 python -m pytest -q \
@@ -47,37 +42,45 @@ python -m pytest -q \
   bdse/tests/test_v19_behavior_actionrank.py \
   bdse/tests/test_v22_adaptive_hybrid_selector.py
 
-TRAIN_OUTPUT="$TRAIN_ROOT/bdse_v24_cace.pt"
-V24_CKPT=${V24_CKPT:-$TRAIN_ROOT/bdse_v24_cace.best.pt}
+TRAIN_OUTPUT="$TRAIN_ROOT/bdse_v25_dgcace.pt"
+V25_CKPT=${V25_CKPT:-$TRAIN_ROOT/bdse_v25_dgcace.best.pt}
 
 if [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
-  echo "[train] v24 CACE finetune on 2 GPUs"
+  if [[ -f "$V24_CKPT_IN" ]]; then
+    WARM_START="$V24_CKPT_IN"
+  elif [[ -f "$V11_CKPT" ]]; then
+    WARM_START="$V11_CKPT"
+  else
+    echo "Missing warm-start checkpoint. Set V24_CKPT_IN or V11_CKPT." >&2
+    exit 1
+  fi
+  echo "[train] v25 DG-CACE finetune from $WARM_START"
   torchrun --standalone --nproc_per_node=2 -m bdse.experiments.train \
-    --config bdse/configs/v24_bdse_cace_train.yaml \
+    --config bdse/configs/v25_bdse_dgcace_train.yaml \
     --split train \
     --preprocessed-dir "$BDSE_TRAIN_CACHE" \
     --max-scenarios "${TRAIN_MAX_SCENARIOS:-12000}" \
     --val-split val \
     --val-preprocessed-dir "$BDSE_VAL_CACHE" \
     --val-max-scenarios "${VAL_MAX_SCENARIOS:-1000}" \
-    --epochs "${TRAIN_EPOCHS:-6}" \
+    --epochs "${TRAIN_EPOCHS:-5}" \
     --batch-size "${TRAIN_BATCH_SIZE:-8}" \
     --num-workers "${TRAIN_NUM_WORKERS:-4}" \
     --val-num-workers "${VAL_NUM_WORKERS:-2}" \
     --val-batch-size "${VAL_BATCH_SIZE:-8}" \
     --val-mode open_loop \
     --val-every-n-epochs "${VAL_EVERY_N_EPOCHS:-1}" \
-    --best-metrics auto bdse_score teacher_action_match budget_vs_full_match teacher_regret \
-    --warm-start-from "$V11_CKPT" \
+    --best-metrics auto bdse_score teacher_action_match budget_vs_full_match selected_interaction_decisive_recall selected_hard_decisive_recall teacher_regret \
+    --warm-start-from "$WARM_START" \
     --output "$TRAIN_OUTPUT" \
     --amp \
-    --log-file "$LOG_ROOT/v24_cace_train.jsonl" \
-    > "$LOG_ROOT/v24_cace_train.out" 2>&1
+    --log-file "$LOG_ROOT/v25_dgcace_train.jsonl" \
+    > "$LOG_ROOT/v25_dgcace_train.out" 2>&1
 fi
 
-if [[ ! -f "$V24_CKPT" ]]; then
-  echo "Missing v24 checkpoint: $V24_CKPT" >&2
-  echo "Set V24_CKPT=/path/to/checkpoint or run without SKIP_TRAIN=1." >&2
+if [[ ! -f "$V25_CKPT" ]]; then
+  echo "Missing v25 checkpoint: $V25_CKPT" >&2
+  echo "Set V25_CKPT=/path/to/checkpoint or run without SKIP_TRAIN=1." >&2
   exit 1
 fi
 
@@ -108,21 +111,19 @@ import json, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 paths = [
-    ('v24_lcb_legacy_cace', root / 'open_loop_v24_lcb_legacy_cace.json'),
-    ('v24_cace_fixed50_control', root / 'open_loop_v24_cace_fixed50_control.json'),
-    ('v24_cace_bbr_scur_tau35', root / 'open_loop_v24_cace_bbr_scur_tau35.json'),
-    ('v24_cace_actionheavy_tau45', root / 'open_loop_v24_cace_actionheavy_tau45.json'),
-    ('v24_cace_safety_tau30', root / 'open_loop_v24_cace_safety_tau30.json'),
+    ('v25_lcb_legacy_dgcace', root / 'open_loop_v25_lcb_legacy_dgcace.json'),
+    ('v25_dgcace_fixed50_control', root / 'open_loop_v25_dgcace_fixed50_control.json'),
+    ('v25_dgcace_bbr_scur_tau35', root / 'open_loop_v25_dgcace_bbr_scur_tau35.json'),
+    ('v25_dgcace_actionheavy_tau45', root / 'open_loop_v25_dgcace_actionheavy_tau45.json'),
+    ('v25_dgcace_safety_tau30', root / 'open_loop_v25_dgcace_safety_tau30.json'),
+    ('v25_dgcace_no_fallback_ablation', root / 'open_loop_v25_dgcace_no_fallback_ablation.json'),
 ]
 keys = [
     'teacher_action_match','decision_sufficiency','budget_vs_full_match','teacher_regret',
     'fallback_would_trigger_rate','pair_sign_acc_winner_rival','pair_sign_acc_interaction','pair_sign_acc_hard',
     'selected_interaction_decisive_recall','selected_hard_decisive_recall','selected_decisive_atom_recall',
-    'selector_hybrid_lcb_action_rank_active','selector_adaptive_lcb_frac','selector_adaptive_lcb_raw_frac',
-    'selector_adaptive_safety_density','selector_adaptive_safety_pressure','selector_adaptive_unsafe_fallback_risk',
-    'selector_adaptive_fallback_risk','selector_adaptive_boundary_density','selector_adaptive_action_need',
-    'selector_hybrid_lcb_seed_atoms','selector_hybrid_action_atoms','selector_hybrid_min_action_budget',
-    'selector_hybrid_max_lcb_seed_atoms','selector_decision_family_selected','selector_decision_family_boost',
+    'selector_adaptive_lcb_frac','selector_hybrid_lcb_seed_atoms','selector_hybrid_action_atoms',
+    'selector_hybrid_min_action_budget','selector_hybrid_max_lcb_seed_atoms','selector_decision_family_selected',
     'selector_pair_atom_query_count','tournament_pair_atom_query_count','total_sparse_query_count','effective_query_count'
 ]
 for name, path in paths:
@@ -135,13 +136,14 @@ for name, path in paths:
 PY
 }
 
-run_open_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" &
-run_open_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" &
+run_open_loop 0 v25_lcb_legacy_dgcace bdse/configs/v25_bdse_lcb_legacy_dgcace_fast_cl.yaml "$V25_CKPT" &
+run_open_loop 1 v25_dgcace_fixed50_control bdse/configs/v25_bdse_dgcace_fixed50_control_fast_cl.yaml "$V25_CKPT" &
 wait
-run_open_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" &
-run_open_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" &
+run_open_loop 0 v25_dgcace_bbr_scur_tau35 bdse/configs/v25_bdse_dgcace_bbr_scur_tau35_fast_cl.yaml "$V25_CKPT" &
+run_open_loop 1 v25_dgcace_actionheavy_tau45 bdse/configs/v25_bdse_dgcace_actionheavy_tau45_fast_cl.yaml "$V25_CKPT" &
 wait
-run_open_loop 0 v24_cace_safety_tau30 bdse/configs/v24_bdse_cace_safety_tau30_fast_cl.yaml "$V24_CKPT" &
+run_open_loop 0 v25_dgcace_safety_tau30 bdse/configs/v25_bdse_dgcace_safety_tau30_fast_cl.yaml "$V25_CKPT" &
+run_open_loop 1 v25_dgcace_no_fallback_ablation bdse/configs/v25_bdse_dgcace_no_fallback_ablation_fast_cl.yaml "$V25_CKPT" &
 wait
 print_open_loop_compare
 
@@ -185,57 +187,67 @@ run_closed_loop() {
   )
 }
 
-run_closed_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" 20 &
-run_closed_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" 20 &
+run_closed_loop 0 v25_lcb_legacy_dgcace bdse/configs/v25_bdse_lcb_legacy_dgcace_fast_cl.yaml "$V25_CKPT" 20 &
+run_closed_loop 1 v25_dgcace_fixed50_control bdse/configs/v25_bdse_dgcace_fixed50_control_fast_cl.yaml "$V25_CKPT" 20 &
 wait
-run_closed_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" 20 &
-run_closed_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" 20 &
+run_closed_loop 0 v25_dgcace_bbr_scur_tau35 bdse/configs/v25_bdse_dgcace_bbr_scur_tau35_fast_cl.yaml "$V25_CKPT" 20 &
+run_closed_loop 1 v25_dgcace_actionheavy_tau45 bdse/configs/v25_bdse_dgcace_actionheavy_tau45_fast_cl.yaml "$V25_CKPT" 20 &
 wait
-run_closed_loop 0 v24_cace_safety_tau30 bdse/configs/v24_bdse_cace_safety_tau30_fast_cl.yaml "$V24_CKPT" 20 &
+run_closed_loop 0 v25_dgcace_safety_tau30 bdse/configs/v25_bdse_dgcace_safety_tau30_fast_cl.yaml "$V25_CKPT" 20 &
+run_closed_loop 1 v25_dgcace_no_fallback_ablation bdse/configs/v25_bdse_dgcace_no_fallback_ablation_fast_cl.yaml "$V25_CKPT" 20 &
 wait
 
 python -m bdse.tools.collect_closed_loop_metrics \
-  "$CL_ROOT/v24_lcb_legacy_cace_20" \
-  "$CL_ROOT/v24_cace_fixed50_control_20" \
-  "$CL_ROOT/v24_cace_bbr_scur_tau35_20" \
-  "$CL_ROOT/v24_cace_actionheavy_tau45_20" \
-  "$CL_ROOT/v24_cace_safety_tau30_20" \
-  --csv "$CL_ROOT/v24_20_compare.csv"
+  "$CL_ROOT/v25_lcb_legacy_dgcace_20" \
+  "$CL_ROOT/v25_dgcace_fixed50_control_20" \
+  "$CL_ROOT/v25_dgcace_bbr_scur_tau35_20" \
+  "$CL_ROOT/v25_dgcace_actionheavy_tau45_20" \
+  "$CL_ROOT/v25_dgcace_safety_tau30_20" \
+  "$CL_ROOT/v25_dgcace_no_fallback_ablation_20" \
+  --csv "$CL_ROOT/v25_20_compare.csv"
+
+python - "$LOG_ROOT" <<'PY'
+import json, math, sys
+from collections import Counter
+from pathlib import Path
+root = Path(sys.argv[1])
+for path in sorted(root.glob('*.closed_loop_20.diag.jsonl')):
+    replans = []
+    reasons = Counter()
+    for line in path.read_text(errors='ignore').splitlines():
+        try:
+            d = json.loads(line).get('diagnostics', {})
+        except Exception:
+            continue
+        if d.get('cached_plan'):
+            continue
+        replans.append(d)
+        reasons[str(d.get('fallback_reason', 'missing'))] += 1
+    if not replans:
+        continue
+    triggered = sum(1 for d in replans if d.get('fallback_triggered')) / len(replans)
+    print(path.name, 'replans=', len(replans), 'fallback_triggered_rate=', round(triggered, 4), 'reasons=', dict(reasons))
+PY
 
 if [[ "${RUN_CL50:-0}" == "1" ]]; then
-  run_closed_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" 50 &
-  run_closed_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" 50 &
+  run_closed_loop 0 v25_dgcace_fixed50_control bdse/configs/v25_bdse_dgcace_fixed50_control_fast_cl.yaml "$V25_CKPT" 50 &
+  run_closed_loop 1 v25_dgcace_bbr_scur_tau35 bdse/configs/v25_bdse_dgcace_bbr_scur_tau35_fast_cl.yaml "$V25_CKPT" 50 &
   wait
-  run_closed_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" 50 &
-  run_closed_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" 50 &
-  wait
-  python -m bdse.tools.collect_closed_loop_metrics \
-    "$CL_ROOT/v24_lcb_legacy_cace_50" \
-    "$CL_ROOT/v24_cace_fixed50_control_50" \
-    "$CL_ROOT/v24_cace_bbr_scur_tau35_50" \
-    "$CL_ROOT/v24_cace_actionheavy_tau45_50" \
-    --csv "$CL_ROOT/v24_50_compare.csv"
-fi
-
-if [[ "${RUN_CL100:-0}" == "1" ]]; then
-  run_closed_loop 0 v24_lcb_legacy_cace bdse/configs/v24_bdse_lcb_legacy_cace_fast_cl.yaml "$V24_CKPT" 100 &
-  run_closed_loop 1 v24_cace_fixed50_control bdse/configs/v24_bdse_cace_fixed50_control_fast_cl.yaml "$V24_CKPT" 100 &
-  wait
-  run_closed_loop 0 v24_cace_bbr_scur_tau35 bdse/configs/v24_bdse_cace_bbr_scur_tau35_fast_cl.yaml "$V24_CKPT" 100 &
-  run_closed_loop 1 v24_cace_actionheavy_tau45 bdse/configs/v24_bdse_cace_actionheavy_tau45_fast_cl.yaml "$V24_CKPT" 100 &
+  run_closed_loop 0 v25_dgcace_actionheavy_tau45 bdse/configs/v25_bdse_dgcace_actionheavy_tau45_fast_cl.yaml "$V25_CKPT" 50 &
+  run_closed_loop 1 v25_dgcace_safety_tau30 bdse/configs/v25_bdse_dgcace_safety_tau30_fast_cl.yaml "$V25_CKPT" 50 &
   wait
   python -m bdse.tools.collect_closed_loop_metrics \
-    "$CL_ROOT/v24_lcb_legacy_cace_100" \
-    "$CL_ROOT/v24_cace_fixed50_control_100" \
-    "$CL_ROOT/v24_cace_bbr_scur_tau35_100" \
-    "$CL_ROOT/v24_cace_actionheavy_tau45_100" \
-    --csv "$CL_ROOT/v24_100_compare.csv"
+    "$CL_ROOT/v25_dgcace_fixed50_control_50" \
+    "$CL_ROOT/v25_dgcace_bbr_scur_tau35_50" \
+    "$CL_ROOT/v25_dgcace_actionheavy_tau45_50" \
+    "$CL_ROOT/v25_dgcace_safety_tau30_50" \
+    --csv "$CL_ROOT/v25_50_compare.csv"
 fi
 
 echo "Done. Key outputs:"
-echo "  $TRAIN_ROOT/bdse_v24_cace.best.pt"
-echo "  $OPEN_ROOT/open_loop_v24_*.json"
-echo "  $CL_ROOT/v24_20_compare.csv"
-echo "  $LOG_ROOT/*.diag.jsonl"
-echo "Optional fast precheck: TRAIN_MAX_SCENARIOS=3000 VAL_MAX_SCENARIOS=500 TRAIN_EPOCHS=2 OPEN_LOOP_ONLY=1 bash run_v24_cace.sh"
-echo "Optional reuse trained ckpt: SKIP_TRAIN=1 V24_CKPT=$V24_CKPT bash run_v24_cace.sh"
+echo "  $TRAIN_ROOT/bdse_v25_dgcace.best.pt"
+echo "  $OPEN_ROOT/open_loop_v25_*.json"
+echo "  $CL_ROOT/v25_20_compare.csv"
+echo "  $LOG_ROOT/*.closed_loop_20.diag.jsonl"
+echo "Fast precheck: TRAIN_MAX_SCENARIOS=3000 VAL_MAX_SCENARIOS=500 TRAIN_EPOCHS=2 OPEN_LOOP_ONLY=1 bash run_v25_dgcace.sh"
+echo "Reuse ckpt: SKIP_TRAIN=1 V25_CKPT=$V25_CKPT bash run_v25_dgcace.sh"
