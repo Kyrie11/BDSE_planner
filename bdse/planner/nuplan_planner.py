@@ -628,12 +628,17 @@ class BDSEPlannerCore:
         if safety_lcb < safety_thr:
             return "safety_lcb_min"
         delta = float(tournament.diagnostics.get("delta_hat_B", 0.0))
+        trigger_low_delta = bool(fcfg.get("trigger_on_low_delta", True))
         if delta < tau_delta:
+            if not trigger_low_delta:
+                return "accepted_low_delta"
+            if bool(fcfg.get("accept_low_delta_if_safe", False)):
+                return "accepted_low_delta"
             return "low_delta"
         return "accepted"
 
     def _needs_fallback(self, tournament, candidates, cfg: dict[str, Any]) -> bool:
-        return self._fallback_reason(tournament, cfg) not in {"disabled", "accepted"}
+        return self._fallback_reason(tournament, cfg) not in {"disabled", "accepted", "accepted_low_delta"}
 
     def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
         profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
@@ -667,17 +672,18 @@ class BDSEPlannerCore:
             L_stages = list(fcfg.get("rival_stages", [base_L, min(31, max(candidates.K - 1, 1))]))
             B_stages = list(fcfg.get("budget_stages", [base_budget, min(int(self.cfg.get("evidence", {}).get("max_atoms", 128)), max(base_budget * 2, base_budget + 1))]))
             max_extra_stages = fcfg.get("max_additional_stages", None)
-            for L in L_stages:
-                for B in B_stages:
-                    M = int(max(int(self.cfg.get("selector", {}).get("proposal_top_m", base_M)), min(int(self.cfg.get("evidence", {}).get("max_atoms", 128)), int(float(fcfg.get("proposal_multiplier", 3.0)) * int(B)))))
-                    name = f"fallback_L{int(L)}_B{int(B)}_M{int(M)}"
-                    cfg_stage = self._stage_cfg(int(B), int(M), int(L))
-                    if name != "base":
-                        stages.append((name, cfg_stage))
-                        if max_extra_stages is not None and len(stages) - 1 >= int(max_extra_stages):
-                            break
-                if max_extra_stages is not None and len(stages) - 1 >= int(max_extra_stages):
-                    break
+            if max_extra_stages is None or int(max_extra_stages) > 0:
+                for L in L_stages:
+                    for B in B_stages:
+                        M = int(max(int(self.cfg.get("selector", {}).get("proposal_top_m", base_M)), min(int(self.cfg.get("evidence", {}).get("max_atoms", 128)), int(float(fcfg.get("proposal_multiplier", 3.0)) * int(B)))))
+                        name = f"fallback_L{int(L)}_B{int(B)}_M{int(M)}"
+                        cfg_stage = self._stage_cfg(int(B), int(M), int(L))
+                        if name != "base":
+                            stages.append((name, cfg_stage))
+                            if max_extra_stages is not None and len(stages) - 1 >= int(max_extra_stages):
+                                break
+                    if max_extra_stages is not None and len(stages) - 1 >= int(max_extra_stages):
+                        break
         best = None
         stage_records = []
         triggered = False
@@ -729,8 +735,8 @@ class BDSEPlannerCore:
                     action = int(best_rule)
                     stage_name = stage_name + "+rule_rerank"
             elif runtime_flags[action]:
-                action = int(conservative_fallback_action(candidates))
-                stage_name = stage_name + "+conservative"
+                action = int(conservative_fallback_action(candidates, safety_flags=runtime_flags, cfg=cfg_stage))
+                stage_name = stage_name + "+safe_progress"
             if profile_enabled:
                 timing_core["rule_rerank_s"] = float(time.perf_counter() - t_rule)
         trajectory = candidates.trajectories[action]

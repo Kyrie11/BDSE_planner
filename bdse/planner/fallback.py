@@ -155,14 +155,65 @@ def rule_based_runtime_scores(
     return scores
 
 
-def conservative_fallback_action(candidates: CandidateBank) -> int:
-    valid = np.flatnonzero(candidates.valid_mask)
+def conservative_fallback_action(
+    candidates: CandidateBank,
+    safety_flags: np.ndarray | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> int:
+    """Choose a safe recovery action without collapsing to zero progress.
+
+    The v25 conservative fallback sorted by low terminal speed and low progress,
+    so many safety-triggered replans degenerated to action 0 / near-stop.  That
+    improved neither fixed-budget evidence use nor closed-loop progress.  This
+    recovery remains rule-only, but it is lexicographic: prefer unflagged valid
+    candidates, then minimize route/lateral/comfort cost while rewarding forward
+    progress.  It is only used when the certificate cannot provide an accepted
+    action.
+    """
+    valid = np.flatnonzero(np.asarray(candidates.valid_mask, dtype=bool).reshape(-1))
     if len(valid) == 0:
         return 0
-    speeds = candidates.trajectories[valid, -1, 3]
-    progress = candidates.trajectories[valid, -1, 0]
-    idx = sorted(valid.tolist(), key=lambda a: (float(speeds[list(valid).index(a)]), float(progress[list(valid).index(a)]), a))[0]
-    return int(idx)
+    traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
+    K = traj.shape[0]
+    flags = np.zeros((K,), dtype=bool) if safety_flags is None else np.asarray(safety_flags, dtype=bool).reshape(-1)
+    if flags.shape[0] < K:
+        flags = np.pad(flags, (0, K - flags.shape[0]), constant_values=True)
+    flags = flags[:K]
+    safe_valid = [int(a) for a in valid.tolist() if not bool(flags[int(a)])]
+    pool = safe_valid if safe_valid else [int(a) for a in valid.tolist()]
+    xy = traj[:, :, :2]
+    lateral_mean = np.mean(np.abs(xy[:, :, 1]), axis=1)
+    lateral_final = np.abs(xy[:, -1, 1])
+    progress = xy[:, -1, 0]
+    speed_final = traj[:, -1, 3] if traj.shape[-1] > 3 else np.zeros((K,), dtype=np.float32)
+    if xy.shape[1] > 1:
+        step = np.linalg.norm(np.diff(xy, axis=1), axis=-1)
+        path_len = step.sum(axis=1)
+    else:
+        path_len = np.zeros((K,), dtype=np.float32)
+    fc = ((cfg or {}).get("fallback", {}) or {}).get("safe_progress_recovery", {}) if isinstance(cfg, dict) else {}
+    min_progress = float(fc.get("min_progress", -1.0))
+    progress_pool = [a for a in pool if float(progress[a]) >= min_progress]
+    if progress_pool:
+        pool = progress_pool
+    progress_w = float(fc.get("progress_weight", 0.50))
+    path_w = float(fc.get("path_length_weight", 0.04))
+    lateral_w = float(fc.get("lateral_weight", 1.2))
+    lateral_final_w = float(fc.get("lateral_final_weight", 0.6))
+    low_speed_thr = float(fc.get("low_speed_threshold", 0.25))
+    low_speed_penalty = float(fc.get("low_speed_penalty", 0.10))
+    def cost(a: int) -> tuple[float, int]:
+        c = (
+            lateral_w * float(lateral_mean[a])
+            + lateral_final_w * float(lateral_final[a])
+            - progress_w * float(progress[a])
+            - path_w * float(path_len[a])
+            + (low_speed_penalty if float(speed_final[a]) < low_speed_thr else 0.0)
+        )
+        if bool(flags[a]):
+            c += float(fc.get("unsafe_penalty", 1000.0))
+        return (float(c), int(a))
+    return int(min(pool, key=cost))
 
 
 def apply_fallback_if_needed(

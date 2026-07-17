@@ -680,7 +680,7 @@ def _certificate_action_gap_loss(
     valid: torch.Tensor,
     hard_action: torch.Tensor | None,
     cfg: dict[str, Any],
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Differentiable proxy for the deployment fallback gate.
 
     CACE makes the right atoms visible, but v24 closed-loop still triggered the
@@ -691,7 +691,7 @@ def _certificate_action_gap_loss(
     """
     if logits is None:
         z = target_action.new_zeros((), dtype=torch.float32)
-        return z, z
+        return z, z, z
     train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
     gc = train_cfg.get("certificate_gap", {}) or {}
     B, K = logits.shape
@@ -705,15 +705,24 @@ def _certificate_action_gap_loss(
     tau = max(float(gc.get("tau", 0.08)), 1e-6)
     L_gap = F.softplus((best_rival - tscore + margin) / tau).mean()
     if hard_action is None:
-        return L_gap, logits.new_tensor(0.0)
+        z = logits.new_tensor(0.0)
+        return L_gap, z, z
     h = hard_action.bool() & valid.bool()
+    safe = (~hard_action.bool()) & valid.bool()
     hard_scores = logits.masked_fill(~h, _neg_mask_value(logits))
+    safe_scores = logits.masked_fill(~safe, _neg_mask_value(logits))
     best_hard = hard_scores.max(dim=1).values
+    best_safe = safe_scores.max(dim=1).values
     has_hard = h.any(dim=1)
+    has_safe = safe.any(dim=1)
     safe_margin = float(gc.get("safety_margin", margin))
     L_safe_terms = F.softplus((best_hard - tscore + safe_margin) / tau)
     L_safe = (L_safe_terms * has_hard.float()).sum() / has_hard.float().sum().clamp_min(1.0)
-    return L_gap, L_safe
+    frontier_margin = float(gc.get("safe_frontier_margin", safe_margin))
+    frontier_terms = F.softplus((best_hard - best_safe + frontier_margin) / tau)
+    frontier_mask = has_hard & has_safe
+    L_frontier = (frontier_terms * frontier_mask.float()).sum() / frontier_mask.float().sum().clamp_min(1.0)
+    return L_gap, L_safe, L_frontier
 
 def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     # Losses include large teacher costs and masking sentinels.  Compute them in
@@ -1082,7 +1091,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
         )
 
-    L_cert_gap, L_cert_safety = _certificate_action_gap_loss(logits_pair, target_action, valid, hard_action, cfg)
+    L_cert_gap, L_cert_safety, L_cert_frontier = _certificate_action_gap_loss(logits_pair, target_action, valid, hard_action, cfg)
 
     full_pred_cost = finite_J0 + (g * e_mask[:, :, None].float()).sum(dim=1)
     full_pred_cost = full_pred_cost.masked_fill(~valid, J0.new_tensor(1e6))
@@ -1165,6 +1174,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("critical_proposal", 0.0)) * L_cace_prop
         + float(lw.get("certificate_gap", 0.0)) * L_cert_gap
         + float(lw.get("certificate_safety", 0.0)) * L_cert_safety
+        + float(lw.get("certificate_safe_frontier", 0.0)) * L_cert_frontier
     )
     return {
         "loss": total,
@@ -1188,4 +1198,5 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_cace_prop": L_cace_prop if 'L_cace_prop' in locals() else J0.new_tensor(0.0),
         "L_cert_gap": L_cert_gap if 'L_cert_gap' in locals() else J0.new_tensor(0.0),
         "L_cert_safety": L_cert_safety if 'L_cert_safety' in locals() else J0.new_tensor(0.0),
+        "L_cert_frontier": L_cert_frontier if 'L_cert_frontier' in locals() else J0.new_tensor(0.0),
     }

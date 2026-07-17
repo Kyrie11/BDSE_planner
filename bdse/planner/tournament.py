@@ -150,24 +150,37 @@ def _apply_safety_score_guard(
     tc = cfg.get("tournament", {}) if isinstance(cfg, dict) else {}
     raw_action = int(np.argmax(guarded)) if guarded.size else 0
     unsafe = valid & flags
+    safe_valid = valid & ~flags
     penalty = max(float(tc.get("unsafe_action_score_penalty", 0.0)), 0.0)
-    if penalty > 0.0 and bool(unsafe.any()):
+    hard_filter = bool(tc.get("hard_filter_unsafe_actions", False))
+    hard_filter_applied = False
+    if hard_filter and bool(safe_valid.any()):
+        # v25 still selected runtime-flagged actions in ~32--49% of replans.
+        # For closed-loop control, cheap hard/runtime flags are constraints, not
+        # soft preferences.  Preserve fixed evidence budget but mask unsafe
+        # candidates before tournament/utility tie-breaking whenever a feasible
+        # unflagged candidate exists.
+        guarded[unsafe] = -1e9
+        hard_filter_applied = True
+    elif penalty > 0.0 and bool(unsafe.any()):
         guarded[unsafe] = guarded[unsafe] - penalty
     action = int(np.argmax(guarded)) if guarded.size else 0
     prefer_margin_raw = tc.get("prefer_unflagged_action_margin", None)
     switched_to_unflagged = False
     if prefer_margin_raw is not None and 0 <= action < n and bool(flags[action]):
-        safe_valid = valid & ~flags
         if bool(safe_valid.any()):
             safe_idx = np.flatnonzero(safe_valid)
             best_safe = int(safe_idx[int(np.argmax(guarded[safe_idx]))])
-            if float(guarded[best_safe]) >= float(guarded[action]) - float(prefer_margin_raw):
+            if hard_filter or float(guarded[best_safe]) >= float(guarded[action]) - float(prefer_margin_raw):
                 action = best_safe
                 switched_to_unflagged = True
     diag = {
         "action_before_safety_guard": int(raw_action),
-        "safety_guard_applied": bool(action != raw_action or penalty > 0.0 or switched_to_unflagged),
+        "safety_guard_applied": bool(action != raw_action or penalty > 0.0 or switched_to_unflagged or hard_filter_applied),
         "unsafe_action_score_penalty": float(penalty),
+        "hard_filter_unsafe_actions": bool(hard_filter),
+        "hard_filter_applied": bool(hard_filter_applied),
+        "safe_action_available": bool(safe_valid.any()),
         "prefer_unflagged_action_margin": float(prefer_margin_raw) if prefer_margin_raw is not None else None,
         "switched_to_unflagged": bool(switched_to_unflagged),
     }
