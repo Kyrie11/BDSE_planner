@@ -725,61 +725,21 @@ class BDSEPlannerCore:
         safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
         if profile_enabled:
             timing_core["final_safety_flags_s"] = float(time.perf_counter() - t_post)
-        post_guard_diag: dict[str, Any] = {"enabled": False, "applied": False}
-        # v29 CDR-RBSR: apply a certificate-preserving, route-aware guard even when
-        # fallback is disabled or not triggered.  v27 fixed-budget recovered progress,
-        # but CL50 still showed a drivable bottleneck; restricting rule rerank to the
-        # fallback branch left fixed-budget decisions without any map-aware final guard.
-        # This guard never expands evidence.  It only reselects inside the current
-        # certificate score band / top-k using cheap runtime route and risk costs.
-        pgcfg = (fcfg.get("post_certificate_route_guard", {}) or {}) if isinstance(fcfg, dict) else {}
-        post_guard_enabled = bool(pgcfg.get("enabled", False))
-        do_rule_guard = bool(fcfg.get("rule_rerank_top_k", 5)) and (triggered or post_guard_enabled)
-        if do_rule_guard:
+        if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
             from bdse.planner.fallback import rule_based_runtime_scores, conservative_fallback_action
             t_rule = time.perf_counter()
-            top_k = int(pgcfg.get("top_k", fcfg.get("rule_rerank_top_k", 5)))
-            score_slack = float(pgcfg.get("score_slack", 0.45))
-            rule_margin = float(pgcfg.get("rule_switch_margin", fcfg.get("rule_switch_margin", 0.0)))
-            selected_score = float(tournament.scores[action]) if 0 <= int(action) < len(tournament.scores) else -float("inf")
-            sorted_actions = [int(a) for a in np.argsort(-tournament.scores) if candidates.valid_mask[int(a)]]
-            band_actions = [a for a in sorted_actions[: max(top_k, 1)] if float(tournament.scores[a]) >= selected_score - score_slack]
-            if not band_actions:
-                band_actions = [int(action)] if 0 <= int(action) < candidates.K else []
+            top_k = int(fcfg.get("rule_rerank_top_k", 5))
+            top_actions = [int(a) for a in np.argsort(-tournament.scores)[:top_k] if candidates.valid_mask[int(a)]]
             rule_cost = rule_based_runtime_scores(runtime, candidates, cfg_stage, safety_flags=runtime_flags)
-            safe_band = [a for a in band_actions if not runtime_flags[a]]
-            pool = safe_band if safe_band else band_actions
-            best_rule = int(min(pool, key=lambda a: (float(rule_cost[a]), -float(tournament.scores[a]), int(a)))) if pool else int(action)
-            selected_flagged = bool(0 <= int(action) < len(runtime_flags) and runtime_flags[int(action)])
-            selected_cost = float(rule_cost[action]) if 0 <= int(action) < len(rule_cost) else float("inf")
-            best_cost = float(rule_cost[best_rule]) if 0 <= int(best_rule) < len(rule_cost) else float("inf")
-            guard_reason = "none"
-            if best_rule != int(action) and (selected_flagged or best_cost + rule_margin < selected_cost):
-                action = int(best_rule)
-                if triggered:
+            safe_top = [a for a in top_actions if not runtime_flags[a]]
+            if safe_top:
+                best_rule = min(safe_top, key=lambda a: (float(rule_cost[a]), a))
+                if float(rule_cost[best_rule]) + float(fcfg.get("rule_switch_margin", 0.0)) < float(rule_cost[action]) or runtime_flags[action]:
+                    action = int(best_rule)
                     stage_name = stage_name + "+rule_rerank"
-                else:
-                    stage_name = stage_name + "+route_guard"
-                guard_reason = "selected_flagged" if selected_flagged else "lower_rule_cost"
-            elif triggered and selected_flagged and not safe_band:
+            elif runtime_flags[action]:
                 action = int(conservative_fallback_action(candidates, safety_flags=runtime_flags, cfg=cfg_stage))
                 stage_name = stage_name + "+safe_progress"
-                guard_reason = "no_safe_band_recovery"
-            post_guard_diag = {
-                "enabled": bool(post_guard_enabled),
-                "applied": bool(guard_reason != "none"),
-                "reason": guard_reason,
-                "top_k": int(top_k),
-                "score_slack": float(score_slack),
-                "band_size": int(len(band_actions)),
-                "safe_band_size": int(len(safe_band)),
-                "action_before_guard": int(tournament.action_index),
-                "action_after_guard": int(action),
-                "selected_flagged_before_guard": bool(selected_flagged),
-                "selected_rule_cost": float(selected_cost),
-                "best_rule_action": int(best_rule),
-                "best_rule_cost": float(best_cost),
-            }
             if profile_enabled:
                 timing_core["rule_rerank_s"] = float(time.perf_counter() - t_rule)
         trajectory = candidates.trajectories[action]
@@ -796,7 +756,6 @@ class BDSEPlannerCore:
             "selector": selection.diagnostics,
             "tournament": tournament.diagnostics,
             "runtime_safety": safety_diag_final,
-            "post_certificate_route_guard": post_guard_diag,
             "fallback_stage": stage_name,
             "fallback_triggered": bool(triggered),
             "fallback_reason": self._fallback_reason(tournament, cfg_stage),

@@ -36,6 +36,21 @@ CL_ROOT="$OUT_ROOT/closed_loop"
 LOG_ROOT="$OUT_ROOT/v28_logs"
 mkdir -p "$TRAIN_ROOT" "$OPEN_ROOT" "$CL_ROOT" "$LOG_ROOT"
 
+# Optional unambiguous stage selector. This avoids relying on ambiguous legacy toggles.
+#   RUN_MODE=open_loop : open-loop only
+#   RUN_MODE=cl20      : closed-loop 20 only, skip open-loop by default
+#   RUN_MODE=cl50      : closed-loop 50 only, skip open-loop by default
+#   RUN_MODE=all       : open-loop + CL20, and CL50 if RUN_CL50=1
+RUN_MODE=${RUN_MODE:-all}
+case "$RUN_MODE" in
+  open_loop) export OPEN_LOOP_ONLY=1; export RUN_CL20=0; export RUN_CL50=0 ;;
+  cl20) export SKIP_OPEN_LOOP=${SKIP_OPEN_LOOP:-1}; export RUN_CL20=1; export RUN_CL50=0 ;;
+  cl50) export SKIP_OPEN_LOOP=${SKIP_OPEN_LOOP:-1}; export RUN_CL20=0; export RUN_CL50=1 ;;
+  all) ;;
+  *) echo "Unknown RUN_MODE=$RUN_MODE. Use all|open_loop|cl20|cl50." >&2; exit 2 ;;
+esac
+echo "[run-mode] RUN_MODE=$RUN_MODE SKIP_OPEN_LOOP=${SKIP_OPEN_LOOP:-0} OPEN_LOOP_ONLY=${OPEN_LOOP_ONLY:-0} RUN_CL20=${RUN_CL20:-1} RUN_CL50=${RUN_CL50:-0}"
+
 python -m py_compile $(find bdse -name '*.py')
 python -m pytest -q \
   bdse/tests/test_flip_rank_selector.py \
@@ -150,21 +165,25 @@ PY
 
 # Run four open-loop evaluations concurrently by default: two jobs on GPU 0 and two on GPU 1.
 # Set OPEN_PARALLEL4=0 to use the old two-at-a-time schedule.
-if [[ "${OPEN_PARALLEL4:-1}" == "1" ]]; then
-  run_open_loop "${GPU_OL_FIXED:-0}" v28_darbsr_fixed_budget bdse/configs/v28_bdse_darbsr_fixed_budget_fast_cl.yaml "$V28_CKPT" &
-  run_open_loop "${GPU_OL_SAFETY:-0}" v28_darbsr_safety_fallback bdse/configs/v28_bdse_darbsr_safety_fallback_fast_cl.yaml "$V28_CKPT" &
-  run_open_loop "${GPU_OL_BBR:-1}" v28_darbsr_bbr_scur bdse/configs/v28_bdse_darbsr_bbr_scur_fast_cl.yaml "$V28_CKPT" &
-  run_open_loop "${GPU_OL_LCB:-1}" v28_darbsr_lcb_control bdse/configs/v28_bdse_darbsr_lcb_control_fast_cl.yaml "$V28_CKPT" &
-  wait
+if [[ "${SKIP_OPEN_LOOP:-0}" != "1" ]]; then
+  if [[ "${OPEN_PARALLEL4:-1}" == "1" ]]; then
+    run_open_loop "${GPU_OL_FIXED:-0}" v28_darbsr_fixed_budget bdse/configs/v28_bdse_darbsr_fixed_budget_fast_cl.yaml "$V28_CKPT" &
+    run_open_loop "${GPU_OL_SAFETY:-0}" v28_darbsr_safety_fallback bdse/configs/v28_bdse_darbsr_safety_fallback_fast_cl.yaml "$V28_CKPT" &
+    run_open_loop "${GPU_OL_BBR:-1}" v28_darbsr_bbr_scur bdse/configs/v28_bdse_darbsr_bbr_scur_fast_cl.yaml "$V28_CKPT" &
+    run_open_loop "${GPU_OL_LCB:-1}" v28_darbsr_lcb_control bdse/configs/v28_bdse_darbsr_lcb_control_fast_cl.yaml "$V28_CKPT" &
+    wait
+  else
+    run_open_loop "${GPU_OL_FIXED:-0}" v28_darbsr_fixed_budget bdse/configs/v28_bdse_darbsr_fixed_budget_fast_cl.yaml "$V28_CKPT" &
+    run_open_loop "${GPU_OL_SAFETY:-1}" v28_darbsr_safety_fallback bdse/configs/v28_bdse_darbsr_safety_fallback_fast_cl.yaml "$V28_CKPT" &
+    wait
+    run_open_loop "${GPU_OL_BBR:-0}" v28_darbsr_bbr_scur bdse/configs/v28_bdse_darbsr_bbr_scur_fast_cl.yaml "$V28_CKPT" &
+    run_open_loop "${GPU_OL_LCB:-1}" v28_darbsr_lcb_control bdse/configs/v28_bdse_darbsr_lcb_control_fast_cl.yaml "$V28_CKPT" &
+    wait
+  fi
+  print_open_loop_compare
 else
-  run_open_loop "${GPU_OL_FIXED:-0}" v28_darbsr_fixed_budget bdse/configs/v28_bdse_darbsr_fixed_budget_fast_cl.yaml "$V28_CKPT" &
-  run_open_loop "${GPU_OL_SAFETY:-1}" v28_darbsr_safety_fallback bdse/configs/v28_bdse_darbsr_safety_fallback_fast_cl.yaml "$V28_CKPT" &
-  wait
-  run_open_loop "${GPU_OL_BBR:-0}" v28_darbsr_bbr_scur bdse/configs/v28_bdse_darbsr_bbr_scur_fast_cl.yaml "$V28_CKPT" &
-  run_open_loop "${GPU_OL_LCB:-1}" v28_darbsr_lcb_control bdse/configs/v28_bdse_darbsr_lcb_control_fast_cl.yaml "$V28_CKPT" &
-  wait
+  echo "SKIP_OPEN_LOOP=1, skipping open-loop runs."
 fi
-print_open_loop_compare
 
 if [[ "${OPEN_LOOP_ONLY:-0}" == "1" ]]; then
   echo "OPEN_LOOP_ONLY=1, skipping closed-loop runs."
@@ -271,13 +290,27 @@ for path in sorted(list(root.glob('*.closed_loop_20.diag.jsonl')) + list(root.gl
 PY
 
 if [[ "${RUN_CL50:-0}" == "1" ]]; then
-  run_closed_loop "${GPU_CL50_FIXED:-0}" v28_darbsr_fixed_budget bdse/configs/v28_bdse_darbsr_fixed_budget_fast_cl.yaml "$V28_CKPT" 50 &
-  run_closed_loop "${GPU_CL50_SAFETY:-1}" v28_darbsr_safety_fallback bdse/configs/v28_bdse_darbsr_safety_fallback_fast_cl.yaml "$V28_CKPT" 50 &
-  wait
-  python -m bdse.tools.collect_closed_loop_metrics \
-    "$CL_ROOT/v28_darbsr_fixed_budget_50" \
-    "$CL_ROOT/v28_darbsr_safety_fallback_50" \
-    --csv "$CL_ROOT/v28_50_compare.csv"
+  if [[ "${RUN_CL50_ALL4:-1}" == "1" ]]; then
+    run_closed_loop "${GPU_CL50_FIXED:-0}" v28_darbsr_fixed_budget bdse/configs/v28_bdse_darbsr_fixed_budget_fast_cl.yaml "$V28_CKPT" 50 &
+    run_closed_loop "${GPU_CL50_SAFETY:-0}" v28_darbsr_safety_fallback bdse/configs/v28_bdse_darbsr_safety_fallback_fast_cl.yaml "$V28_CKPT" 50 &
+    run_closed_loop "${GPU_CL50_BBR:-1}" v28_darbsr_bbr_scur bdse/configs/v28_bdse_darbsr_bbr_scur_fast_cl.yaml "$V28_CKPT" 50 &
+    run_closed_loop "${GPU_CL50_LCB:-1}" v28_darbsr_lcb_control bdse/configs/v28_bdse_darbsr_lcb_control_fast_cl.yaml "$V28_CKPT" 50 &
+    wait
+    python -m bdse.tools.collect_closed_loop_metrics \
+      "$CL_ROOT/v28_darbsr_fixed_budget_50" \
+      "$CL_ROOT/v28_darbsr_safety_fallback_50" \
+      "$CL_ROOT/v28_darbsr_bbr_scur_50" \
+      "$CL_ROOT/v28_darbsr_lcb_control_50" \
+      --csv "$CL_ROOT/v28_50_compare.csv"
+  else
+    run_closed_loop "${GPU_CL50_FIXED:-0}" v28_darbsr_fixed_budget bdse/configs/v28_bdse_darbsr_fixed_budget_fast_cl.yaml "$V28_CKPT" 50 &
+    run_closed_loop "${GPU_CL50_SAFETY:-1}" v28_darbsr_safety_fallback bdse/configs/v28_bdse_darbsr_safety_fallback_fast_cl.yaml "$V28_CKPT" 50 &
+    wait
+    python -m bdse.tools.collect_closed_loop_metrics \
+      "$CL_ROOT/v28_darbsr_fixed_budget_50" \
+      "$CL_ROOT/v28_darbsr_safety_fallback_50" \
+      --csv "$CL_ROOT/v28_50_compare.csv"
+  fi
   python - "$LOG_ROOT" <<'PY'
 import json, sys
 from collections import Counter
@@ -320,6 +353,8 @@ echo "  $TRAIN_ROOT/bdse_v28_darbsr.best.pt"
 echo "  $OPEN_ROOT/open_loop_v28_*.json"
 echo "  $CL_ROOT/v28_20_compare.csv"
 echo "  $LOG_ROOT/*.closed_loop_20.diag.jsonl"
-echo "Runtime-only first check: export SKIP_TRAIN=1 V28_CKPT=$V25_CKPT_IN OPEN_LOOP_ONLY=1; bash run_v28_darbsr.sh"
-echo "Runtime-only CL20: export SKIP_TRAIN=1 V28_CKPT=$V25_CKPT_IN RUN_CL20=1 RUN_CL50=0; bash run_v28_darbsr.sh"
-echo "Finetune: export TRAIN_MAX_SCENARIOS=12000 VAL_MAX_SCENARIOS=1000 TRAIN_EPOCHS=5; bash run_v28_darbsr.sh"
+echo "Runtime-only first check: export SKIP_TRAIN=1 V28_CKPT=$V25_CKPT_IN RUN_MODE=open_loop; bash run_v28_darbsr.sh"
+echo "Runtime-only CL20: export SKIP_TRAIN=1 V28_CKPT=$V25_CKPT_IN RUN_MODE=cl20; bash run_v28_darbsr.sh"
+echo "Finetune: export TRAIN_MAX_SCENARIOS=12000 VAL_MAX_SCENARIOS=1000 TRAIN_EPOCHS=5 RUN_MODE=all; bash run_v28_darbsr.sh"
+
+# CL50 after finetune: export SKIP_TRAIN=1 V28_CKPT=outputs_v28/train/bdse_v28_darbsr.best.pt RUN_MODE=cl50; bash run_v28_darbsr.sh
