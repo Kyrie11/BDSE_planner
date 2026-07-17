@@ -76,7 +76,7 @@ if [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
     --val-mode open_loop \
     --val-every-n-epochs "${VAL_EVERY_N_EPOCHS:-1}" \
     --best-metrics auto bdse_score teacher_action_match budget_vs_full_match selected_interaction_decisive_recall selected_hard_decisive_recall fallback_would_trigger_rate teacher_regret \
-    outputs_v26/train/checkpoints/bdse_v26_rbsr.epoch_0002.pt \
+    --resume-from outputs_v26/train/checkpoints/bdse_v26_rbsr.epoch_0002.pt \
     --output "$TRAIN_OUTPUT" \
     --amp \
     --log-file "$LOG_ROOT/v26_rbsr_train.jsonl" \
