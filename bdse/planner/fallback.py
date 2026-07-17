@@ -194,15 +194,18 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
       - legacy: v26-compatible conservative union;
       - soft: soft risk union;
       - hard: only hard/infeasible runtime violations;
-      - tiered: use soft flags if at least one valid soft-safe action exists,
-        otherwise fall back to hard flags so the planner is not forced into an
-        all-unsafe mask at dense interactions.
+      - tiered: v27 behavior, use soft flags if at least one valid soft-safe
+        action exists, otherwise fall back to hard flags;
+      - dual_tier / hard_constraint_soft_price: v28 behavior, use only hard
+        violations as constraints.  Soft risks are deliberately left to rule /
+        utility pricing so that the hard filter does not collapse in dense but
+        still negotiable interactions.
     """
     comp = runtime_safety_flag_components(runtime, candidates, cfg)
     valid = comp["valid"]
     rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
-    mode = str(rsc.get("flag_mode", "legacy")).lower()
-    if mode == "hard":
+    mode = str(rsc.get("flag_mode", "legacy")).lower().replace("-", "_")
+    if mode in {"hard", "dual_tier", "dual", "hard_constraint_soft_price", "hard_constrained_soft_priced"}:
         flags = comp["hard"]
     elif mode == "soft":
         flags = comp["soft"]
@@ -212,6 +215,43 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
     else:
         flags = comp["legacy"]
     return (valid & np.asarray(flags, dtype=bool).reshape(-1)[: int(candidates.K)]).astype(bool)
+
+
+def runtime_safety_diagnostics(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Compact diagnostics for v28 dual-tier safety.
+
+    These counters separate hard feasibility from soft interaction risk.  They
+    make it possible to tell whether a selected flagged action is unavoidable
+    because every candidate is hard-unsafe, or merely a soft-risk action that
+    should be handled by pricing rather than fallback.
+    """
+    comp = runtime_safety_flag_components(runtime, candidates, cfg)
+    valid = np.asarray(comp.get("valid", np.zeros((int(candidates.K),), dtype=bool)), dtype=bool).reshape(-1)[: int(candidates.K)]
+    hard = np.asarray(comp.get("hard", np.zeros_like(valid)), dtype=bool).reshape(-1)[: int(candidates.K)]
+    soft = np.asarray(comp.get("soft", np.zeros_like(valid)), dtype=bool).reshape(-1)[: int(candidates.K)]
+    flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
+    flags = np.asarray(flags, dtype=bool).reshape(-1)[: int(candidates.K)]
+    valid_n = int(valid.sum())
+    hard_safe = valid & ~hard
+    soft_safe = valid & ~soft
+    active_safe = valid & ~flags
+    out: dict[str, Any] = {
+        "runtime_flag_mode": str((cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}).get("flag_mode", "legacy")),
+        "valid_action_count": valid_n,
+        "hard_flagged_count": int((valid & hard).sum()),
+        "soft_flagged_count": int((valid & soft).sum()),
+        "active_flagged_count": int((valid & flags).sum()),
+        "hard_safe_action_available": bool(hard_safe.any()),
+        "soft_safe_action_available": bool(soft_safe.any()),
+        "active_safe_action_available": bool(active_safe.any()),
+        "hard_safe_action_count": int(hard_safe.sum()),
+        "soft_safe_action_count": int(soft_safe.sum()),
+        "active_safe_action_count": int(active_safe.sum()),
+    }
+    for name in ["off_route_hard", "off_route_soft", "agent_hard", "agent_soft", "red_light", "speed_hard", "speed_soft", "dyn_hard", "dyn_soft"]:
+        arr = np.asarray(comp.get(name, np.zeros_like(valid)), dtype=bool).reshape(-1)[: int(candidates.K)]
+        out[f"{name}_count"] = int((valid & arr).sum())
+    return out
 
 
 def rule_based_runtime_scores(

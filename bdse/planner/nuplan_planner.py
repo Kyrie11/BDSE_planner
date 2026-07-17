@@ -39,7 +39,7 @@ from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.evidence_queries import compute_query_features_for_pairs
 from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
-from bdse.planner.fallback import runtime_safety_flags_from_runtime
+from bdse.planner.fallback import runtime_safety_diagnostics, runtime_safety_flags_from_runtime
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
 from bdse.planner.selector import (
     SelectionResult,
@@ -695,12 +695,14 @@ class BDSEPlannerCore:
                 timing_core["certificate_stages_s"] = timing_core.get("certificate_stages_s", 0.0) + stage_elapsed
             qdiag = runtime_query_diagnostics(pred, selection.selected)
             qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
+            safety_diag_stage = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
             stage_records.append({
                 "stage": stage_name,
                 "action": int(tournament.action_index),
                 "delta_hat_B": float(tournament.diagnostics.get("delta_hat_B", 0.0)),
                 "safety_lcb_min": float(tournament.diagnostics.get("safety_lcb_min", float("inf"))),
                 "fallback_reason": self._fallback_reason(tournament, cfg_stage),
+                "runtime_safety": safety_diag_stage,
                 "selected_atoms": list(map(int, selection.selected)),
                 "top_m_atoms": list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).tolist())),
                 "queried_actions": list(map(int, np.asarray(pred.get("queried_actions", []), dtype=np.int64).tolist())),
@@ -720,6 +722,7 @@ class BDSEPlannerCore:
         action = int(tournament.action_index)
         t_post = time.perf_counter()
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg_stage)
+        safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
         if profile_enabled:
             timing_core["final_safety_flags_s"] = float(time.perf_counter() - t_post)
         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
@@ -752,6 +755,7 @@ class BDSEPlannerCore:
             **({"model_timing": pred.get("model_timing", {})} if profile_enabled else {}),
             "selector": selection.diagnostics,
             "tournament": tournament.diagnostics,
+            "runtime_safety": safety_diag_final,
             "fallback_stage": stage_name,
             "fallback_triggered": bool(triggered),
             "fallback_reason": self._fallback_reason(tournament, cfg_stage),
