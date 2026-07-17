@@ -16,6 +16,14 @@ from bdse.planner.selector import (
 )
 
 
+def _to_numpy(t: torch.Tensor | None, dtype: Any | None = None) -> np.ndarray | None:
+    """Detach once and convert to NumPy without an extra dtype copy when possible."""
+    if t is None:
+        return None
+    arr = t.detach().cpu().numpy()
+    return arr.astype(dtype, copy=False) if dtype is not None else arr
+
+
 def robust_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, delta: float = 1.0) -> torch.Tensor:
     mask = mask.bool()
     if mask.sum() == 0:
@@ -69,24 +77,28 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
     sparse atom-action query mask, preventing dense-label leakage into action
     supervision.
     """
-    J0 = outputs["J0"].detach().cpu().numpy().astype(np.float32)
-    g = outputs["g"].detach().cpu().numpy().astype(np.float32)
+    J0 = _to_numpy(outputs["J0"], np.float32)
+    g = _to_numpy(outputs["g"], np.float32)
     g_var = outputs.get("g_var")
-    g_var_np = g_var.detach().cpu().numpy().astype(np.float32) if g_var is not None else None
-    logits = outputs["proposal_logits"].detach().cpu().numpy().astype(np.float32)
+    g_var_np = _to_numpy(g_var, np.float32) if (g_var is not None and (float(cfg.get("tournament", {}).get("beta_uncertainty", 0.0)) > 0.0 or float(cfg.get("selector", {}).get("lambda_info", 0.0)) > 0.0)) else None
+    logits = _to_numpy(outputs["proposal_logits"], np.float32)
     family_logits = outputs.get("family_logits")
-    family_logits_np = family_logits.detach().cpu().numpy().astype(np.float32) if family_logits is not None else None
-    valid = batch["candidate_valid"].detach().cpu().numpy().astype(bool)
-    active = batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()).detach().cpu().numpy().astype(bool)
-    costs = batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])).detach().cpu().numpy().astype(np.float32)
+    family_logits_np = _to_numpy(family_logits, np.float32) if family_logits is not None else None
+    valid = _to_numpy(batch["candidate_valid"], bool)
+    active = _to_numpy(batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()), bool)
+    costs = _to_numpy(batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])), np.float32)
     fam_ids_t = batch.get("evidence_family_ids")
-    fam_ids_np = fam_ids_t.detach().cpu().numpy().astype(np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
+    fam_ids_np = _to_numpy(fam_ids_t, np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
     B, E = logits.shape
     K = valid.shape[1]
     traj_np = batch.get("candidate_trajectories")
-    traj_np = traj_np.detach().cpu().numpy().astype(np.float32) if traj_np is not None else None
+    traj_np = _to_numpy(traj_np, np.float32) if traj_np is not None else None
     man_np = batch.get("candidate_maneuver_ids")
-    man_np = man_np.detach().cpu().numpy().astype(np.int64) if man_np is not None else None
+    man_np = _to_numpy(man_np, np.int64) if man_np is not None else None
+    flags_t = batch.get("runtime_safety_flags")
+    flags_np_all = _to_numpy(flags_t, bool) if flags_t is not None else None
+    evidence_features_np = _to_numpy(batch.get("evidence_features"), np.float32) if "evidence_features" in batch else None
+    decisive_hard_np = _to_numpy(batch.get("decisive_hard_mask"), bool) if "decisive_hard_mask" in batch else None
     selected_mask = np.zeros((B, E), dtype=bool)
     query_mask = np.zeros((B, E, K), dtype=bool)
 
@@ -126,7 +138,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
         # certificate; it only expands the Top-M candidate pool before the same
         # budgeted greedy selector runs.
         if bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
-            hard_train = batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx]
+            hard_train = (decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx]
             forced = np.flatnonzero(hard_train)
             if forced.size:
                 forced_cap = int(s_cfg.get("max_forced_hard_topm", max(1, M // 2)))
@@ -136,8 +148,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True
         atom_active &= active[bidx]
-        flags = batch.get("runtime_safety_flags")
-        flag_np = flags[bidx].detach().cpu().numpy().astype(bool) if flags is not None else np.zeros((K,), dtype=bool)
+        flag_np = flags_np_all[bidx] if flags_np_all is not None else np.zeros((K,), dtype=bool)
         pairs, _ = build_runtime_pairs_from_base(
             J0[bidx], valid[bidx], flag_np, L0=L0, eta0=eta, lambda_near=lambda_near, lambda_safety=lambda_safety,
             candidate_trajectories=traj_np[bidx] if traj_np is not None else None,
@@ -168,7 +179,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
                 query_mask[bidx, ei, action_ids] = True
         g_sparse = np.where(query_mask[bidx], g[bidx], 0.0)
         var_sparse = np.where(query_mask[bidx], g_var_np[bidx], 0.0) if g_var_np is not None else None
-        hard_feature = batch["evidence_features"][bidx, :, 0].detach().cpu().numpy() > 0.5 if "evidence_features" in batch else np.zeros((E,), dtype=bool)
+        hard_feature = evidence_features_np[bidx, :, 0] > 0.5 if evidence_features_np is not None else np.zeros((E,), dtype=bool)
         mandatory = structural_safety_mask(
             hard_feature,
             fam_ids_np[bidx],
@@ -176,7 +187,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
         )
         if "decisive_hard_mask" in batch and bool(s_cfg.get("force_decisive_hard_topm", True)):
-            mandatory = mandatory | (batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx])
+            mandatory = mandatory | ((decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx])
         result = runtime_greedy_selector(
             J0[bidx],
             g_sparse,
@@ -223,34 +234,43 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
     """
     if "pair_atom_delta" not in outputs or "pair_indices" not in batch:
         return outputs["J0"].new_zeros(outputs["proposal_logits"].shape, dtype=torch.bool)
-    J0 = outputs["J0"].detach().cpu().numpy().astype(np.float32)
-    g_np = outputs["g"].detach().cpu().numpy().astype(np.float32) if "g" in outputs else None
-    delta = outputs["pair_atom_delta"].detach().cpu().numpy().astype(np.float32)
-    pair_var_t = outputs.get("pair_atom_var")
-    pair_var = pair_var_t.detach().cpu().numpy().astype(np.float32) if pair_var_t is not None else None
-    pairs = batch["pair_indices"].detach().cpu().numpy().astype(np.int64)
-    pair_valid = batch["pair_valid"].detach().cpu().numpy().astype(bool)
-    pair_weights = batch.get("pair_weights", torch.ones_like(batch["pair_valid"], dtype=torch.float32)).detach().cpu().numpy().astype(np.float32)
-    logits = outputs["proposal_logits"].detach().cpu().numpy().astype(np.float32)
-    family_logits = outputs.get("family_logits")
-    family_logits_np = family_logits.detach().cpu().numpy().astype(np.float32) if family_logits is not None else None
-    valid = batch["candidate_valid"].detach().cpu().numpy().astype(bool)
-    active = batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()).detach().cpu().numpy().astype(bool)
-    costs = batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])).detach().cpu().numpy().astype(np.float32)
-    fam_ids_t = batch.get("evidence_family_ids")
-    fam_ids_np = fam_ids_t.detach().cpu().numpy().astype(np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
-    flags = batch.get("runtime_safety_flags")
-    flags_np = flags.detach().cpu().numpy().astype(bool) if flags is not None else np.zeros_like(valid, dtype=bool)
-
-    Bsz, E = logits.shape
-    selected_mask = np.zeros((Bsz, E), dtype=bool)
     e_cfg = cfg.get("evidence", {})
     s_cfg = cfg.get("selector", {})
     t_cfg = cfg.get("tournament", {})
     c_cfg = cfg.get("calibration", {})
+    normalize_margins = bool(cfg.get("model", {}).get("pair_margin_normalized", True))
+    pair_head_needs_local = bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)) or float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0)) > 0.0
+    selector_needs_pair_var = (
+        float(t_cfg.get("beta_uncertainty", 0.0)) > 0.0
+        or float(s_cfg.get("lambda_info", 0.0)) > 0.0
+        or bool(s_cfg.get("force_uncertainty_objective", False))
+    )
+
+    J0 = _to_numpy(outputs["J0"], np.float32)
+    g_np = _to_numpy(outputs.get("g"), np.float32) if pair_head_needs_local and "g" in outputs else None
+    delta = _to_numpy(outputs["pair_atom_delta"], np.float32)
+    pair_var_t = outputs.get("pair_atom_var")
+    pair_var = _to_numpy(pair_var_t, np.float32) if (pair_var_t is not None and selector_needs_pair_var) else None
+    pairs = _to_numpy(batch["pair_indices"], np.int64)
+    pair_valid = _to_numpy(batch["pair_valid"], bool)
+    pair_weights = _to_numpy(batch.get("pair_weights", torch.ones_like(batch["pair_valid"], dtype=torch.float32)), np.float32)
+    logits = _to_numpy(outputs["proposal_logits"], np.float32)
+    family_logits = outputs.get("family_logits")
+    family_logits_np = _to_numpy(family_logits, np.float32) if family_logits is not None else None
+    valid = _to_numpy(batch["candidate_valid"], bool)
+    active = _to_numpy(batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()), bool)
+    costs = _to_numpy(batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])), np.float32)
+    fam_ids_t = batch.get("evidence_family_ids")
+    fam_ids_np = _to_numpy(fam_ids_t, np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
+    flags = batch.get("runtime_safety_flags")
+    flags_np = _to_numpy(flags, bool) if flags is not None else np.zeros_like(valid, dtype=bool)
+    evidence_features_np = _to_numpy(batch.get("evidence_features"), np.float32) if "evidence_features" in batch else None
+    decisive_hard_np = _to_numpy(batch.get("decisive_hard_mask"), bool) if "decisive_hard_mask" in batch else None
+
+    Bsz, E = logits.shape
+    selected_mask = np.zeros((Bsz, E), dtype=bool)
     budget = float(e_cfg.get("budget", 16))
     M = int(s_cfg.get("proposal_top_m", max(int(2 * budget), int(budget) + 1)))
-    normalize_margins = bool(cfg.get("model", {}).get("pair_margin_normalized", True))
     gamma = float(s_cfg.get("normalized_gamma_max", 5.0) if normalize_margins else s_cfg.get("gamma_max_default", 100.0))
     eta = float(s_cfg.get("normalized_eta_pred", 0.1) if normalize_margins else s_cfg.get("eta_pred", 1.0))
     beta_unc = float(t_cfg.get("beta_uncertainty", 0.0))
@@ -278,7 +298,7 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
         # certificate; it only expands the Top-M candidate pool before the same
         # budgeted greedy selector runs.
         if bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
-            hard_train = batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx]
+            hard_train = (decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx]
             forced = np.flatnonzero(hard_train)
             if forced.size:
                 forced_cap = int(s_cfg.get("max_forced_hard_topm", max(1, M // 2)))
@@ -302,7 +322,7 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             delta_arr = delta_arr[:, ok]
             if var_arr is not None:
                 var_arr = var_arr[:, ok]
-        hard_feature = batch["evidence_features"][bidx, :, 0].detach().cpu().numpy() > 0.5 if "evidence_features" in batch else np.zeros((E,), dtype=bool)
+        hard_feature = evidence_features_np[bidx, :, 0] > 0.5 if evidence_features_np is not None else np.zeros((E,), dtype=bool)
         mandatory = structural_safety_mask(
             hard_feature,
             fam_ids_np[bidx],
@@ -310,7 +330,7 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
         )
         if "decisive_hard_mask" in batch and bool(s_cfg.get("force_decisive_hard_topm", True)):
-            mandatory = mandatory | (batch["decisive_hard_mask"][bidx].detach().cpu().numpy().astype(bool) & active[bidx])
+            mandatory = mandatory | ((decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx])
         base_deltas = J0[bidx, pair_arr[:, 1]] - J0[bidx, pair_arr[:, 0]] if pair_arr.size else np.zeros((0,), dtype=np.float32)
         mscale = margin_normalization_scale(base_deltas, min_scale=_margin_norm_min_scale(cfg), quantile=_margin_norm_quantile(cfg)) if normalize_margins else 1.0
         if g_np is not None and pair_arr.size:
@@ -517,12 +537,24 @@ def _masked_value_scale(values: torch.Tensor, mask: torch.Tensor, default: float
 
 
 def _pair_margin_scale_per_scene(pair_margins: torch.Tensor, pair_mask: torch.Tensor, default: float = 100.0, quantile: float = 0.75) -> torch.Tensor:
-    """Robust per-sample normalization scale for pair margins. Output: [B,1]."""
-    vals = pair_margins.detach().abs().masked_fill(~pair_mask.bool(), 0.0)
+    """Robust per-sample normalization scale for pair margins. Output: [B,1].
+
+    This is algebraically the same per-row quantile used before, but computes all
+    rows in one tensor op instead of launching ``torch.quantile`` once per scene.
+    The fallback branch preserves compatibility with older PyTorch builds that do
+    not expose ``nanquantile``.
+    """
+    mask = pair_mask.bool() & torch.isfinite(pair_margins)
     q = max(0.5, min(float(quantile), 0.99))
+    if hasattr(torch, "nanquantile"):
+        vals = pair_margins.detach().abs().float().masked_fill(~mask, float("nan"))
+        scales = torch.nanquantile(vals, q, dim=1)
+        scales = torch.where(torch.isfinite(scales), scales, scales.new_full(scales.shape, float(default)))
+        return scales.clamp_min(float(default)).view(pair_margins.shape[0], 1).to(pair_margins.device).detach()
+    vals = pair_margins.detach().abs().masked_fill(~mask, 0.0)
     scales = []
     for b in range(vals.shape[0]):
-        row = vals[b][pair_mask[b].bool()]
+        row = vals[b][mask[b]]
         scales.append(pair_margins.new_tensor(float(default)) if row.numel() == 0 else torch.quantile(row.float(), q).clamp_min(float(default)))
     return torch.stack(scales, dim=0).view(vals.shape[0], 1).detach()
 

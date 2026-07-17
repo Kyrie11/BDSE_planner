@@ -288,9 +288,18 @@ def save_sample_npz(sample: Sample, path: str | Path, compressed: bool = False) 
     )
 
 
-def load_sample_npz(path: str | Path, *, include_label_future: bool = True, include_candidate_metadata: bool = True) -> Sample:
+def load_sample_npz(
+    path: str | Path,
+    *,
+    include_label_future: bool = True,
+    include_candidate_metadata: bool = True,
+    include_runtime_metadata: bool = True,
+    include_route_ids: bool = True,
+    include_evidence_aux_metadata: bool = True,
+    allow_pickle: bool = True,
+) -> Sample:
     p = Path(path)
-    with np.load(p, allow_pickle=True) as z:
+    with np.load(p, allow_pickle=allow_pickle) as z:
         scenario_token = str(z["scenario_token"].item() if z["scenario_token"].shape == () else z["scenario_token"].reshape(-1)[0])
         timestamp_us = int(z["timestamp_us"].item())
         mission_goal = np.asarray(z["mission_goal"], dtype=np.float32)
@@ -308,9 +317,9 @@ def load_sample_npz(path: str | Path, *, include_label_future: bool = True, incl
             current_agents=np.asarray(z["runtime_current_agents"], dtype=np.float32),
             traffic_lights=_json_loads_npz(z, "runtime_traffic_lights_json", []),
             map_features=map_features,
-            route_roadblock_ids=_string_list(np.asarray(z["route_roadblock_ids"])),
+            route_roadblock_ids=_string_list(np.asarray(z["route_roadblock_ids"])) if include_route_ids else [],
             mission_goal=mission_goal_val,
-            metadata=_json_loads_npz(z, "runtime_metadata_json", {}),
+            metadata=_json_loads_npz(z, "runtime_metadata_json", {}) if include_runtime_metadata else {},
         )
         if include_label_future and "label_logged_ego" in z.files and np.asarray(z["label_logged_ego"]).size:
             label_future = LabelOnlyFuture(
@@ -352,10 +361,15 @@ def load_sample_npz(path: str | Path, *, include_label_future: bool = True, incl
         anchors = _json_loads_npz(z, "evidence_anchors_json", [{} for _ in types])
         if not isinstance(anchors, list) or len(anchors) != len(types):
             anchors = [{} for _ in types]
-        domains = _json_loads_npz(z, "evidence_validity_domains_json", [{} for _ in types])
-        modes = _json_loads_npz(z, "evidence_response_modes_json", [[] for _ in types])
+        if include_evidence_aux_metadata:
+            domains = _json_loads_npz(z, "evidence_validity_domains_json", [{} for _ in types])
+            modes = _json_loads_npz(z, "evidence_response_modes_json", [[] for _ in types])
+            aggs = _string_list(np.asarray(z["evidence_aggregators"])) if "evidence_aggregators" in z.files else ["mean" for _ in types]
+        else:
+            domains = [{} for _ in types]
+            modes = [[] for _ in types]
+            aggs = ["mean" for _ in types]
         cheap = _json_loads_npz(z, "evidence_cheap_features_json", [{} for _ in types])
-        aggs = _string_list(np.asarray(z["evidence_aggregators"])) if "evidence_aggregators" in z.files else ["mean" for _ in types]
         lambdas = np.asarray(z["evidence_lambda_weights"], dtype=np.float32) if "evidence_lambda_weights" in z.files else np.ones((len(types),), dtype=np.float32)
         def _take(seq, i, default):
             return seq[i] if isinstance(seq, list) and i < len(seq) else default

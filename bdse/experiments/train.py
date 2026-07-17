@@ -51,6 +51,10 @@ class OnTheFlyDataset(Dataset):
                 self._preprocessed_paths[idx],
                 include_label_future=False,
                 include_candidate_metadata=False,
+                include_runtime_metadata=False,
+                include_route_ids=False,
+                include_evidence_aux_metadata=False,
+                allow_pickle=False,
             )
         return self.source[idx]
 
@@ -313,6 +317,17 @@ def _load_checkpoint_if_requested(
     return start_epoch, best_metric, best_epoch, best_trackers, ckpt_path
 
 
+
+
+def _append_loss_meters(meters: dict[str, list[float]], losses: dict[str, torch.Tensor]) -> None:
+    """Append scalar losses with one device->host sync instead of one per key."""
+    items = [(str(k), v) for k, v in losses.items() if torch.is_tensor(v)]
+    if not items:
+        return
+    vals = torch.stack([v.detach().float().reshape(()) for _, v in items]).cpu().tolist()
+    for (k, _), v in zip(items, vals):
+        meters.setdefault(k, []).append(float(v))
+
 def _aggregate_meters(meters: dict[str, list[float]], device: torch.device, distributed: bool) -> dict[str, float]:
     keys = sorted(meters)
     if not keys:
@@ -504,8 +519,7 @@ def _run_validation_loss(
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
         out = model(batch)
         losses = compute_bdse_losses(out, batch, cfg)
-        for k, v in losses.items():
-            meters.setdefault(k, []).append(float(v.detach().cpu()))
+        _append_loss_meters(meters, losses)
     if was_training:
         model.train()
     return _prefix_metrics(_aggregate_meters(meters, device, distributed), "val_")
@@ -547,7 +561,6 @@ def _run_validation_open_loop(
             qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
             qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
             dense = None
-            raw_model = model.module if isinstance(model, DDP) else model
             if dense_diagnostic and hasattr(raw_model, "predict_dense_numpy"):
                 dense = raw_model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
             diag = compute_bdse_diagnostics(
@@ -897,8 +910,7 @@ def main() -> None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg["training"]["grad_clip"]))
             scaler.step(opt)
             scaler.update()
-            for k, v in losses.items():
-                meters.setdefault(k, []).append(float(v.detach().cpu()))
+            _append_loss_meters(meters, losses)
         epoch_metrics = _aggregate_meters(meters, device, distributed)
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):
             if val_sampler is not None:
