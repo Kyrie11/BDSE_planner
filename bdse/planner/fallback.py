@@ -54,35 +54,61 @@ def _trajectory_curvature_batch(xy: np.ndarray) -> np.ndarray:
     return ((dx * ddy - dy * ddx) / denom).astype(np.float32)
 
 
-def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
-    """Return conservative per-candidate safety flags.
+def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
+    """Return tiered runtime safety flags for candidate actions.
 
-    This function is called several times per closed-loop tick.  The previous
-    implementation recomputed route distances, kinematic derivatives, and
-    agent constant-velocity distances inside a Python loop for every candidate.
-    In the fallback rule-rerank path it was accidentally called once per
-    candidate again, creating an O(K^2) hotspot.  Keep the same conservative
-    semantics but compute candidate-bank terms in batches.
+    v26 used one conservative boolean flag for several very different failure
+    modes: off-route, red-light, close agent proximity, high speed, and dynamic
+    discomfort.  In closed loop this often marked every valid candidate as
+    unsafe, so the hard-mask could not actually select a safe alternative.  This
+    helper separates hard violations from soft risk indicators.  The deployed
+    hard mask can then be applied only to infeasible/high-risk candidates, while
+    soft risk is handled by rule reranking and evidence/certificate scores.
     """
     K = int(candidates.K)
-    flags = np.zeros((K,), dtype=bool)
+    zeros = np.zeros((K,), dtype=bool)
+    out = {
+        "valid": zeros.copy(),
+        "off_route_soft": zeros.copy(),
+        "off_route_hard": zeros.copy(),
+        "speed_soft": zeros.copy(),
+        "speed_hard": zeros.copy(),
+        "dyn_soft": zeros.copy(),
+        "dyn_hard": zeros.copy(),
+        "agent_soft": zeros.copy(),
+        "agent_hard": zeros.copy(),
+        "red_light": zeros.copy(),
+        "soft": zeros.copy(),
+        "hard": zeros.copy(),
+        "legacy": zeros.copy(),
+    }
     valid_mask = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)[:K]
+    if valid_mask.shape[0] < K:
+        valid_mask = np.pad(valid_mask, (0, K - valid_mask.shape[0]), constant_values=False)
+    out["valid"] = valid_mask.astype(bool)
     if K <= 0 or not bool(valid_mask.any()):
-        return flags
+        return out
 
     traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
     if traj.ndim != 3 or traj.shape[0] != K or traj.shape[2] < 4:
-        return flags
+        return out
     T = int(traj.shape[1])
     xy_all = traj[:, :, :2]
+    rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
 
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
     width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
     route_dist = nearest_polyline_distance(xy_all.reshape(-1, 2), route).reshape(K, T)
-    off_route = (route_dist > width + 1.0).any(axis=1)
+    soft_off_margin = float(rsc.get("soft_off_route_margin_m", 1.0))
+    hard_off_margin = float(rsc.get("hard_off_route_margin_m", 3.0))
+    out["off_route_soft"] = (route_dist > width + soft_off_margin).any(axis=1)
+    out["off_route_hard"] = (route_dist > width + hard_off_margin).any(axis=1)
 
     speed_limit = float(runtime.map_features.get("speed_limit_mps", 13.4))
-    speed_bad = (traj[:, :, 3] > speed_limit + 2.0).any(axis=1)
+    soft_speed_margin = float(rsc.get("soft_speed_margin_mps", 2.0))
+    hard_speed_margin = float(rsc.get("hard_speed_margin_mps", 5.0))
+    out["speed_soft"] = (traj[:, :, 3] > speed_limit + soft_speed_margin).any(axis=1)
+    out["speed_hard"] = (traj[:, :, 3] > speed_limit + hard_speed_margin).any(axis=1)
 
     dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
     v = traj[:, :, 3]
@@ -93,7 +119,14 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
         acc = np.zeros_like(v, dtype=np.float32)
         jerk = np.zeros_like(v, dtype=np.float32)
     curv = _trajectory_curvature_batch(xy_all)
-    dyn_bad = (np.abs(acc) > 4.0).any(axis=1) | (np.abs(jerk) > 8.0).any(axis=1) | (np.abs(curv) > 0.35).any(axis=1)
+    soft_acc = float(rsc.get("soft_acc_abs", 4.0))
+    soft_jerk = float(rsc.get("soft_jerk_abs", 8.0))
+    soft_curv = float(rsc.get("soft_curvature_abs", 0.35))
+    hard_acc = float(rsc.get("hard_acc_abs", 7.0))
+    hard_jerk = float(rsc.get("hard_jerk_abs", 15.0))
+    hard_curv = float(rsc.get("hard_curvature_abs", 0.55))
+    out["dyn_soft"] = (np.abs(acc) > soft_acc).any(axis=1) | (np.abs(jerk) > soft_jerk).any(axis=1) | (np.abs(curv) > soft_curv).any(axis=1)
+    out["dyn_hard"] = (np.abs(acc) > hard_acc).any(axis=1) | (np.abs(jerk) > hard_jerk).any(axis=1) | (np.abs(curv) > hard_curv).any(axis=1)
 
     red_light_bad = np.zeros((K,), dtype=bool)
     for sl in runtime.map_features.get("stop_lines", []) if runtime.map_features else []:
@@ -106,11 +139,17 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
         for a in np.flatnonzero(valid_mask & ~red_light_bad):
             if _crosses_polyline(xy_all[int(a)], line_xy):
                 red_light_bad[int(a)] = True
+    out["red_light"] = red_light_bad
 
-    agent_bad = np.zeros((K,), dtype=bool)
+    agent_soft = np.zeros((K,), dtype=bool)
+    agent_hard = np.zeros((K,), dtype=bool)
     agent_valid = np.asarray(runtime.agent_valid, dtype=bool).reshape(-1)
     if agent_valid.size and getattr(runtime, "current_agents", None) is not None:
         times = traj[:, :, 4] if traj.shape[2] > 4 else np.arange(T, dtype=np.float32)[None, :] * dt
+        soft_r = float(rsc.get("soft_agent_radius_m", 1.5))
+        hard_r = float(rsc.get("hard_agent_radius_m", 0.85))
+        soft_r2 = soft_r * soft_r
+        hard_r2 = hard_r * hard_r
         for j in np.flatnonzero(agent_valid):
             cur = np.asarray(runtime.current_agents[int(j)], dtype=np.float32).reshape(-1)
             if cur.size < 4:
@@ -121,10 +160,58 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
             pred_y = float(cur[1]) + vy * times
             dx = xy_all[:, :, 0] - pred_x
             dy = xy_all[:, :, 1] - pred_y
-            agent_bad |= ((dx * dx + dy * dy).min(axis=1) < 1.5 * 1.5)
+            d2 = (dx * dx + dy * dy).min(axis=1)
+            agent_soft |= d2 < soft_r2
+            agent_hard |= d2 < hard_r2
+    out["agent_soft"] = agent_soft
+    out["agent_hard"] = agent_hard
 
-    flags = valid_mask & (off_route | speed_bad | dyn_bad | agent_bad | red_light_bad)
-    return flags.astype(bool)
+    include_speed_soft = bool(rsc.get("include_speed_in_soft", True))
+    include_dyn_soft = bool(rsc.get("include_dynamics_in_soft", True))
+    include_speed_hard = bool(rsc.get("include_speed_in_hard", False))
+    include_dyn_hard = bool(rsc.get("include_dynamics_in_hard", False))
+    soft = out["off_route_soft"] | out["agent_soft"] | out["red_light"]
+    hard = out["off_route_hard"] | out["agent_hard"] | out["red_light"]
+    if include_speed_soft:
+        soft = soft | out["speed_soft"]
+    if include_dyn_soft:
+        soft = soft | out["dyn_soft"]
+    if include_speed_hard:
+        hard = hard | out["speed_hard"]
+    if include_dyn_hard:
+        hard = hard | out["dyn_hard"]
+    legacy = out["off_route_soft"] | out["speed_soft"] | out["dyn_soft"] | out["agent_soft"] | out["red_light"]
+    out["soft"] = valid_mask & soft
+    out["hard"] = valid_mask & hard
+    out["legacy"] = valid_mask & legacy
+    return out
+
+
+def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
+    """Return per-candidate flags used by the tournament hard filter.
+
+    ``runtime_safety.flag_mode`` controls the semantics:
+      - legacy: v26-compatible conservative union;
+      - soft: soft risk union;
+      - hard: only hard/infeasible runtime violations;
+      - tiered: use soft flags if at least one valid soft-safe action exists,
+        otherwise fall back to hard flags so the planner is not forced into an
+        all-unsafe mask at dense interactions.
+    """
+    comp = runtime_safety_flag_components(runtime, candidates, cfg)
+    valid = comp["valid"]
+    rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
+    mode = str(rsc.get("flag_mode", "legacy")).lower()
+    if mode == "hard":
+        flags = comp["hard"]
+    elif mode == "soft":
+        flags = comp["soft"]
+    elif mode == "tiered":
+        soft_safe_exists = bool((valid & ~comp["soft"]).any())
+        flags = comp["soft"] if soft_safe_exists else comp["hard"]
+    else:
+        flags = comp["legacy"]
+    return (valid & np.asarray(flags, dtype=bool).reshape(-1)[: int(candidates.K)]).astype(bool)
 
 
 def rule_based_runtime_scores(
@@ -148,10 +235,25 @@ def rule_based_runtime_scores(
     route_dist = nearest_polyline_distance(traj[:, :, :2].reshape(-1, 2), route).reshape(candidates.K, traj.shape[1])
     route_cost = np.square(route_dist).mean(axis=1)
     progress_reward = np.maximum(traj[:, -1, 0], 0.0)
+    # Reranking can be more nuanced than the tournament hard mask: hard flags
+    # receive a very large penalty, while soft risks receive a smaller penalty
+    # so that the planner can still choose forward progress when every candidate
+    # is near a soft interaction envelope.
+    rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
+    comp = runtime_safety_flag_components(runtime, candidates, cfg)
     if safety_flags is None:
         safety_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
-    safety_flags = np.asarray(safety_flags, dtype=bool).reshape(-1)[: candidates.K]
-    scores[valid_mask] = (route_cost[valid_mask] - 0.1 * progress_reward[valid_mask] + 100.0 * safety_flags[valid_mask].astype(np.float32)).astype(np.float32)
+    hard_flags = np.asarray(safety_flags, dtype=bool).reshape(-1)[: candidates.K]
+    soft_flags = np.asarray(comp.get("soft", np.zeros((candidates.K,), dtype=bool)), dtype=bool).reshape(-1)[: candidates.K]
+    hard_penalty = float(rsc.get("rule_hard_penalty", 1000.0))
+    soft_penalty = float(rsc.get("rule_soft_penalty", 25.0))
+    progress_weight = float(rsc.get("rule_progress_weight", 0.1))
+    scores[valid_mask] = (
+        route_cost[valid_mask]
+        - progress_weight * progress_reward[valid_mask]
+        + hard_penalty * hard_flags[valid_mask].astype(np.float32)
+        + soft_penalty * (soft_flags[valid_mask] & ~hard_flags[valid_mask]).astype(np.float32)
+    ).astype(np.float32)
     return scores
 
 
