@@ -755,6 +755,8 @@ class BDSEPlannerCore:
                 "final_action_soft_flag": bool(comp_final.get("soft", runtime_flags)[action]) if 0 <= int(action) < len(runtime_flags) else True,
                 "final_action_hard_risk": float(risks_final.get("hard", [float("inf")])[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
                 "final_action_soft_risk": float(risks_final.get("soft", [float("inf")])[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
+                "final_action_hard_agent_risk": float(risks_final.get("hard_agent", risks_final.get("agent", [float("inf")]))[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
+                "final_action_hard_offroute_risk": float(risks_final.get("hard_off_route", risks_final.get("off_route", [float("inf")]))[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
                 "pre_recovery_action": int(tournament.action_index),
             }
         except Exception:

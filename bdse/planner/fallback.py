@@ -208,7 +208,11 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
         "hard": z.copy(),
         "soft": z.copy(),
         "agent": z.copy(),
+        "hard_agent": z.copy(),
+        "soft_agent": z.copy(),
         "off_route": z.copy(),
+        "hard_off_route": z.copy(),
+        "soft_off_route": z.copy(),
         "red_light": z.copy(),
     }
     if K <= 0:
@@ -233,6 +237,8 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
     off_soft = soft_excess.max(axis=1).astype(np.float32)
     off_hard = hard_excess.max(axis=1).astype(np.float32)
     out["off_route"] = off_hard
+    out["hard_off_route"] = off_hard
+    out["soft_off_route"] = off_soft
 
     dt = float(cfg.get("candidate", {}).get("step_s", 0.1)) if isinstance(cfg, dict) else 0.1
     times = traj[:, :, 4] if traj.shape[2] > 4 else np.arange(T, dtype=np.float32)[None, :] * dt
@@ -259,6 +265,8 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
         agent_soft_def = np.maximum(soft_r - min_d, 0.0).astype(np.float32)
         agent_hard_def = np.maximum(hard_r - min_d, 0.0).astype(np.float32)
     out["agent"] = agent_hard_def
+    out["hard_agent"] = agent_hard_def
+    out["soft_agent"] = agent_soft_def
 
     red = np.asarray(runtime_safety_flag_components(runtime, candidates, cfg).get("red_light", np.zeros((K,), dtype=bool)), dtype=bool).reshape(-1)[:K]
     red_risk = red.astype(np.float32) * float(rsc.get("red_light_risk", 10.0))
@@ -358,6 +366,8 @@ def runtime_safety_diagnostics(runtime: RuntimeFeatures, candidates: CandidateBa
         "active_safe_action_count": int(active_safe.sum()),
         "min_hard_risk": float(np.nanmin(risks.get("hard", np.array([np.inf], dtype=np.float32)))) if valid_n else float("inf"),
         "min_soft_risk": float(np.nanmin(risks.get("soft", np.array([np.inf], dtype=np.float32)))) if valid_n else float("inf"),
+        "min_hard_agent_risk": float(np.nanmin(risks.get("hard_agent", risks.get("agent", np.array([np.inf], dtype=np.float32))))) if valid_n else float("inf"),
+        "min_hard_offroute_risk": float(np.nanmin(risks.get("hard_off_route", risks.get("off_route", np.array([np.inf], dtype=np.float32))))) if valid_n else float("inf"),
     }
     for name in ["off_route_hard", "off_route_soft", "agent_hard", "agent_soft", "red_light", "speed_hard", "speed_soft", "dyn_hard", "dyn_soft"]:
         arr = np.asarray(comp.get(name, np.zeros_like(valid)), dtype=bool).reshape(-1)[: int(candidates.K)]
@@ -453,6 +463,60 @@ def conservative_fallback_action(
     else:
         path_len = np.zeros((K,), dtype=np.float32)
     fc = ((cfg or {}).get("fallback", {}) or {}).get("safe_progress_recovery", {}) if isinstance(cfg, dict) else {}
+    hard_risk = np.zeros((K,), dtype=np.float32)
+    soft_risk = np.zeros((K,), dtype=np.float32)
+    agent_risk = np.zeros((K,), dtype=np.float32)
+    offroute_risk = np.zeros((K,), dtype=np.float32)
+    if runtime is not None and isinstance(cfg, dict):
+        risks = runtime_risk_scores(runtime, candidates, cfg)
+        hard_risk = np.nan_to_num(risks.get("hard", hard_risk), nan=0.0, posinf=np.inf, neginf=0.0).astype(np.float32)
+        soft_risk = np.nan_to_num(risks.get("soft", soft_risk), nan=0.0, posinf=np.inf, neginf=0.0).astype(np.float32)
+        agent_risk = np.nan_to_num(risks.get("hard_agent", risks.get("agent", agent_risk)), nan=0.0, posinf=np.inf, neginf=0.0).astype(np.float32)
+        offroute_risk = np.nan_to_num(risks.get("hard_off_route", risks.get("off_route", offroute_risk)), nan=0.0, posinf=np.inf, neginf=0.0).astype(np.float32)
+
+    all_flagged = len(safe_valid) == 0
+    if all_flagged and bool(fc.get("pareto_min_violation", True)) and runtime is not None and isinstance(cfg, dict):
+        # v30 PMV-RBSR: when every valid candidate violates the active runtime
+        # flag, do not rank unsafe actions by a single huge weighted sum.  First
+        # keep a Pareto band around the minimum continuous violation, with agent
+        # proximity protected before off-route/progress trade-offs.  Then choose
+        # the best progress/drivable utility inside that near-min-violation set.
+        pool0 = np.asarray(pool, dtype=np.int64)
+        finite_pool = pool0[np.isfinite(hard_risk[pool0])]
+        if finite_pool.size > 0:
+            min_agent = float(np.min(agent_risk[finite_pool]))
+            agent_margin = float(fc.get("agent_risk_abs_margin", 0.06))
+            agent_pool = finite_pool[agent_risk[finite_pool] <= min_agent + agent_margin]
+            if agent_pool.size >= int(fc.get("min_pareto_pool", 4)):
+                finite_pool = agent_pool
+            min_hard = float(np.min(hard_risk[finite_pool]))
+            hard_margin = max(
+                float(fc.get("hard_risk_abs_margin", 18.0)),
+                float(fc.get("hard_risk_rel_margin", 0.08)) * max(abs(min_hard), 1.0),
+            )
+            risk_pool = finite_pool[hard_risk[finite_pool] <= min_hard + hard_margin]
+            min_soft = float(np.min(soft_risk[risk_pool])) if risk_pool.size else float(np.min(soft_risk[finite_pool]))
+            soft_margin = max(
+                float(fc.get("soft_risk_abs_margin", 5.0)),
+                float(fc.get("soft_risk_rel_margin", 0.12)) * max(abs(min_soft), 1.0),
+            )
+            soft_pool = risk_pool[soft_risk[risk_pool] <= min_soft + soft_margin] if risk_pool.size else finite_pool
+            if soft_pool.size >= int(fc.get("min_pareto_pool", 4)):
+                risk_pool = soft_pool
+            if risk_pool.size > int(fc.get("max_pareto_pool", 16)):
+                # Keep the lowest-risk actions but leave enough alternatives for
+                # progress-aware utility to avoid over-conservative stopping.
+                order = sorted(risk_pool.tolist(), key=lambda a: (float(agent_risk[a]), float(hard_risk[a]), float(soft_risk[a]), -float(progress[a]), int(a)))
+                risk_pool = np.asarray(order[: int(fc.get("max_pareto_pool", 16))], dtype=np.int64)
+            q = float(fc.get("progress_quantile_floor", 0.0))
+            if q > 0.0 and risk_pool.size >= int(fc.get("min_pareto_pool", 4)):
+                thr = float(np.quantile(progress[risk_pool], min(max(q, 0.0), 0.95)))
+                progress_pool_np = risk_pool[progress[risk_pool] >= thr]
+                if progress_pool_np.size >= int(fc.get("min_pareto_pool", 4)):
+                    risk_pool = progress_pool_np
+            if risk_pool.size > 0:
+                pool = [int(a) for a in risk_pool.tolist()]
+
     min_progress = float(fc.get("min_progress", -1.0))
     progress_pool = [a for a in pool if float(progress[a]) >= min_progress]
     if progress_pool:
@@ -463,28 +527,29 @@ def conservative_fallback_action(
     lateral_final_w = float(fc.get("lateral_final_weight", 0.6))
     low_speed_thr = float(fc.get("low_speed_threshold", 0.25))
     low_speed_penalty = float(fc.get("low_speed_penalty", 0.10))
-    hard_risk = np.zeros((K,), dtype=np.float32)
-    soft_risk = np.zeros((K,), dtype=np.float32)
-    if runtime is not None and isinstance(cfg, dict):
-        risks = runtime_risk_scores(runtime, candidates, cfg)
-        hard_risk = np.nan_to_num(risks.get("hard", hard_risk), nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-        soft_risk = np.nan_to_num(risks.get("soft", soft_risk), nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
     hard_risk_w = float(fc.get("hard_risk_weight", 260.0))
     soft_risk_w = float(fc.get("soft_risk_weight", 22.0))
+    # Inside the all-flagged Pareto band, safety has already been handled
+    # lexicographically, so cost only pays excess risk over the pool minimum.
+    risk_ref_hard = float(np.min(hard_risk[np.asarray(pool, dtype=np.int64)])) if all_flagged and pool else 0.0
+    risk_ref_soft = float(np.min(soft_risk[np.asarray(pool, dtype=np.int64)])) if all_flagged and pool else 0.0
     unsafe_penalty = float(fc.get("unsafe_penalty", 1000.0))
     def cost(a: int) -> tuple[float, int]:
+        hard_term = max(float(hard_risk[a]) - risk_ref_hard, 0.0) if all_flagged else float(hard_risk[a])
+        soft_term = max(float(soft_risk[a]) - risk_ref_soft, 0.0) if all_flagged else float(soft_risk[a])
         c = (
             lateral_w * float(lateral_mean[a])
             + lateral_final_w * float(lateral_final[a])
             - progress_w * float(progress[a])
             - path_w * float(path_len[a])
-            + hard_risk_w * float(hard_risk[a])
-            + soft_risk_w * float(soft_risk[a])
+            + hard_risk_w * hard_term
+            + soft_risk_w * soft_term
             + (low_speed_penalty if float(speed_final[a]) < low_speed_thr else 0.0)
         )
-        if bool(flags[a]):
-            # Keep a bounded lexicographic unsafe bias, but let continuous risk
-            # decide among all-flagged candidates.
+        if bool(flags[a]) and not all_flagged:
+            # Preserve the lexicographic safe-first preference whenever a safe
+            # candidate exists.  When all are flagged, avoid adding a constant
+            # penalty that carries no decision information.
             c += unsafe_penalty
         return (float(c), int(a))
     return int(min(pool, key=cost))
