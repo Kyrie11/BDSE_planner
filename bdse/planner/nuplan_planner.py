@@ -39,7 +39,7 @@ from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.evidence_queries import compute_query_features_for_pairs
 from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
-from bdse.planner.fallback import runtime_safety_diagnostics, runtime_safety_flags_from_runtime
+from bdse.planner.fallback import runtime_safety_diagnostics, runtime_safety_flags_from_runtime, runtime_safety_flag_components, runtime_risk_scores
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
 from bdse.planner.selector import (
     SelectionResult,
@@ -726,7 +726,7 @@ class BDSEPlannerCore:
         if profile_enabled:
             timing_core["final_safety_flags_s"] = float(time.perf_counter() - t_post)
         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
-            from bdse.planner.fallback import rule_based_runtime_scores, conservative_fallback_action
+            from bdse.planner.fallback import rule_based_runtime_scores, conservative_fallback_action, runtime_safety_flag_components, runtime_risk_scores
             t_rule = time.perf_counter()
             top_k = int(fcfg.get("rule_rerank_top_k", 5))
             top_actions = [int(a) for a in np.argsort(-tournament.scores)[:top_k] if candidates.valid_mask[int(a)]]
@@ -738,13 +738,38 @@ class BDSEPlannerCore:
                     action = int(best_rule)
                     stage_name = stage_name + "+rule_rerank"
             elif runtime_flags[action]:
-                action = int(conservative_fallback_action(candidates, safety_flags=runtime_flags, cfg=cfg_stage))
+                action = int(conservative_fallback_action(candidates, safety_flags=runtime_flags, cfg=cfg_stage, runtime=runtime))
                 stage_name = stage_name + "+safe_progress"
             if profile_enabled:
                 timing_core["rule_rerank_s"] = float(time.perf_counter() - t_rule)
+        # v29 diagnostic fix: tournament.selected_action_safety_flag was computed
+        # before rule_rerank / safe_progress could change the action.  Keep the
+        # original value but expose final-action hard/soft flags and risk so the
+        # closed-loop logs describe the actually deployed trajectory.
+        try:
+            comp_final = runtime_safety_flag_components(runtime, candidates, cfg_stage)
+            risks_final = runtime_risk_scores(runtime, candidates, cfg_stage)
+            final_runtime_safety = {
+                "final_action_safety_flag": bool(runtime_flags[action]) if 0 <= int(action) < len(runtime_flags) else True,
+                "final_action_hard_flag": bool(comp_final.get("hard", runtime_flags)[action]) if 0 <= int(action) < len(runtime_flags) else True,
+                "final_action_soft_flag": bool(comp_final.get("soft", runtime_flags)[action]) if 0 <= int(action) < len(runtime_flags) else True,
+                "final_action_hard_risk": float(risks_final.get("hard", [float("inf")])[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
+                "final_action_soft_risk": float(risks_final.get("soft", [float("inf")])[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
+                "pre_recovery_action": int(tournament.action_index),
+            }
+        except Exception:
+            final_runtime_safety = {
+                "final_action_safety_flag": bool(runtime_flags[action]) if 0 <= int(action) < len(runtime_flags) else True,
+                "pre_recovery_action": int(tournament.action_index),
+            }
         trajectory = candidates.trajectories[action]
         qdiag = runtime_query_diagnostics(pred, selection.selected)
         qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
+        tournament_diag = dict(tournament.diagnostics)
+        if "selected_action_safety_flag" in tournament_diag:
+            tournament_diag["pre_recovery_selected_action_safety_flag"] = bool(tournament_diag.get("selected_action_safety_flag", False))
+        tournament_diag.update(final_runtime_safety)
+        tournament_diag["selected_action_safety_flag"] = bool(final_runtime_safety.get("final_action_safety_flag", False))
         diagnostics = {
             "action_index": action,
             "selected_atoms": selection.selected,
@@ -754,8 +779,8 @@ class BDSEPlannerCore:
             "hab": pred.get("hab_diagnostics", {}),
             **({"model_timing": pred.get("model_timing", {})} if profile_enabled else {}),
             "selector": selection.diagnostics,
-            "tournament": tournament.diagnostics,
-            "runtime_safety": safety_diag_final,
+            "tournament": tournament_diag,
+            "runtime_safety": {**safety_diag_final, **final_runtime_safety},
             "fallback_stage": stage_name,
             "fallback_triggered": bool(triggered),
             "fallback_reason": self._fallback_reason(tournament, cfg_stage),

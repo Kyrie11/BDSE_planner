@@ -187,19 +187,109 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
     return out
 
 
+def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
+    """Continuous runtime risk scores for min-violation recovery.
+
+    Boolean hard flags are necessary for constraint filtering, but they are not
+    sufficient once every valid candidate violates at least one hard flag.  In
+    that regime v28 treated all flagged actions almost equally, so recovery could
+    choose a candidate with larger collision/TTC risk as long as it had better
+    lateral/progress utility.  These scores keep the same fixed evidence budget
+    and use only runtime geometry to rank *how severe* each violation is.
+
+    Returns lower-is-better per-candidate arrays.  The main outputs are:
+      - hard: severe off-route / hard agent / red-light violation severity;
+      - soft: mild off-route / soft agent proximity severity;
+      - agent: hard-agent proximity severity, useful for diagnostics.
+    """
+    K = int(candidates.K)
+    z = np.zeros((K,), dtype=np.float32)
+    out = {
+        "hard": z.copy(),
+        "soft": z.copy(),
+        "agent": z.copy(),
+        "off_route": z.copy(),
+        "red_light": z.copy(),
+    }
+    if K <= 0:
+        return out
+    valid_mask = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)[:K]
+    if valid_mask.shape[0] < K:
+        valid_mask = np.pad(valid_mask, (0, K - valid_mask.shape[0]), constant_values=False)
+    traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
+    if traj.ndim != 3 or traj.shape[0] != K or traj.shape[2] < 2:
+        return out
+    T = int(traj.shape[1])
+    xy_all = traj[:, :, :2]
+    rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
+
+    route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
+    width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
+    route_dist = nearest_polyline_distance(xy_all.reshape(-1, 2), route).reshape(K, T)
+    soft_off_margin = float(rsc.get("soft_off_route_margin_m", 1.0))
+    hard_off_margin = float(rsc.get("hard_off_route_margin_m", 3.0))
+    soft_excess = np.maximum(route_dist - (width + soft_off_margin), 0.0)
+    hard_excess = np.maximum(route_dist - (width + hard_off_margin), 0.0)
+    off_soft = soft_excess.max(axis=1).astype(np.float32)
+    off_hard = hard_excess.max(axis=1).astype(np.float32)
+    out["off_route"] = off_hard
+
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1)) if isinstance(cfg, dict) else 0.1
+    times = traj[:, :, 4] if traj.shape[2] > 4 else np.arange(T, dtype=np.float32)[None, :] * dt
+    soft_r = float(rsc.get("soft_agent_radius_m", 1.5))
+    hard_r = float(rsc.get("hard_agent_radius_m", 0.85))
+    agent_soft_def = np.zeros((K,), dtype=np.float32)
+    agent_hard_def = np.zeros((K,), dtype=np.float32)
+    agent_valid = np.asarray(runtime.agent_valid, dtype=bool).reshape(-1)
+    if agent_valid.size and getattr(runtime, "current_agents", None) is not None:
+        min_d = np.full((K,), np.inf, dtype=np.float32)
+        for j in np.flatnonzero(agent_valid):
+            cur = np.asarray(runtime.current_agents[int(j)], dtype=np.float32).reshape(-1)
+            if cur.size < 4:
+                continue
+            vx = float(cur[5]) if cur.size > 5 else float(cur[3]) * np.cos(float(cur[2]))
+            vy = float(cur[6]) if cur.size > 6 else float(cur[3]) * np.sin(float(cur[2]))
+            pred_x = float(cur[0]) + vx * times
+            pred_y = float(cur[1]) + vy * times
+            dx = xy_all[:, :, 0] - pred_x
+            dy = xy_all[:, :, 1] - pred_y
+            d = np.sqrt(np.maximum((dx * dx + dy * dy).min(axis=1), 0.0)).astype(np.float32)
+            min_d = np.minimum(min_d, d)
+        min_d = np.where(np.isfinite(min_d), min_d, max(soft_r, hard_r) + 1.0).astype(np.float32)
+        agent_soft_def = np.maximum(soft_r - min_d, 0.0).astype(np.float32)
+        agent_hard_def = np.maximum(hard_r - min_d, 0.0).astype(np.float32)
+    out["agent"] = agent_hard_def
+
+    red = np.asarray(runtime_safety_flag_components(runtime, candidates, cfg).get("red_light", np.zeros((K,), dtype=bool)), dtype=bool).reshape(-1)[:K]
+    red_risk = red.astype(np.float32) * float(rsc.get("red_light_risk", 10.0))
+    out["red_light"] = red_risk
+
+    hard_agent_w = float(rsc.get("risk_hard_agent_weight", 6.0))
+    hard_off_w = float(rsc.get("risk_hard_offroute_weight", 3.0))
+    red_w = float(rsc.get("risk_red_light_weight", 10.0))
+    soft_agent_w = float(rsc.get("risk_soft_agent_weight", 1.2))
+    soft_off_w = float(rsc.get("risk_soft_offroute_weight", 0.8))
+    hard = hard_agent_w * agent_hard_def + hard_off_w * off_hard + red_w * red.astype(np.float32)
+    soft = soft_agent_w * agent_soft_def + soft_off_w * off_soft
+    hard = np.where(valid_mask, hard, np.inf).astype(np.float32)
+    soft = np.where(valid_mask, soft, np.inf).astype(np.float32)
+    out["hard"] = hard
+    out["soft"] = soft
+    return out
+
+
 def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
     """Return per-candidate flags used by the tournament hard filter.
 
-    ``runtime_safety.flag_mode`` controls the semantics:
-      - legacy: v26-compatible conservative union;
-      - soft: soft risk union;
-      - hard: only hard/infeasible runtime violations;
-      - tiered: v27 behavior, use soft flags if at least one valid soft-safe
-        action exists, otherwise fall back to hard flags;
-      - dual_tier / hard_constraint_soft_price: v28 behavior, use only hard
-        violations as constraints.  Soft risks are deliberately left to rule /
-        utility pricing so that the hard filter does not collapse in dense but
-        still negotiable interactions.
+    Modes:
+      - legacy: v26 conservative union;
+      - soft: soft-risk union;
+      - hard / dual_tier: v28 hard-only constraint;
+      - tiered: v27 soft-if-available else hard;
+      - adaptive_dual_tier: v29.  Use soft flags as constraints only when the
+        soft-safe set is large enough; otherwise fall back to hard flags.  This
+        recovers v27's collision/TTC benefit in easy scenes without collapsing
+        route progress/drivable in dense scenes.
     """
     comp = runtime_safety_flag_components(runtime, candidates, cfg)
     valid = comp["valid"]
@@ -212,10 +302,26 @@ def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: Cand
     elif mode == "tiered":
         soft_safe_exists = bool((valid & ~comp["soft"]).any())
         flags = comp["soft"] if soft_safe_exists else comp["hard"]
+    elif mode in {"adaptive_dual_tier", "adaptive_dual", "adaptive_hard_soft", "adaptive_soft_price"}:
+        valid_n = max(int(valid.sum()), 1)
+        soft_safe_count = int((valid & ~comp["soft"]).sum())
+        hard_safe_count = int((valid & ~comp["hard"]).sum())
+        extra_soft = int((valid & comp["soft"] & ~comp["hard"]).sum())
+        min_soft_safe = int(rsc.get("adaptive_min_soft_safe_actions", 6))
+        min_soft_ratio = float(rsc.get("adaptive_min_soft_safe_ratio", 0.20))
+        max_extra_soft = int(rsc.get("adaptive_max_extra_soft_flags", max(valid_n, 1)))
+        use_soft = (
+            soft_safe_count >= min_soft_safe
+            and (soft_safe_count / float(valid_n)) >= min_soft_ratio
+            and extra_soft <= max_extra_soft
+        )
+        # If hard-safe and soft-safe sets are both empty, use hard so downstream
+        # min-violation recovery can rank by continuous risk instead of declaring
+        # everything equally unsafe.
+        flags = comp["soft"] if use_soft else comp["hard"]
     else:
         flags = comp["legacy"]
     return (valid & np.asarray(flags, dtype=bool).reshape(-1)[: int(candidates.K)]).astype(bool)
-
 
 def runtime_safety_diagnostics(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, Any]:
     """Compact diagnostics for v28 dual-tier safety.
@@ -235,8 +341,11 @@ def runtime_safety_diagnostics(runtime: RuntimeFeatures, candidates: CandidateBa
     hard_safe = valid & ~hard
     soft_safe = valid & ~soft
     active_safe = valid & ~flags
+    active_tier = "soft" if np.array_equal(flags, valid & soft) else ("hard" if np.array_equal(flags, valid & hard) else "custom")
+    risks = runtime_risk_scores(runtime, candidates, cfg)
     out: dict[str, Any] = {
         "runtime_flag_mode": str((cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}).get("flag_mode", "legacy")),
+        "active_flag_tier": active_tier,
         "valid_action_count": valid_n,
         "hard_flagged_count": int((valid & hard).sum()),
         "soft_flagged_count": int((valid & soft).sum()),
@@ -247,6 +356,8 @@ def runtime_safety_diagnostics(runtime: RuntimeFeatures, candidates: CandidateBa
         "hard_safe_action_count": int(hard_safe.sum()),
         "soft_safe_action_count": int(soft_safe.sum()),
         "active_safe_action_count": int(active_safe.sum()),
+        "min_hard_risk": float(np.nanmin(risks.get("hard", np.array([np.inf], dtype=np.float32)))) if valid_n else float("inf"),
+        "min_soft_risk": float(np.nanmin(risks.get("soft", np.array([np.inf], dtype=np.float32)))) if valid_n else float("inf"),
     }
     for name in ["off_route_hard", "off_route_soft", "agent_hard", "agent_soft", "red_light", "speed_hard", "speed_soft", "dyn_hard", "dyn_soft"]:
         arr = np.asarray(comp.get(name, np.zeros_like(valid)), dtype=bool).reshape(-1)[: int(candidates.K)]
@@ -287,12 +398,19 @@ def rule_based_runtime_scores(
     soft_flags = np.asarray(comp.get("soft", np.zeros((candidates.K,), dtype=bool)), dtype=bool).reshape(-1)[: candidates.K]
     hard_penalty = float(rsc.get("rule_hard_penalty", 1000.0))
     soft_penalty = float(rsc.get("rule_soft_penalty", 25.0))
+    hard_risk_weight = float(rsc.get("rule_hard_risk_weight", 180.0))
+    soft_risk_weight = float(rsc.get("rule_soft_risk_weight", 18.0))
     progress_weight = float(rsc.get("rule_progress_weight", 0.1))
+    risks = runtime_risk_scores(runtime, candidates, cfg)
+    hard_risk = np.nan_to_num(risks.get("hard", np.zeros((candidates.K,), dtype=np.float32)), nan=0.0, posinf=0.0, neginf=0.0)
+    soft_risk = np.nan_to_num(risks.get("soft", np.zeros((candidates.K,), dtype=np.float32)), nan=0.0, posinf=0.0, neginf=0.0)
     scores[valid_mask] = (
         route_cost[valid_mask]
         - progress_weight * progress_reward[valid_mask]
         + hard_penalty * hard_flags[valid_mask].astype(np.float32)
         + soft_penalty * (soft_flags[valid_mask] & ~hard_flags[valid_mask]).astype(np.float32)
+        + hard_risk_weight * hard_risk[valid_mask]
+        + soft_risk_weight * soft_risk[valid_mask]
     ).astype(np.float32)
     return scores
 
@@ -301,6 +419,7 @@ def conservative_fallback_action(
     candidates: CandidateBank,
     safety_flags: np.ndarray | None = None,
     cfg: dict[str, Any] | None = None,
+    runtime: RuntimeFeatures | None = None,
 ) -> int:
     """Choose a safe recovery action without collapsing to zero progress.
 
@@ -344,16 +463,29 @@ def conservative_fallback_action(
     lateral_final_w = float(fc.get("lateral_final_weight", 0.6))
     low_speed_thr = float(fc.get("low_speed_threshold", 0.25))
     low_speed_penalty = float(fc.get("low_speed_penalty", 0.10))
+    hard_risk = np.zeros((K,), dtype=np.float32)
+    soft_risk = np.zeros((K,), dtype=np.float32)
+    if runtime is not None and isinstance(cfg, dict):
+        risks = runtime_risk_scores(runtime, candidates, cfg)
+        hard_risk = np.nan_to_num(risks.get("hard", hard_risk), nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+        soft_risk = np.nan_to_num(risks.get("soft", soft_risk), nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+    hard_risk_w = float(fc.get("hard_risk_weight", 260.0))
+    soft_risk_w = float(fc.get("soft_risk_weight", 22.0))
+    unsafe_penalty = float(fc.get("unsafe_penalty", 1000.0))
     def cost(a: int) -> tuple[float, int]:
         c = (
             lateral_w * float(lateral_mean[a])
             + lateral_final_w * float(lateral_final[a])
             - progress_w * float(progress[a])
             - path_w * float(path_len[a])
+            + hard_risk_w * float(hard_risk[a])
+            + soft_risk_w * float(soft_risk[a])
             + (low_speed_penalty if float(speed_final[a]) < low_speed_thr else 0.0)
         )
         if bool(flags[a]):
-            c += float(fc.get("unsafe_penalty", 1000.0))
+            # Keep a bounded lexicographic unsafe bias, but let continuous risk
+            # decide among all-flagged candidates.
+            c += unsafe_penalty
         return (float(c), int(a))
     return int(min(pool, key=cost))
 
@@ -425,6 +557,6 @@ def apply_fallback_if_needed(
             stage = "rule_rerank"
             return FallbackResult(int(best), best_tournament, True, stage, {**best_tournament.diagnostics, "rule_cost": float(rule_cost[best])})
 
-    action = conservative_fallback_action(candidates)
+    action = conservative_fallback_action(candidates, runtime=runtime, cfg=cfg)
     best_tournament.action_index = int(action)
     return FallbackResult(int(action), best_tournament, True, "conservative_fallback", dict(best_tournament.diagnostics))
