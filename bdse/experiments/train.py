@@ -385,6 +385,38 @@ def _validation_bdse_score(metrics: dict[str, float]) -> float:
     )
 
 
+def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
+    """Checkpoint score aligned with the fixed-budget paper claim.
+
+    Unlike the historical score, this proxy gives direct weight to the true
+    dense full-interface match and to selected critical interaction/hard atom
+    recall.  It should be used together with ``--val-dense-diagnostic``; without
+    dense scoring, budget-vs-full may only represent a sparse approximation.
+    """
+    def finite(name: str, default: float = 0.0) -> float:
+        value = float(metrics.get(name, default))
+        return value if np.isfinite(value) else default
+
+    budget_full = finite("val_budget_vs_full_match", 0.0)
+    teacher_match = finite("val_teacher_action_match", finite("val_decision_sufficiency", 0.0))
+    interaction_recall = finite("val_selected_interaction_decisive_recall", 0.0)
+    hard_recall = finite("val_selected_hard_decisive_recall", finite("val_hard_evidence_recall", 0.0))
+    near_sign = finite("val_pair_sign_acc_near_tie", 0.0)
+    sufficiency = finite("val_evidence_sufficiency", 0.0)
+    fallback = finite("val_fallback_would_trigger_rate", 0.0)
+    regret = max(0.0, finite("val_teacher_regret", 1e6))
+    return float(
+        160.0 * budget_full
+        + 80.0 * teacher_match
+        + 35.0 * interaction_recall
+        + 25.0 * hard_recall
+        + 20.0 * near_sign
+        + 10.0 * sufficiency
+        - 10.0 * fallback
+        - 5.0 * np.log1p(regret / 1000.0)
+    )
+
+
 def _infer_best_mode(metric_name: str, requested_mode: str = "auto") -> str:
     if requested_mode in {"min", "max"}:
         return requested_mode
@@ -593,6 +625,7 @@ def _run_validation_open_loop(
     metrics["val_open_loop_failed"] = float(fail_t[0].item())
     metrics["val_open_loop_count"] = float(fail_t[1].item())
     metrics["val_bdse_score"] = _validation_bdse_score(metrics)
+    metrics["val_fixed_budget_critical_score"] = _validation_fixed_budget_critical_score(metrics)
     if was_training:
         model.train()
     return metrics
@@ -696,6 +729,38 @@ def _save_training_checkpoints(
             flush=True,
         )
     return new_best_metric, new_best_epoch, new_trackers
+
+def _configure_trainable_modules(model: torch.nn.Module, cfg: dict[str, Any], is_main: bool) -> list[str]:
+    """Optionally freeze the pretrained planner and fine-tune only critical heads.
+
+    V31 full-model fine-tuning changed almost no closed-loop actions and reduced
+    safety on several scenes.  V32 supports low-rate critical-head adaptation so
+    the stable scene/action/base representation is preserved while the evidence,
+    pair-margin and HAB heads learn the fixed-budget decision boundary.
+    """
+    raw = cfg.get("training", {}).get("trainable_modules", []) if isinstance(cfg, dict) else []
+    prefixes = [str(x).strip() for x in raw if str(x).strip()]
+    if not prefixes:
+        return [name for name, p in model.named_parameters() if p.requires_grad]
+    for param in model.parameters():
+        param.requires_grad_(False)
+    selected: list[str] = []
+    for name, param in model.named_parameters():
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes):
+            param.requires_grad_(True)
+            selected.append(name)
+    if not selected:
+        raise ValueError(f"training.trainable_modules matched no parameters: {prefixes}")
+    if is_main:
+        trainable = sum(int(p.numel()) for p in model.parameters() if p.requires_grad)
+        total = sum(int(p.numel()) for p in model.parameters())
+        print(
+            f"[bdse] critical-head finetune prefixes={prefixes} trainable_params={trainable}/{total} "
+            f"({100.0 * trainable / max(total, 1):.2f}%)",
+            flush=True,
+        )
+    return selected
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -865,12 +930,16 @@ def main() -> None:
     if is_main:
         print(f"[bdse] device={device} distributed={distributed} cuda_available={cuda_available} amp={bool(args.amp and device.type == 'cuda')}", flush=True)
     model = BDSEModel(cfg).to(device)
+    _configure_trainable_modules(model, cfg, is_main)
     if distributed:
         find_unused = bool(cfg.get("training", {}).get("ddp_find_unused_parameters", True))
         if is_main:
             print(f"[bdse] DDP find_unused_parameters={find_unused}", flush=True)
         model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=find_unused)
-    opt = torch.optim.AdamW(model.parameters(), lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
+    trainable_parameters = [p for p in model.parameters() if p.requires_grad]
+    if not trainable_parameters:
+        raise RuntimeError("no trainable parameters after applying training.trainable_modules")
+    opt = torch.optim.AdamW(trainable_parameters, lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
     use_amp = bool(args.amp and device.type == "cuda")
     if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)

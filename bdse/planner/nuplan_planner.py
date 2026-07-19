@@ -906,8 +906,20 @@ class BDSEnuPlanPlanner(AbstractPlanner):
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, sort_keys=True) + "\n")
-        except Exception:
-            pass
+        except Exception as exc:
+            # Never silently lose the runtime diagnostics used to validate the
+            # safety/progress mechanism.  Hydra can change the worker cwd, so the
+            # runner supplies an absolute path; any remaining failure is recorded
+            # next to that path and can optionally fail the simulation.
+            try:
+                err_path = Path(str(diag_path) + ".error.log").expanduser()
+                err_path.parent.mkdir(parents=True, exist_ok=True)
+                with err_path.open("a", encoding="utf-8") as f:
+                    f.write(f"{type(exc).__name__}: {exc}\n")
+            except Exception:
+                pass
+            if os.environ.get("BDSE_STRICT_CLOSED_LOOP_DIAG", "0").lower() in {"1", "true", "yes", "on"}:
+                raise
 
     def _planner_replan_interval_ticks(self) -> int:
         pcfg = self.core.cfg.get("planner", {}) if isinstance(self.core.cfg, dict) else {}

@@ -1589,6 +1589,92 @@ def full_prescore_greedy_selector(
     )
 
 
+
+def _collapse_reciprocal_runtime_pairs(
+    pairs: np.ndarray,
+    pair_weights: np.ndarray,
+    base_delta: np.ndarray,
+    caps: np.ndarray,
+    atom_delta: np.ndarray,
+    atom_pair_var: np.ndarray,
+    base_var: np.ndarray,
+    info_caps: np.ndarray,
+    atom_active_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Collapse reciprocal runtime edges into one evidence-sensitive orientation.
+
+    A signed certificate objective cannot reward both ``a>b`` and ``b>a`` for
+    the same unordered action pair: antisymmetric atom margins make the two
+    gains cancel.  This was especially harmful for stop-vs-go pairs, where the
+    cheap base score preferred stopping but a critical interaction/rule atom
+    could legitimately flip the decision.  We retain one edge per unordered
+    pair and orient it toward the direction with the largest *available*
+    positive certificate gain.  No teacher label or future state is used.
+    """
+    pp = np.asarray(pairs, dtype=np.int64)
+    if pp.ndim != 2 or pp.shape[0] <= 1:
+        return pp, pair_weights, base_delta, caps, atom_delta, atom_pair_var, base_var, info_caps
+
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    bd = np.asarray(base_delta, dtype=np.float32).reshape(-1)
+    cp = np.asarray(caps, dtype=np.float32).reshape(-1)
+    ad = np.asarray(atom_delta, dtype=np.float32)
+    av = np.asarray(atom_pair_var, dtype=np.float32)
+    bv = np.asarray(base_var, dtype=np.float32).reshape(-1)
+    ic = np.asarray(info_caps, dtype=np.float32).reshape(-1)
+    active = np.ones((ad.shape[0],), dtype=bool)
+    if atom_active_mask is not None:
+        raw = np.asarray(atom_active_mask, dtype=bool).reshape(-1)
+        active[:] = False
+        active[: min(len(raw), len(active))] = raw[: min(len(raw), len(active))]
+
+    groups: dict[tuple[int, int], list[int]] = {}
+    order: list[tuple[int, int]] = []
+    for idx, (a, b) in enumerate(pp.tolist()):
+        key = (min(int(a), int(b)), max(int(a), int(b)))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(int(idx))
+
+    keep: list[int] = []
+    out_weights: list[float] = []
+    for key in order:
+        idxs = groups[key]
+        if len(idxs) == 1:
+            chosen = idxs[0]
+        else:
+            scored: list[tuple[float, float, float, int]] = []
+            for j in idxs:
+                cap_j = float(cp[j]) if j < len(cp) else 0.0
+                w_j = float(weights[j]) if j < len(weights) else 1.0
+                base_value = w_j * min(cap_j, max(float(bd[j]), 0.0))
+                best_gain = 0.0
+                if ad.ndim == 2 and j < ad.shape[1] and bool(active.any()):
+                    margins = float(bd[j]) + ad[active, j]
+                    after = w_j * np.minimum(cap_j, np.maximum(margins, 0.0))
+                    if after.size:
+                        best_gain = max(0.0, float(np.max(after) - base_value))
+                # Prefer evidence-sensitive flips; then an already positive base
+                # certificate; finally deterministic original order.
+                scored.append((best_gain, max(float(bd[j]), 0.0), w_j, -j))
+            chosen = max(idxs, key=lambda j: next(x for x in scored if x[3] == -j))
+        keep.append(chosen)
+        out_weights.append(max(float(weights[j]) for j in idxs))
+
+    k = np.asarray(keep, dtype=np.int64)
+    return (
+        pp[k],
+        np.asarray(out_weights, dtype=np.float32),
+        bd[k],
+        cp[k],
+        ad[:, k] if ad.ndim == 2 else ad,
+        av[:, k] if av.ndim == 2 else av,
+        bv[k] if bv.shape[0] == pp.shape[0] else bv,
+        ic[k] if ic.shape[0] == pp.shape[0] else ic,
+    )
+
+
 def runtime_greedy_selector(
     predicted_base_cost: np.ndarray,
     predicted_atom_costs: np.ndarray,
@@ -1624,6 +1710,7 @@ def runtime_greedy_selector(
     maneuver_pair_count: int = 0,
     decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     decision_family_quota: int = 0,
+    collapse_reciprocal_pairs: bool = True,
 ) -> SelectionResult:
     """Two-stage runtime selector using base/cheap pair screening only.
 
@@ -1692,6 +1779,30 @@ def runtime_greedy_selector(
         base_var = np.zeros((0,), dtype=np.float32)
         caps = np.zeros((0,), dtype=np.float32)
         info_caps = np.zeros((0,), dtype=np.float32)
+    if bool(collapse_reciprocal_pairs) and len(pairs) > 1:
+        (
+            pairs,
+            pair_weights,
+            base_delta,
+            caps,
+            atom_delta,
+            atom_pair_var,
+            base_var,
+            info_caps,
+        ) = _collapse_reciprocal_runtime_pairs(
+            pairs,
+            pair_weights,
+            base_delta,
+            caps,
+            atom_delta,
+            atom_pair_var,
+            base_var,
+            info_caps,
+            atom_active_mask=atom_active_mask,
+        )
+        base_support = np.maximum(base_delta, 0.0)
+        atom_support = np.maximum(atom_delta, 0.0)
+
     use_uncertainty_objective = (
         predicted_atom_variance is not None
         or abs(float(beta_uncertainty)) > 0.0
