@@ -16,6 +16,7 @@ from bdse.utils import transform_states_to_local
 
 
 _ROUTE_GLOBAL_CACHE: dict[tuple[int, tuple[str, ...]], np.ndarray] = {}
+_ROUTE_CORRIDOR_GLOBAL_CACHE: dict[tuple[int, tuple[str, ...]], list[np.ndarray]] = {}
 _ROUTE_GLOBAL_CACHE_MAX = 4096
 
 # Closed-loop optimization: nuPlan map queries are expensive and this adapter is
@@ -47,6 +48,22 @@ def _store_route_global(initialization: Any, route_global: np.ndarray) -> None:
     if len(_ROUTE_GLOBAL_CACHE) >= _ROUTE_GLOBAL_CACHE_MAX:
         _ROUTE_GLOBAL_CACHE.pop(next(iter(_ROUTE_GLOBAL_CACHE)))
     _ROUTE_GLOBAL_CACHE[key] = arr
+
+
+def _cached_route_corridors_global(initialization: Any) -> list[np.ndarray] | None:
+    corridors = _ROUTE_CORRIDOR_GLOBAL_CACHE.get(_route_cache_key(initialization))
+    if not corridors:
+        return None
+    return corridors
+
+
+def _store_route_corridors_global(initialization: Any, corridors: list[np.ndarray]) -> None:
+    clean = [np.asarray(x, dtype=np.float32).reshape(-1, 2) for x in corridors if len(np.asarray(x).reshape(-1, 2)) >= 2]
+    if not clean:
+        return
+    if len(_ROUTE_CORRIDOR_GLOBAL_CACHE) >= _ROUTE_GLOBAL_CACHE_MAX:
+        _ROUTE_CORRIDOR_GLOBAL_CACHE.pop(next(iter(_ROUTE_CORRIDOR_GLOBAL_CACHE)))
+    _ROUTE_CORRIDOR_GLOBAL_CACHE[_route_cache_key(initialization)] = clean
 
 
 def _traffic_has_red_light(traffic_lights: list[dict[str, Any]]) -> bool:
@@ -456,6 +473,42 @@ def _get_map_object_any_layer(map_api: Any, object_id: str) -> Any | None:
     return None
 
 
+def _route_corridors_from_map_api(initialization: Any, current_state: np.ndarray | None, cfg: dict[str, Any]) -> list[np.ndarray]:
+    """Return all lane-edge centerlines belonging to the declared route.
+
+    A single stitched centerline is ambiguous inside intersections and at
+    branching roadblocks.  CARB keeps the route graph's alternative interior
+    edges as a deployment-available corridor representation.  Geometry is
+    cached globally and only transformed to the current ego frame per tick.
+    """
+    max_corridors = max(1, int(cfg.get("runtime", {}).get("max_route_corridors", 128)))
+    max_pts = max(2, int(cfg.get("runtime", {}).get("max_route_corridor_points", 256)))
+    cached = _cached_route_corridors_global(initialization)
+    if cached is None:
+        corridors: list[np.ndarray] = []
+        seen: set[tuple[float, float, float, float, int]] = set()
+        for _rid, edges in _route_edges_by_roadblock(initialization):
+            for edge in edges:
+                arr = _edge_baseline_polyline(edge)
+                if len(arr) < 2:
+                    continue
+                key = (
+                    round(float(arr[0, 0]), 2), round(float(arr[0, 1]), 2),
+                    round(float(arr[-1, 0]), 2), round(float(arr[-1, 1]), 2), int(len(arr)),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                corridors.append(np.asarray(arr[:max_pts], dtype=np.float32))
+                if len(corridors) >= max_corridors:
+                    break
+            if len(corridors) >= max_corridors:
+                break
+        _store_route_corridors_global(initialization, corridors)
+        cached = corridors
+    return [_to_local_xy(arr, current_state)[:max_pts] for arr in (cached or []) if len(arr) >= 2]
+
+
 def _route_from_map_api(initialization: Any, current_state: np.ndarray | None, cfg: dict[str, Any]) -> np.ndarray:
     max_pts = int(cfg.get("runtime", {}).get("max_route_points", 512))
 
@@ -550,15 +603,17 @@ def _map_features_from_initialization(initialization: Any, cfg: dict[str, Any], 
     route_ids = list(_safe_getattr(initialization, "route_roadblock_ids", []) or []) if initialization is not None else []
     goal = _safe_getattr(initialization, "mission_goal", None) if initialization is not None else None
     route = _route_from_map_api(initialization, current_state, cfg)
+    route_corridors = _route_corridors_from_map_api(initialization, current_state, cfg)
     stop_lines = _stop_lines_from_map_api(initialization, current_state, traffic_lights, cfg)
     return {
         "route_centerline": route,
+        "route_corridor_centerlines": route_corridors,
         "route_corridor_width": float(cfg.get("candidate", {}).get("route_width_m", 4.0)),
         "route_roadblock_ids": route_ids,
         "mission_goal_raw": str(goal) if goal is not None else "",
         "stop_lines": stop_lines,
         "traffic_lights": traffic_lights,
-        "map_valid": bool(len(route) >= 2 and not np.allclose(route[:, 1], 0.0)) or bool(stop_lines),
+        "map_valid": bool(route_corridors) or bool(len(route) >= 2 and not np.allclose(route[:, 1], 0.0)) or bool(stop_lines),
         "runtime_adapter": "planner_input_map_api_best_effort",
         "speed_limit_mps": float(cfg.get("runtime", {}).get("default_speed_limit_mps", 13.4)),
     }

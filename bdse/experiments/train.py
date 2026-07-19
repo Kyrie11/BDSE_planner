@@ -405,15 +405,32 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     sufficiency = finite("val_evidence_sufficiency", 0.0)
     fallback = finite("val_fallback_would_trigger_rate", 0.0)
     regret = max(0.0, finite("val_teacher_regret", 1e6))
+    effective_queries = max(0.0, finite("val_effective_query_count", 0.0))
+    total_queries = max(0.0, finite("val_total_sparse_query_count", 0.0))
+
+    # Feasibility-first checkpointing.  V32's unconstrained weighted sum selected
+    # epochs whose teacher match improved by a few tenths of a point while hard
+    # evidence recall continued to fall.  These hinge penalties encode the
+    # minimum evidence coverage needed before dense-match gains are rewarded.
+    hard_shortfall = max(0.0, 0.60 - hard_recall)
+    interaction_shortfall = max(0.0, 0.32 - interaction_recall)
+    fallback_excess = max(0.0, fallback - 0.02)
+    query_excess = max(0.0, effective_queries / 8500.0 - 1.0)
+    sparse_query_excess = max(0.0, total_queries / 33000.0 - 1.0)
     return float(
         160.0 * budget_full
         + 80.0 * teacher_match
         + 35.0 * interaction_recall
-        + 25.0 * hard_recall
+        + 35.0 * hard_recall
         + 20.0 * near_sign
         + 10.0 * sufficiency
-        - 10.0 * fallback
+        - 20.0 * fallback
         - 5.0 * np.log1p(regret / 1000.0)
+        - 180.0 * hard_shortfall
+        - 90.0 * interaction_shortfall
+        - 120.0 * fallback_excess
+        - 3.0 * query_excess
+        - 2.0 * sparse_query_excess
     )
 
 

@@ -42,6 +42,34 @@ class FallbackResult:
     diagnostics: dict[str, Any]
 
 
+def _route_graph_distance(points_xy: np.ndarray, map_features: dict[str, Any], default_route: np.ndarray) -> np.ndarray:
+    """Minimum distance to any centerline in the declared route graph.
+
+    The historical single-polyline proxy can report >100 m off-route inside a
+    valid intersection branch.  This helper preserves the same runtime inputs
+    and fixed evidence budget while evaluating all route-lane alternatives.
+    """
+    pts = np.asarray(points_xy, dtype=np.float32).reshape(-1, 2)
+    routes: list[np.ndarray] = []
+    raw = map_features.get("route_corridor_centerlines", []) if isinstance(map_features, dict) else []
+    if isinstance(raw, np.ndarray) and raw.ndim == 3:
+        raw = list(raw)
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            arr = np.asarray(item, dtype=np.float32).reshape(-1, 2)
+            if len(arr) >= 2:
+                routes.append(arr)
+    base = np.asarray(default_route, dtype=np.float32).reshape(-1, 2)
+    if len(base) >= 2:
+        routes.append(base)
+    if not routes:
+        return np.full((len(pts),), np.inf, dtype=np.float32)
+    dist = np.full((len(pts),), np.inf, dtype=np.float32)
+    for route in routes:
+        dist = np.minimum(dist, nearest_polyline_distance(pts, route).astype(np.float32))
+    return dist
+
+
 def _trajectory_curvature_batch(xy: np.ndarray) -> np.ndarray:
     """Vectorized variant of ``compute_curvature`` for a K x T x 2 trajectory bank."""
     pts = np.nan_to_num(np.asarray(xy, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
@@ -218,7 +246,7 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
 
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
     width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
-    route_dist = nearest_polyline_distance(xy_all.reshape(-1, 2), route).reshape(K, T)
+    route_dist = _route_graph_distance(xy_all.reshape(-1, 2), runtime.map_features, route).reshape(K, T)
     soft_off_margin = float(rsc.get("soft_off_route_margin_m", 1.0))
     hard_off_margin = float(rsc.get("hard_off_route_margin_m", 3.0))
     out["off_route_soft"] = ((route_dist > width + soft_off_margin) & soft_time_mask).any(axis=1)
@@ -350,7 +378,7 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
 
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
     width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
-    route_dist = nearest_polyline_distance(xy_all.reshape(-1, 2), route).reshape(K, T)
+    route_dist = _route_graph_distance(xy_all.reshape(-1, 2), runtime.map_features, route).reshape(K, T)
     soft_off_margin = float(rsc.get("soft_off_route_margin_m", 1.0))
     hard_off_margin = float(rsc.get("hard_off_route_margin_m", 3.0))
     soft_excess = np.maximum(route_dist - (width + soft_off_margin), 0.0)
@@ -515,7 +543,7 @@ def rule_based_runtime_scores(
         return scores
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
     traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
-    route_dist = nearest_polyline_distance(traj[:, :, :2].reshape(-1, 2), route).reshape(candidates.K, traj.shape[1])
+    route_dist = _route_graph_distance(traj[:, :, :2].reshape(-1, 2), runtime.map_features, route).reshape(candidates.K, traj.shape[1])
     route_cost = np.square(route_dist).mean(axis=1)
     progress_reward = np.maximum(traj[:, -1, 0], 0.0)
     # Reranking can be more nuanced than the tournament hard mask: hard flags
@@ -675,6 +703,31 @@ def viability_frontier_recovery_action(
     if red_pool.size:
         pool = red_pool
 
+    # Absolute physical barrier first, relative ranking second.  CAVR's pure
+    # scene-normalized guard can select a sub-one-second TTC action whenever all
+    # candidates are bad.  CARB preserves any candidate that clears an absolute
+    # TTC/overlap barrier; only when none clears it do we relax toward the best
+    # physically available alternatives.
+    absolute_barrier_applied = False
+    absolute_barrier_relaxed = False
+    barrier_pool_before = int(pool.size)
+    if pool.size:
+        ttc_floor = max(float(vc.get("absolute_ttc_floor_s", 1.50)), 0.0)
+        overlap_cap = max(float(vc.get("absolute_agent_overlap_cap", 0.02)), 0.0)
+        physical_ok = (min_ttc_s >= ttc_floor) & (agent_hard <= overlap_cap)
+        strict = pool[physical_ok[pool]]
+        if strict.size:
+            pool = strict
+            absolute_barrier_applied = True
+        else:
+            absolute_barrier_relaxed = True
+            finite_ttc = np.where(np.isfinite(min_ttc_s), min_ttc_s, 1e6)
+            best_ttc = float(np.max(finite_ttc[pool]))
+            ttc_slack = max(float(vc.get("relative_ttc_slack_s", 0.35)), 0.0)
+            relaxed = pool[finite_ttc[pool] >= best_ttc - ttc_slack]
+            if relaxed.size:
+                pool = relaxed
+
     # Every scale is estimated once from the same candidate population.  This
     # makes diagnostics comparable while avoiding cascading re-normalization.
     agent_n, agent_min, agent_scale = _normalized_excess(agent_hard, valid, q, scale_floor)
@@ -734,6 +787,19 @@ def viability_frontier_recovery_action(
                 ),
             )
             pool = np.asarray(order[:min_pool], dtype=np.int64)
+
+    # Evidence-preserving guard after physical viability.  It is intentionally
+    # conditional: the certificate never removes the only physically safer
+    # action, but when enough viable alternatives exist it prevents recovery
+    # from becoming a disconnected hand-coded planner.
+    certificate_guard_applied = False
+    if score_available and pool.size > min_pool:
+        cert_eps = max(float(vc.get("certificate_guard_epsilon_norm", 0.35)), 0.0)
+        cert_min = float(np.min(score_n[pool]))
+        cert_pool = pool[score_n[pool] <= cert_min + cert_eps]
+        if cert_pool.size >= min_pool:
+            pool = cert_pool
+            certificate_guard_applied = True
 
     # Normalize utility objectives.  Progress is kept as an explicit Pareto
     # objective, so a low-risk stop trajectory cannot dominate a near-risk moving
@@ -817,6 +883,12 @@ def viability_frontier_recovery_action(
         "valid_pool_size": int(valid.size),
         "safe_pool_size": int(safe.size),
         "pool_before_guard": int(pool_before_guard),
+        "absolute_barrier_pool_before": int(barrier_pool_before),
+        "absolute_barrier_applied": bool(absolute_barrier_applied),
+        "absolute_barrier_relaxed": bool(absolute_barrier_relaxed),
+        "absolute_ttc_floor_s": float(vc.get("absolute_ttc_floor_s", 1.50)),
+        "absolute_agent_overlap_cap": float(vc.get("absolute_agent_overlap_cap", 0.02)),
+        "certificate_guard_applied": bool(certificate_guard_applied),
         "guarded_pool_size": int(pool.size),
         "frontier_size": int(frontier.size),
         "frontier_actions": [int(a) for a in frontier.tolist()],

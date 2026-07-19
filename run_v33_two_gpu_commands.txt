@@ -1,0 +1,112 @@
+# Run from ~/code/BDSE_planner after copying the v33 files into the repository.
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Step 0: install v33 code (make a backup first)
+# ---------------------------------------------------------------------------
+# unzip -q BDSE_v33_carb_optimized.zip
+# cp -a BDSE_v33_carb_optimized/. ~/code/BDSE_planner/
+cd ~/code/BDSE_planner
+
+export V30_CKPT_IN=outputs_v30/train/bdse_v30_pmvrbsr.best.pt
+export CL_WORKERS_PER_RUN=2
+export OPEN_PARALLEL4=1
+export CL_PARALLEL4=1
+
+# ---------------------------------------------------------------------------
+# Step 1: strict runtime-only open-loop using the exact v30 checkpoint
+# Do not train before this passes the evidence-coverage gates.
+# ---------------------------------------------------------------------------
+SKIP_TRAIN=1 \
+V33_CKPT="$V30_CKPT_IN" \
+OUT_ROOT=outputs_v33_runtime_v30ckpt \
+RUN_MODE=open_loop \
+bash run_v33_carb.sh
+
+# Required before closed-loop:
+# selected_hard_decisive_recall >= 0.60
+# selected_interaction_decisive_recall >= 0.32
+# fallback_would_trigger_rate <= 0.02 (or clearly below v32's 0.046)
+# teacher_action_match >= 0.215
+# effective_query_count <= 8500
+# total_sparse_query_count <= 33000
+
+# ---------------------------------------------------------------------------
+# Step 2: runtime-only CL20
+# ---------------------------------------------------------------------------
+SKIP_TRAIN=1 \
+V33_CKPT="$V30_CKPT_IN" \
+OUT_ROOT=outputs_v33_runtime_v30ckpt \
+RUN_MODE=cl20 \
+bash run_v33_carb.sh
+
+# Inspect diagnostics before CL50:
+# - no new collision/TTC failures against v31 on the same scenarios
+# - absolute_barrier_applied appears in all-flagged recoveries
+# - selected_min_ttc_s >= 1.5 whenever an absolute-safe candidate exists
+# - route-graph corridor greatly reduces off-route-risk scale
+
+# ---------------------------------------------------------------------------
+# Step 3: runtime-only CL50 (causal test of runtime changes)
+# ---------------------------------------------------------------------------
+SKIP_TRAIN=1 \
+V33_CKPT="$V30_CKPT_IN" \
+OUT_ROOT=outputs_v33_runtime_v30ckpt \
+RUN_MODE=cl50 \
+RUN_CL50_ALL4=1 \
+bash run_v33_carb.sh
+
+# Minimum train gate for BBR/SCUR CL50:
+# score >= 0.333; route_progress >= 0.46; collision >= 0.70;
+# TTC >= 0.70; comfort >= 0.96; DAC >= 0.78;
+# final_action_safety_flag_rate < 0.30.
+
+# ---------------------------------------------------------------------------
+# Optional Step 3b: if hard recall is below 0.60, do quota ablations before training.
+# Copy v33 config and change only:
+# mandatory_hard_quota in {6,7,8}
+# decision_family_quota in {8,10,12}
+# Keep B=16 and proposal_top_m=64 fixed.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Step 4: critical-head finetune from v30 only after runtime-only passes
+# ---------------------------------------------------------------------------
+unset SKIP_TRAIN
+V30_CKPT_IN="$V30_CKPT_IN" \
+OUT_ROOT=outputs_v33 \
+TRAIN_MAX_SCENARIOS=12000 \
+VAL_MAX_SCENARIOS=1000 \
+TRAIN_EPOCHS=3 \
+NPROC_PER_NODE=2 \
+RUN_MODE=open_loop \
+bash run_v33_carb.sh
+
+# ---------------------------------------------------------------------------
+# Step 5: trained checkpoint CL20 then CL50
+# ---------------------------------------------------------------------------
+SKIP_TRAIN=1 \
+V33_CKPT=outputs_v33/train/bdse_v33_carb.best.pt \
+OUT_ROOT=outputs_v33 \
+RUN_MODE=cl20 \
+bash run_v33_carb.sh
+
+SKIP_TRAIN=1 \
+V33_CKPT=outputs_v33/train/bdse_v33_carb.best.pt \
+OUT_ROOT=outputs_v33 \
+RUN_MODE=cl50 \
+RUN_CL50_ALL4=1 \
+bash run_v33_carb.sh
+
+# ---------------------------------------------------------------------------
+# Step 6: package all closed-loop artifacts requested by the paper audit
+# ---------------------------------------------------------------------------
+python tools/package_closed_loop_results.py \
+  --root ~/code/BDSE_planner/outputs_v33_runtime_v30ckpt/closed_loop \
+  --output ~/code/BDSE_planner/outputs_v33_runtime_v30ckpt_closed_loop_results.tar.gz
+
+python tools/package_closed_loop_results.py \
+  --root ~/code/BDSE_planner/outputs_v33/closed_loop \
+  --output ~/code/BDSE_planner/outputs_v33_closed_loop_results.tar.gz
+
+# Add --strict to fail if any run lacks aggregator_metric, metrics, or runner_report.parquet.
