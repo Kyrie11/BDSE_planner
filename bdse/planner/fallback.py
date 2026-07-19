@@ -95,22 +95,31 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
     T = int(traj.shape[1])
     xy_all = traj[:, :, :2]
     rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
+    times = traj[:, :, 4] if traj.shape[2] > 4 else np.broadcast_to(np.arange(T, dtype=np.float32)[None, :] * dt, (K, T))
+    hard_horizon = float(rsc.get("hard_check_horizon_s", float("inf")))
+    soft_horizon = float(rsc.get("soft_check_horizon_s", float("inf")))
+    hard_time_mask = np.isfinite(times) & (times <= hard_horizon + 1e-6)
+    soft_time_mask = np.isfinite(times) & (times <= soft_horizon + 1e-6)
+    # Always retain the first sample even if a malformed candidate starts after
+    # the configured horizon. This keeps the guard conservative and defined.
+    hard_time_mask[:, 0] = True
+    soft_time_mask[:, 0] = True
 
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
     width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
     route_dist = nearest_polyline_distance(xy_all.reshape(-1, 2), route).reshape(K, T)
     soft_off_margin = float(rsc.get("soft_off_route_margin_m", 1.0))
     hard_off_margin = float(rsc.get("hard_off_route_margin_m", 3.0))
-    out["off_route_soft"] = (route_dist > width + soft_off_margin).any(axis=1)
-    out["off_route_hard"] = (route_dist > width + hard_off_margin).any(axis=1)
+    out["off_route_soft"] = ((route_dist > width + soft_off_margin) & soft_time_mask).any(axis=1)
+    out["off_route_hard"] = ((route_dist > width + hard_off_margin) & hard_time_mask).any(axis=1)
 
     speed_limit = float(runtime.map_features.get("speed_limit_mps", 13.4))
     soft_speed_margin = float(rsc.get("soft_speed_margin_mps", 2.0))
     hard_speed_margin = float(rsc.get("hard_speed_margin_mps", 5.0))
-    out["speed_soft"] = (traj[:, :, 3] > speed_limit + soft_speed_margin).any(axis=1)
-    out["speed_hard"] = (traj[:, :, 3] > speed_limit + hard_speed_margin).any(axis=1)
+    out["speed_soft"] = ((traj[:, :, 3] > speed_limit + soft_speed_margin) & soft_time_mask).any(axis=1)
+    out["speed_hard"] = ((traj[:, :, 3] > speed_limit + hard_speed_margin) & hard_time_mask).any(axis=1)
 
-    dt = float(cfg.get("candidate", {}).get("step_s", 0.1))
     v = traj[:, :, 3]
     if T >= 2:
         acc = np.gradient(v, dt, axis=1).astype(np.float32)
@@ -125,8 +134,8 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
     hard_acc = float(rsc.get("hard_acc_abs", 7.0))
     hard_jerk = float(rsc.get("hard_jerk_abs", 15.0))
     hard_curv = float(rsc.get("hard_curvature_abs", 0.55))
-    out["dyn_soft"] = (np.abs(acc) > soft_acc).any(axis=1) | (np.abs(jerk) > soft_jerk).any(axis=1) | (np.abs(curv) > soft_curv).any(axis=1)
-    out["dyn_hard"] = (np.abs(acc) > hard_acc).any(axis=1) | (np.abs(jerk) > hard_jerk).any(axis=1) | (np.abs(curv) > hard_curv).any(axis=1)
+    out["dyn_soft"] = ((np.abs(acc) > soft_acc) & soft_time_mask).any(axis=1) | ((np.abs(jerk) > soft_jerk) & soft_time_mask).any(axis=1) | ((np.abs(curv) > soft_curv) & soft_time_mask).any(axis=1)
+    out["dyn_hard"] = ((np.abs(acc) > hard_acc) & hard_time_mask).any(axis=1) | ((np.abs(jerk) > hard_jerk) & hard_time_mask).any(axis=1) | ((np.abs(curv) > hard_curv) & hard_time_mask).any(axis=1)
 
     red_light_bad = np.zeros((K,), dtype=bool)
     for sl in runtime.map_features.get("stop_lines", []) if runtime.map_features else []:
@@ -137,7 +146,8 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
         if len(line_xy) < 2:
             continue
         for a in np.flatnonzero(valid_mask & ~red_light_bad):
-            if _crosses_polyline(xy_all[int(a)], line_xy):
+            path_prefix = xy_all[int(a)][hard_time_mask[int(a)]]
+            if _crosses_polyline(path_prefix, line_xy):
                 red_light_bad[int(a)] = True
     out["red_light"] = red_light_bad
 
@@ -145,7 +155,6 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
     agent_hard = np.zeros((K,), dtype=bool)
     agent_valid = np.asarray(runtime.agent_valid, dtype=bool).reshape(-1)
     if agent_valid.size and getattr(runtime, "current_agents", None) is not None:
-        times = traj[:, :, 4] if traj.shape[2] > 4 else np.arange(T, dtype=np.float32)[None, :] * dt
         soft_r = float(rsc.get("soft_agent_radius_m", 1.5))
         hard_r = float(rsc.get("hard_agent_radius_m", 0.85))
         soft_r2 = soft_r * soft_r
@@ -160,9 +169,11 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
             pred_y = float(cur[1]) + vy * times
             dx = xy_all[:, :, 0] - pred_x
             dy = xy_all[:, :, 1] - pred_y
-            d2 = (dx * dx + dy * dy).min(axis=1)
-            agent_soft |= d2 < soft_r2
-            agent_hard |= d2 < hard_r2
+            d2_all = dx * dx + dy * dy
+            d2_soft = np.where(soft_time_mask, d2_all, np.inf).min(axis=1)
+            d2_hard = np.where(hard_time_mask, d2_all, np.inf).min(axis=1)
+            agent_soft |= d2_soft < soft_r2
+            agent_hard |= d2_hard < hard_r2
     out["agent_soft"] = agent_soft
     out["agent_hard"] = agent_hard
 
@@ -226,6 +237,14 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
     T = int(traj.shape[1])
     xy_all = traj[:, :, :2]
     rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
+    dt = float(cfg.get("candidate", {}).get("step_s", 0.1)) if isinstance(cfg, dict) else 0.1
+    times = traj[:, :, 4] if traj.shape[2] > 4 else np.broadcast_to(np.arange(T, dtype=np.float32)[None, :] * dt, (K, T))
+    hard_horizon = float(rsc.get("hard_check_horizon_s", float("inf")))
+    soft_horizon = float(rsc.get("soft_check_horizon_s", float("inf")))
+    hard_time_mask = np.isfinite(times) & (times <= hard_horizon + 1e-6)
+    soft_time_mask = np.isfinite(times) & (times <= soft_horizon + 1e-6)
+    hard_time_mask[:, 0] = True
+    soft_time_mask[:, 0] = True
 
     route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float32)
     width = float(runtime.map_features.get("route_corridor_width", cfg.get("candidate", {}).get("route_width_m", 4.0)))
@@ -234,14 +253,12 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
     hard_off_margin = float(rsc.get("hard_off_route_margin_m", 3.0))
     soft_excess = np.maximum(route_dist - (width + soft_off_margin), 0.0)
     hard_excess = np.maximum(route_dist - (width + hard_off_margin), 0.0)
-    off_soft = soft_excess.max(axis=1).astype(np.float32)
-    off_hard = hard_excess.max(axis=1).astype(np.float32)
+    off_soft = np.where(soft_time_mask, soft_excess, 0.0).max(axis=1).astype(np.float32)
+    off_hard = np.where(hard_time_mask, hard_excess, 0.0).max(axis=1).astype(np.float32)
     out["off_route"] = off_hard
     out["hard_off_route"] = off_hard
     out["soft_off_route"] = off_soft
 
-    dt = float(cfg.get("candidate", {}).get("step_s", 0.1)) if isinstance(cfg, dict) else 0.1
-    times = traj[:, :, 4] if traj.shape[2] > 4 else np.arange(T, dtype=np.float32)[None, :] * dt
     soft_r = float(rsc.get("soft_agent_radius_m", 1.5))
     hard_r = float(rsc.get("hard_agent_radius_m", 0.85))
     agent_soft_def = np.zeros((K,), dtype=np.float32)
@@ -249,6 +266,7 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
     agent_valid = np.asarray(runtime.agent_valid, dtype=bool).reshape(-1)
     if agent_valid.size and getattr(runtime, "current_agents", None) is not None:
         min_d = np.full((K,), np.inf, dtype=np.float32)
+        soft_min_d = np.full((K,), np.inf, dtype=np.float32)
         for j in np.flatnonzero(agent_valid):
             cur = np.asarray(runtime.current_agents[int(j)], dtype=np.float32).reshape(-1)
             if cur.size < 4:
@@ -259,10 +277,14 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
             pred_y = float(cur[1]) + vy * times
             dx = xy_all[:, :, 0] - pred_x
             dy = xy_all[:, :, 1] - pred_y
-            d = np.sqrt(np.maximum((dx * dx + dy * dy).min(axis=1), 0.0)).astype(np.float32)
-            min_d = np.minimum(min_d, d)
+            d2_all = dx * dx + dy * dy
+            d_soft = np.sqrt(np.maximum(np.where(soft_time_mask, d2_all, np.inf).min(axis=1), 0.0)).astype(np.float32)
+            d_hard = np.sqrt(np.maximum(np.where(hard_time_mask, d2_all, np.inf).min(axis=1), 0.0)).astype(np.float32)
+            min_d = np.minimum(min_d, d_hard)
+            soft_min_d = np.minimum(soft_min_d, d_soft)
         min_d = np.where(np.isfinite(min_d), min_d, max(soft_r, hard_r) + 1.0).astype(np.float32)
-        agent_soft_def = np.maximum(soft_r - min_d, 0.0).astype(np.float32)
+        soft_min_d = np.where(np.isfinite(soft_min_d), soft_min_d, max(soft_r, hard_r) + 1.0).astype(np.float32)
+        agent_soft_def = np.maximum(soft_r - soft_min_d, 0.0).astype(np.float32)
         agent_hard_def = np.maximum(hard_r - min_d, 0.0).astype(np.float32)
     out["agent"] = agent_hard_def
     out["hard_agent"] = agent_hard_def
@@ -423,6 +445,288 @@ def rule_based_runtime_scores(
         + soft_risk_weight * soft_risk[valid_mask]
     ).astype(np.float32)
     return scores
+
+
+
+@dataclass(slots=True)
+class RecoveryDecision:
+    """Final runtime recovery action and auditable selection diagnostics."""
+
+    action_index: int
+    diagnostics: dict[str, Any]
+
+
+def _robust_min_scale(values: np.ndarray, ids: np.ndarray, quantile: float = 0.90, floor: float = 1e-3) -> tuple[float, float]:
+    """Return a scene-adaptive minimum and robust upper spread.
+
+    Fixed absolute PMV bands are brittle because agent, route and certificate
+    scores have unrelated units and can change scale across scenes.  VCDSR uses
+    a within-candidate robust scale so every epsilon is dimensionless.
+    """
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    idx = np.asarray(ids, dtype=np.int64).reshape(-1)
+    vals = arr[idx]
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return 0.0, 1.0
+    lo = float(np.min(vals))
+    q = float(np.quantile(vals, min(max(float(quantile), 0.50), 1.0)))
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med))) * 1.4826
+    scale = max(q - lo, mad, float(floor))
+    return lo, scale
+
+
+def _normalized_excess(values: np.ndarray, ids: np.ndarray, quantile: float, floor: float) -> tuple[np.ndarray, float, float]:
+    lo, scale = _robust_min_scale(values, ids, quantile=quantile, floor=floor)
+    out = np.maximum((np.asarray(values, dtype=np.float64) - lo) / scale, 0.0)
+    out = np.nan_to_num(out, nan=1e6, posinf=1e6, neginf=0.0).astype(np.float32)
+    return out, lo, scale
+
+
+def _epsilon_pareto_frontier(ids: np.ndarray, objectives: np.ndarray, eps: np.ndarray) -> np.ndarray:
+    """Return the epsilon-nondominated candidate ids (all objectives minimized)."""
+    ids = np.asarray(ids, dtype=np.int64).reshape(-1)
+    obj = np.asarray(objectives, dtype=np.float64)
+    eps = np.asarray(eps, dtype=np.float64).reshape(1, -1)
+    if ids.size <= 1:
+        return ids.copy()
+    keep = np.ones((ids.size,), dtype=bool)
+    for i in range(ids.size):
+        # j dominates i only when it is no worse outside the configured
+        # tolerance in every objective and materially better in at least one.
+        no_worse = np.all(obj <= obj[i : i + 1] + eps, axis=1)
+        materially_better = np.any(obj < obj[i : i + 1] - eps, axis=1)
+        dominated = no_worse & materially_better
+        dominated[i] = False
+        if bool(dominated.any()):
+            keep[i] = False
+    return ids[keep]
+
+
+def viability_frontier_recovery_action(
+    candidates: CandidateBank,
+    safety_flags: np.ndarray | None = None,
+    cfg: dict[str, Any] | None = None,
+    runtime: RuntimeFeatures | None = None,
+    tournament_scores: np.ndarray | None = None,
+    reference_action: int | None = None,
+) -> RecoveryDecision:
+    """Evidence-conditioned, viability-calibrated recovery for all-flagged scenes.
+
+    VCDSR differs from v30 PMV-RBSR in three important ways:
+      1. component risks are normalized with scene-adaptive robust scales rather
+         than compared through fixed raw-unit bands;
+      2. the candidate set is a true epsilon-Pareto frontier over agent risk,
+         route risk, soft risk, BDSE certificate loss and progress loss;
+      3. final progress recovery is conditioned on the evidence tournament score,
+         so the fallback no longer becomes a disconnected rule-only controller.
+
+    The function uses only runtime-observable geometry and already-computed BDSE
+    tournament scores.  It does not query extra evidence or future labels.
+    """
+    valid = np.flatnonzero(np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)).astype(np.int64)
+    if valid.size == 0:
+        return RecoveryDecision(0, {"mode": "vcdsr", "reason": "no_valid_candidate"})
+
+    traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float32), nan=0.0, posinf=1e6, neginf=-1e6)
+    K = int(traj.shape[0])
+    flags = np.zeros((K,), dtype=bool) if safety_flags is None else np.asarray(safety_flags, dtype=bool).reshape(-1)
+    if flags.size < K:
+        flags = np.pad(flags, (0, K - flags.size), constant_values=True)
+    flags = flags[:K]
+    safe = valid[~flags[valid]]
+    all_flagged = safe.size == 0
+    pool = valid.copy() if all_flagged else safe.copy()
+
+    fc = (((cfg or {}).get("fallback", {}) or {}).get("safe_progress_recovery", {}) or {}) if isinstance(cfg, dict) else {}
+    vc = (fc.get("viability_frontier", {}) or {}) if isinstance(fc, dict) else {}
+    q = float(vc.get("scale_quantile", 0.90))
+    scale_floor = float(vc.get("scale_floor", 1e-3))
+    min_pool = max(1, int(vc.get("min_pool", 4)))
+    max_pool = max(min_pool, int(vc.get("max_pool", 18)))
+
+    xy = traj[:, :, :2]
+    lateral_mean = np.mean(np.abs(xy[:, :, 1]), axis=1).astype(np.float32)
+    lateral_final = np.abs(xy[:, -1, 1]).astype(np.float32)
+    progress = xy[:, -1, 0].astype(np.float32)
+    speed_final = traj[:, -1, 3].astype(np.float32) if traj.shape[-1] > 3 else np.zeros((K,), dtype=np.float32)
+    path_len = np.linalg.norm(np.diff(xy, axis=1), axis=-1).sum(axis=1).astype(np.float32) if xy.shape[1] > 1 else np.zeros((K,), dtype=np.float32)
+
+    if runtime is not None and isinstance(cfg, dict):
+        risks = runtime_risk_scores(runtime, candidates, cfg)
+    else:
+        z = np.zeros((K,), dtype=np.float32)
+        risks = {"hard": z, "soft": z, "hard_agent": z, "soft_agent": z, "hard_off_route": z, "soft_off_route": z, "red_light": z}
+    hard = np.asarray(risks.get("hard", np.zeros((K,), dtype=np.float32)), dtype=np.float32)
+    soft = np.asarray(risks.get("soft", np.zeros((K,), dtype=np.float32)), dtype=np.float32)
+    agent_hard = np.asarray(risks.get("hard_agent", risks.get("agent", np.zeros((K,), dtype=np.float32))), dtype=np.float32)
+    agent_soft = np.asarray(risks.get("soft_agent", np.zeros((K,), dtype=np.float32)), dtype=np.float32)
+    off_hard = np.asarray(risks.get("hard_off_route", risks.get("off_route", np.zeros((K,), dtype=np.float32))), dtype=np.float32)
+    off_soft = np.asarray(risks.get("soft_off_route", np.zeros((K,), dtype=np.float32)), dtype=np.float32)
+    red = np.asarray(risks.get("red_light", np.zeros((K,), dtype=np.float32)), dtype=np.float32)
+
+    # Preserve the hard rule hierarchy before any risk/progress trade-off.
+    red_level = float(np.min(red[pool]))
+    red_pool = pool[red[pool] <= red_level + float(vc.get("red_tolerance", 1e-6))]
+    if red_pool.size:
+        pool = red_pool
+
+    # Every scale is estimated once from the same candidate population.  This
+    # makes diagnostics comparable while avoiding cascading re-normalization.
+    agent_n, agent_min, agent_scale = _normalized_excess(agent_hard, valid, q, scale_floor)
+    off_n, off_min, off_scale = _normalized_excess(off_hard, valid, q, scale_floor)
+    soft_n, soft_min, soft_scale = _normalized_excess(soft, valid, q, scale_floor)
+    hard_n, hard_min, hard_scale = _normalized_excess(hard, valid, q, scale_floor)
+
+    scores = np.zeros((K,), dtype=np.float32)
+    score_available = tournament_scores is not None
+    if score_available:
+        raw = np.asarray(tournament_scores, dtype=np.float32).reshape(-1)
+        if raw.size < K:
+            raw = np.pad(raw, (0, K - raw.size), constant_values=-np.inf)
+        scores = raw[:K]
+        finite_valid = valid[np.isfinite(scores[valid])]
+        if finite_valid.size:
+            best_score = float(np.max(scores[finite_valid]))
+            score_loss = np.where(np.isfinite(scores), best_score - scores, np.inf).astype(np.float32)
+        else:
+            score_available = False
+            score_loss = np.zeros((K,), dtype=np.float32)
+    else:
+        score_loss = np.zeros((K,), dtype=np.float32)
+    score_n, score_min, score_scale = _normalized_excess(score_loss, valid, q, scale_floor)
+
+    # Dimensionless viability guards.  If a strict band becomes too small, keep
+    # the lowest-risk min_pool actions instead of silently admitting the entire
+    # bank.  This controlled relaxation is explicit in diagnostics.
+    relaxations: list[str] = []
+    def guarded_filter(ids: np.ndarray, values: np.ndarray, eps_norm: float, name: str) -> np.ndarray:
+        ids = np.asarray(ids, dtype=np.int64)
+        if ids.size <= min_pool:
+            return ids
+        lo = float(np.min(values[ids]))
+        strict = ids[values[ids] <= lo + float(eps_norm)]
+        if strict.size >= min_pool:
+            return strict
+        relaxations.append(name)
+        order = sorted(ids.tolist(), key=lambda a: (float(values[int(a)]), float(hard_n[int(a)]), -float(progress[int(a)]), int(a)))
+        return np.asarray(order[:min_pool], dtype=np.int64)
+
+    pool_before_guard = int(pool.size)
+    pool = guarded_filter(pool, agent_n, float(vc.get("agent_epsilon_norm", 0.12)), "agent")
+    pool = guarded_filter(pool, off_n, float(vc.get("offroute_epsilon_norm", 0.22)), "offroute")
+    if score_available:
+        pool = guarded_filter(pool, score_n, float(vc.get("certificate_epsilon_norm", 0.45)), "certificate")
+
+    # Normalize utility objectives.  Progress is kept as an explicit Pareto
+    # objective, so a low-risk stop trajectory cannot dominate a near-risk moving
+    # trajectory merely because safety dimensions are slightly smaller.
+    progress_cost = -progress
+    progress_loss_n, _, progress_scale = _normalized_excess(progress_cost, valid, q, scale_floor)
+    path_cost_n, _, _ = _normalized_excess(-path_len, valid, q, scale_floor)
+    lateral_n, _, _ = _normalized_excess(lateral_mean + 0.5 * lateral_final, valid, q, scale_floor)
+
+    obj = np.stack(
+        [
+            agent_n[pool],
+            off_n[pool],
+            soft_n[pool],
+            score_n[pool] if score_available else np.zeros((pool.size,), dtype=np.float32),
+            progress_loss_n[pool],
+        ],
+        axis=1,
+    )
+    eps = np.asarray(
+        [
+            float(vc.get("pareto_agent_epsilon", 0.04)),
+            float(vc.get("pareto_offroute_epsilon", 0.06)),
+            float(vc.get("pareto_soft_epsilon", 0.08)),
+            float(vc.get("pareto_certificate_epsilon", 0.08)),
+            float(vc.get("pareto_progress_epsilon", 0.04)),
+        ],
+        dtype=np.float32,
+    )
+    frontier = _epsilon_pareto_frontier(pool, obj, eps)
+    if frontier.size == 0:
+        frontier = pool.copy()
+        relaxations.append("empty_frontier")
+    if frontier.size > max_pool:
+        pre_cost = (
+            float(vc.get("agent_risk_weight", 0.55)) * agent_n[frontier]
+            + float(vc.get("offroute_risk_weight", 0.45)) * off_n[frontier]
+            + float(vc.get("soft_risk_weight", 0.12)) * soft_n[frontier]
+            + float(vc.get("certificate_loss_weight", 0.20)) * score_n[frontier]
+            + float(vc.get("progress_loss_weight", 0.18)) * progress_loss_n[frontier]
+        )
+        order = np.argsort(pre_cost, kind="stable")[:max_pool]
+        frontier = frontier[order]
+
+    low_speed_thr = float(vc.get("low_speed_threshold", fc.get("low_speed_threshold", 0.25)))
+    utility = (
+        float(vc.get("progress_weight", 1.00)) * (1.0 - progress_loss_n)
+        + float(vc.get("path_length_weight", 0.10)) * (1.0 - path_cost_n)
+        + float(vc.get("certificate_weight", 0.24)) * (1.0 - score_n if score_available else 0.0)
+        - float(vc.get("lateral_weight", 0.18)) * lateral_n
+        - float(vc.get("agent_risk_weight", 0.55)) * agent_n
+        - float(vc.get("offroute_risk_weight", 0.45)) * off_n
+        - float(vc.get("soft_risk_weight", 0.12)) * soft_n
+        - float(vc.get("hard_risk_weight", 0.10)) * hard_n
+        - float(vc.get("low_speed_penalty", 0.08)) * (speed_final < low_speed_thr).astype(np.float32)
+    ).astype(np.float32)
+    if reference_action is not None and 0 <= int(reference_action) < K:
+        utility[int(reference_action)] += float(vc.get("reference_action_bonus", 0.03))
+
+    chosen = max(
+        frontier.tolist(),
+        key=lambda a: (
+            float(utility[int(a)]),
+            -float(agent_n[int(a)]),
+            -float(off_n[int(a)]),
+            float(progress[int(a)]),
+            -int(a),
+        ),
+    )
+    chosen = int(chosen)
+    min_hard_id = int(valid[np.argmin(hard[valid])])
+    diagnostics: dict[str, Any] = {
+        "mode": "vcdsr",
+        "all_flagged": bool(all_flagged),
+        "score_conditioned": bool(score_available),
+        "valid_pool_size": int(valid.size),
+        "safe_pool_size": int(safe.size),
+        "pool_before_guard": int(pool_before_guard),
+        "guarded_pool_size": int(pool.size),
+        "frontier_size": int(frontier.size),
+        "frontier_actions": [int(a) for a in frontier.tolist()],
+        "relaxations": list(relaxations),
+        "selected_action": chosen,
+        "selected_utility": float(utility[chosen]),
+        "selected_progress": float(progress[chosen]),
+        "selected_path_length": float(path_len[chosen]),
+        "selected_hard_risk": float(hard[chosen]),
+        "selected_soft_risk": float(soft[chosen]),
+        "selected_agent_risk": float(agent_hard[chosen]),
+        "selected_offroute_risk": float(off_hard[chosen]),
+        "selected_score": float(scores[chosen]) if score_available and np.isfinite(scores[chosen]) else None,
+        "selected_score_loss_norm": float(score_n[chosen]) if score_available else 0.0,
+        "selected_hard_risk_excess": float(hard[chosen] - hard[min_hard_id]),
+        "minimum_hard_risk_action": min_hard_id,
+        "minimum_hard_risk": float(hard[min_hard_id]),
+        "progress_gain_over_min_risk": float(progress[chosen] - progress[min_hard_id]),
+        "agent_risk_min": float(agent_min),
+        "agent_risk_scale": float(agent_scale),
+        "offroute_risk_min": float(off_min),
+        "offroute_risk_scale": float(off_scale),
+        "soft_risk_min": float(soft_min),
+        "soft_risk_scale": float(soft_scale),
+        "hard_risk_min": float(hard_min),
+        "hard_risk_scale": float(hard_scale),
+        "certificate_loss_min": float(score_min),
+        "certificate_loss_scale": float(score_scale),
+        "progress_scale": float(progress_scale),
+    }
+    return RecoveryDecision(chosen, diagnostics)
 
 
 def conservative_fallback_action(

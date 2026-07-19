@@ -725,8 +725,15 @@ class BDSEPlannerCore:
         safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
         if profile_enabled:
             timing_core["final_safety_flags_s"] = float(time.perf_counter() - t_post)
+        recovery_diag: dict[str, Any] = {}
         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
-            from bdse.planner.fallback import rule_based_runtime_scores, conservative_fallback_action, runtime_safety_flag_components, runtime_risk_scores
+            from bdse.planner.fallback import (
+                conservative_fallback_action,
+                rule_based_runtime_scores,
+                runtime_risk_scores,
+                runtime_safety_flag_components,
+                viability_frontier_recovery_action,
+            )
             t_rule = time.perf_counter()
             top_k = int(fcfg.get("rule_rerank_top_k", 5))
             top_actions = [int(a) for a in np.argsort(-tournament.scores)[:top_k] if candidates.valid_mask[int(a)]]
@@ -738,8 +745,22 @@ class BDSEPlannerCore:
                     action = int(best_rule)
                     stage_name = stage_name + "+rule_rerank"
             elif runtime_flags[action]:
-                action = int(conservative_fallback_action(candidates, safety_flags=runtime_flags, cfg=cfg_stage, runtime=runtime))
-                stage_name = stage_name + "+safe_progress"
+                recovery_cfg = ((((cfg_stage.get("fallback", {}) or {}).get("safe_progress_recovery", {}) or {}).get("viability_frontier", {}) or {}) if isinstance(cfg_stage, dict) else {})
+                if bool(recovery_cfg.get("enabled", False)):
+                    decision = viability_frontier_recovery_action(
+                        candidates,
+                        safety_flags=runtime_flags,
+                        cfg=cfg_stage,
+                        runtime=runtime,
+                        tournament_scores=tournament.scores,
+                        reference_action=action,
+                    )
+                    action = int(decision.action_index)
+                    recovery_diag = dict(decision.diagnostics)
+                    stage_name = stage_name + "+vcdsr"
+                else:
+                    action = int(conservative_fallback_action(candidates, safety_flags=runtime_flags, cfg=cfg_stage, runtime=runtime))
+                    stage_name = stage_name + "+safe_progress"
             if profile_enabled:
                 timing_core["rule_rerank_s"] = float(time.perf_counter() - t_rule)
         # v29 diagnostic fix: tournament.selected_action_safety_flag was computed
@@ -758,6 +779,7 @@ class BDSEPlannerCore:
                 "final_action_hard_agent_risk": float(risks_final.get("hard_agent", risks_final.get("agent", [float("inf")]))[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
                 "final_action_hard_offroute_risk": float(risks_final.get("hard_off_route", risks_final.get("off_route", [float("inf")]))[action]) if 0 <= int(action) < len(runtime_flags) else float("inf"),
                 "pre_recovery_action": int(tournament.action_index),
+                **({f"recovery_{k}": v for k, v in recovery_diag.items()} if recovery_diag else {}),
             }
         except Exception:
             final_runtime_safety = {
@@ -787,6 +809,7 @@ class BDSEPlannerCore:
             "fallback_triggered": bool(triggered),
             "fallback_reason": self._fallback_reason(tournament, cfg_stage),
             "fallback_stage_records": stage_records,
+            "recovery": recovery_diag,
             **({"timing_core": timing_core} if profile_enabled else {}),
         }
         return action, trajectory, diagnostics
