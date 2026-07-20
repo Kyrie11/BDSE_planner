@@ -492,3 +492,88 @@ def build_rival_sets_from_base(
         add_ordered(base_cand, sort_key=lambda x: (abs(float(J0[x] - J0[a])), x), max_total=target)
         rivals.append(seen)
     return rivals
+
+
+def reweight_pairs_by_viability_scope(
+    pairs: np.ndarray,
+    pair_weights: np.ndarray | None,
+    valid_mask: np.ndarray,
+    safety_flags: np.ndarray,
+    predicted_base_cost: np.ndarray,
+    *,
+    hard_risk: np.ndarray | None = None,
+    safe_safe_weight: float = 1.0,
+    cross_safety_weight: float = 0.35,
+    unsafe_unsafe_weight: float = 0.10,
+    all_flagged_frontier_size: int = 8,
+    outside_frontier_weight: float = 0.20,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Keep the runtime pair graph intact while emphasizing viable decisions.
+
+    V36 removed every pair outside the current hard-feasible frontier.  That is
+    appropriate for a perfect safety oracle, but runtime flags are conservative
+    proxies and the unchanged v30 checkpoint was trained on a broader pair graph.
+    Hard removal therefore reduced teacher-margin fidelity.  This function keeps
+    all deployment pairs and only changes their acquisition weights: safe-safe
+    comparisons dominate, cross-safety pairs remain available for calibration,
+    and unsafe-unsafe comparisons receive a small weight.  In all-flagged scenes
+    a minimum-risk frontier is emphasized without erasing the remaining graph.
+    """
+    arr = np.asarray(pairs, dtype=np.int64).reshape(-1, 2) if np.asarray(pairs).size else np.zeros((0, 2), dtype=np.int64)
+    weights = np.ones((arr.shape[0],), dtype=np.float32)
+    if pair_weights is not None:
+        raw = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+        weights[: min(len(raw), len(weights))] = raw[: min(len(raw), len(weights))]
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    flags = np.asarray(safety_flags, dtype=bool).reshape(-1)
+    J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    K = min(len(valid), len(J0))
+    valid = valid[:K]
+    if flags.shape[0] < K:
+        flags = np.pad(flags, (0, K - flags.shape[0]), constant_values=False)
+    flags = flags[:K]
+    safe = valid & ~flags
+    safe_count = int(safe.sum())
+    scope_code = 4.0
+    frontier: set[int] = set()
+    if safe_count == 0:
+        risk = np.full((K,), np.inf, dtype=np.float32)
+        if hard_risk is not None:
+            raw_risk = np.asarray(hard_risk, dtype=np.float32).reshape(-1)
+            risk[: min(K, len(raw_risk))] = raw_risk[: min(K, len(raw_risk))]
+        finite_valid = np.flatnonzero(valid & np.isfinite(J0))
+        order = sorted(
+            finite_valid.tolist(),
+            key=lambda i: (float(risk[i]) if np.isfinite(risk[i]) else float("inf"), float(J0[i]), int(i)),
+        )
+        frontier = set(order[: max(2, int(all_flagged_frontier_size))])
+        scope_code = 1.0
+
+    multipliers = np.ones((arr.shape[0],), dtype=np.float32)
+    for idx, (a_raw, b_raw) in enumerate(arr.tolist()):
+        a, b = int(a_raw), int(b_raw)
+        if a < 0 or b < 0 or a >= K or b >= K or not valid[a] or not valid[b]:
+            multipliers[idx] = 0.0
+            continue
+        if safe_count > 0:
+            a_safe, b_safe = bool(safe[a]), bool(safe[b])
+            if a_safe and b_safe:
+                multipliers[idx] = max(float(safe_safe_weight), 0.0)
+            elif a_safe != b_safe:
+                multipliers[idx] = max(float(cross_safety_weight), 0.0)
+            else:
+                multipliers[idx] = max(float(unsafe_unsafe_weight), 0.0)
+        else:
+            inside = a in frontier and b in frontier
+            multipliers[idx] = 1.0 if inside else max(float(outside_frontier_weight), 0.0)
+    out = np.maximum(weights * multipliers, 1e-4).astype(np.float32)
+    return arr.astype(np.int64), out, {
+        "pair_count_before_viability": float(arr.shape[0]),
+        "pair_count_after_viability": float(arr.shape[0]),
+        "viability_safe_action_count": float(safe_count),
+        "viability_scope_code": float(scope_code),
+        "viability_pair_weight_mean": float(out.mean()) if out.size else 0.0,
+        "viability_pair_weight_min": float(out.min()) if out.size else 0.0,
+        "viability_pair_weight_max": float(out.max()) if out.size else 0.0,
+        "viability_frontier_size": float(len(frontier)),
+    }

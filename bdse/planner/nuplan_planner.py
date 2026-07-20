@@ -145,6 +145,10 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
         "decision_budget_atom_count": selected_count,
         "structural_safety_atom_count": int(pred.get("structural_safety_atom_count", len(np.asarray(pred.get("mandatory_hard_atoms", []), dtype=np.int64).reshape(-1)))),
         "decision_budget_excludes_structural_safety": int(bool(pred.get("structural_safety_bypass", False))),
+        "structural_safety_include_feasibility": int(bool(pred.get("structural_safety_include_feasibility", False))),
+        "structural_residual_enabled": int(bool(pred.get("structural_residual_enabled", False))),
+        "structural_residual_weight": float(pred.get("structural_residual_weight", 0.0)),
+        "viability_pair_weight_mean": float(pred.get("viability_viability_pair_weight_mean", pred.get("viability_pair_weight_mean", 0.0))),
     }
 
 
@@ -653,6 +657,9 @@ class BDSEPlannerCore:
                 candidate_trajectories=candidates.trajectories,
                 maneuver_ids=candidates.maneuver_ids,
             )
+        tournament = self._apply_all_flagged_structural_guard(
+            tournament, runtime, candidates, runtime_flags, stage_cfg
+        )
         selection.diagnostics.update({
             "structural_safety_bypass": bool(structural_safety_bypass),
             "structural_safety_atom_count": int(structural_mask.sum()),
@@ -660,6 +667,85 @@ class BDSEPlannerCore:
             "decision_topm_atom_count": int(decision_atom_active.sum()),
         })
         return pred, selection, tournament, decision_atom_active
+
+    def _apply_all_flagged_structural_guard(
+        self,
+        tournament,
+        runtime: RuntimeFeatures,
+        candidates,
+        runtime_flags: np.ndarray,
+        cfg: dict[str, Any],
+    ):
+        """Use continuous structural risk when every valid action is flagged.
+
+        A boolean hard filter cannot discriminate an all-flagged candidate bank.
+        V36 therefore reported a 3.5% selected-action flag rate even though there
+        was no avoidable unsafe choice.  The guard keeps the learned certificate
+        as the tie-breaker, but first restricts the choice to a near-minimum hard
+        risk set using only deployment-time geometry.
+        """
+        gcfg = (((cfg.get("tournament", {}) or {}).get("all_flagged_risk_guard", {}) or {})
+                if isinstance(cfg, dict) else {})
+        valid = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
+        flags = np.asarray(runtime_flags, dtype=bool).reshape(-1)
+        K = min(len(valid), len(flags), len(np.asarray(tournament.scores).reshape(-1)))
+        valid = valid[:K]
+        flags = flags[:K]
+        safe_available = bool((valid & ~flags).any())
+        all_flagged = bool(valid.any() and not safe_available)
+        tournament.diagnostics["all_actions_safety_flagged"] = all_flagged
+        if not all_flagged or not bool(gcfg.get("enabled", True)):
+            selected = int(tournament.action_index)
+            selected_flag = bool(flags[selected]) if 0 <= selected < K else True
+            tournament.diagnostics["avoidable_selected_action_safety_flag"] = bool(selected_flag and safe_available)
+            tournament.diagnostics["all_flagged_risk_guard_applied"] = False
+            return tournament
+
+        risks = runtime_risk_scores(runtime, candidates, cfg)
+        hard = np.asarray(risks.get("hard", np.full((K,), np.inf)), dtype=np.float32).reshape(-1)[:K]
+        soft = np.asarray(risks.get("soft", np.full((K,), np.inf)), dtype=np.float32).reshape(-1)[:K]
+        red = np.asarray(risks.get("red_light", np.zeros((K,))), dtype=np.float32).reshape(-1)[:K]
+        min_ttc = np.asarray(risks.get("min_ttc_s", np.full((K,), np.inf)), dtype=np.float32).reshape(-1)[:K]
+        valid_idx = np.flatnonzero(valid & np.isfinite(hard))
+        if valid_idx.size == 0:
+            tournament.diagnostics["all_flagged_risk_guard_applied"] = False
+            return tournament
+
+        red_min = float(np.min(red[valid_idx]))
+        red_tol = max(float(gcfg.get("red_tolerance", 1e-6)), 0.0)
+        pool = valid_idx[red[valid_idx] <= red_min + red_tol]
+        if pool.size == 0:
+            pool = valid_idx
+        hard_min = float(np.min(hard[pool]))
+        finite_hard = hard[pool][np.isfinite(hard[pool])]
+        scale = float(np.quantile(finite_hard, 0.75) - np.quantile(finite_hard, 0.25)) if finite_hard.size > 1 else 0.0
+        slack = max(float(gcfg.get("hard_risk_abs_slack", 0.10)), float(gcfg.get("hard_risk_rel_slack", 0.08)) * max(scale, 1e-3))
+        near = pool[hard[pool] <= hard_min + slack]
+        if near.size:
+            pool = near
+        scores = np.asarray(tournament.scores, dtype=np.float32).reshape(-1)[:K]
+        chosen = max(
+            pool.tolist(),
+            key=lambda a: (
+                float(scores[int(a)]),
+                -float(soft[int(a)]) if np.isfinite(soft[int(a)]) else -1e9,
+                float(min_ttc[int(a)]) if np.isfinite(min_ttc[int(a)]) else 1e9,
+                -int(a),
+            ),
+        )
+        old = int(tournament.action_index)
+        tournament.action_index = int(chosen)
+        tournament.diagnostics.update({
+            "all_flagged_risk_guard_applied": True,
+            "all_flagged_action_before_guard": int(old),
+            "all_flagged_guard_pool_size": int(len(pool)),
+            "all_flagged_selected_hard_risk": float(hard[int(chosen)]),
+            "all_flagged_min_hard_risk": float(hard_min),
+            "all_flagged_hard_risk_regret": float(max(float(hard[int(chosen)] - hard_min), 0.0)),
+            "selected_action_safety_flag": True,
+            "avoidable_selected_action_safety_flag": False,
+        })
+        return tournament
 
     def _fallback_thresholds(self, cfg: dict[str, Any]) -> tuple[float, float]:
         fcfg = cfg.get("fallback", {})
@@ -754,7 +840,7 @@ class BDSEPlannerCore:
             if profile_enabled:
                 timing_core["certificate_stages_s"] = timing_core.get("certificate_stages_s", 0.0) + stage_elapsed
             qdiag = runtime_query_diagnostics(pred, selection.selected)
-            qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "hard_filter_applied", "safe_action_available"}})
+            qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "avoidable_selected_action_safety_flag", "all_actions_safety_flagged", "all_flagged_risk_guard_applied", "all_flagged_hard_risk_regret", "hard_filter_applied", "safe_action_available"}})
             safety_diag_stage = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
             stage_records.append({
                 "stage": stage_name,
@@ -848,7 +934,7 @@ class BDSEPlannerCore:
             }
         trajectory = candidates.trajectories[action]
         qdiag = runtime_query_diagnostics(pred, selection.selected)
-        qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "hard_filter_applied", "safe_action_available"}})
+        qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "avoidable_selected_action_safety_flag", "all_actions_safety_flagged", "all_flagged_risk_guard_applied", "all_flagged_hard_risk_regret", "hard_filter_applied", "safe_action_available"}})
         tournament_diag = dict(tournament.diagnostics)
         if "selected_action_safety_flag" in tournament_diag:
             tournament_diag["pre_recovery_selected_action_safety_flag"] = bool(tournament_diag.get("selected_action_safety_flag", False))

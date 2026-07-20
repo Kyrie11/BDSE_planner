@@ -174,13 +174,18 @@ def _apply_safety_score_guard(
             if hard_filter or float(guarded[best_safe]) >= float(guarded[action]) - float(prefer_margin_raw):
                 action = best_safe
                 switched_to_unflagged = True
+    selected_flag = bool(flags[action]) if 0 <= action < n else True
+    safe_available = bool(safe_valid.any())
+    all_flagged = bool(valid.any() and not safe_available)
     diag = {
         "action_before_safety_guard": int(raw_action),
         "safety_guard_applied": bool(action != raw_action or penalty > 0.0 or switched_to_unflagged or hard_filter_applied),
         "unsafe_action_score_penalty": float(penalty),
         "hard_filter_unsafe_actions": bool(hard_filter),
         "hard_filter_applied": bool(hard_filter_applied),
-        "safe_action_available": bool(safe_valid.any()),
+        "safe_action_available": safe_available,
+        "all_actions_safety_flagged": all_flagged,
+        "avoidable_selected_action_safety_flag": bool(selected_flag and safe_available),
         "prefer_unflagged_action_margin": float(prefer_margin_raw) if prefer_margin_raw is not None else None,
         "switched_to_unflagged": bool(switched_to_unflagged),
     }
@@ -423,9 +428,13 @@ def run_tournament(
             "beta_uncertainty": float(tc.get("beta_uncertainty", 0.0)),
             "sigma_used": bool(sigma is not None),
             "safety_lcb_min": safety_lcb_min,
-            "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             **safety_guard_diag,
             **utility_refinement_diag,
+            "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
+            "avoidable_selected_action_safety_flag": bool(
+                (bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else True)
+                and bool(safety_guard_diag.get("safe_action_available", False))
+            ),
         },
     )
 
@@ -622,9 +631,13 @@ def run_pair_conditioned_tournament(
             "beta_uncertainty": float(tc.get("beta_uncertainty", 0.0)),
             "sigma_used": bool(sigma is not None),
             "safety_lcb_min": safety_lcb_min,
-            "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             **safety_guard_diag,
             **utility_refinement_diag,
+            "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
+            "avoidable_selected_action_safety_flag": bool(
+                (bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else True)
+                and bool(safety_guard_diag.get("safe_action_available", False))
+            ),
             "pair_conditioned": True,
             "selector_eta_used": float(_pair_selector_eta(cfg)),
             "normalized_margins": bool(normalize_margins),

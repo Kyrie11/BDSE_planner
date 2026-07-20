@@ -17,7 +17,7 @@ from bdse.model.scene_encoder import SceneEncoder
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, compute_query_features_for_pairs
 from bdse.planner.fallback import runtime_risk_scores, runtime_safety_flags_from_runtime
 from bdse.planner.hab import max_family_id, select_topm_atoms_hab
-from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, compact_runtime_pair_graph, restrict_pairs_to_viability_frontier
+from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, compact_runtime_pair_graph, restrict_pairs_to_viability_frontier, reweight_pairs_by_viability_scope
 from bdse.planner.selector import margin_normalization_scale, reserve_topm_candidates, restrict_topm_to_decision_evidence, structural_safety_mask
 
 EVIDENCE_TYPE_TO_ID = TYPE_NAMES
@@ -158,6 +158,76 @@ def _apply_runtime_base_prior_np(J0: np.ndarray, candidates: Any, runtime_flags:
         "base_prior_replaced_best": bool(np.nanargmin(np.where(valid & np.isfinite(prior_raw), prior_raw, np.inf)) != np.nanargmin(np.where(valid & np.isfinite(J0_in), J0_in, np.inf))) if bool((valid & np.isfinite(prior_raw) & np.isfinite(J0_in)).any()) else False,
     }
     return J0_out, diag
+
+
+def _apply_structural_safety_residual_prior_np(
+    J0: np.ndarray,
+    runtime: Any,
+    candidates: Any,
+    cfg: dict[str, Any],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Blend a graded runtime-safety residual into the base decision prior.
+
+    Hard constraints remain lexicographic and budget-exempt.  Their *continuous*
+    near-boundary information (agent clearance, TTC and route-boundary distance)
+    still affects ranking among feasible actions, however.  V36 discarded that
+    graded component together with the hard atoms and therefore changed the
+    teacher-margin decomposition.  This helper compresses the complete structural
+    channel into one dimensionless action prior without spending evidence budget
+    or querying teacher futures.
+    """
+    rcfg = (((cfg.get("runtime", {}) or {}).get("structural_safety_residual", {}) or {})
+            if isinstance(cfg, dict) else {})
+    if not bool(rcfg.get("enabled", False)):
+        return np.asarray(J0, dtype=np.float32), {"structural_residual_enabled": False}
+
+    base = np.asarray(J0, dtype=np.float32).reshape(-1)
+    valid = np.asarray(getattr(candidates, "valid_mask", np.isfinite(base)), dtype=bool).reshape(-1)
+    if valid.shape[0] < base.shape[0]:
+        valid = np.pad(valid, (0, base.shape[0] - valid.shape[0]), constant_values=False)
+    valid = valid[: base.shape[0]] & np.isfinite(base)
+    risks = runtime_risk_scores(runtime, candidates, cfg)
+
+    components = {
+        "hard_agent": float(rcfg.get("hard_agent_weight", 0.28)),
+        "agent_ttc": float(rcfg.get("ttc_weight", 0.30)),
+        "hard_off_route": float(rcfg.get("hard_offroute_weight", 0.18)),
+        "soft_agent": float(rcfg.get("soft_agent_weight", 0.12)),
+        "soft_off_route": float(rcfg.get("soft_offroute_weight", 0.08)),
+        "red_light": float(rcfg.get("red_light_weight", 0.40)),
+    }
+    combined = np.zeros_like(base, dtype=np.float32)
+    used = 0
+    for key, weight in components.items():
+        if abs(weight) <= 0.0:
+            continue
+        raw = np.asarray(risks.get(key, np.zeros_like(base)), dtype=np.float32).reshape(-1)
+        if raw.shape[0] < base.shape[0]:
+            raw = np.pad(raw, (0, base.shape[0] - raw.shape[0]), constant_values=np.inf)
+        z = _robust_rank_cost_np(raw[: base.shape[0]], valid, clip=float(rcfg.get("component_z_clip", 3.0)))
+        finite = valid & np.isfinite(z)
+        combined[finite] += float(weight) * z[finite]
+        used += 1
+    if used == 0 or not bool(valid.any()):
+        return base, {"structural_residual_enabled": True, "structural_residual_component_count": 0}
+
+    combined = _robust_rank_cost_np(combined, valid, clip=float(rcfg.get("combined_z_clip", 3.0)))
+    mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
+    tcfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    scale = float(mcfg.get("margin_normalization_min_scale", tcfg.get("pair_margin_min_scale", 20000.0)))
+    scale *= float(rcfg.get("scale_multiplier", 1.0))
+    weight = max(0.0, float(rcfg.get("weight", 0.25)))
+    out = base.copy()
+    out[valid] = out[valid] + weight * scale * combined[valid]
+    out[~valid] = np.inf
+    best = int(np.argmin(np.where(valid, combined, np.inf))) if bool(valid.any()) else -1
+    return out.astype(np.float32), {
+        "structural_residual_enabled": True,
+        "structural_residual_component_count": int(used),
+        "structural_residual_weight": float(weight),
+        "structural_residual_scale": float(scale),
+        "structural_residual_best_action": int(best),
+    }
 
 
 class BDSEModel(nn.Module):
@@ -893,6 +963,7 @@ class BDSEModel(nn.Module):
         # of J0.  This keeps the fixed evidence budget intact while giving the
         # budgeted residual evidence a stronger progress/route anchor.
         J0, base_prior_diag = _apply_runtime_base_prior_np(J0, candidates, flags, cfg)
+        J0, structural_residual_diag = _apply_structural_safety_residual_prior_np(J0, runtime, candidates, cfg)
         selector_eta, selector_gamma = self._selector_pair_thresholds(cfg)
         pairs, pair_weights = build_runtime_pairs_from_base(
             J0,
@@ -928,7 +999,8 @@ class BDSEModel(nn.Module):
         )
         selector_cfg_early = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
         viability_pair_diag: dict[str, float] = {}
-        if bool(selector_cfg_early.get("decision_pairs_within_viability_frontier", False)):
+        viability_mode = str(selector_cfg_early.get("decision_pair_viability_mode", "hard_frontier" if selector_cfg_early.get("decision_pairs_within_viability_frontier", False) else "full")).lower()
+        if viability_mode in {"hard_frontier", "restrict", "strict"}:
             risk_dict = runtime_risk_scores(runtime, candidates, cfg)
             pairs, pair_weights, viability_pair_diag = restrict_pairs_to_viability_frontier(
                 pairs,
@@ -940,6 +1012,28 @@ class BDSEModel(nn.Module):
                 frontier_size=int(selector_cfg_early.get("all_flagged_frontier_size", 8)),
                 single_safe_rivals=int(selector_cfg_early.get("single_safe_anchor_rivals", 8)),
             )
+        elif viability_mode in {"soft_weight", "weighted", "reweight"}:
+            risk_dict = runtime_risk_scores(runtime, candidates, cfg)
+            pairs, pair_weights, viability_pair_diag = reweight_pairs_by_viability_scope(
+                pairs,
+                pair_weights,
+                candidates.valid_mask,
+                flags,
+                J0,
+                hard_risk=risk_dict.get("hard", None),
+                safe_safe_weight=float(selector_cfg_early.get("viability_safe_safe_weight", 1.0)),
+                cross_safety_weight=float(selector_cfg_early.get("viability_cross_safety_weight", 0.35)),
+                unsafe_unsafe_weight=float(selector_cfg_early.get("viability_unsafe_unsafe_weight", 0.10)),
+                all_flagged_frontier_size=int(selector_cfg_early.get("all_flagged_frontier_size", 8)),
+                outside_frontier_weight=float(selector_cfg_early.get("viability_outside_frontier_weight", 0.20)),
+            )
+        else:
+            viability_pair_diag = {
+                "pair_count_before_viability": float(len(pairs)),
+                "pair_count_after_viability": float(len(pairs)),
+                "viability_safe_action_count": float((np.asarray(candidates.valid_mask, dtype=bool) & ~np.asarray(flags, dtype=bool)).sum()),
+                "viability_scope_code": 4.0,
+            }
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
         active = np.asarray(evidence_bank.active_mask, dtype=bool)
@@ -1262,6 +1356,7 @@ class BDSEModel(nn.Module):
             "family_budgets": family_budget.family_budgets,
             "mandatory_atom_mask": mandatory_hard_mask.astype(bool),
             "structural_safety_bypass": bool(structural_safety_bypass),
+            "structural_safety_include_feasibility": bool(cfg.get("selector", {}).get("structural_safety_include_feasibility", True)),
             "structural_safety_atom_count": int(mandatory_hard_mask.sum()),
             "soft_interaction_mask": soft_interaction_mask.astype(bool),
             "interaction_group_ids": interaction_group_ids.astype(np.int64),
@@ -1302,6 +1397,7 @@ class BDSEModel(nn.Module):
             **{f"viability_{k}": v for k, v in viability_pair_diag.items()},
             **{f"rival_{k}": v for k, v in rival_pair_compact_diag.items()},
             **base_prior_diag,
+            **structural_residual_diag,
         }
         if profile_enabled:
             result["model_timing"] = model_timing
