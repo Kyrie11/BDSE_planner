@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from bdse.data.cache_schema import CandidateBank, EvidenceBank, PairLabels, TeacherLabels
-from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, oracle_objective_value
+from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, oracle_objective_value, structural_safety_mask
 from bdse.planner.tournament import full_interface_action
 
 
@@ -122,6 +122,7 @@ def _critical_atom_sets(evidence_bank: EvidenceBank, teacher: TeacherLabels, pai
     ], dtype=bool)
     decisive: set[int] = set()
     interaction_decisive: set[int] = set()
+    soft_interaction_decisive: set[int] = set()
     hard_decisive: set[int] = set()
     pair_arr = np.asarray(pairs.pairs[pairs.valid_mask], dtype=np.int64).reshape(-1, 2) if pairs is not None else np.zeros((0, 2), dtype=np.int64)
     for a, b in pair_arr:
@@ -133,6 +134,8 @@ def _critical_atom_sets(evidence_bank: EvidenceBank, teacher: TeacherLabels, pai
             decisive.add(int(ei))
         for ei in np.flatnonzero(support & interaction_mask):
             interaction_decisive.add(int(ei))
+        for ei in np.flatnonzero(support & interaction_mask & ~hard):
+            soft_interaction_decisive.add(int(ei))
         for ei in np.flatnonzero(support & hard):
             hard_decisive.add(int(ei))
     return {
@@ -141,6 +144,7 @@ def _critical_atom_sets(evidence_bank: EvidenceBank, teacher: TeacherLabels, pai
         "interaction": set(map(int, np.flatnonzero(active & interaction_mask).tolist())),
         "decisive": decisive,
         "interaction_decisive": interaction_decisive,
+        "soft_interaction_decisive": soft_interaction_decisive,
         "hard_decisive": hard_decisive,
     }
 
@@ -265,6 +269,22 @@ def compute_bdse_diagnostics(
         effective_query_count = float(query_atom_count * query_action_count)
     critical_sets = _critical_atom_sets(evidence_bank, teacher, pairs, cfg)
     selected_set = set(map(int, selected_atoms))
+    selector_cfg = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
+    structural_set: set[int] = set()
+    if bool(selector_cfg.get("decision_budget_excludes_structural_safety", False)):
+        try:
+            raw_hard = np.asarray(evidence_bank.hard_mask(), dtype=bool).reshape(-1)
+        except Exception:
+            raw_hard = np.zeros((evidence_bank.E,), dtype=bool)
+        fam_ids = np.asarray([getattr(a, "family_id", 0) for a in evidence_bank.atoms], dtype=np.int64)
+        structural = structural_safety_mask(
+            raw_hard,
+            fam_ids,
+            np.asarray(evidence_bank.active_mask, dtype=bool),
+            include_feasibility=bool(selector_cfg.get("structural_safety_include_feasibility", True)),
+        )
+        structural_set = set(map(int, np.flatnonzero(structural).tolist()))
+    effective_selected_set = selected_set | structural_set
     topm_raw = qdiag.get("top_m_atoms", [])
     try:
         topm_set = set(map(int, np.asarray(topm_raw, dtype=np.int64).reshape(-1).tolist()))
@@ -329,21 +349,31 @@ def compute_bdse_diagnostics(
         "selector_value_ratio": selector_ratio,
         "hard_evidence_recall": hard_recall,
         "selected_decisive_atom_recall": _recall(selected_set, critical_sets["decisive"]),
+        "effective_selected_decisive_atom_recall": _recall(effective_selected_set, critical_sets["decisive"]),
         "selected_interaction_decisive_recall": _recall(selected_set, critical_sets["interaction_decisive"]),
+        "selected_soft_interaction_decisive_recall": _recall(selected_set, critical_sets["soft_interaction_decisive"]),
+        "effective_interaction_decisive_recall": _recall(effective_selected_set, critical_sets["interaction_decisive"]),
         "selected_hard_decisive_recall": _recall(selected_set, hard_denom),
+        "structural_hard_decisive_coverage": _recall(structural_set, hard_denom),
+        "effective_hard_decisive_recall": _recall(effective_selected_set, hard_denom),
         "proposal_decisive_atom_recall": _recall(topm_set, critical_sets["decisive"]) if topm_set else float("nan"),
         "proposal_interaction_decisive_recall": _recall(topm_set, critical_sets["interaction_decisive"]) if topm_set else float("nan"),
         "proposal_hard_recall": _recall(topm_set, hard_denom) if topm_set else float("nan"),
         "decisive_atom_count": float(len(critical_sets["decisive"])),
         "interaction_decisive_atom_count": float(len(critical_sets["interaction_decisive"])),
+        "soft_interaction_decisive_atom_count": float(len(critical_sets["soft_interaction_decisive"])),
         "hard_decisive_atom_count": float(len(hard_denom)),
+        "structural_safety_atom_count": float(len(structural_set)),
+        "decision_budget_atom_count": float(len(selected_set)),
         "fallback_would_trigger_rate": float(bool(qdiag.get("fallback_would_trigger", False))),
+        "selected_action_safety_flag_rate": float(bool(qdiag.get("selected_action_safety_flag", False))),
         "effective_query_count": float(qdiag.get("effective_query_count", effective_query_count)),
         "effective_query_atom_count": float(qdiag.get("selected_atom_count", query_atom_count)),
         "effective_query_action_count": float(qdiag.get("queried_action_count", query_action_count)),
         "effective_pair_count": float(qdiag.get("tournament_pair_count", len(query_pairs))),
         "teacher_pair_count": float(len(pairs.pairs)),
         "total_sparse_query_count": float(qdiag.get("total_sparse_query_count", qdiag.get("sparse_query_count", effective_query_count))),
+        "decision_budget_excludes_structural_safety": float(qdiag.get("decision_budget_excludes_structural_safety", 0.0)),
         "action_atom_query_count": float(qdiag.get("action_atom_query_count", query_atom_count * query_action_count)),
         "selector_pair_atom_query_count": float(qdiag.get("selector_pair_atom_query_count", 0.0)),
         "tournament_pair_atom_query_count": float(qdiag.get("tournament_pair_atom_query_count", 0.0)),

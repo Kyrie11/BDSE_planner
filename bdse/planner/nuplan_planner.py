@@ -40,12 +40,13 @@ from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.evidence_queries import compute_query_features_for_pairs
 from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
 from bdse.planner.fallback import runtime_safety_diagnostics, runtime_safety_flags_from_runtime, runtime_safety_flag_components, runtime_risk_scores
-from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
+from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, restrict_pairs_to_viability_frontier
 from bdse.planner.selector import (
     SelectionResult,
     runtime_greedy_selector,
     runtime_greedy_selector_pair_conditioned,
     select_by_mode,
+    restrict_topm_to_decision_evidence,
     structural_safety_mask,
 )
 from bdse.planner.tournament import (
@@ -141,6 +142,9 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
         "total_sparse_query_count": total,
         "selected_certificate_query_count": selected_certificate,
         "effective_query_count": selected_certificate,
+        "decision_budget_atom_count": selected_count,
+        "structural_safety_atom_count": int(pred.get("structural_safety_atom_count", len(np.asarray(pred.get("mandatory_hard_atoms", []), dtype=np.int64).reshape(-1)))),
+        "decision_budget_excludes_structural_safety": int(bool(pred.get("structural_safety_bypass", False))),
     }
 
 
@@ -198,6 +202,20 @@ class BDSEPlannerCore:
             progress_pair_count=int(cfg.get("selector", {}).get("progress_pair_count", 8)),
             maneuver_pair_count=int(cfg.get("selector", {}).get("maneuver_pair_count", 8)),
         )
+        selector_cfg_early = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
+        viability_pair_diag: dict[str, float] = {}
+        if bool(selector_cfg_early.get("decision_pairs_within_viability_frontier", False)):
+            risk_dict = runtime_risk_scores(runtime, candidates, cfg)
+            pairs, pair_weights, viability_pair_diag = restrict_pairs_to_viability_frontier(
+                pairs,
+                pair_weights,
+                candidates.valid_mask,
+                runtime_flags,
+                J0,
+                hard_risk=risk_dict.get("hard", None),
+                frontier_size=int(selector_cfg_early.get("all_flagged_frontier_size", 8)),
+                single_safe_rivals=int(selector_cfg_early.get("single_safe_anchor_rivals", 8)),
+            )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
         active = np.asarray(evidence_bank.active_mask, dtype=bool)
@@ -226,7 +244,19 @@ class BDSEPlannerCore:
             active,
             include_feasibility=bool(cfg.get("selector", {}).get("structural_safety_include_feasibility", True)),
         )
-        if bool(cfg.get("selector", {}).get("force_hard_topm", True)):
+        structural_safety_bypass = bool(selector_cfg_early.get("decision_budget_excludes_structural_safety", False))
+        if structural_safety_bypass:
+            topm, decision_topm_diag = restrict_topm_to_decision_evidence(
+                topm,
+                active & ~mandatory_hard_mask,
+                proposal_logits,
+                M,
+                family_ids=family_ids,
+            )
+            hab_diag = dict(hab_diag)
+            hab_diag.update({f"scide_{k}": int(v) for k, v in decision_topm_diag.items()})
+            hab_diag["structural_safety_bypass"] = 1
+        elif bool(cfg.get("selector", {}).get("force_hard_topm", True)):
             forced = np.flatnonzero(mandatory_hard_mask)
             if forced.size:
                 forced_cap = int(cfg.get("selector", {}).get("max_forced_hard_topm", max(1, M // 2)))
@@ -268,6 +298,8 @@ class BDSEPlannerCore:
             "family_budget_caps": family_budget.family_caps,
             "family_budgets": family_budget.family_budgets,
             "mandatory_atom_mask": mandatory_hard_mask.astype(bool),
+            "structural_safety_bypass": bool(structural_safety_bypass),
+            "structural_safety_atom_count": int(mandatory_hard_mask.sum()),
             "mandatory_hard_atoms": np.flatnonzero(mandatory_hard_mask).astype(np.int64),
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
@@ -280,6 +312,7 @@ class BDSEPlannerCore:
             "queried_pair_count": int(len(topm) * len(action_ids)),
             "runtime_pairs": pairs,
             "runtime_pair_weights": pair_weights,
+            **{f"viability_{k}": v for k, v in viability_pair_diag.items()},
         }
 
     def _predict_costs(self, runtime: RuntimeFeatures, candidates, evidence_bank) -> tuple[np.ndarray, np.ndarray]:
@@ -472,6 +505,12 @@ class BDSEPlannerCore:
         topm = np.asarray(pred.get("top_m_atoms", np.flatnonzero(evidence_bank.active_mask)), dtype=np.int64)
         atom_active[topm[(topm >= 0) & (topm < evidence_bank.E)]] = True
         atom_active &= evidence_bank.active_mask
+        structural_safety_bypass = bool(sel_cfg.get("decision_budget_excludes_structural_safety", False))
+        structural_mask = np.asarray(pred.get("mandatory_atom_mask", np.zeros((evidence_bank.E,), dtype=bool)), dtype=bool).reshape(-1)
+        if structural_mask.shape[0] < evidence_bank.E:
+            structural_mask = np.pad(structural_mask, (0, evidence_bank.E - structural_mask.shape[0]), constant_values=False)
+        structural_mask = structural_mask[: evidence_bank.E] & np.asarray(evidence_bank.active_mask, dtype=bool)
+        decision_atom_active = atom_active & ~structural_mask if structural_safety_bypass else atom_active
         family_ids = np.asarray(pred.get("family_ids", family_ids_from_atoms(evidence_bank.atoms, max_atoms=evidence_bank.E)), dtype=np.int64)
         family_caps = pred.get("family_budget_caps", None)
         baseline_mode = str(stage_cfg.get("planner", {}).get("baseline_mode", "bdse")).lower().replace("-", "_")
@@ -503,7 +542,7 @@ class BDSEPlannerCore:
                 budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
                 gamma_max=float(sel_cfg.get("normalized_gamma_max", 5.0) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("gamma_max_default", 100.0)),
                 eta_pred=float(sel_cfg.get("normalized_eta_pred", 0.1) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("eta_pred", 1.0)),
-                atom_active_mask=atom_active,
+                atom_active_mask=decision_atom_active,
                 pair_atom_variance=pred.get("pair_atom_var", None),
                 beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
                 epsilon_cal=float(tour_cfg.get("epsilon_cal", stage_cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
@@ -511,8 +550,8 @@ class BDSEPlannerCore:
                 prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
                 family_ids=family_ids,
                 family_budget_caps=family_caps,
-                mandatory_atom_mask=pred.get("mandatory_atom_mask", None),
-                mandatory_quota=int(sel_cfg.get("mandatory_hard_quota", 0)),
+                mandatory_atom_mask=None if structural_safety_bypass else pred.get("mandatory_atom_mask", None),
+                mandatory_quota=0 if structural_safety_bypass else int(sel_cfg.get("mandatory_hard_quota", 0)),
                 min_selected_atoms=int(sel_cfg.get("min_selected_atoms", 0)),
                 force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
                 normalize_margins=bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)),
@@ -587,7 +626,7 @@ class BDSEPlannerCore:
                 eta_pred=float(sel_cfg.get("eta_pred", 1.0)),
                 lambda_near=float(sel_cfg.get("lambda_near", 1.0)),
                 lambda_safety=float(sel_cfg.get("lambda_safety", 2.0)),
-                atom_active_mask=atom_active,
+                atom_active_mask=decision_atom_active,
                 predicted_atom_variance=g_var,
                 beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
                 epsilon_cal=float(tour_cfg.get("epsilon_cal", stage_cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
@@ -595,8 +634,8 @@ class BDSEPlannerCore:
                 prior_atom_variance=sel_cfg.get("unqueried_atom_variance", None),
                 family_ids=family_ids,
                 family_budget_caps=family_caps,
-                mandatory_atom_mask=pred.get("mandatory_atom_mask", None),
-                mandatory_quota=int(sel_cfg.get("mandatory_hard_quota", 0)),
+                mandatory_atom_mask=None if structural_safety_bypass else pred.get("mandatory_atom_mask", None),
+                mandatory_quota=0 if structural_safety_bypass else int(sel_cfg.get("mandatory_hard_quota", 0)),
                 min_selected_atoms=int(sel_cfg.get("min_selected_atoms", 0)),
                 force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
                 prioritize_mandatory_fill=bool(sel_cfg.get("prioritize_mandatory_fill", True)),
@@ -614,7 +653,13 @@ class BDSEPlannerCore:
                 candidate_trajectories=candidates.trajectories,
                 maneuver_ids=candidates.maneuver_ids,
             )
-        return pred, selection, tournament, atom_active
+        selection.diagnostics.update({
+            "structural_safety_bypass": bool(structural_safety_bypass),
+            "structural_safety_atom_count": int(structural_mask.sum()),
+            "decision_budget_atom_count": int(len(selection.selected)),
+            "decision_topm_atom_count": int(decision_atom_active.sum()),
+        })
+        return pred, selection, tournament, decision_atom_active
 
     def _fallback_thresholds(self, cfg: dict[str, Any]) -> tuple[float, float]:
         fcfg = cfg.get("fallback", {})
@@ -709,7 +754,7 @@ class BDSEPlannerCore:
             if profile_enabled:
                 timing_core["certificate_stages_s"] = timing_core.get("certificate_stages_s", 0.0) + stage_elapsed
             qdiag = runtime_query_diagnostics(pred, selection.selected)
-            qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
+            qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "hard_filter_applied", "safe_action_available"}})
             safety_diag_stage = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
             stage_records.append({
                 "stage": stage_name,
@@ -803,7 +848,7 @@ class BDSEPlannerCore:
             }
         trajectory = candidates.trajectories[action]
         qdiag = runtime_query_diagnostics(pred, selection.selected)
-        qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
+        qdiag.update({k: v for k, v in getattr(tournament, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "hard_filter_applied", "safe_action_available"}})
         tournament_diag = dict(tournament.diagnostics)
         if "selected_action_safety_flag" in tournament_diag:
             tournament_diag["pre_recovery_selected_action_safety_flag"] = bool(tournament_diag.get("selected_action_safety_flag", False))

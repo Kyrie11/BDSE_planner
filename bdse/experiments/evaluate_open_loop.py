@@ -57,7 +57,7 @@ def main() -> None:
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
         pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
         qdiag = runtime_query_diagnostics(pred, sel.selected)
-        qdiag.update({k: v for k, v in getattr(tour, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned"}})
+        qdiag.update({k: v for k, v in getattr(tour, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "hard_filter_applied", "safe_action_available"}})
         qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
         sel_diag = getattr(sel, "diagnostics", {}) or {}
         mode = str(sel_diag.get("mode", ""))

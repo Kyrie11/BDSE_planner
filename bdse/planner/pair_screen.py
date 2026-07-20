@@ -321,6 +321,116 @@ def compact_runtime_pair_graph(
         "pair_budget_pruned": float(pruned),
     }
 
+def restrict_pairs_to_viability_frontier(
+    pairs: np.ndarray,
+    pair_weights: np.ndarray | None,
+    valid_mask: np.ndarray,
+    safety_flags: np.ndarray,
+    predicted_base_cost: np.ndarray,
+    *,
+    hard_risk: np.ndarray | None = None,
+    frontier_size: int = 8,
+    single_safe_rivals: int = 8,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Restrict the *selector* graph to decisions not already settled by safety.
+
+    Hard feasibility is handled lexicographically by the runtime safety channel.
+    The budgeted evidence selector should therefore spend its pair queries on
+    comparisons inside the viable set.  When there is only one safe action, keep
+    a small anchor graph around it for diagnostics/calibration.  If all candidates
+    are flagged, fall back to a minimum-risk frontier instead of silently dropping
+    every pair.
+
+    The function never changes the final tournament rival graph; it only removes
+    comparisons that cannot influence the decision after the hard safety guard.
+    """
+    arr = np.asarray(pairs, dtype=np.int64).reshape(-1, 2) if np.asarray(pairs).size else np.zeros((0, 2), dtype=np.int64)
+    raw_w = np.ones((arr.shape[0],), dtype=np.float32)
+    if pair_weights is not None:
+        w = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+        raw_w[: min(len(w), len(raw_w))] = w[: min(len(w), len(raw_w))]
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    flags = np.asarray(safety_flags, dtype=bool).reshape(-1)
+    J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    K = min(len(valid), len(J0))
+    valid = valid[:K]
+    if flags.shape[0] < K:
+        flags = np.pad(flags, (0, K - flags.shape[0]), constant_values=False)
+    flags = flags[:K]
+    if arr.size == 0 or K == 0:
+        return np.zeros((0, 2), dtype=np.int64), np.zeros((0,), dtype=np.float32), {
+            "pair_count_before_viability": float(arr.shape[0]),
+            "pair_count_after_viability": 0.0,
+            "viability_safe_action_count": float((valid & ~flags).sum()),
+            "viability_scope_code": 0.0,
+        }
+
+    safe = valid & ~flags
+    safe_idx = np.flatnonzero(safe)
+    keep = np.zeros((arr.shape[0],), dtype=bool)
+    scope_code = 0
+    if safe_idx.size >= 2:
+        a = arr[:, 0]; b = arr[:, 1]
+        ok = (a >= 0) & (a < K) & (b >= 0) & (b < K)
+        keep = ok & safe[np.clip(a, 0, K - 1)] & safe[np.clip(b, 0, K - 1)]
+        scope_code = 3  # safe-safe
+    elif safe_idx.size == 1:
+        anchor = int(safe_idx[0])
+        a = arr[:, 0]; b = arr[:, 1]
+        ok = (a >= 0) & (a < K) & (b >= 0) & (b < K)
+        incident = ok & ((a == anchor) | (b == anchor))
+        incident_ids = np.flatnonzero(incident).tolist()
+        incident_ids.sort(key=lambda i: (
+            abs(float(J0[int(arr[i, 1])] - J0[int(arr[i, 0])])),
+            -float(raw_w[i]),
+            int(arr[i, 0]),
+            int(arr[i, 1]),
+        ))
+        keep[np.asarray(incident_ids[: max(1, int(single_safe_rivals))], dtype=np.int64)] = True
+        scope_code = 2  # one-safe anchor
+    else:
+        risk = np.full((K,), np.inf, dtype=np.float32)
+        if hard_risk is not None:
+            r = np.asarray(hard_risk, dtype=np.float32).reshape(-1)
+            risk[: min(K, len(r))] = r[: min(K, len(r))]
+        finite_valid = np.flatnonzero(valid & np.isfinite(J0))
+        order = sorted(
+            finite_valid.tolist(),
+            key=lambda i: (float(risk[i]) if np.isfinite(risk[i]) else float('inf'), float(J0[i]), int(i)),
+        )
+        frontier = set(order[: max(2, int(frontier_size))])
+        a = arr[:, 0]; b = arr[:, 1]
+        keep = np.asarray([(int(x) in frontier and int(y) in frontier) for x, y in arr.tolist()], dtype=bool)
+        scope_code = 1  # all-flagged minimum-risk frontier
+
+    out_pairs = arr[keep]
+    out_weights = raw_w[keep]
+    # Do not return an empty selector graph when the input contained usable pairs.
+    # A tiny near-base fallback is preferable to arbitrary proposal-only filling.
+    if out_pairs.shape[0] == 0 and arr.shape[0] > 0:
+        order = sorted(
+            range(arr.shape[0]),
+            key=lambda i: (
+                abs(float(J0[int(arr[i, 1])] - J0[int(arr[i, 0])]))
+                if 0 <= int(arr[i, 0]) < K and 0 <= int(arr[i, 1]) < K else float('inf'),
+                -float(raw_w[i]),
+                int(arr[i, 0]),
+                int(arr[i, 1]),
+            ),
+        )
+        take = np.asarray(order[: min(max(1, int(single_safe_rivals)), len(order))], dtype=np.int64)
+        out_pairs = arr[take]
+        out_weights = raw_w[take]
+        scope_code = -1  # defensive near-base fallback
+
+    return out_pairs.astype(np.int64), out_weights.astype(np.float32), {
+        "pair_count_before_viability": float(arr.shape[0]),
+        "pair_count_after_viability": float(out_pairs.shape[0]),
+        "viability_safe_action_count": float(safe_idx.size),
+        "viability_scope_code": float(scope_code),
+    }
+
+
 def build_rival_sets_from_base(
     predicted_base_cost: np.ndarray,
     valid_mask: np.ndarray,

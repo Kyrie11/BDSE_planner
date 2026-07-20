@@ -7,10 +7,11 @@ import torch
 import torch.nn.functional as F
 
 from bdse.planner.hab import select_topm_atoms_hab
-from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
+from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, restrict_pairs_to_viability_frontier
 from bdse.planner.selector import (
     margin_normalization_scale,
     reserve_topm_candidates,
+    restrict_topm_to_decision_evidence,
     runtime_greedy_selector,
     runtime_greedy_selector_pair_conditioned,
     structural_safety_mask,
@@ -122,6 +123,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
     prior_var = s_cfg.get("unqueried_atom_variance", None)
 
     for bidx in range(B):
+        structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
         topm, fam_budget, _ = select_topm_atoms_hab(
             logits[bidx],
             fam_ids_np[bidx],
@@ -140,7 +142,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
         # logits are still immature.  This is not dense leakage into the final
         # certificate; it only expands the Top-M candidate pool before the same
         # budgeted greedy selector runs.
-        if bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
+        if (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
             hard_train = (decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx]
             forced = np.flatnonzero(hard_train)
             if forced.size:
@@ -169,6 +171,20 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
                 min_soft_topm,
                 protected_mask=protected_for_pool,
                 group_ids=group_ids_np[bidx],
+            )
+        if structural_bypass:
+            structural_for_pool = structural_safety_mask(
+                hard_feature_for_pool,
+                fam_ids_np[bidx],
+                active[bidx],
+                include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
+            )
+            topm, _ = restrict_topm_to_decision_evidence(
+                topm,
+                active[bidx] & ~structural_for_pool,
+                logits[bidx],
+                M,
+                family_ids=fam_ids_np[bidx],
             )
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True
@@ -211,8 +227,10 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             active[bidx],
             include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
         )
-        if "decisive_hard_mask" in batch and bool(s_cfg.get("force_decisive_hard_topm", True)):
+        if (not structural_bypass) and "decisive_hard_mask" in batch and bool(s_cfg.get("force_decisive_hard_topm", True)):
             mandatory = mandatory | ((decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx])
+        if structural_bypass:
+            atom_active &= ~mandatory
         result = runtime_greedy_selector(
             J0[bidx],
             g_sparse,
@@ -236,8 +254,8 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             prior_atom_variance=prior_var,
             family_ids=fam_ids_np[bidx],
             family_budget_caps=fam_budget.family_caps,
-            mandatory_atom_mask=mandatory,
-            mandatory_quota=int(s_cfg.get("mandatory_hard_quota", 0)),
+            mandatory_atom_mask=None if structural_bypass else mandatory,
+            mandatory_quota=0 if structural_bypass else int(s_cfg.get("mandatory_hard_quota", 0)),
             min_selected_atoms=int(s_cfg.get("min_selected_atoms", 0)),
             force_fill_budget=bool(s_cfg.get("force_fill_budget", False)),
             prioritize_mandatory_fill=bool(s_cfg.get("prioritize_mandatory_fill", True)),
@@ -304,6 +322,7 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
     prior_var = s_cfg.get("unqueried_atom_variance", None)
 
     for bidx in range(Bsz):
+        structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
         topm, fam_budget, _ = select_topm_atoms_hab(
             logits[bidx],
             fam_ids_np[bidx],
@@ -322,7 +341,7 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
         # logits are still immature.  This is not dense leakage into the final
         # certificate; it only expands the Top-M candidate pool before the same
         # budgeted greedy selector runs.
-        if bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
+        if (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
             hard_train = (decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx]
             forced = np.flatnonzero(hard_train)
             if forced.size:
@@ -330,6 +349,27 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
                 forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(logits[bidx, i]), int(i)))[:forced_cap], dtype=np.int64)
                 non_forced = [int(i) for i in np.asarray(topm, dtype=np.int64).reshape(-1).tolist() if int(i) not in set(forced.tolist())]
                 topm = np.asarray((forced.tolist() + non_forced)[:M], dtype=np.int64)
+        hard_feature_for_pool = evidence_features_np[bidx, :, 0] > 0.5 if evidence_features_np is not None else np.zeros((E,), dtype=bool)
+        interaction_family_set = set(int(x) for x in s_cfg.get("interaction_family_ids", [2, 3]))
+        soft_interaction_pool = np.asarray([int(f) in interaction_family_set for f in fam_ids_np[bidx].tolist()], dtype=bool) & active[bidx] & ~hard_feature_for_pool
+        min_soft_topm = int(s_cfg.get("min_soft_interaction_topm_slots", 0))
+        protected_for_pool = structural_safety_mask(
+            hard_feature_for_pool,
+            fam_ids_np[bidx],
+            active[bidx],
+            include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
+        )
+        if min_soft_topm > 0 and bool(soft_interaction_pool.any()):
+            topm, _ = reserve_topm_candidates(
+                topm, soft_interaction_pool, logits[bidx], M, min_soft_topm,
+                protected_mask=None if structural_bypass else protected_for_pool,
+                group_ids=group_ids_np[bidx],
+            )
+        if structural_bypass:
+            topm, _ = restrict_topm_to_decision_evidence(
+                topm, active[bidx] & ~protected_for_pool, logits[bidx], M,
+                family_ids=fam_ids_np[bidx],
+            )
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True
         atom_active &= active[bidx]
@@ -347,6 +387,28 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             delta_arr = delta_arr[:, ok]
             if var_arr is not None:
                 var_arr = var_arr[:, ok]
+        if bool(s_cfg.get("decision_pairs_within_viability_frontier", False)) and pair_arr.size:
+            pair_arr_before = pair_arr.copy()
+            pair_arr, weight_arr, _ = restrict_pairs_to_viability_frontier(
+                pair_arr,
+                weight_arr,
+                valid[bidx],
+                flags_np[bidx],
+                J0[bidx],
+                hard_risk=None,
+                frontier_size=int(s_cfg.get("all_flagged_frontier_size", 8)),
+                single_safe_rivals=int(s_cfg.get("single_safe_anchor_rivals", 8)),
+            )
+            if pair_arr.size:
+                lookup = {tuple(map(int, p)): i for i, p in enumerate(pair_arr_before.tolist())}
+                idx = np.asarray([lookup[tuple(map(int, p))] for p in pair_arr.tolist()], dtype=np.int64)
+                delta_arr = delta_arr[:, idx]
+                if var_arr is not None:
+                    var_arr = var_arr[:, idx]
+            else:
+                delta_arr = delta_arr[:, :0]
+                if var_arr is not None:
+                    var_arr = var_arr[:, :0]
         hard_feature = evidence_features_np[bidx, :, 0] > 0.5 if evidence_features_np is not None else np.zeros((E,), dtype=bool)
         mandatory = structural_safety_mask(
             hard_feature,
@@ -354,8 +416,10 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             active[bidx],
             include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
         )
-        if "decisive_hard_mask" in batch and bool(s_cfg.get("force_decisive_hard_topm", True)):
+        if (not structural_bypass) and "decisive_hard_mask" in batch and bool(s_cfg.get("force_decisive_hard_topm", True)):
             mandatory = mandatory | ((decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx])
+        if structural_bypass:
+            atom_active &= ~mandatory
         base_deltas = J0[bidx, pair_arr[:, 1]] - J0[bidx, pair_arr[:, 0]] if pair_arr.size else np.zeros((0,), dtype=np.float32)
         mscale = margin_normalization_scale(base_deltas, min_scale=_margin_norm_min_scale(cfg), quantile=_margin_norm_quantile(cfg)) if normalize_margins else 1.0
         if g_np is not None and pair_arr.size:
@@ -388,8 +452,8 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             prior_atom_variance=prior_var,
             family_ids=fam_ids_np[bidx],
             family_budget_caps=fam_budget.family_caps,
-            mandatory_atom_mask=mandatory,
-            mandatory_quota=int(s_cfg.get("mandatory_hard_quota", 0)),
+            mandatory_atom_mask=None if structural_bypass else mandatory,
+            mandatory_quota=0 if structural_bypass else int(s_cfg.get("mandatory_hard_quota", 0)),
             min_selected_atoms=int(s_cfg.get("min_selected_atoms", 0)),
             force_fill_budget=bool(s_cfg.get("force_fill_budget", False)),
             normalize_margins=normalize_margins,

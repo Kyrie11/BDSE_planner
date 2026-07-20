@@ -15,10 +15,10 @@ from bdse.model.action_encoder import ActionEncoder
 from bdse.model.evidence_encoder import EvidenceEncoder
 from bdse.model.scene_encoder import SceneEncoder
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, compute_query_features_for_pairs
-from bdse.planner.fallback import runtime_safety_flags_from_runtime
+from bdse.planner.fallback import runtime_risk_scores, runtime_safety_flags_from_runtime
 from bdse.planner.hab import max_family_id, select_topm_atoms_hab
-from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, compact_runtime_pair_graph
-from bdse.planner.selector import margin_normalization_scale, reserve_topm_candidates, structural_safety_mask
+from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, compact_runtime_pair_graph, restrict_pairs_to_viability_frontier
+from bdse.planner.selector import margin_normalization_scale, reserve_topm_candidates, restrict_topm_to_decision_evidence, structural_safety_mask
 
 EVIDENCE_TYPE_TO_ID = TYPE_NAMES
 FAMILY_TO_ID = FAMILY_NAMES
@@ -926,6 +926,20 @@ class BDSEModel(nn.Module):
             max_pairs=query_pair_cap,
             canonicalize_reciprocals=bool(cfg.get("selector", {}).get("canonicalize_reciprocal_queries", True)),
         )
+        selector_cfg_early = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
+        viability_pair_diag: dict[str, float] = {}
+        if bool(selector_cfg_early.get("decision_pairs_within_viability_frontier", False)):
+            risk_dict = runtime_risk_scores(runtime, candidates, cfg)
+            pairs, pair_weights, viability_pair_diag = restrict_pairs_to_viability_frontier(
+                pairs,
+                pair_weights,
+                candidates.valid_mask,
+                flags,
+                J0,
+                hard_risk=risk_dict.get("hard", None),
+                frontier_size=int(selector_cfg_early.get("all_flagged_frontier_size", 8)),
+                single_safe_rivals=int(selector_cfg_early.get("single_safe_anchor_rivals", 8)),
+            )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
         active = np.asarray(evidence_bank.active_mask, dtype=bool)
@@ -951,7 +965,6 @@ class BDSEModel(nn.Module):
             raw_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E]
         except Exception:
             raw_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
-        selector_cfg_early = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
         interaction_family_set = set(int(x) for x in selector_cfg_early.get("interaction_family_ids", [2, 3]))
         soft_interaction_mask = np.asarray(
             [int(f) in interaction_family_set for f in family_ids.tolist()], dtype=bool
@@ -968,7 +981,20 @@ class BDSEModel(nn.Module):
             active,
             include_feasibility=bool(cfg.get("selector", {}).get("structural_safety_include_feasibility", True)),
         )
-        if bool(cfg.get("selector", {}).get("force_hard_topm", True)):
+        structural_safety_bypass = bool(selector_cfg_early.get("decision_budget_excludes_structural_safety", False))
+        if structural_safety_bypass:
+            decision_mask = active & ~mandatory_hard_mask
+            topm, decision_topm_diag = restrict_topm_to_decision_evidence(
+                topm,
+                decision_mask,
+                proposal_logits[: evidence_bank.E],
+                M,
+                family_ids=family_ids,
+            )
+            hab_diag = dict(hab_diag)
+            hab_diag.update({f"scide_{k}": int(v) for k, v in decision_topm_diag.items()})
+            hab_diag["structural_safety_bypass"] = 1
+        elif bool(cfg.get("selector", {}).get("force_hard_topm", True)):
             forced = np.flatnonzero(mandatory_hard_mask)
             if forced.size:
                 forced_cap = int(cfg.get("selector", {}).get("max_forced_hard_topm", max(1, M // 2)))
@@ -1235,6 +1261,8 @@ class BDSEModel(nn.Module):
             "family_budget_caps": family_budget.family_caps,
             "family_budgets": family_budget.family_budgets,
             "mandatory_atom_mask": mandatory_hard_mask.astype(bool),
+            "structural_safety_bypass": bool(structural_safety_bypass),
+            "structural_safety_atom_count": int(mandatory_hard_mask.sum()),
             "soft_interaction_mask": soft_interaction_mask.astype(bool),
             "interaction_group_ids": interaction_group_ids.astype(np.int64),
             "mandatory_hard_atoms": np.flatnonzero(mandatory_hard_mask).astype(np.int64),
@@ -1271,6 +1299,7 @@ class BDSEModel(nn.Module):
             "runtime_base_pair_weights": pair_weights,
             "selector_pair_union_enabled": bool(selector_pair_union_enabled),
             **{f"runtime_{k}": v for k, v in runtime_pair_compact_diag.items()},
+            **{f"viability_{k}": v for k, v in viability_pair_diag.items()},
             **{f"rival_{k}": v for k, v in rival_pair_compact_diag.items()},
             **base_prior_diag,
         }

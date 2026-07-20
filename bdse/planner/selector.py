@@ -164,6 +164,73 @@ def reserve_topm_candidates(
     return np.asarray(current, dtype=np.int64), diag
 
 
+def restrict_topm_to_decision_evidence(
+    topm: np.ndarray | list[int],
+    decision_mask: np.ndarray,
+    proposal_scores: np.ndarray,
+    max_size: int,
+    *,
+    family_ids: np.ndarray | None = None,
+    min_family_slots: dict[int, int] | None = None,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Remove structural-safety atoms from Top-M and refill in fixed size.
+
+    The safety channel is evaluated deterministically and therefore must not
+    consume the learned decision-evidence proposal pool.  This helper preserves
+    the original M and performs only within-pool replacement.
+    """
+    allowed = np.asarray(decision_mask, dtype=bool).reshape(-1)
+    E = int(allowed.shape[0])
+    score = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
+    if score.shape[0] < E:
+        score = np.pad(score, (0, E - score.shape[0]), constant_values=-np.inf)
+    score = score[:E]
+    size = max(0, int(max_size))
+    current: list[int] = []
+    seen: set[int] = set()
+    for raw in np.asarray(topm, dtype=np.int64).reshape(-1).tolist():
+        i = int(raw)
+        if 0 <= i < E and allowed[i] and i not in seen:
+            current.append(i); seen.add(i)
+        if size and len(current) >= size:
+            break
+
+    fam = np.full((E,), -999, dtype=np.int64)
+    if family_ids is not None:
+        raw_f = np.asarray(family_ids, dtype=np.int64).reshape(-1)
+        fam[: min(E, raw_f.shape[0])] = raw_f[: min(E, raw_f.shape[0])]
+    slots = {int(k): max(0, int(v)) for k, v in (min_family_slots or {}).items()}
+    for fid, target in slots.items():
+        have = sum(1 for i in current if int(fam[i]) == fid)
+        if have >= target:
+            continue
+        candidates = [i for i in np.flatnonzero(allowed & (fam == fid)).tolist() if i not in seen]
+        candidates.sort(key=lambda i: (-float(score[i]), int(i)))
+        for i in candidates[: max(0, target - have)]:
+            if size and len(current) >= size:
+                removable = [j for j in current if int(fam[j]) != fid]
+                if not removable:
+                    break
+                rm = min(removable, key=lambda j: (float(score[j]), -int(j)))
+                current.remove(rm); seen.remove(rm)
+            current.append(int(i)); seen.add(int(i))
+
+    fill = sorted(np.flatnonzero(allowed).tolist(), key=lambda i: (-float(score[i]), int(i)))
+    for i in fill:
+        if i in seen:
+            continue
+        current.append(int(i)); seen.add(int(i))
+        if size and len(current) >= size:
+            break
+    current = current[:size] if size else current
+    current.sort(key=lambda i: (-float(score[i]), int(i)))
+    return np.asarray(current, dtype=np.int64), {
+        "decision_topm_available": int(allowed.sum()),
+        "decision_topm_selected": int(len(current)),
+        "structural_atoms_excluded_from_topm": int(E - int(allowed.sum())),
+    }
+
+
 def _complete_safety_aware_selection(
     selected: list[int] | np.ndarray,
     atom_budget_costs: np.ndarray,
