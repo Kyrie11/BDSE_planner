@@ -112,13 +112,17 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
     action_atom = int(pred.get("action_atom_query_count", len(topm) * len(actions)))
     selector_pair_atom = int(pred.get("selector_pair_atom_query_count", len(topm) * len(runtime_pairs)))
     tournament_pair_atom = int(pred.get("tournament_pair_atom_query_count", len(topm) * len(rival_pairs)))
-    total = int(action_atom + selector_pair_atom + tournament_pair_atom)
+    # v34: the model scores the unique selector/tournament union in one call.
+    # Report actual executed scores, while retaining the legacy decompositions.
+    unique_pair_atom = int(pred.get("unique_pair_atom_query_count", selector_pair_atom + tournament_pair_atom))
+    total = int(action_atom + unique_pair_atom)
 
     if selected_atoms is None:
         selected_count = 0
     else:
         selected_count = int(len(np.asarray(selected_atoms, dtype=np.int64).reshape(-1)))
     if len(rival_pairs):
+        # rival_pair_indices are canonicalized to one query per unordered pair.
         selected_certificate = int(selected_count * len(rival_pairs))
     else:
         selected_certificate = int(selected_count * len(actions))
@@ -131,6 +135,8 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
         "action_atom_query_count": action_atom,
         "selector_pair_atom_query_count": selector_pair_atom,
         "tournament_pair_atom_query_count": tournament_pair_atom,
+        "unique_pair_atom_query_count": unique_pair_atom,
+        "actual_unique_pair_count": int(pred.get("actual_unique_pair_count", 0)),
         "sparse_query_count": total,
         "total_sparse_query_count": total,
         "selected_certificate_query_count": selected_certificate,
@@ -547,6 +553,9 @@ class BDSEPlannerCore:
                 decision_family_boost=float(sel_cfg.get("decision_family_boost", 0.0)),
                 decision_family_ids=sel_cfg.get("decision_family_ids", [2, 3]),
                 decision_family_quota=int(sel_cfg.get("decision_family_quota", 0)),
+                interaction_family_ids=sel_cfg.get("interaction_family_ids", [2, 3]),
+                interaction_family_quota=int(sel_cfg.get("interaction_family_quota", 0)),
+                collapse_reciprocal_pairs=bool(sel_cfg.get("collapse_reciprocal_pairs", True)),
                 force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),
             )
             tournament_cfg = dict(stage_cfg)

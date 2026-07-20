@@ -17,7 +17,7 @@ from bdse.model.scene_encoder import SceneEncoder
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, compute_query_features_for_pairs
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.hab import max_family_id, select_topm_atoms_hab
-from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
+from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, compact_runtime_pair_graph
 from bdse.planner.selector import margin_normalization_scale, structural_safety_mask
 
 EVIDENCE_TYPE_TO_ID = TYPE_NAMES
@@ -910,6 +910,22 @@ class BDSEModel(nn.Module):
             progress_pair_count=int(cfg.get("selector", {}).get("progress_pair_count", 8)),
             maneuver_pair_count=int(cfg.get("selector", {}).get("maneuver_pair_count", 8)),
         )
+        # v34 ABIQ: compact the pair graph before neural scoring.  The final
+        # tournament is antisymmetric, so reciprocal directed queries are redundant.
+        # A strict logical-pair cap makes the fixed query budget an executed
+        # constraint rather than a post-hoc reporting threshold.
+        query_pair_cap = int(cfg.get("selector", {}).get("max_runtime_pair_queries", 512))
+        pairs, pair_weights, runtime_pair_compact_diag = compact_runtime_pair_graph(
+            pairs,
+            pair_weights,
+            J0,
+            candidates.valid_mask,
+            flags,
+            maneuver_ids=candidates.maneuver_ids,
+            candidate_trajectories=candidates.trajectories,
+            max_pairs=query_pair_cap,
+            canonicalize_reciprocals=bool(cfg.get("selector", {}).get("canonicalize_reciprocal_queries", True)),
+        )
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
         active = np.asarray(evidence_bank.active_mask, dtype=bool)
@@ -972,6 +988,17 @@ class BDSEModel(nn.Module):
             for r in rivals:
                 rival_pair_list.append((int(a_idx), int(r)))
         rival_pairs = np.asarray(rival_pair_list, dtype=np.int64).reshape(-1, 2) if rival_pair_list else np.zeros((0, 2), dtype=np.int64)
+        rival_pairs, _, rival_pair_compact_diag = compact_runtime_pair_graph(
+            rival_pairs,
+            None,
+            J0,
+            candidates.valid_mask,
+            flags,
+            maneuver_ids=candidates.maneuver_ids,
+            candidate_trajectories=candidates.trajectories,
+            max_pairs=query_pair_cap,
+            canonicalize_reciprocals=bool(cfg.get("selector", {}).get("canonicalize_reciprocal_queries", True)),
+        )
         if action_set:
             action_ids = np.asarray(sorted(action_set), dtype=np.int64)
         elif len(pairs):
@@ -1128,10 +1155,12 @@ class BDSEModel(nn.Module):
         # unique pair union.  With selector.use_tournament_pair_union=true, the
         # selector graph itself is the decision/tournament graph, while query
         # accounting still reports the original cheap runtime-pair count.
+        actual_unique_pair_count = 0
         if len(selection_pairs) or len(rival_pairs):
             t_pair = time.perf_counter()
             all_pairs = np.concatenate([selection_pairs.reshape(-1, 2), rival_pairs.reshape(-1, 2)], axis=0)
             unique_pairs, inverse = np.unique(all_pairs, axis=0, return_inverse=True)
+            actual_unique_pair_count = int(len(unique_pairs))
             all_pair_delta, all_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, unique_pairs, cfg)
             if profile_enabled:
                 model_timing["model_pair_scoring_s"] = float(time.perf_counter() - t_pair)
@@ -1190,12 +1219,16 @@ class BDSEModel(nn.Module):
             # as a backward-compatible alias for the total number of sparse model
             # scores actually evaluated in this runtime certificate stage.
             "action_atom_query_count": int(len(atom_ids)),
+            # Legacy decompositions remain available for diagnostics, but the
+            # actual model call scores the unique selector/tournament union once.
             "selector_pair_atom_query_count": int(len(topm) * len(selection_pairs)),
             "tournament_pair_atom_query_count": int(len(topm) * len(rival_pairs)),
+            "unique_pair_atom_query_count": int(len(topm) * actual_unique_pair_count),
             "runtime_pair_count": int(len(pairs)),
             "selector_pair_count": int(len(selection_pairs)),
             "tournament_pair_count": int(len(rival_pairs)),
-            "queried_pair_count": int(len(atom_ids) + len(topm) * len(selection_pairs) + len(topm) * len(rival_pairs)),
+            "actual_unique_pair_count": int(actual_unique_pair_count),
+            "queried_pair_count": int(len(atom_ids) + len(topm) * actual_unique_pair_count),
             "pair_atom_delta": selector_pair_delta,
             "pair_atom_var": selector_pair_var,
             "pair_indices": selection_pairs,
@@ -1211,6 +1244,8 @@ class BDSEModel(nn.Module):
             "runtime_pair_weights": selection_pair_weights,
             "runtime_base_pair_weights": pair_weights,
             "selector_pair_union_enabled": bool(selector_pair_union_enabled),
+            **{f"runtime_{k}": v for k, v in runtime_pair_compact_diag.items()},
+            **{f"rival_{k}": v for k, v in rival_pair_compact_diag.items()},
             **base_prior_diag,
         }
         if profile_enabled:

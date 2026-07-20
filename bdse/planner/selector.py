@@ -99,6 +99,8 @@ def _complete_safety_aware_selection(
     family_ids: np.ndarray | None = None,
     decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     decision_family_quota: int = 0,
+    interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
+    interaction_family_quota: int = 0,
 ) -> tuple[list[int], float, dict[str, Any]]:
     """Post-process greedy acquisition for BDSE-v5.
 
@@ -127,6 +129,10 @@ def _complete_safety_aware_selection(
     decision_family = np.zeros((E,), dtype=bool)
     if fam is not None and decision_family_set:
         decision_family = np.asarray([int(x) in decision_family_set for x in fam.tolist()], dtype=bool) & active
+    interaction_family_set = set(int(x) for x in np.asarray(interaction_family_ids if interaction_family_ids is not None else [], dtype=np.int64).reshape(-1).tolist())
+    interaction_family = np.zeros((E,), dtype=bool)
+    if fam is not None and interaction_family_set:
+        interaction_family = np.asarray([int(x) in interaction_family_set for x in fam.tolist()], dtype=bool) & active
 
     out: list[int] = []
     seen: set[int] = set()
@@ -168,6 +174,38 @@ def _complete_safety_aware_selection(
             forced_added += 1
         if quota and forced_added >= quota:
             break
+
+    # 2) Explicit interaction/precedence reservation.  A broad decision-family
+    # quota can be satisfied almost entirely by feasibility atoms, which is why
+    # v33 selected ~14 decision-family atoms yet recovered only ~27% of decisive
+    # interaction evidence.  Protect families 2/3 directly, while allowing hard
+    # atoms above the mandatory floor to be exchanged rather than permanently
+    # starving interaction evidence.
+    interaction_quota = max(0, int(interaction_family_quota))
+    interaction_added = int(sum(1 for i in out if interaction_family[i]))
+    if interaction_quota > 0 and bool(interaction_family.any()):
+        interaction_order = sorted(np.flatnonzero(interaction_family).tolist(), key=lambda i: (-float(util[i]), float(costs[i]), int(i)))
+        for i in interaction_order:
+            if interaction_added >= interaction_quota:
+                break
+            if i in seen:
+                continue
+            while not can_add(i):
+                mandatory_count = int(sum(1 for j in out if mandatory[j]))
+                removable = [
+                    j for j in out
+                    if not interaction_family[j]
+                    and (not mandatory[j] or mandatory_count - 1 >= quota)
+                ]
+                if not removable:
+                    break
+                rm = min(removable, key=lambda j: (float(util[j]), -int(j)))
+                out.remove(rm)
+                seen.remove(rm)
+            if can_add(i):
+                out.append(int(i))
+                seen.add(int(i))
+                interaction_added += 1
 
     # 2) Decision-family reservation.  The hard/feasibility quota protects safety,
     # but v18 showed that it can starve interaction/precedence evidence without
@@ -231,6 +269,9 @@ def _complete_safety_aware_selection(
         "decision_family_quota": int(max(0, int(decision_family_quota))),
         "decision_family_available": int(decision_family.sum()),
         "decision_family_selected": int(sum(1 for i in out if decision_family[i])) if E else 0,
+        "interaction_family_quota": int(interaction_quota),
+        "interaction_family_available": int(interaction_family.sum()),
+        "interaction_family_selected": int(sum(1 for i in out if interaction_family[i])) if E else 0,
         "postfill_selected_atoms": int(len(out)),
         "postfill_spent_budget": float(final_spent),
     }
@@ -1710,6 +1751,8 @@ def runtime_greedy_selector(
     maneuver_pair_count: int = 0,
     decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     decision_family_quota: int = 0,
+    interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
+    interaction_family_quota: int = 0,
     collapse_reciprocal_pairs: bool = True,
 ) -> SelectionResult:
     """Two-stage runtime selector using base/cheap pair screening only.
@@ -1880,6 +1923,8 @@ def runtime_greedy_selector(
         family_ids=family_ids,
         decision_family_ids=decision_family_ids,
         decision_family_quota=decision_family_quota,
+        interaction_family_ids=interaction_family_ids,
+        interaction_family_quota=interaction_family_quota,
     )
     return SelectionResult(
         selected=selected,
@@ -1951,6 +1996,9 @@ def runtime_greedy_selector_pair_conditioned(
     decision_family_boost: float = 0.0,
     decision_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     decision_family_quota: int = 0,
+    interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
+    interaction_family_quota: int = 0,
+    collapse_reciprocal_pairs: bool = False,
     force_uncertainty_objective: bool = False,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
@@ -1983,6 +2031,8 @@ def runtime_greedy_selector_pair_conditioned(
             family_ids=family_ids,
             decision_family_ids=decision_family_ids,
             decision_family_quota=decision_family_quota,
+            interaction_family_ids=interaction_family_ids,
+            interaction_family_quota=interaction_family_quota,
         )
         return SelectionResult(selected, current, pair_arr, weights, {"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": "runtime_pair_conditioned_empty", "pair_count": 0, **post_diag})
     a = pair_arr[:, 0]
@@ -2007,6 +2057,39 @@ def runtime_greedy_selector_pair_conditioned(
     delta = np.asarray(pair_atom_delta, dtype=np.float32)
     if delta.ndim != 2 or delta.shape[1] != pair_arr.shape[0]:
         delta = np.zeros((E, pair_arr.shape[0]), dtype=np.float32)
+    # v34 ABIQ: the pair-conditioned path previously skipped the reciprocal
+    # collapse used by the legacy action-sparse selector.  That let d(a,b) and
+    # d(b,a) cancel in the fixed-budget objective.  Collapse them here using the
+    # already-scored evidence-sensitive orientation; no extra query is required.
+    if bool(collapse_reciprocal_pairs) and pair_arr.shape[0] > 1:
+        pair_var_c = np.asarray(pair_atom_variance, dtype=np.float32) if pair_atom_variance is not None else np.zeros_like(delta, dtype=np.float32)
+        if pair_var_c.shape != delta.shape:
+            pair_var_c = np.zeros_like(delta, dtype=np.float32)
+        info_caps_c = np.where(safety_b, float(gamma_max), np.maximum(float(eta_pred), np.abs(base_delta))).astype(np.float32)
+        (
+            pair_arr,
+            weights,
+            base_delta,
+            caps,
+            delta,
+            pair_var_c,
+            _base_var_c,
+            _info_caps_c,
+        ) = _collapse_reciprocal_runtime_pairs(
+            pair_arr,
+            weights,
+            base_delta,
+            caps,
+            delta,
+            pair_var_c,
+            np.zeros((pair_arr.shape[0],), dtype=np.float32),
+            info_caps_c,
+            atom_active_mask=atom_active_mask,
+        )
+        pair_atom_variance = pair_var_c
+        a = pair_arr[:, 0]
+        b = pair_arr[:, 1]
+        safety_b = flags[b] if flags.shape[0] > int(np.max(b, initial=0)) else np.zeros_like(base_delta, dtype=bool)
     base_support = np.maximum(base_delta, 0.0).astype(np.float32)
     atom_support = np.maximum(delta, 0.0).astype(np.float32)  # legacy/debug only
 
@@ -2161,7 +2244,7 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank"}:
@@ -2212,6 +2295,8 @@ def runtime_greedy_selector_pair_conditioned(
         family_ids=family_ids,
         decision_family_ids=decision_family_ids,
         decision_family_quota=decision_family_quota,
+        interaction_family_ids=interaction_family_ids,
+        interaction_family_quota=interaction_family_quota,
     )
     return SelectionResult(
         selected=selected,

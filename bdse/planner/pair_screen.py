@@ -217,6 +217,110 @@ def build_runtime_pairs_from_base(
     return pairs, weights
 
 
+
+def compact_runtime_pair_graph(
+    pairs: np.ndarray,
+    pair_weights: np.ndarray | None,
+    predicted_base_cost: np.ndarray,
+    valid_mask: np.ndarray,
+    cheap_safety_flags: np.ndarray,
+    *,
+    maneuver_ids: np.ndarray | None = None,
+    candidate_trajectories: np.ndarray | None = None,
+    max_pairs: int = 0,
+    canonicalize_reciprocals: bool = True,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Compact a directed runtime pair graph before neural pair scoring.
+
+    The final tournament consumes an antisymmetric margin matrix, so querying both
+    directions of every unordered pair is redundant.  This helper keeps one
+    deployment-meaningful orientation per unordered pair and then applies a strict
+    pair budget while preserving safety, stop/yield-vs-go, and near-boundary pairs.
+    It uses only runtime quantities and therefore does not leak teacher labels.
+    """
+    arr = np.asarray(pairs, dtype=np.int64).reshape(-1, 2) if np.asarray(pairs).size else np.zeros((0, 2), dtype=np.int64)
+    if arr.size == 0:
+        return arr, np.zeros((0,), dtype=np.float32), {
+            "pair_count_before": 0.0,
+            "pair_count_after": 0.0,
+            "reciprocal_pairs_removed": 0.0,
+            "pair_budget_pruned": 0.0,
+        }
+    J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    flags = np.asarray(cheap_safety_flags, dtype=bool).reshape(-1)
+    K = min(len(J0), len(valid))
+    if flags.shape[0] < K:
+        flags = np.pad(flags, (0, K - flags.shape[0]), constant_values=False)
+    flags = flags[:K]
+    man = _maneuver_array(maneuver_ids, K)
+    progress = _trajectory_progress(candidate_trajectories, K)
+    raw_w = np.ones((arr.shape[0],), dtype=np.float32)
+    if pair_weights is not None:
+        rw = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+        raw_w[: min(len(rw), len(raw_w))] = rw[: min(len(rw), len(raw_w))]
+
+    def orient(a: int, b: int) -> tuple[int, int]:
+        # Unflagged -> flagged is the safety-certificate direction.
+        if bool(flags[a]) != bool(flags[b]):
+            return (b, a) if bool(flags[a]) else (a, b)
+        a_safe_like = int(man[a]) in SAFE_LIKE_MANEUVER_IDS
+        b_safe_like = int(man[b]) in SAFE_LIKE_MANEUVER_IDS
+        a_prog = int(man[a]) in PROGRESSIVE_MANEUVER_IDS
+        b_prog = int(man[b]) in PROGRESSIVE_MANEUVER_IDS
+        # Preserve the interpretable stop/yield -> go orientation.
+        if a_safe_like and b_prog and not b_safe_like:
+            return a, b
+        if b_safe_like and a_prog and not a_safe_like:
+            return b, a
+        # Otherwise orient from the lower base-cost action to its rival.
+        if (float(J0[b]), int(b)) < (float(J0[a]), int(a)):
+            return b, a
+        return a, b
+
+    merged: dict[tuple[int, int], float] = {}
+    original_directed: set[tuple[int, int]] = set()
+    for idx, (a0, b0) in enumerate(arr.tolist()):
+        a, b = int(a0), int(b0)
+        if a == b or a < 0 or b < 0 or a >= K or b >= K or not valid[a] or not valid[b]:
+            continue
+        original_directed.add((a, b))
+        key = orient(a, b) if bool(canonicalize_reciprocals) else (a, b)
+        merged[key] = max(float(raw_w[idx]), merged.get(key, 0.0))
+
+    items = list(merged.items())
+    before_unique = len(original_directed)
+    reciprocal_removed = max(0, before_unique - len(items))
+
+    def priority(item: tuple[tuple[int, int], float]) -> tuple[float, float, float, int, int]:
+        (a, b), w = item
+        cross_safety = float(bool(flags[a]) != bool(flags[b]))
+        a_safe_like = int(man[a]) in SAFE_LIKE_MANEUVER_IDS
+        b_safe_like = int(man[b]) in SAFE_LIKE_MANEUVER_IDS
+        a_prog = int(man[a]) in PROGRESSIVE_MANEUVER_IDS
+        b_prog = int(man[b]) in PROGRESSIVE_MANEUVER_IDS
+        maneuver_cross = float((a_safe_like and b_prog) or (b_safe_like and a_prog))
+        gap = abs(float(J0[b] - J0[a]))
+        near = 1.0 / (1.0 + gap)
+        progress_span = min(abs(float(progress[b] - progress[a])) / 20.0, 2.0)
+        score = 8.0 * cross_safety + 5.0 * maneuver_cross + 2.0 * float(w) + 1.5 * near + 0.5 * progress_span
+        return (-score, gap, -float(w), int(a), int(b))
+
+    items.sort(key=priority)
+    cap = max(0, int(max_pairs))
+    pruned = 0
+    if cap > 0 and len(items) > cap:
+        pruned = len(items) - cap
+        items = items[:cap]
+    out_pairs = np.asarray([k for k, _ in items], dtype=np.int64).reshape(-1, 2) if items else np.zeros((0, 2), dtype=np.int64)
+    out_weights = np.asarray([w for _, w in items], dtype=np.float32) if items else np.zeros((0,), dtype=np.float32)
+    return out_pairs, out_weights, {
+        "pair_count_before": float(arr.shape[0]),
+        "pair_count_after": float(out_pairs.shape[0]),
+        "reciprocal_pairs_removed": float(reciprocal_removed),
+        "pair_budget_pruned": float(pruned),
+    }
+
 def build_rival_sets_from_base(
     predicted_base_cost: np.ndarray,
     valid_mask: np.ndarray,
