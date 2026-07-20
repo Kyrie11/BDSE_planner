@@ -85,6 +85,85 @@ def structural_safety_mask(
     return out
 
 
+def reserve_topm_candidates(
+    topm: np.ndarray | list[int],
+    candidate_mask: np.ndarray,
+    scores: np.ndarray,
+    max_size: int,
+    min_slots: int,
+    *,
+    protected_mask: np.ndarray | None = None,
+    group_ids: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Reserve complementary candidates in a fixed-size proposal pool.
+
+    The function only exchanges entries inside Top-M; it never increases M or
+    the number of neural pair queries.  Group-aware ordering prevents all slots
+    from being consumed by multiple evidence types attached to one agent.
+    """
+    mask = np.asarray(candidate_mask, dtype=bool).reshape(-1)
+    E = int(mask.shape[0])
+    score = np.asarray(scores, dtype=np.float32).reshape(-1)
+    if score.shape[0] < E:
+        score = np.pad(score, (0, E - score.shape[0]), constant_values=-np.inf)
+    score = score[:E]
+    protected = _as_bool_mask(protected_mask, E)
+    groups = np.full((E,), -1, dtype=np.int64)
+    if group_ids is not None:
+        raw = np.asarray(group_ids, dtype=np.int64).reshape(-1)
+        groups[: min(E, raw.shape[0])] = raw[: min(E, raw.shape[0])]
+
+    size = max(0, int(max_size))
+    current: list[int] = []
+    seen: set[int] = set()
+    for raw_i in np.asarray(topm, dtype=np.int64).reshape(-1).tolist():
+        i = int(raw_i)
+        if 0 <= i < E and i not in seen:
+            current.append(i)
+            seen.add(i)
+        if size and len(current) >= size:
+            break
+
+    def gid(i: int) -> int:
+        g = int(groups[i])
+        return g if g >= 0 else -(i + 1)
+
+    available = np.flatnonzero(mask).tolist()
+    by_group: dict[int, list[int]] = {}
+    for i in available:
+        by_group.setdefault(gid(int(i)), []).append(int(i))
+    group_best = [max(ids, key=lambda i: (float(score[i]), -int(i))) for ids in by_group.values()]
+    group_best.sort(key=lambda i: (-float(score[i]), int(i)))
+    rest = sorted(available, key=lambda i: (-float(score[i]), int(i)))
+    order = group_best + [i for i in rest if i not in set(group_best)]
+    target = min(max(0, int(min_slots)), len(available), size if size > 0 else len(available))
+
+    for i in order:
+        if sum(1 for j in current if mask[j]) >= target:
+            break
+        if i in seen:
+            continue
+        removable = [j for j in current if not protected[j] and not mask[j]]
+        if not removable:
+            break
+        rm = min(removable, key=lambda j: (float(score[j]), -int(j)))
+        pos = current.index(rm)
+        current[pos] = int(i)
+        seen.remove(rm)
+        seen.add(int(i))
+
+    current.sort(key=lambda i: (-float(score[i]), int(i)))
+    if size:
+        current = current[:size]
+    diag = {
+        "reserved_available": int(mask.sum()),
+        "reserved_selected": int(sum(1 for i in current if mask[i])),
+        "reserved_target": int(target),
+        "reserved_distinct_groups": int(len({gid(i) for i in current if mask[i]})),
+    }
+    return np.asarray(current, dtype=np.int64), diag
+
+
 def _complete_safety_aware_selection(
     selected: list[int] | np.ndarray,
     atom_budget_costs: np.ndarray,
@@ -101,6 +180,10 @@ def _complete_safety_aware_selection(
     decision_family_quota: int = 0,
     interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     interaction_family_quota: int = 0,
+    soft_interaction_mask: np.ndarray | None = None,
+    soft_interaction_quota: int = 0,
+    interaction_group_ids: np.ndarray | None = None,
+    interaction_utility: np.ndarray | None = None,
 ) -> tuple[list[int], float, dict[str, Any]]:
     """Post-process greedy acquisition for BDSE-v5.
 
@@ -133,6 +216,23 @@ def _complete_safety_aware_selection(
     interaction_family = np.zeros((E,), dtype=bool)
     if fam is not None and interaction_family_set:
         interaction_family = np.asarray([int(x) in interaction_family_set for x in fam.tolist()], dtype=bool) & active
+    # v35 DICE: hard occupancy atoms belong to the interaction family, but they
+    # are already protected by ``mandatory_quota``.  Counting them again toward
+    # an interaction quota made v34 appear to reserve interaction evidence while
+    # selecting almost no complementary TTC/gap evidence.  Keep a distinct soft
+    # interaction mask so safety and interaction coverage are complementary.
+    if soft_interaction_mask is None:
+        soft_interaction = interaction_family & ~mandatory
+    else:
+        soft_interaction = _as_bool_mask(soft_interaction_mask, E) & active & ~mandatory
+    group_ids = np.full((E,), -1, dtype=np.int64)
+    if interaction_group_ids is not None:
+        raw_groups = np.asarray(interaction_group_ids, dtype=np.int64).reshape(-1)
+        group_ids[: min(E, raw_groups.shape[0])] = raw_groups[: min(E, raw_groups.shape[0])]
+    inter_util = util.copy()
+    if interaction_utility is not None:
+        raw_inter_util = np.asarray(interaction_utility, dtype=np.float32).reshape(-1)
+        inter_util[: min(E, raw_inter_util.shape[0])] = raw_inter_util[: min(E, raw_inter_util.shape[0])]
 
     out: list[int] = []
     seen: set[int] = set()
@@ -175,7 +275,92 @@ def _complete_safety_aware_selection(
         if quota and forced_added >= quota:
             break
 
-    # 2) Explicit interaction/precedence reservation.  A broad decision-family
+    # 2) Complementary soft-interaction floor with agent diversity.  The first
+    # pass gives different interacting agents a chance before taking a second
+    # TTC/gap atom for the same agent.  The ranking is deployment-only and uses
+    # the direction-invariant predicted influence supplied by the runtime
+    # selector; it never sees teacher costs or logged futures.
+    soft_quota = max(0, int(soft_interaction_quota))
+    soft_available = np.flatnonzero(soft_interaction).tolist()
+
+    def _soft_group(i: int) -> int:
+        gid = int(group_ids[i]) if 0 <= i < E else -1
+        # Unknown groups remain distinct instead of collapsing all non-agent
+        # interaction atoms into a single pseudo-agent.
+        return gid if gid >= 0 else -(int(i) + 1)
+
+    def _mandatory_count() -> int:
+        return int(sum(1 for j in out if mandatory[j]))
+
+    def _remove_for_soft(candidate: int, prefer_duplicate_group: bool) -> bool:
+        selected_soft_groups = [_soft_group(j) for j in out if soft_interaction[j]]
+        group_counts: dict[int, int] = {}
+        for gid in selected_soft_groups:
+            group_counts[gid] = group_counts.get(gid, 0) + 1
+        removable: list[int] = []
+        for j in out:
+            if mandatory[j] and _mandatory_count() - 1 < quota:
+                continue
+            if soft_interaction[j]:
+                if not prefer_duplicate_group or group_counts.get(_soft_group(j), 0) <= 1:
+                    continue
+            removable.append(int(j))
+        if not removable:
+            return False
+        rm = min(removable, key=lambda j: (float(inter_util[j]), float(util[j]), -int(j)))
+        out.remove(rm)
+        seen.remove(rm)
+        return True
+
+    if soft_quota > 0 and soft_available:
+        # Diversity pass: best candidate from each not-yet represented agent.
+        by_group: dict[int, list[int]] = {}
+        for i in soft_available:
+            by_group.setdefault(_soft_group(i), []).append(int(i))
+        group_best = [
+            max(ids, key=lambda i: (float(inter_util[i]), float(util[i]), -float(costs[i]), -int(i)))
+            for ids in by_group.values()
+        ]
+        group_best.sort(key=lambda i: (-float(inter_util[i]), -float(util[i]), float(costs[i]), int(i)))
+        represented = {_soft_group(i) for i in out if soft_interaction[i]}
+        diversity_target = min(soft_quota, len(group_best))
+        for i in group_best:
+            if len(represented) >= diversity_target:
+                break
+            gid = _soft_group(i)
+            if gid in represented:
+                continue
+            while not can_add(i):
+                if not _remove_for_soft(i, prefer_duplicate_group=True):
+                    if not _remove_for_soft(i, prefer_duplicate_group=False):
+                        break
+            if can_add(i):
+                out.append(int(i))
+                seen.add(int(i))
+                represented.add(gid)
+
+        # Cardinality pass: fill the remaining soft interaction floor by
+        # two-sided influence, regardless of sign in the retained orientation.
+        soft_selected = int(sum(1 for i in out if soft_interaction[i]))
+        soft_order = sorted(
+            soft_available,
+            key=lambda i: (-float(inter_util[i]), -float(util[i]), float(costs[i]), int(i)),
+        )
+        for i in soft_order:
+            if soft_selected >= soft_quota:
+                break
+            if i in seen:
+                continue
+            while not can_add(i):
+                if not _remove_for_soft(i, prefer_duplicate_group=False):
+                    break
+            if can_add(i):
+                out.append(int(i))
+                seen.add(int(i))
+                soft_selected += 1
+
+    # 3) Legacy all-interaction reservation.  Retained for backward-compatible
+    # ablations; v35 configs set this to zero and use the complementary soft floor.
     # quota can be satisfied almost entirely by feasibility atoms, which is why
     # v33 selected ~14 decision-family atoms yet recovered only ~27% of decisive
     # interaction evidence.  Protect families 2/3 directly, while allowing hard
@@ -207,7 +392,7 @@ def _complete_safety_aware_selection(
                 seen.add(int(i))
                 interaction_added += 1
 
-    # 2) Decision-family reservation.  The hard/feasibility quota protects safety,
+    # 4) Decision-family reservation.  The hard/feasibility quota protects safety,
     # but v18 showed that it can starve interaction/precedence evidence without
     # improving closed-loop collision/TTC.  Reserve a small, utility-ranked slice
     # for interaction-like families using only deployment-time family ids and
@@ -234,7 +419,7 @@ def _complete_safety_aware_selection(
                 seen.add(int(i))
                 decision_added += 1
 
-    # 3) Acquisition fill.  Keep querying until a minimum support size is reached;
+    # 5) Acquisition fill.  Keep querying until a minimum support size is reached;
     # optionally fill the whole cost budget.  This prevents early stopping caused by
     # conservative LCBs before the calibration epsilon is reliable.
     fill_target = max(0, int(min_selected_atoms))
@@ -272,6 +457,10 @@ def _complete_safety_aware_selection(
         "interaction_family_quota": int(interaction_quota),
         "interaction_family_available": int(interaction_family.sum()),
         "interaction_family_selected": int(sum(1 for i in out if interaction_family[i])) if E else 0,
+        "soft_interaction_quota": int(soft_quota),
+        "soft_interaction_available": int(soft_interaction.sum()),
+        "soft_interaction_selected": int(sum(1 for i in out if soft_interaction[i])) if E else 0,
+        "soft_interaction_distinct_groups": int(len({_soft_group(i) for i in out if soft_interaction[i]})) if E else 0,
         "postfill_selected_atoms": int(len(out)),
         "postfill_spent_budget": float(final_spent),
     }
@@ -1282,6 +1471,59 @@ def _action_rank_atom_utility(
     return np.asarray(gains, dtype=np.float32)
 
 
+def _direction_invariant_interaction_utility(
+    delta: np.ndarray,
+    base_delta: np.ndarray,
+    caps: np.ndarray,
+    weights: np.ndarray,
+    *,
+    boundary_tau: float = 0.35,
+    flip_bonus: float = 0.5,
+    active_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Two-sided deployment influence for canonicalized pair queries.
+
+    v34 queried only one orientation of each unordered action pair.  A negative
+    contribution in that retained orientation is nevertheless a positive
+    contribution in the reciprocal orientation, and therefore can be decisive
+    for the paper's direction-agnostic interaction support set.  This utility
+    scores ``abs(delta)`` near the current decision boundary and adds a small
+    bonus when the predicted atom crosses that boundary.  It is used only for
+    complementary interaction allocation; the final tournament remains signed.
+    """
+    d = np.asarray(delta, dtype=np.float32)
+    if d.ndim != 2 or d.size == 0:
+        return np.zeros((d.shape[0] if d.ndim else 0,), dtype=np.float32)
+    base = np.asarray(base_delta, dtype=np.float32).reshape(-1)
+    w = np.asarray(weights, dtype=np.float32).reshape(-1)
+    cp = np.asarray(caps, dtype=np.float32).reshape(-1)
+    if base.shape[0] != d.shape[1]:
+        return np.mean(np.abs(d), axis=1).astype(np.float32)
+    if w.shape[0] != base.shape[0]:
+        w = np.ones_like(base, dtype=np.float32)
+    if cp.shape[0] != base.shape[0]:
+        cp = np.ones_like(base, dtype=np.float32)
+    tau = max(float(boundary_tau), 1e-3)
+    boundary_w = np.maximum(w, 0.0) * np.exp(-np.abs(base) / tau)
+    if float(boundary_w.sum()) <= 1e-9:
+        boundary_w = np.maximum(w, 1e-3)
+    cap_mag = np.maximum(np.abs(cp), tau)
+    effect = np.minimum(np.abs(d), cap_mag[None, :])
+    crossed = (base[None, :] * (base[None, :] + d) <= 0.0) & (np.abs(d) > 1e-6)
+    raw = np.sum(
+        boundary_w[None, :] * (effect + max(float(flip_bonus), 0.0) * crossed.astype(np.float32) * cap_mag[None, :]),
+        axis=1,
+        dtype=np.float64,
+    ) / max(float(boundary_w.sum()), 1e-9)
+    raw = np.asarray(raw, dtype=np.float32)
+    active = np.ones((raw.shape[0],), dtype=bool) if active_mask is None else _as_bool_mask(active_mask, raw.shape[0])
+    finite = raw[active & np.isfinite(raw)]
+    if finite.size:
+        scale = max(float(np.quantile(finite, 0.90)), 1e-6)
+        raw = np.clip(raw / scale, 0.0, 4.0)
+    return np.nan_to_num(raw, nan=0.0, posinf=4.0, neginf=0.0).astype(np.float32)
+
+
 def _greedy_cover_from_pair_support(
     atom_support: np.ndarray,
     base_support: np.ndarray,
@@ -1998,6 +2240,12 @@ def runtime_greedy_selector_pair_conditioned(
     decision_family_quota: int = 0,
     interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
     interaction_family_quota: int = 0,
+    soft_interaction_mask: np.ndarray | None = None,
+    soft_interaction_quota: int = 0,
+    interaction_group_ids: np.ndarray | None = None,
+    direction_invariant_interaction_weight: float = 0.0,
+    direction_invariant_boundary_tau: float = 0.35,
+    direction_invariant_flip_bonus: float = 0.5,
     collapse_reciprocal_pairs: bool = False,
     force_uncertainty_objective: bool = False,
 ) -> SelectionResult:
@@ -2033,6 +2281,9 @@ def runtime_greedy_selector_pair_conditioned(
             decision_family_quota=decision_family_quota,
             interaction_family_ids=interaction_family_ids,
             interaction_family_quota=interaction_family_quota,
+            soft_interaction_mask=soft_interaction_mask,
+            soft_interaction_quota=soft_interaction_quota,
+            interaction_group_ids=interaction_group_ids,
         )
         return SelectionResult(selected, current, pair_arr, weights, {"spent_budget": float(spent_post), "pre_postfill_spent_budget": float(spent), "budget": float(budget), "mode": "runtime_pair_conditioned_empty", "pair_count": 0, **post_diag})
     a = pair_arr[:, 0]
@@ -2244,7 +2495,7 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), **hybrid_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank"}:
@@ -2281,6 +2532,20 @@ def runtime_greedy_selector_pair_conditioned(
         # for post-fill tie breaking and cannot override the hard budget/active masks.
         prop_prior = 1.0 / (1.0 + np.exp(-np.clip(prop, -20.0, 20.0)))
         utility = utility + float(proposal_fill_weight) * prop_prior.astype(np.float32)
+    interaction_utility = utility.copy()
+    if float(direction_invariant_interaction_weight) > 0.0 and np.asarray(delta).ndim == 2 and np.asarray(delta).size:
+        two_sided = _direction_invariant_interaction_utility(
+            delta,
+            base_delta,
+            caps,
+            weights,
+            boundary_tau=float(direction_invariant_boundary_tau),
+            flip_bonus=float(direction_invariant_flip_bonus),
+            active_mask=atom_active_mask,
+        )
+        interaction_utility = interaction_utility + float(direction_invariant_interaction_weight) * two_sided
+        extra_diag["direction_invariant_interaction_mean"] = float(np.mean(two_sided)) if two_sided.size else 0.0
+        extra_diag["direction_invariant_interaction_p90"] = float(np.quantile(two_sided, 0.90)) if two_sided.size else 0.0
     selected, spent_post, post_diag = _complete_safety_aware_selection(
         selected,
         atom_budget_costs,
@@ -2297,6 +2562,10 @@ def runtime_greedy_selector_pair_conditioned(
         decision_family_quota=decision_family_quota,
         interaction_family_ids=interaction_family_ids,
         interaction_family_quota=interaction_family_quota,
+        soft_interaction_mask=soft_interaction_mask,
+        soft_interaction_quota=soft_interaction_quota,
+        interaction_group_ids=interaction_group_ids,
+        interaction_utility=interaction_utility,
     )
     return SelectionResult(
         selected=selected,

@@ -10,6 +10,7 @@ from bdse.planner.hab import select_topm_atoms_hab
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
 from bdse.planner.selector import (
     margin_normalization_scale,
+    reserve_topm_candidates,
     runtime_greedy_selector,
     runtime_greedy_selector_pair_conditioned,
     structural_safety_mask,
@@ -89,6 +90,8 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
     costs = _to_numpy(batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])), np.float32)
     fam_ids_t = batch.get("evidence_family_ids")
     fam_ids_np = _to_numpy(fam_ids_t, np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
+    group_ids_t = batch.get("evidence_agent_group_ids")
+    group_ids_np = _to_numpy(group_ids_t, np.int64) if group_ids_t is not None else np.full_like(fam_ids_np, -1, dtype=np.int64)
     B, E = logits.shape
     K = valid.shape[1]
     traj_np = batch.get("candidate_trajectories")
@@ -145,6 +148,28 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
                 forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(logits[bidx, i]), int(i)))[:forced_cap], dtype=np.int64)
                 non_forced = [int(i) for i in np.asarray(topm, dtype=np.int64).reshape(-1).tolist() if int(i) not in set(forced.tolist())]
                 topm = np.asarray((forced.tolist() + non_forced)[:M], dtype=np.int64)
+        hard_feature_for_pool = evidence_features_np[bidx, :, 0] > 0.5 if evidence_features_np is not None else np.zeros((E,), dtype=bool)
+        interaction_family_set = set(int(x) for x in s_cfg.get("interaction_family_ids", [2, 3]))
+        soft_interaction_pool = np.asarray(
+            [int(f) in interaction_family_set for f in fam_ids_np[bidx].tolist()], dtype=bool
+        ) & active[bidx] & ~hard_feature_for_pool
+        min_soft_topm = int(s_cfg.get("min_soft_interaction_topm_slots", 0))
+        if min_soft_topm > 0 and bool(soft_interaction_pool.any()):
+            protected_for_pool = structural_safety_mask(
+                hard_feature_for_pool,
+                fam_ids_np[bidx],
+                active[bidx],
+                include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
+            )
+            topm, _ = reserve_topm_candidates(
+                topm,
+                soft_interaction_pool,
+                logits[bidx],
+                M,
+                min_soft_topm,
+                protected_mask=protected_for_pool,
+                group_ids=group_ids_np[bidx],
+            )
         atom_active = np.zeros((E,), dtype=bool)
         atom_active[topm] = True
         atom_active &= active[bidx]
@@ -404,6 +429,15 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
             decision_family_boost=float(s_cfg.get("decision_family_boost", 0.0)),
             decision_family_ids=s_cfg.get("decision_family_ids", [2, 3]),
             decision_family_quota=int(s_cfg.get("decision_family_quota", 0)),
+            interaction_family_ids=s_cfg.get("interaction_family_ids", [2, 3]),
+            interaction_family_quota=int(s_cfg.get("interaction_family_quota", 0)),
+            soft_interaction_mask=soft_interaction_pool,
+            soft_interaction_quota=int(s_cfg.get("soft_interaction_quota", 0)),
+            interaction_group_ids=group_ids_np[bidx],
+            direction_invariant_interaction_weight=float(s_cfg.get("direction_invariant_interaction_weight", 0.0)),
+            direction_invariant_boundary_tau=float(s_cfg.get("direction_invariant_boundary_tau", 0.35)),
+            direction_invariant_flip_bonus=float(s_cfg.get("direction_invariant_flip_bonus", 0.5)),
+            collapse_reciprocal_pairs=bool(s_cfg.get("collapse_reciprocal_pairs", True)),
             force_uncertainty_objective=bool(s_cfg.get("force_uncertainty_objective", False)),
         )
         selected_mask[bidx, result.selected] = True

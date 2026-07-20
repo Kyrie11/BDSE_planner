@@ -555,6 +555,12 @@ class BDSEPlannerCore:
                 decision_family_quota=int(sel_cfg.get("decision_family_quota", 0)),
                 interaction_family_ids=sel_cfg.get("interaction_family_ids", [2, 3]),
                 interaction_family_quota=int(sel_cfg.get("interaction_family_quota", 0)),
+                soft_interaction_mask=pred.get("soft_interaction_mask", None),
+                soft_interaction_quota=int(sel_cfg.get("soft_interaction_quota", 0)),
+                interaction_group_ids=pred.get("interaction_group_ids", None),
+                direction_invariant_interaction_weight=float(sel_cfg.get("direction_invariant_interaction_weight", 0.0)),
+                direction_invariant_boundary_tau=float(sel_cfg.get("direction_invariant_boundary_tau", 0.35)),
+                direction_invariant_flip_bonus=float(sel_cfg.get("direction_invariant_flip_bonus", 0.5)),
                 collapse_reciprocal_pairs=bool(sel_cfg.get("collapse_reciprocal_pairs", True)),
                 force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),
             )

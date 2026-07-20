@@ -159,6 +159,7 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
     prop = np.zeros((Emax, prop_dim), dtype=np.float32)
     type_ids = np.zeros((Emax,), dtype=np.int64)
     fam_ids = np.zeros((Emax,), dtype=np.int64)
+    agent_group_ids = np.full((Emax,), -1, dtype=np.int64)
     active = np.zeros((Emax,), dtype=bool)
     budget = np.ones((Emax,), dtype=np.float32)
     if evidence_bank.proposal_features is None or np.asarray(evidence_bank.proposal_features).shape[0] < E:
@@ -170,6 +171,10 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
         budget[i] = float(atom.budget_cost)
         type_ids[i] = TYPE_NAMES.get(atom.type, 0)
         fam_ids[i] = FAMILY_NAMES.get(atom.family, 0)
+        try:
+            agent_group_ids[i] = int(atom.anchor.get("agent_index", -1))
+        except Exception:
+            agent_group_ids[i] = -1
         feat[i, 0] = float(atom.is_hard)
         feat[i, 1] = float(atom.budget_cost)
         feat[i, 2] = float(atom.lambda_weight)
@@ -211,6 +216,7 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
         "evidence_active": active,
         "evidence_type_ids": type_ids,
         "evidence_family_ids": fam_ids,
+        "evidence_agent_group_ids": agent_group_ids,
         "evidence_budget_costs": budget,
     }
 

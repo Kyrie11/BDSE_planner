@@ -18,7 +18,7 @@ from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, compute_quer
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.hab import max_family_id, select_topm_atoms_hab
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, compact_runtime_pair_graph
-from bdse.planner.selector import margin_normalization_scale, structural_safety_mask
+from bdse.planner.selector import margin_normalization_scale, reserve_topm_candidates, structural_safety_mask
 
 EVIDENCE_TYPE_TO_ID = TYPE_NAMES
 FAMILY_TO_ID = FAMILY_NAMES
@@ -951,6 +951,17 @@ class BDSEModel(nn.Module):
             raw_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E]
         except Exception:
             raw_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
+        selector_cfg_early = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
+        interaction_family_set = set(int(x) for x in selector_cfg_early.get("interaction_family_ids", [2, 3]))
+        soft_interaction_mask = np.asarray(
+            [int(f) in interaction_family_set for f in family_ids.tolist()], dtype=bool
+        ) & active & ~raw_hard_mask
+        interaction_group_ids = np.full((evidence_bank.E,), -1, dtype=np.int64)
+        for i, atom in enumerate(evidence_bank.atoms[: evidence_bank.E]):
+            try:
+                interaction_group_ids[i] = int(getattr(atom, "anchor", {}).get("agent_index", -1))
+            except Exception:
+                interaction_group_ids[i] = -1
         mandatory_hard_mask = structural_safety_mask(
             raw_hard_mask,
             family_ids,
@@ -967,6 +978,19 @@ class BDSEModel(nn.Module):
                 topm = np.asarray((forced.tolist() + non_forced)[:M], dtype=np.int64)
                 hab_diag = dict(hab_diag)
                 hab_diag["forced_hard_topm"] = int(forced.size)
+        min_soft_topm = int(selector_cfg_early.get("min_soft_interaction_topm_slots", 0))
+        if min_soft_topm > 0 and bool(soft_interaction_mask.any()):
+            topm, soft_topm_diag = reserve_topm_candidates(
+                topm,
+                soft_interaction_mask,
+                proposal_logits[: evidence_bank.E],
+                M,
+                min_soft_topm,
+                protected_mask=mandatory_hard_mask,
+                group_ids=interaction_group_ids,
+            )
+            hab_diag = dict(hab_diag)
+            hab_diag.update({f"soft_interaction_topm_{k}": int(v) for k, v in soft_topm_diag.items()})
         rival_sets = build_rival_sets_from_base(
             J0,
             candidates.valid_mask,
@@ -1211,6 +1235,8 @@ class BDSEModel(nn.Module):
             "family_budget_caps": family_budget.family_caps,
             "family_budgets": family_budget.family_budgets,
             "mandatory_atom_mask": mandatory_hard_mask.astype(bool),
+            "soft_interaction_mask": soft_interaction_mask.astype(bool),
+            "interaction_group_ids": interaction_group_ids.astype(np.int64),
             "mandatory_hard_atoms": np.flatnonzero(mandatory_hard_mask).astype(np.int64),
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
