@@ -1269,10 +1269,13 @@ class BDSEModel(nn.Module):
         else:
             rival_pair_margin_scale = pair_margin_scale
 
+        pair_cal_cfg = (runtime_cfg.get("pair_delta_calibration", {}) or {}) if isinstance(runtime_cfg, dict) else {}
+        pair_cal_enabled = bool(pair_cal_cfg.get("enabled", False))
         need_action_sparse = (
             not use_pair_runtime
             or bool(mcfg.get("pair_head_residual_over_local", False))
             or hybrid_local_weight > 0.0
+            or pair_cal_enabled
         )
         g_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         g_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
@@ -1332,9 +1335,48 @@ class BDSEModel(nn.Module):
             local = g_sparse[:, b] - g_sparse[:, a]
             return (local / max(float(scale), 1e-6)).astype(np.float32) if normalize_pairs else local.astype(np.float32)
 
+        pair_delta_calibration_diag: dict[str, Any] = {"pair_delta_calibration_enabled": bool(pair_cal_enabled)}
+
+        def _calibrate_pair_delta(
+            pair_pred: np.ndarray,
+            pair_var: np.ndarray,
+            pair_arr: np.ndarray,
+            scale: float,
+            prefix: str,
+        ) -> np.ndarray:
+            local = _local_pair_delta(pair_arr, scale)
+            if pair_pred.shape != local.shape or pair_pred.size == 0:
+                return pair_pred
+            base_w = float(pair_cal_cfg.get("base_local_weight", 0.35))
+            min_w = float(pair_cal_cfg.get("min_local_weight", 0.20))
+            max_w = float(pair_cal_cfg.get("max_local_weight", 0.70))
+            variance_gain = float(pair_cal_cfg.get("variance_gain", 0.25))
+            disagreement_gain = float(pair_cal_cfg.get("disagreement_gain", 0.20))
+            variance_tau = max(float(pair_cal_cfg.get("variance_tau", 0.35)), 1e-6)
+            magnitude_tau = max(float(pair_cal_cfg.get("magnitude_tau", 0.25)), 1e-6)
+            var = np.asarray(pair_var, dtype=np.float32)
+            if var.shape != pair_pred.shape:
+                var = np.zeros_like(pair_pred, dtype=np.float32)
+            std = np.sqrt(np.maximum(var, 0.0))
+            var_term = std / (std + variance_tau)
+            disagree = (pair_pred * local < 0.0).astype(np.float32)
+            local_strength = np.tanh(np.abs(local) / magnitude_tau).astype(np.float32)
+            w = base_w + variance_gain * var_term + disagreement_gain * disagree * local_strength
+            w = np.clip(w, min(min_w, max_w), max(min_w, max_w)).astype(np.float32)
+            blended = (1.0 - w) * pair_pred + w * local
+            pair_delta_calibration_diag[f"pair_delta_{prefix}_local_weight_mean"] = float(np.mean(w))
+            pair_delta_calibration_diag[f"pair_delta_{prefix}_local_weight_p90"] = float(np.quantile(w, 0.90))
+            pair_delta_calibration_diag[f"pair_delta_{prefix}_sign_disagreement_rate"] = float(np.mean(disagree))
+            pair_delta_calibration_diag[f"pair_delta_{prefix}_local_abs_mean"] = float(np.mean(np.abs(local)))
+            pair_delta_calibration_diag[f"pair_delta_{prefix}_pair_abs_mean"] = float(np.mean(np.abs(pair_pred)))
+            return blended.astype(np.float32)
+
         if bool(mcfg.get("pair_head_residual_over_local", False)):
             selector_pair_delta = _local_pair_delta(selection_pairs, pair_margin_scale) + selector_pair_delta
             rival_pair_delta = _local_pair_delta(rival_pairs, rival_pair_margin_scale) + rival_pair_delta
+        elif pair_cal_enabled:
+            selector_pair_delta = _calibrate_pair_delta(selector_pair_delta, selector_pair_var, selection_pairs, pair_margin_scale, "selector")
+            rival_pair_delta = _calibrate_pair_delta(rival_pair_delta, rival_pair_var, rival_pairs, rival_pair_margin_scale, "tournament")
         else:
             w_local = float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0)) if isinstance(cfg, dict) else 0.0
             if w_local > 0.0:
@@ -1398,6 +1440,7 @@ class BDSEModel(nn.Module):
             **{f"rival_{k}": v for k, v in rival_pair_compact_diag.items()},
             **base_prior_diag,
             **structural_residual_diag,
+            **pair_delta_calibration_diag,
         }
         if profile_enabled:
             result["model_timing"] = model_timing

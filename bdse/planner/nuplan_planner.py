@@ -148,6 +148,12 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
         "structural_safety_include_feasibility": int(bool(pred.get("structural_safety_include_feasibility", False))),
         "structural_residual_enabled": int(bool(pred.get("structural_residual_enabled", False))),
         "structural_residual_weight": float(pred.get("structural_residual_weight", 0.0)),
+        "pair_delta_calibration_enabled": int(bool(pred.get("pair_delta_calibration_enabled", False))),
+        "pair_delta_selector_local_weight_mean": float(pred.get("pair_delta_selector_local_weight_mean", 0.0)),
+        "pair_delta_selector_local_weight_p90": float(pred.get("pair_delta_selector_local_weight_p90", 0.0)),
+        "pair_delta_selector_sign_disagreement_rate": float(pred.get("pair_delta_selector_sign_disagreement_rate", 0.0)),
+        "pair_delta_tournament_local_weight_mean": float(pred.get("pair_delta_tournament_local_weight_mean", 0.0)),
+        "pair_delta_tournament_sign_disagreement_rate": float(pred.get("pair_delta_tournament_sign_disagreement_rate", 0.0)),
         "viability_pair_weight_mean": float(pred.get("viability_viability_pair_weight_mean", pred.get("viability_pair_weight_mean", 0.0))),
     }
 
@@ -527,7 +533,7 @@ class BDSEPlannerCore:
             if (
                 float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
                 or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
-                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank"}
+                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving"}
             ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
@@ -606,6 +612,14 @@ class BDSEPlannerCore:
                 direction_invariant_flip_bonus=float(sel_cfg.get("direction_invariant_flip_bonus", 0.5)),
                 collapse_reciprocal_pairs=bool(sel_cfg.get("collapse_reciprocal_pairs", True)),
                 force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),
+                margin_coreset_residual_weight=float(sel_cfg.get("margin_coreset_residual_weight", 1.0)),
+                margin_coreset_sign_weight=float(sel_cfg.get("margin_coreset_sign_weight", 0.8)),
+                margin_coreset_winner_weight=float(sel_cfg.get("margin_coreset_winner_weight", 1.5)),
+                margin_coreset_action_weight=float(sel_cfg.get("margin_coreset_action_weight", 0.5)),
+                margin_coreset_boundary_tau=float(sel_cfg.get("margin_coreset_boundary_tau", 0.35)),
+                margin_coreset_huber_delta=float(sel_cfg.get("margin_coreset_huber_delta", 0.25)),
+                margin_coreset_target_clip=float(sel_cfg.get("margin_coreset_target_clip", 3.0)),
+                margin_coreset_swap_passes=int(sel_cfg.get("margin_coreset_swap_passes", 2)),
             )
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
