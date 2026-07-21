@@ -152,3 +152,176 @@ deployment_coreset_repair_two_swap_candidates: 256
 ### Do not repeat
 ### Next step
 ```
+
+---
+
+## 2026-07-20 — v41 PR-DACC (Path-Relaxed Deployment-Aligned Certificate Coreset)
+
+### Motivation
+
+The v40 strict 1000-scenario runtime gate still failed, but only one hard condition failed:
+
+| Metric | v40 PR predecessor | Gate / control condition | Status |
+|---|---:|---:|---|
+| Teacher action match | 0.239 | paired LCB >= -0.005 | pass, LCB -0.003937 |
+| B=16 vs full-interface | 0.209 | paired LCB >= -0.002 | pass, LCB -0.001200 |
+| Winner-rival sign accuracy | 0.638470 | paired LCB >= -0.005 | pass, LCB -0.003047 |
+| Deployment target action preserved | **0.946** | **>= 0.950** | **fail by 4/1000 scenarios** |
+| Effective query count | 5383.152 | unchanged budget | pass |
+
+The v40 main output contained 54 target-action preservation failures.
+
+### Failure slices and diagnosis
+
+1. **The finite-penalty problem was fixed, but the remaining search is path dependent.**
+   - Failed samples averaged **6.35 forced action-flip deletion steps** versus 0.013 on preserved samples.
+   - Failed samples averaged 306.61 expanded exact deletion scans and 750.41 deployment evaluations.
+   - Thus v40 already exhausts every feasible one-step deletion whenever the cheap top-k has no preserving candidate; the problem is no longer a missed top-k item at one state.
+
+2. **The single greedy subset path reaches a dead end.**
+   - Lex-DACC keeps only one subset after every deletion.
+   - It can choose an action-preserving deletion that is locally best but later reaches a cardinality where every possible next deletion changes the target action.
+   - A different earlier branch, or a branch that temporarily changes the action and later restores it, is never retained.
+
+3. **The local repair radius is insufficient.**
+   - Every failed sample exhaustively evaluated 224 one-swap candidates.
+   - Every failed sample evaluated the configured top 256 two-swap candidates.
+   - Only 4/1000 total samples were repaired by v40, and none of the final 54 failures were repairable by the retained one/two-swap search.
+   - Increasing the same local-swap candidate count alone is therefore not the primary algorithmic fix.
+
+4. **A residual graph mismatch remained in the cheap branch screen.**
+   - v40 exact subset evaluation uses `rival_pair_atom_delta/rival_pair_indices`, which drive the final tournament.
+   - The cheap deletion/swap screen still receives `pair_atom_delta/pair_indices`, the selector graph.
+   - This does not change exact decisions, but it can prevent a useful branch from entering a bounded multi-path search.
+
+5. **The failure is localized to coreset search rather than checkpoint/query capacity.**
+   - All paired non-inferiority tests passed.
+   - Query counts are exactly unchanged from the MARS control.
+   - 49/54 failed v40 scenes selected the same final action as the MARS control.
+   - Therefore v41 keeps the v30 checkpoint, B=16, Top-M, candidate bank, teacher, pair-query outputs and validation scenarios fixed.
+
+### Hypothesis
+
+Target-action preservation under a cardinality/budget constraint is not a monotone property along a greedy deletion path. A bounded subset-lattice beam that retains:
+
+- exact target-preserving states; and
+- a small, action-diverse set of temporarily mismatching states
+
+can recover feasible final B=16 subsets that a single-path lexicographic greedy plus local exchange cannot reach.
+
+### Algorithm changes
+
+New runtime selector alias: **PR-DACC / Path-Relaxed DACC**.
+
+1. **Deployment-graph-aligned screening**
+   - When enabled, the coreset search receives the already queried final rival pair graph.
+   - Exact evaluator and cheap screen now use the same pair index/delta family.
+   - Rival graph weights are set to one because the deployed tournament is unweighted over its rival sets.
+
+2. **Failure-triggered action-diverse beam search**
+   - Triggered only when lexicographic deletion and one/two-swap repair still change the Top-M deployment action.
+   - Starts from the complete active Top-M decision atom set.
+   - Searches exactly the same final cardinality as the greedy B=16 set.
+   - Retains both preserving states and a configured fraction of mismatching states.
+   - Mismatching states are diversified by their exact deployed action so the beam does not collapse to one wrong winner.
+   - Branch candidates combine four cheap rankings:
+     - deployment distortion screen;
+     - low target-action pair impact;
+     - target-harming oriented contribution;
+     - low proposal prior.
+   - Every retained child is evaluated by the unchanged exact downstream deployment callback.
+   - A beam result replaces v40 only when it exactly restores the target action and satisfies the budget.
+
+3. **Bounded computation and unchanged model queries**
+   - Beam is disabled on the 94.6% v40-preserved cases.
+   - Default bound: width 12, branch 14, at most 2400 new exact subset evaluations per triggered scene.
+   - No extra neural inference or evidence query is performed.
+
+### Configuration
+
+```yaml
+selector_cap_mode: path_relaxed_deployment_coreset
+deployment_coreset_use_deployment_pair_graph: true
+deployment_coreset_beam_width: 12
+deployment_coreset_beam_branch: 14
+deployment_coreset_beam_max_evaluations: 2400
+deployment_coreset_beam_mismatch_fraction: 0.42
+```
+
+The v40 lexicographic scan, one-swap repair, guided two-swap repair and post-fill audit remain enabled.
+
+### Modified / added files
+
+- `bdse/planner/selector.py`
+  - bounded fixed-cardinality deletion-lattice beam;
+  - action-diverse beam pruning;
+  - target-oriented branch features;
+  - beam diagnostics and config plumbing;
+  - new PR-DACC aliases.
+- `bdse/planner/nuplan_planner.py`
+  - optional rival-graph-aligned coreset search;
+  - v41 beam config plumbing and diagnostics.
+- `bdse/configs/v41_bdse_prdacc_fast_cl.yaml`
+- `bdse/configs/v41_bdse_prdacc_fallback_fast_cl.yaml`
+- `bdse/configs/v41_bdse_mars_control_fast_cl.yaml`
+- `bdse/tools/check_v41_prdacc_gate.py`
+- `bdse/tests/test_v41_prdacc.py`
+- `run_v41_prdacc.sh`
+
+### Controlled variables
+
+Unchanged:
+
+- checkpoint: `outputs_v30/train/bdse_v30_pmvrbsr.best.pt`;
+- validation scenarios/order;
+- candidate trajectories and K;
+- proposal Top-M and evidence bank;
+- budget B=16;
+- neural pair/local predictions;
+- teacher labels;
+- final tournament, safety guard, utility refinement and all-flagged guard;
+- MARS control configuration.
+
+### Validation completed in the delivery environment
+
+- all Python files compile;
+- `bash -n run_v41_prdacc.sh` passes;
+- full test suite: **122 passed, 5 warnings**;
+- new synthetic regression verifies a case where:
+  - the target action disappears at an intermediate cardinality;
+  - the v40 single path ends with the wrong action;
+  - PR-DACC keeps a temporary mismatch branch and restores the target at the final budget;
+- v41 configs load and require the rival graph plus bounded beam.
+
+### Runtime validation still required
+
+No nuPlan cache or v30 checkpoint is available in the delivery environment, so no claim is made that v41 already passes the 1000-scene gate.
+
+Inspect after running:
+
+```text
+selector_deployment_coreset_target_action_preserved
+selector_deployment_coreset_beam_attempted
+selector_deployment_coreset_beam_success
+selector_deployment_coreset_beam_evaluations
+selector_deployment_coreset_beam_depth
+selector_deployment_coreset_beam_peak_width
+selector_deployment_coreset_search_uses_rival_graph
+```
+
+### Do not repeat
+
+- Do not lower the 0.95 gate or relabel the v40 result as a pass.
+- Do not increase `deployment_coreset_action_weight`; v40 already uses a true lexicographic comparison.
+- Do not only increase the two-swap top-k and treat it as a path-dependence solution.
+- Do not enable a full beam on every scenario; it wastes runtime on already-preserved samples.
+- Do not change checkpoint or finetune while testing v41 runtime search.
+- Do not compare v41 against a newly changed control; retain the frozen MARS control.
+- Do not run closed loop until the strict open-loop gate passes.
+
+### Next decision rule
+
+- If preservation reaches >=0.95 and all paired gates pass: measure selector evaluation count/latency, then run CL20 and CL100.
+- If beam success recovers at least 4 scenes but another paired metric fails: inspect the exact recovered/lost action transitions before changing beam width.
+- If beam is attempted on the 54-like failures but success remains near zero: the target action may be infeasible at B=16 for those scenes; next step is a target-feasibility diagnostic or deployment-target redefinition, not a larger blind beam.
+- If beam reaches the 2400-evaluation cap before full depth: increase the cap only after confirming branch diversity is useful; do not increase width, branch and cap simultaneously.

@@ -2543,6 +2543,10 @@ def _deployment_aligned_coreset_from_pair_delta(
     preservation_scan_candidates: int = 0,
     repair_one_swap: bool = True,
     repair_two_swap_candidates: int = 0,
+    beam_width: int = 0,
+    beam_branch: int = 0,
+    beam_max_evaluations: int = 0,
+    beam_mismatch_fraction: float = 0.35,
 ) -> tuple[list[int], float, float, dict[str, Any]]:
     """Compress Top-M evidence against the actual deployed decision map.
 
@@ -2555,7 +2559,12 @@ def _deployment_aligned_coreset_from_pair_delta(
       1. preserve the full-Top-M deployment action whenever a feasible deletion
          or exchange exists;
       2. among action-preserving subsets, minimize score/gap/margin distortion;
-      3. only accept an action-changing step when no preserving step is found.
+      3. only accept an action-changing step when no preserving step is found;
+      4. if the single-path search is trapped, run a bounded action-diverse beam
+         over the deletion lattice.  The beam deliberately retains a small
+         number of temporarily mismatching states, because a target action can
+         disappear at an intermediate cardinality and reappear after a later
+         evidence deletion.
 
     Candidate screening still uses the cheap signed-margin surrogate.  Exact
     decisions are evaluated with the same downstream tournament, safety guard,
@@ -2811,6 +2820,12 @@ def _deployment_aligned_coreset_from_pair_delta(
     repair_success = False
     repair_one_swap_evals = 0
     repair_two_swap_evals = 0
+    beam_attempted = False
+    beam_success = False
+    beam_evals = 0
+    beam_depth = 0
+    beam_peak_width = 0
+    beam_terminal_count = 0
     selected_action, _ = distortion_components(selected)
     if bool(lexicographic_action_preservation) and target_action >= 0 and selected_action != target_action:
         repair_attempted = True
@@ -2887,6 +2902,223 @@ def _deployment_aligned_coreset_from_pair_delta(
                 spent = float(new_spent)
                 repair_success = True
 
+    # v41 PR-DACC: the hard lexicographic greedy path can still become
+    # trapped.  In the v40 gate failures, a preserving deletion often existed
+    # at early cardinalities, but the chosen preserving branch later reached a
+    # level where every one-step deletion flipped the action.  A final one/two
+    # exchange cannot reliably undo that path dependence.  When the local
+    # repair fails, search a bounded beam over the full deletion lattice.  The
+    # beam keeps both exact target-preserving states and a controlled set of
+    # temporarily mismatching states, ranked by exact deployment distortion and
+    # target-action deficit.  This is still query-free: every state reuses the
+    # already-computed Top-M pair deltas and the deployment callback.
+    selected_action, _ = distortion_components(selected)
+    bw = max(0, int(beam_width))
+    bb = max(0, int(beam_branch))
+    beam_eval_cap = max(0, int(beam_max_evaluations))
+    if (
+        bool(lexicographic_action_preservation)
+        and target_action >= 0
+        and selected_action != target_action
+        and bw > 0
+        and bb > 0
+        and len(ids) > len(selected)
+    ):
+        beam_attempted = True
+        beam_eval_start = len(eval_cache)
+        target_valid_idx = np.flatnonzero(eligible)
+        target_rivals = target_valid_idx[target_valid_idx != int(target_action)]
+        if 0 <= target_action < target_scores.shape[0] and target_rivals.size:
+            target_raw_gap = float(target_scores[target_action] - np.max(target_scores[target_rivals]))
+        else:
+            target_raw_gap = 0.0
+
+        # Cheap target-oriented atom statistics from the same pair graph used by
+        # the deployment-aligned screen.  Positive support helps the target
+        # action; strongly negative support is a useful recovery deletion.
+        target_pair_mask = np.zeros((pairs.shape[0],), dtype=bool)
+        target_orient = np.zeros((pairs.shape[0],), dtype=np.float32)
+        if 0 <= target_action:
+            for pidx, (a_raw, b_raw) in enumerate(pairs.tolist()):
+                a_i, b_i = int(a_raw), int(b_raw)
+                if a_i == target_action:
+                    target_pair_mask[pidx] = True
+                    target_orient[pidx] = 1.0
+                elif b_i == target_action:
+                    target_pair_mask[pidx] = True
+                    target_orient[pidx] = -1.0
+        if bool(target_pair_mask.any()):
+            oriented = d[:, target_pair_mask] * target_orient[target_pair_mask][None, :]
+            target_atom_support = np.mean(oriented, axis=1).astype(np.float32)
+            target_atom_abs = np.mean(np.abs(oriented), axis=1).astype(np.float32)
+        else:
+            target_atom_support = np.zeros((E,), dtype=np.float32)
+            target_atom_abs = np.zeros((E,), dtype=np.float32)
+
+        def recovery_row(sel_tuple: tuple[int, ...]) -> tuple[tuple[int, ...], int, float, float, float]:
+            action, scores, margins = evaluate(list(sel_tuple))
+            _, distortion = distortion_components(list(sel_tuple))
+            score_deficit = 0.0
+            if 0 <= target_action < scores.shape[0] and target_rivals.size:
+                rr = target_rivals[target_rivals < scores.shape[0]]
+                if rr.size:
+                    trial_gap = float(scores[target_action] - np.max(scores[rr]))
+                    score_deficit = max(0.0, target_raw_gap - trial_gap) / max(target_scale, 1e-6)
+            margin_deficit = 0.0
+            if (
+                target_margins.ndim == 2 and margins.ndim == 2
+                and 0 <= target_action < min(target_margins.shape[0], margins.shape[0])
+            ):
+                kk = min(target_margins.shape[1], margins.shape[1], valid.shape[0])
+                rr_mask = valid[:kk].copy()
+                if target_action < kk:
+                    rr_mask[target_action] = False
+                tr = target_margins[target_action, :kk]
+                xr = margins[target_action, :kk]
+                informative = rr_mask & np.isfinite(tr) & np.isfinite(xr) & (
+                    np.abs(tr) >= max(float(margin_floor), 0.0)
+                )
+                if bool(informative.any()):
+                    margin_deficit = float(np.mean((tr[informative] * xr[informative] < 0.0).astype(np.float32)))
+            potential = float(distortion + score_deficit + 0.5 * margin_deficit)
+            return sel_tuple, int(action), float(distortion), potential, float(_spent_for(list(sel_tuple), costs))
+
+        def prune_beam(rows: list[tuple[tuple[int, ...], int, float, float, float]]) -> list[tuple[int, ...]]:
+            # Exact duplicates arise from different parent/deletion paths.
+            unique: dict[tuple[int, ...], tuple[tuple[int, ...], int, float, float, float]] = {}
+            for row in rows:
+                old = unique.get(row[0])
+                if old is None or (row[1] != target_action, row[3], row[2], row[0]) < (
+                    old[1] != target_action, old[3], old[2], old[0]
+                ):
+                    unique[row[0]] = row
+            vals = list(unique.values())
+            preserving = sorted(
+                (row for row in vals if row[1] == target_action),
+                key=lambda row: (row[2], row[3], row[0]),
+            )
+            mismatching = sorted(
+                (row for row in vals if row[1] != target_action),
+                key=lambda row: (row[3], row[2], row[1], row[0]),
+            )
+            mismatch_slots = min(
+                bw,
+                max(1, int(round(float(bw) * float(np.clip(beam_mismatch_fraction, 0.0, 1.0)))))
+                if mismatching else 0,
+            )
+            preserving_slots = max(0, bw - mismatch_slots)
+            chosen: list[tuple[tuple[int, ...], int, float, float, float]] = preserving[:preserving_slots]
+
+            # Action diversity prevents all exploratory slots from collapsing to
+            # one wrong winner.  Keep the best state for each wrong action first.
+            seen_actions: set[int] = set()
+            for row in mismatching:
+                if len(chosen) >= preserving_slots + mismatch_slots:
+                    break
+                if row[1] in seen_actions:
+                    continue
+                chosen.append(row)
+                seen_actions.add(row[1])
+            if len(chosen) < preserving_slots + mismatch_slots:
+                chosen_keys = {row[0] for row in chosen}
+                for row in mismatching:
+                    if len(chosen) >= preserving_slots + mismatch_slots:
+                        break
+                    if row[0] not in chosen_keys:
+                        chosen.append(row)
+                        chosen_keys.add(row[0])
+
+            # If either pool is smaller than its reservation, fill by the global
+            # recovery ranking rather than leaving beam capacity unused.
+            if len(chosen) < bw:
+                chosen_keys = {row[0] for row in chosen}
+                rest = sorted(
+                    (row for row in vals if row[0] not in chosen_keys),
+                    key=lambda row: (row[1] != target_action, row[3], row[2], row[1], row[0]),
+                )
+                chosen.extend(rest[: max(0, bw - len(chosen))])
+            return [row[0] for row in chosen[:bw]]
+
+        desired_removed = max(0, len(ids) - len(selected))
+        beam: list[tuple[int, ...]] = [tuple(sorted(ids))]
+        terminals: list[tuple[tuple[int, ...], int, float, float, float]] = []
+        for depth in range(desired_removed):
+            beam_depth = depth + 1
+            expanded_rows: list[tuple[tuple[int, ...], int, float, float, float]] = []
+            for state in beam:
+                state_list = list(state)
+                state_soft_count = int(sum(1 for i in state_list if soft[i]))
+                state_margin = base + d[np.asarray(state_list, dtype=np.int64)].sum(axis=0)
+                removable: list[tuple[float, float, float, float, int]] = []
+                for i in state_list:
+                    if soft[i] and state_soft_count - 1 < soft_floor:
+                        continue
+                    trial_margin = state_margin - d[i]
+                    cheap = float(screen_loss(trial_margin) / max(float(costs[i]), 1e-6))
+                    removable.append((cheap, float(proposal[i]), float(target_atom_abs[i]), float(target_atom_support[i]), int(i)))
+                if not removable:
+                    continue
+
+                # Build a diverse branch: normal deployment distortion screen,
+                # low target-impact deletions, low proposal-prior deletions, and
+                # (for recovery) atoms whose oriented contribution hurts target.
+                selected_removals: list[int] = []
+                def add_ranked(seq, count: int) -> None:
+                    for row in seq:
+                        i = int(row[-1])
+                        if i not in selected_removals:
+                            selected_removals.append(i)
+                            if len(selected_removals) >= count:
+                                break
+
+                n_screen = max(1, bb // 2)
+                n_aux = max(1, bb // 4)
+                by_screen = sorted(removable, key=lambda row: (row[0], row[1], row[4]))
+                by_abs = sorted(removable, key=lambda row: (row[2], row[0], row[4]))
+                by_proposal = sorted(removable, key=lambda row: (row[1], row[0], row[4]))
+                by_harm = sorted(removable, key=lambda row: (row[3], row[0], row[4]))
+                add_ranked(by_screen, n_screen)
+                add_ranked(by_abs, n_screen + n_aux)
+                add_ranked(by_harm, n_screen + 2 * n_aux)
+                add_ranked(by_proposal, bb)
+                if len(selected_removals) < bb:
+                    add_ranked(by_screen, bb)
+
+                for i in selected_removals[:bb]:
+                    if beam_eval_cap > 0 and len(eval_cache) - beam_eval_start >= beam_eval_cap:
+                        break
+                    child = tuple(j for j in state if j != i)
+                    row = recovery_row(child)
+                    # A fixed-cardinality beam is used so successful repair is
+                    # directly executable and cannot rely on later force-fill.
+                    expanded_rows.append(row)
+                if beam_eval_cap > 0 and len(eval_cache) - beam_eval_start >= beam_eval_cap:
+                    break
+
+            if not expanded_rows:
+                break
+            beam = prune_beam(expanded_rows)
+            beam_peak_width = max(beam_peak_width, len(beam))
+            if depth + 1 == desired_removed:
+                terminals.extend(recovery_row(state) for state in beam)
+            if beam_eval_cap > 0 and len(eval_cache) - beam_eval_start >= beam_eval_cap:
+                break
+
+        beam_evals = max(0, len(eval_cache) - beam_eval_start)
+        beam_terminal_count = len(terminals)
+        feasible = [
+            row for row in terminals
+            if row[1] == target_action and row[4] <= float(budget) + 1e-6
+        ]
+        if feasible:
+            best_state, _, _, _, best_spent = min(feasible, key=lambda row: (row[2], row[3], row[0]))
+            selected = list(best_state)
+            spent = float(best_spent)
+            current_surrogate = base + d[np.asarray(selected, dtype=np.int64)].sum(axis=0)
+            selected_action = int(target_action)
+            beam_success = True
+            repair_success = True
+
     selected = sorted(selected)
     selected_action, selected_scores, _ = evaluate(selected)
     final_loss = exact_loss(selected)
@@ -2920,6 +3152,12 @@ def _deployment_aligned_coreset_from_pair_delta(
         "deployment_coreset_repair_success": bool(repair_success),
         "deployment_coreset_repair_one_swap_evaluations": int(repair_one_swap_evals),
         "deployment_coreset_repair_two_swap_evaluations": int(repair_two_swap_evals),
+        "deployment_coreset_beam_attempted": bool(beam_attempted),
+        "deployment_coreset_beam_success": bool(beam_success),
+        "deployment_coreset_beam_evaluations": int(beam_evals),
+        "deployment_coreset_beam_depth": int(beam_depth),
+        "deployment_coreset_beam_peak_width": int(beam_peak_width),
+        "deployment_coreset_beam_terminal_count": int(beam_terminal_count),
     }
     return selected, float(-final_loss), float(spent), diag
 
@@ -3013,6 +3251,10 @@ def runtime_greedy_selector_pair_conditioned(
     deployment_coreset_preservation_scan_candidates: int = 0,
     deployment_coreset_repair_one_swap: bool = True,
     deployment_coreset_repair_two_swap_candidates: int = 0,
+    deployment_coreset_beam_width: int = 0,
+    deployment_coreset_beam_branch: int = 0,
+    deployment_coreset_beam_max_evaluations: int = 0,
+    deployment_coreset_beam_mismatch_fraction: float = 0.35,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -3117,6 +3359,7 @@ def runtime_greedy_selector_pair_conditioned(
     deployment_coreset_modes = {
         "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset",
         "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
+        "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc",
     }
     # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
     # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
@@ -3189,6 +3432,10 @@ def runtime_greedy_selector_pair_conditioned(
                 preservation_scan_candidates=int(deployment_coreset_preservation_scan_candidates),
                 repair_one_swap=bool(deployment_coreset_repair_one_swap),
                 repair_two_swap_candidates=int(deployment_coreset_repair_two_swap_candidates),
+                beam_width=int(deployment_coreset_beam_width),
+                beam_branch=int(deployment_coreset_beam_branch),
+                beam_max_evaluations=int(deployment_coreset_beam_max_evaluations),
+                beam_mismatch_fraction=float(deployment_coreset_beam_mismatch_fraction),
             )
             mode = "runtime_pair_conditioned_deployment_coreset"
         elif cap_mode_l in deployment_coreset_modes:
@@ -3325,10 +3572,10 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), **hybrid_diag, **coreset_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), **hybrid_diag, **coreset_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc"}:
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
                 certificate_weight=float(action_rank_certificate_weight),

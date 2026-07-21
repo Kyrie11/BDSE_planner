@@ -533,7 +533,7 @@ class BDSEPlannerCore:
             if (
                 float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
                 or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
-                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc"}
+                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc"}
             ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
@@ -545,9 +545,39 @@ class BDSEPlannerCore:
             deployment_modes = {
                 "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset",
                 "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
+                "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc",
             }
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
+
+            # v41 PR-DACC aligns the *cheap search graph* with the graph used by
+            # the final deployment tournament.  v39/v40 evaluated candidate
+            # subsets with the rival graph but screened them with the selector
+            # graph, so beam branching could discard the useful deletion before
+            # exact evaluation.  The rival deltas have already been queried; this
+            # changes no neural-query count.
+            search_pair_delta = pred["pair_atom_delta"]
+            search_pair_indices = pred["pair_indices"]
+            search_pair_weights = pred.get(
+                "runtime_pair_weights",
+                np.ones((np.asarray(search_pair_indices).reshape(-1, 2).shape[0],), dtype=np.float32),
+            )
+            search_pair_variance = pred.get("pair_atom_var", None)
+            search_pair_margin_scale = float(pred.get("pair_margin_scale", 100.0))
+            deployment_search_uses_rival_graph = False
+            if cap_mode in deployment_modes and bool(sel_cfg.get("deployment_coreset_use_deployment_pair_graph", False)):
+                rival_indices = np.asarray(pred.get("rival_pair_indices", []), dtype=np.int64)
+                rival_indices = rival_indices.reshape(-1, 2) if rival_indices.size else np.zeros((0, 2), dtype=np.int64)
+                rival_delta = np.asarray(pred.get("rival_pair_atom_delta", []), dtype=np.float32)
+                if rival_indices.size and rival_delta.ndim == 2 and rival_delta.shape[1] == rival_indices.shape[0]:
+                    search_pair_delta = rival_delta
+                    search_pair_indices = rival_indices
+                    # The final tournament is unweighted over its rival sets.
+                    search_pair_weights = np.ones((rival_indices.shape[0],), dtype=np.float32)
+                    search_pair_variance = pred.get("rival_pair_atom_var", None)
+                    search_pair_margin_scale = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
+                    deployment_search_uses_rival_graph = True
+
             deployment_evaluator = None
             if cap_mode in deployment_modes:
                 def deployment_evaluator(selected_atoms: list[int]):
@@ -575,9 +605,9 @@ class BDSEPlannerCore:
 
             selection = runtime_greedy_selector_pair_conditioned(
                 J0,
-                pred["pair_atom_delta"],
-                pred["pair_indices"],
-                pred.get("runtime_pair_weights", np.ones((np.asarray(pred["pair_indices"]).reshape(-1, 2).shape[0],), dtype=np.float32)),
+                search_pair_delta,
+                search_pair_indices,
+                search_pair_weights,
                 evidence_bank.budget_costs(),
                 candidates.valid_mask,
                 runtime_flags,
@@ -585,7 +615,7 @@ class BDSEPlannerCore:
                 gamma_max=float(sel_cfg.get("normalized_gamma_max", 5.0) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("gamma_max_default", 100.0)),
                 eta_pred=float(sel_cfg.get("normalized_eta_pred", 0.1) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("eta_pred", 1.0)),
                 atom_active_mask=decision_atom_active,
-                pair_atom_variance=pred.get("pair_atom_var", None),
+                pair_atom_variance=search_pair_variance,
                 beta_uncertainty=float(tour_cfg.get("beta_uncertainty", 0.0)),
                 epsilon_cal=float(tour_cfg.get("epsilon_cal", stage_cfg.get("calibration", {}).get("epsilon_cal", 0.0))),
                 lambda_info=float(sel_cfg.get("lambda_info", 0.0)),
@@ -597,7 +627,7 @@ class BDSEPlannerCore:
                 min_selected_atoms=int(sel_cfg.get("min_selected_atoms", 0)),
                 force_fill_budget=bool(sel_cfg.get("force_fill_budget", False)),
                 normalize_margins=bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)),
-                margin_scale=float(pred.get("pair_margin_scale", 100.0)),
+                margin_scale=search_pair_margin_scale,
                 proposal_scores=pred.get("proposal_logits", None),
                 proposal_fill_weight=float(sel_cfg.get("proposal_fill_weight", 0.25)),
                 prioritize_mandatory_fill=bool(sel_cfg.get("prioritize_mandatory_fill", True)),
@@ -671,6 +701,21 @@ class BDSEPlannerCore:
                 deployment_coreset_repair_two_swap_candidates=int(
                     sel_cfg.get("deployment_coreset_repair_two_swap_candidates", 0)
                 ),
+                deployment_coreset_beam_width=int(
+                    sel_cfg.get("deployment_coreset_beam_width", 0)
+                ),
+                deployment_coreset_beam_branch=int(
+                    sel_cfg.get("deployment_coreset_beam_branch", 0)
+                ),
+                deployment_coreset_beam_max_evaluations=int(
+                    sel_cfg.get("deployment_coreset_beam_max_evaluations", 0)
+                ),
+                deployment_coreset_beam_mismatch_fraction=float(
+                    sel_cfg.get("deployment_coreset_beam_mismatch_fraction", 0.35)
+                ),
+            )
+            selection.diagnostics["deployment_coreset_search_uses_rival_graph"] = bool(
+                deployment_search_uses_rival_graph
             )
             tournament = run_pair_conditioned_tournament(
                 J0,
