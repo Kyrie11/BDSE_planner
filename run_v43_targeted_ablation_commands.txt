@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Run only after v43 micro6 passes. These are mechanism diagnostics. Reuse the
+# paired scalar results from the main micro6 run rather than rerunning them.
+BASE_RUN=${BASE_RUN:-$(cat runs/v43_chosen_base_run.txt)}
+TAG=$(basename "$BASE_RUN")
+COMMON="RUN_OFFLINE_EVAL=0 RUN_AUDITS=1 RUN_SAFE_CLOSED_LOOP=0 RUN_SCALAR_BASELINES=0 PAIR_BUCKETS_ON_TWO_GPUS=1 GPU_NEAR=0 GPU_CONTACT=1 AUDIT_MAX_ROLLOUTS=4 AUDIT_MAX_STEPS=10 AUDIT_EVERY_N_STEPS=2 AUDIT_TARGETS=8 AUDIT_LABELS=64 AUDIT_LABEL_MODE=selected_topk AUDIT_NUM_CANDIDATES=10 AUDIT_NUM_RECOVERY_OPTIONS=8 AUDIT_TOP_K=4 AUDIT_MAX_EXTRA_CANDIDATES=3 CONTACT_BRAKE_TAIL=false RUN_NEAR_TAIL=false CONTACT_TAIL_BYPASS_PCD_GAIN=false"
+
+# A1: remove the learned value path entirely.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_no_value" RUN_DIRECT_VALUE=false \
+  bash scripts/run_ocrap_v43_rsc.sh
+
+# A2: keep the value ranking but remove OC-RSC's admission augmentation. This
+# should reproduce v42's structural zero-use failure when base admission is nominal-only.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_preference_only" \
+  RSC_AUGMENT_ADMISSION=false bash scripts/run_ocrap_v43_rsc.sh
+
+# A3: remove the verified risk threshold while retaining actionability. More
+# challenges with worse precision/NUP demonstrates why selective calibration matters.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_no_risk_threshold" \
+  NEAR_DIRECT_MIN_ADV=0 CONTACT_DIRECT_MIN_ADV=0 bash scripts/run_ocrap_v43_rsc.sh
+
+# A4: remove actionability. Tiny-deviation or stopped-vehicle actions should
+# reappear if the trajectory-effect certificate is practically necessary.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_no_actionability" \
+  NEAR_DIRECT_MIN_DEVIATION=0 CONTACT_DIRECT_MIN_DEVIATION=0 \
+  NEAR_TAIL_MIN_DEVIATION=0 CONTACT_TAIL_MIN_DEVIATION=0 \
+  bash scripts/run_ocrap_v43_rsc.sh
