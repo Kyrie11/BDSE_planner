@@ -20,13 +20,13 @@ CKPT="$OUT_ROOT/train/bdse_v44_rads.pt"
 BEST_CKPT="$OUT_ROOT/train/bdse_v44_rads.best.pt"
 
 train() {
-  torchrun --standalone --nproc_per_node=${NPROC_PER_NODE:-2} -m bdse.experiments.train \
+  torchrun --standalone --nproc_per_node=2 -m bdse.experiments.train \
     --config bdse/configs/v44_bdse_rads_train.yaml \
     --split train_boston train_pittsburgh train_singapore train_vegas_2 \
     --preprocessed-dir "$BDSE_TRAIN_CACHE" \
     --max-scenarios "$MAX_TRAIN_SCENARIOS" \
     --max-scenarios-per-split $((MAX_TRAIN_SCENARIOS / 4)) \
-    --batch-size "${BATCH_SIZE:-8}" \
+    --batch-size "${BATCH_SIZE:-16}" \
     --num-workers "${NUM_WORKERS:-8}" \
     --device "$DEVICE" \
     --amp \
