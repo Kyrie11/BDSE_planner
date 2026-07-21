@@ -779,6 +779,54 @@ def _configure_trainable_modules(model: torch.nn.Module, cfg: dict[str, Any], is
     return selected
 
 
+def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
+    """Reject schedules that never train the selector used at deployment.
+
+    Earlier BDSE configurations could finish all epochs before
+    ``predicted_selector_start_epoch``.  In that case the action-level loss was
+    optimized only with oracle evidence masks, while inference used predicted
+    masks.  The run was syntactically valid but did not train the deployed
+    decision path.
+    """
+    train_cfg = cfg.get("training", {})
+    epochs = int(train_cfg.get("epochs", 0))
+    predicted_start = int(train_cfg.get("predicted_selector_start_epoch", 8))
+    action_start = int(train_cfg.get("action_loss_start_epoch", 4))
+    pair_action_weight = float(train_cfg.get("pair_action_loss_weight", 1.0))
+    action_weight = float(train_cfg.get("loss_weights", {}).get("action", 1.0))
+    allow_oracle_only = bool(train_cfg.get("allow_oracle_only_selector_training", False))
+    if epochs <= 0:
+        raise ValueError("training.epochs must be positive")
+    if action_weight > 0.0 and pair_action_weight > 0.0 and not allow_oracle_only:
+        if predicted_start >= epochs:
+            raise ValueError(
+                "Deployment selector is never action-supervised: "
+                f"predicted_selector_start_epoch={predicted_start} but epochs={epochs}. "
+                "Set predicted_selector_start_epoch < epochs, increase epochs, or explicitly set "
+                "training.allow_oracle_only_selector_training=true for an oracle-only ablation."
+            )
+        if action_start >= epochs:
+            raise ValueError(
+                "Action loss is never enabled: "
+                f"action_loss_start_epoch={action_start} but epochs={epochs}."
+            )
+
+    budgets = train_cfg.get("deployment_budgets", None)
+    weights = train_cfg.get("deployment_budget_weights", None)
+    if budgets is not None:
+        if not isinstance(budgets, (list, tuple)) or not budgets:
+            raise ValueError("training.deployment_budgets must be a non-empty list")
+        parsed = [float(x) for x in budgets]
+        if any((not np.isfinite(x)) or x <= 0.0 for x in parsed):
+            raise ValueError("training.deployment_budgets must contain finite positive values")
+        if weights is not None:
+            if not isinstance(weights, (list, tuple)) or len(weights) != len(parsed):
+                raise ValueError("training.deployment_budget_weights must match training.deployment_budgets")
+            parsed_weights = [float(x) for x in weights]
+            if any((not np.isfinite(x)) or x < 0.0 for x in parsed_weights) or sum(parsed_weights) <= 0.0:
+                raise ValueError("training.deployment_budget_weights must be non-negative with positive total mass")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
@@ -841,6 +889,7 @@ def main() -> None:
         cfg["training"]["pin_memory"] = False
     if args.seed is not None:
         cfg["seed"] = int(args.seed)
+    _validate_deployment_training_schedule(cfg)
     seed = int(cfg.get("seed", 17))
     np.random.seed(seed)
     torch.manual_seed(seed)

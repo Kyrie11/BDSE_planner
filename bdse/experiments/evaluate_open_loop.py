@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import time
 
 import numpy as np
 import torch
@@ -46,6 +47,8 @@ def main() -> None:
     model = load_model(args.checkpoint, cfg, device)
     print(f"Open-loop evaluation device: {device}")
     core = BDSEPlannerCore(model=model, cfg=cfg)
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     if args.preprocessed_dir:
         dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios)
     else:
@@ -54,9 +57,18 @@ def main() -> None:
         dataset = NuPlanBDSEDataset(cfg, split=args.split[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
     results = []
     per_sample_rows = []
+    planner_latencies_ms: list[float] = []
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        planner_start = time.perf_counter()
         pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        planner_latency_ms = 1000.0 * (time.perf_counter() - planner_start)
+        planner_latencies_ms.append(float(planner_latency_ms))
         qdiag = runtime_query_diagnostics(pred, sel.selected)
+        qdiag["planner_latency_ms"] = float(planner_latency_ms)
         qdiag.update({k: v for k, v in getattr(tour, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "avoidable_selected_action_safety_flag", "all_actions_safety_flagged", "all_flagged_risk_guard_applied", "all_flagged_hard_risk_regret", "hard_filter_applied", "safe_action_available"}})
         qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
         sel_diag = getattr(sel, "diagnostics", {}) or {}
@@ -102,10 +114,25 @@ def main() -> None:
                 "bdse_action": int(tour.action_index),
                 "full_action": int(diag.details.get("full_action", -1)),
                 "fallback_would_trigger": bool(qdiag.get("fallback_would_trigger", False)),
+                "planner_latency_ms": float(planner_latency_ms),
             }
             per_sample_rows.append(row)
     summary = aggregate_metric_results(results)
     summary["device"] = str(device)
+    if planner_latencies_ms:
+        latency = np.asarray(planner_latencies_ms, dtype=np.float64)
+        summary.update(
+            {
+                "planner_latency_ms_mean": float(latency.mean()),
+                "planner_latency_ms_p50": float(np.quantile(latency, 0.50)),
+                "planner_latency_ms_p90": float(np.quantile(latency, 0.90)),
+                "planner_latency_ms_p95": float(np.quantile(latency, 0.95)),
+                "planner_latency_ms_p99": float(np.quantile(latency, 0.99)),
+                "planner_latency_ms_max": float(latency.max()),
+            }
+        )
+    if device.type == "cuda":
+        summary["cuda_peak_memory_mb"] = float(torch.cuda.max_memory_allocated(device) / (1024.0**2))
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     import json

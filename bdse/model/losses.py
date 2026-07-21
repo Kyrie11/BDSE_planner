@@ -629,6 +629,69 @@ def _negative_cost_logits(cost: torch.Tensor, valid: torch.Tensor, min_scale: fl
     return logits.masked_fill(~valid.bool(), _neg_mask_value(logits))
 
 
+def _config_with_evidence_budget(cfg: dict[str, Any], budget: float) -> dict[str, Any]:
+    """Return a shallow config view with a different evidence budget.
+
+    The deployment selector reads only nested configuration dictionaries and
+    does not mutate them.  A shallow top-level copy plus a copied ``evidence``
+    block is therefore enough and avoids a costly deepcopy in every batch.
+    """
+    local_cfg = dict(cfg)
+    local_evidence = dict(cfg.get("evidence", {}))
+    local_evidence["budget"] = float(budget)
+    local_cfg["evidence"] = local_evidence
+    return local_cfg
+
+
+def _teacher_regret_weights(
+    logits: torch.Tensor,
+    target_action: torch.Tensor,
+    valid: torch.Tensor,
+    teacher_cost: torch.Tensor | None,
+    *,
+    strength: float,
+    clip: float,
+    min_scale: float,
+) -> torch.Tensor:
+    """Robust, stop-gradient weights for deployment mistakes with high regret.
+
+    The raw teacher costs in nuPlan-style supervision are heavy tailed.  We
+    therefore normalize regret by a per-scene robust scale and use ``log1p``
+    before clipping.  This emphasizes consequential selector failures without
+    letting a few extreme scenes dominate the batch.
+    """
+    if teacher_cost is None or float(strength) <= 0.0:
+        return logits.new_ones((logits.shape[0],))
+    with torch.no_grad():
+        pred_action = logits.argmax(dim=1)
+        safe_teacher = teacher_cost.float().masked_fill(~valid.bool(), float("inf"))
+        pred_cost = torch.gather(safe_teacher, 1, pred_action[:, None]).squeeze(1)
+        target_cost = torch.gather(safe_teacher, 1, target_action[:, None]).squeeze(1)
+        regret = (pred_cost - target_cost).clamp_min(0.0)
+        finite_teacher = torch.where(torch.isfinite(safe_teacher), safe_teacher, torch.zeros_like(safe_teacher))
+        scale = _valid_row_scale(finite_teacher, valid, min_scale=float(min_scale)).squeeze(1)
+        normalized = torch.log1p(regret / scale.clamp_min(1e-6))
+        if float(clip) > 0.0:
+            normalized = normalized.clamp_max(float(clip))
+        return 1.0 + float(strength) * normalized
+
+
+def _weighted_action_target_loss(
+    logits: torch.Tensor,
+    target_action: torch.Tensor,
+    *,
+    soft_target: torch.Tensor | None,
+    scene_weights: torch.Tensor,
+) -> torch.Tensor:
+    """Teacher action loss with optional soft targets and per-scene weights."""
+    if soft_target is not None:
+        per_scene = -(soft_target * F.log_softmax(logits, dim=1)).sum(dim=1)
+    else:
+        per_scene = F.cross_entropy(logits, target_action, reduction="none")
+    weights = scene_weights.detach().to(dtype=per_scene.dtype)
+    return (per_scene * weights).sum() / weights.sum().clamp_min(1e-6)
+
+
 def _pair_margin_scale(pair_margins: torch.Tensor, pair_mask: torch.Tensor, default: float = 100.0, quantile: float = 0.75) -> torch.Tensor:
     vals = pair_margins[pair_mask].detach().abs()
     if vals.numel() == 0:
@@ -1194,6 +1257,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     enable_action_loss = (cur_epoch >= action_loss_start) and (float(lw.get("action", 1.0)) > 0.0)
     logits_action = None
     logits_pair = None
+    pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
 
     if enable_action_loss and action_act_weight_cfg > 0.0:
         selected_mask, query_mask = _predicted_certificate_masks(out, batch, cfg)
@@ -1215,22 +1279,57 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             # exclude structural safety atoms (legacy behavior) or include clipped
             # hard/safety margins for metric-aligned deployment training.
             pair_selected_mask = target_sel.bool() & pair_action_atom_mask
+            logits_pair = _pair_conditioned_tournament_scores(
+                finite_J0,
+                pred_atom_delta,
+                pairs,
+                pair_valid,
+                pair_selected_mask,
+                valid,
+                tau_q,
+                eps_cal,
+                pair_var=out.get("pair_atom_var"),
+                beta_uncertainty=beta_unc,
+                pair_scale=pair_scale,
+                normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+            )
+            pair_logits_entries = [(float(cfg.get("evidence", {}).get("budget", 16)), 1.0, logits_pair)]
         else:
-            pair_selected_mask = _predicted_pair_certificate_masks(out, batch, cfg) & pair_action_atom_mask
-        logits_pair = _pair_conditioned_tournament_scores(
-            finite_J0,
-            pred_atom_delta,
-            pairs,
-            pair_valid,
-            pair_selected_mask,
-            valid,
-            tau_q,
-            eps_cal,
-            pair_var=out.get("pair_atom_var"),
-            beta_uncertainty=beta_unc,
-            pair_scale=pair_scale,
-            normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
-        )
+            configured_budgets = train_cfg.get("deployment_budgets", None)
+            if configured_budgets is None:
+                configured_budgets = [float(cfg.get("evidence", {}).get("budget", 16))]
+            budgets = [float(x) for x in configured_budgets]
+            configured_weights = train_cfg.get("deployment_budget_weights", None)
+            if configured_weights is None:
+                budget_weights = [1.0] * len(budgets)
+            else:
+                budget_weights = [float(x) for x in configured_weights]
+                if len(budget_weights) != len(budgets):
+                    raise ValueError("training.deployment_budget_weights must match training.deployment_budgets")
+            primary_budget = float(cfg.get("evidence", {}).get("budget", 16))
+            primary_distance = float("inf")
+            for budget_value, budget_weight in zip(budgets, budget_weights):
+                budget_cfg = _config_with_evidence_budget(cfg, budget_value)
+                pair_selected_mask = _predicted_pair_certificate_masks(out, batch, budget_cfg) & pair_action_atom_mask
+                budget_logits = _pair_conditioned_tournament_scores(
+                    finite_J0,
+                    pred_atom_delta,
+                    pairs,
+                    pair_valid,
+                    pair_selected_mask,
+                    valid,
+                    tau_q,
+                    eps_cal,
+                    pair_var=out.get("pair_atom_var"),
+                    beta_uncertainty=beta_unc,
+                    pair_scale=pair_scale,
+                    normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+                )
+                pair_logits_entries.append((budget_value, max(float(budget_weight), 0.0), budget_logits))
+                distance = abs(float(budget_value) - primary_budget)
+                if distance < primary_distance:
+                    logits_pair = budget_logits
+                    primary_distance = distance
 
     L_cert_gap, L_cert_safety, L_cert_frontier = _certificate_action_gap_loss(logits_pair, target_action, valid, hard_action, cfg)
 
@@ -1238,18 +1337,70 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     full_pred_cost = full_pred_cost.masked_fill(~valid, J0.new_tensor(1e6))
     full_logits = _negative_cost_logits(full_pred_cost, valid, min_scale=float(train_cfg.get("full_action_min_scale", 1.0)))
     hard_action_targets = bool(train_cfg.get("hard_action_targets", True))
+    soft_teacher_target = None
     if "teacher_J_T" in batch and not hard_action_targets:
         tau_T = float(train_cfg.get("teacher_soft_target_tau", 1.0))
         teacher_cost = batch["teacher_J_T"].float().masked_fill(~valid, J0.new_tensor(1e9))
         teacher_logits = _negative_cost_logits(teacher_cost, valid, min_scale=float(train_cfg.get("teacher_action_min_scale", 1.0))) / max(tau_T, 1e-6)
-        p = torch.softmax(teacher_logits, dim=1)
-        L_act_action = -(p * F.log_softmax(logits_action, dim=1)).sum(dim=1).mean() if logits_action is not None else J0.new_tensor(0.0)
-        L_act_pair = -(p * F.log_softmax(logits_pair, dim=1)).sum(dim=1).mean() if logits_pair is not None else J0.new_tensor(0.0)
-        L_full_action = -(p * F.log_softmax(full_logits, dim=1)).sum(dim=1).mean()
+        soft_teacher_target = torch.softmax(teacher_logits, dim=1)
+        L_full_action = -(soft_teacher_target * F.log_softmax(full_logits, dim=1)).sum(dim=1).mean()
     else:
-        L_act_action = F.cross_entropy(logits_action, target_action) if logits_action is not None else J0.new_tensor(0.0)
-        L_act_pair = F.cross_entropy(logits_pair, target_action) if logits_pair is not None else J0.new_tensor(0.0)
         L_full_action = F.cross_entropy(full_logits, target_action)
+
+    teacher_cost_for_weight = batch.get("teacher_J_T")
+    regret_strength = float(train_cfg.get("deployment_regret_weight", 0.0)) if cur_epoch >= predicted_selector_start else 0.0
+    regret_clip = float(train_cfg.get("deployment_regret_clip", 4.0))
+    regret_min_scale = float(train_cfg.get("deployment_regret_min_scale", train_cfg.get("teacher_action_min_scale", 1.0)))
+    if logits_action is not None:
+        action_scene_weights = _teacher_regret_weights(
+            logits_action,
+            target_action,
+            valid,
+            teacher_cost_for_weight,
+            strength=regret_strength,
+            clip=regret_clip,
+            min_scale=regret_min_scale,
+        )
+        L_act_action = _weighted_action_target_loss(
+            logits_action,
+            target_action,
+            soft_target=soft_teacher_target,
+            scene_weights=action_scene_weights,
+        )
+    else:
+        L_act_action = J0.new_tensor(0.0)
+
+    if pair_logits_entries:
+        pair_losses = []
+        pair_weights_for_average = []
+        for _, budget_weight, budget_logits in pair_logits_entries:
+            if budget_weight <= 0.0:
+                continue
+            scene_weights = _teacher_regret_weights(
+                budget_logits,
+                target_action,
+                valid,
+                teacher_cost_for_weight,
+                strength=regret_strength,
+                clip=regret_clip,
+                min_scale=regret_min_scale,
+            )
+            pair_losses.append(
+                _weighted_action_target_loss(
+                    budget_logits,
+                    target_action,
+                    soft_target=soft_teacher_target,
+                    scene_weights=scene_weights,
+                )
+            )
+            pair_weights_for_average.append(float(budget_weight))
+        if pair_losses:
+            denom = max(sum(pair_weights_for_average), 1e-6)
+            L_act_pair = sum(w * loss for w, loss in zip(pair_weights_for_average, pair_losses)) / denom
+        else:
+            L_act_pair = J0.new_tensor(0.0)
+    else:
+        L_act_pair = J0.new_tensor(0.0)
 
     # Dense full-interface margin distillation.  Use a per-scene scale so this
     # term optimizes ordering rather than absolute cost units.
