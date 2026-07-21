@@ -28,6 +28,8 @@ export BDSE_REPLAN_INTERVAL_TICKS=${BDSE_REPLAN_INTERVAL_TICKS:-5}
 export BDSE_PROFILE_CLOSED_LOOP=${BDSE_PROFILE_CLOSED_LOOP:-1}
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+DEVICE="${DEVICE:-cuda}"
+export CUDA_VISIBLE_DEVICES="$GPU"
 
 OUT_ROOT=${OUT_ROOT:-$ROOT_DIR/outputs_v27}
 TRAIN_ROOT="$OUT_ROOT/train"
@@ -78,6 +80,8 @@ if [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
     --epochs "${TRAIN_EPOCHS:-4}" \
     --batch-size "${TRAIN_BATCH_SIZE:-8}" \
     --num-workers "${TRAIN_NUM_WORKERS:-4}" \
+    --device "$DEVICE" \
+    --amp \
     --val-num-workers "${VAL_NUM_WORKERS:-2}" \
     --val-batch-size "${VAL_BATCH_SIZE:-8}" \
     --val-mode open_loop \
@@ -85,7 +89,6 @@ if [[ "${SKIP_TRAIN:-0}" != "1" ]]; then
     --best-metrics auto bdse_score teacher_action_match budget_vs_full_match selected_interaction_decisive_recall selected_hard_decisive_recall fallback_would_trigger_rate teacher_regret \
     --warm-start-from "$WARM_START" \
     --output "$TRAIN_OUTPUT" \
-    --amp \
     --log-file "$LOG_ROOT/v27_trbsr_train.jsonl" \
     > "$LOG_ROOT/v27_trbsr_train.out" 2>&1
 else
