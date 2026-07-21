@@ -2526,7 +2526,7 @@ def _deployment_aligned_coreset_from_pair_delta(
     valid_mask: np.ndarray,
     runtime_safety_flags: np.ndarray,
     atom_active_mask: np.ndarray | None,
-    deployment_evaluator: Callable[[list[int]], tuple[int, np.ndarray, np.ndarray]],
+    deployment_evaluator: Callable[[list[int]], Any],
     *,
     soft_interaction_mask: np.ndarray | None = None,
     soft_interaction_quota: int = 0,
@@ -2614,18 +2614,41 @@ def _deployment_aligned_coreset_from_pair_delta(
     )
 
     eval_cache: dict[tuple[int, ...], tuple[int, np.ndarray, np.ndarray]] = {}
+    eval_diag_cache: dict[tuple[int, ...], dict[str, Any]] = {}
     component_cache: dict[tuple[int, ...], tuple[int, float]] = {}
 
     def evaluate(sel: list[int]) -> tuple[int, np.ndarray, np.ndarray]:
         key = tuple(sorted(map(int, sel)))
         if key not in eval_cache:
-            action, scores, margins = deployment_evaluator(list(key))
+            result = deployment_evaluator(list(key))
+            diag: dict[str, Any] = {}
+            if isinstance(result, dict):
+                action = result.get("action", result.get("action_index", -1))
+                scores = result.get("scores", [])
+                margins = result.get("margins", [])
+                raw_diag = result.get("diagnostics", {})
+                if isinstance(raw_diag, dict):
+                    diag = dict(raw_diag)
+            else:
+                values = tuple(result)
+                if len(values) < 3:
+                    raise ValueError("deployment_evaluator must return action, scores, margins")
+                action, scores, margins = values[:3]
+                if len(values) >= 4 and isinstance(values[3], dict):
+                    diag = dict(values[3])
             eval_cache[key] = (
                 int(action),
                 np.asarray(scores, dtype=np.float32).reshape(-1),
                 np.asarray(margins, dtype=np.float32),
             )
+            eval_diag_cache[key] = diag
         return eval_cache[key]
+
+    def evaluation_diagnostics(sel: list[int] | tuple[int, ...]) -> dict[str, Any]:
+        key = tuple(sorted(map(int, sel)))
+        if key not in eval_cache:
+            evaluate(list(key))
+        return eval_diag_cache.get(key, {})
 
     target_action, target_scores, target_margins = evaluate(ids)
     valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
@@ -2843,6 +2866,9 @@ def _deployment_aligned_coreset_from_pair_delta(
     budget_layer_best_target_rank = 0
     budget_layer_best_action_deficit = 0.0
     budget_layer_best_margin_deficit = 0.0
+    budget_layer_best_stage = 0
+    budget_layer_best_stage_violation = 0.0
+    budget_layer_best_raw_action = -1
     selected_action, _ = distortion_components(selected)
     if bool(lexicographic_action_preservation) and target_action >= 0 and selected_action != target_action:
         repair_attempted = True
@@ -3205,19 +3231,29 @@ def _deployment_aligned_coreset_from_pair_delta(
         if global_support_weight > 0.0:
             global_target_support /= float(global_support_weight)
 
-        # A row contains the exact deployment state plus a recovery key.  The
-        # selected-rival and max-rival deficits remain informative when utility
-        # refinement chooses an action that is not the raw score argmax.
+        # A row contains the exact deployment state plus a stage-aware recovery
+        # certificate.  v42 ranked raw tournament scores even when the final
+        # action was changed later by utility refinement.  In that case the raw
+        # target rank can already be one and the old deficit is exactly zero, so
+        # the search has no useful gradient.  v43 carries the downstream stage
+        # diagnostics back into the coreset search and measures the distance to
+        # the actual decision boundary that changed the final action.
         def budget_layer_row(sel_tuple: tuple[int, ...]) -> tuple[
-            tuple[int, ...], int, float, int, float, float, float, float
+            tuple[int, ...], int, float, int, float, float, float, float, int, float, int
         ]:
             action, scores, margins = evaluate(list(sel_tuple))
+            deploy_diag = evaluation_diagnostics(sel_tuple)
             _, distortion = distortion_components(list(sel_tuple))
             m = min(int(scores.shape[0]), int(eligible.shape[0]))
             target_rank = max(1, int(np.sum(eligible[:m])))
             max_gap_deficit = 0.0
             selected_gap_deficit = 0.0
             margin_deficit = 0.0
+            raw_action = int(deploy_diag.get("utility_refinement_action_before", -1))
+            if not (0 <= raw_action < m):
+                raw_action = int(np.argmax(np.where(eligible[:m], scores[:m], -np.inf))) if m > 0 else -1
+            stage = 0 if int(action) == int(target_action) else (2 if raw_action == int(target_action) else 1)
+            stage_violation = 0.0
             if 0 <= target_action < m and bool(eligible[target_action]):
                 rivals = np.flatnonzero(eligible[:m] & (np.arange(m) != int(target_action)))
                 if rivals.size:
@@ -3245,24 +3281,50 @@ def _deployment_aligned_coreset_from_pair_delta(
                     finite = rr & np.isfinite(row)
                     if bool(finite.any()):
                         margin_deficit += 0.25 * float(np.mean(np.maximum(-row[finite], 0.0)))
+
+                if stage == 2 and 0 <= int(action) < m:
+                    # Utility refinement selected a cheaper rival even though the
+                    # target is the post-safety score winner.  Evidence can recover
+                    # the target by excluding that rival from either the score band
+                    # or the pair-certificate band.  Use the smaller exact boundary
+                    # distance; trajectory utility itself is fixed and cannot be
+                    # changed by evidence selection.
+                    slack = max(float(deploy_diag.get("utility_score_slack", 0.0) or 0.0), 0.0)
+                    score_gap = float(scores[target_action] - scores[int(action)])
+                    band_distance = max(0.0, slack - score_gap) / max(target_scale, 1e-6)
+                    cert_distance = float("inf")
+                    pair_cert_enabled = bool(deploy_diag.get("utility_pair_certificate_enabled", False))
+                    tol = max(float(deploy_diag.get("utility_pair_margin_tolerance", 0.0) or 0.0), 0.0)
+                    if (
+                        pair_cert_enabled and margins.ndim == 2
+                        and int(action) < margins.shape[0] and target_action < margins.shape[1]
+                        and np.isfinite(margins[int(action), target_action])
+                    ):
+                        # Candidate action remains utility-eligible while
+                        # M[action,target] >= -tol.  Crossing below -tol excludes it.
+                        cert_distance = max(0.0, float(margins[int(action), target_action]) + tol) / max(tol, 0.05)
+                    stage_violation = min(band_distance, cert_distance)
+                    if not np.isfinite(stage_violation):
+                        stage_violation = band_distance
+                elif stage == 1:
+                    stage_violation = float(max_gap_deficit + selected_gap_deficit + margin_deficit)
             action_deficit = float(max_gap_deficit + selected_gap_deficit)
             return (
                 tuple(sel_tuple), int(action), float(distortion), int(target_rank),
                 float(action_deficit), float(margin_deficit),
                 float(_spent_for(list(sel_tuple), costs)),
                 float(screen_loss(base + d[np.asarray(sel_tuple, dtype=np.int64)].sum(axis=0))),
+                int(stage), float(stage_violation), int(raw_action),
             )
 
-        def layer_key(row: tuple[tuple[int, ...], int, float, int, float, float, float, float]) -> tuple:
+        def layer_key(row: tuple[tuple[int, ...], int, float, int, float, float, float, float, int, float, int]) -> tuple:
             return (
-                int(row[1] != target_action), int(row[3]), float(row[4]),
-                float(row[5]), float(row[2]), float(row[7]), row[0],
+                int(row[1] != target_action), float(row[9]), int(row[3]),
+                float(row[4]), float(row[5]), float(row[2]), float(row[7]), row[0],
             )
 
-        def prune_budget_layer(rows: list[tuple[tuple[int, ...], int, float, int, float, float, float, float]]) -> list[
-            tuple[tuple[int, ...], int, float, int, float, float, float, float]
-        ]:
-            unique: dict[tuple[int, ...], tuple[tuple[int, ...], int, float, int, float, float, float, float]] = {}
+        def prune_budget_layer(rows: list[tuple]) -> list[tuple]:
+            unique: dict[tuple[int, ...], tuple] = {}
             for row in rows:
                 old = unique.get(row[0])
                 if old is None or layer_key(row) < layer_key(old):
@@ -3271,7 +3333,7 @@ def _deployment_aligned_coreset_from_pair_delta(
             if len(ranked) <= layer_width:
                 return ranked
 
-            chosen: list[tuple[tuple[int, ...], int, float, int, float, float, float, float]] = []
+            chosen: list[tuple] = []
             chosen_keys: set[tuple[int, ...]] = set()
             seen_actions: set[int] = set()
             action_slots = max(1, layer_width // 4)
@@ -3462,6 +3524,9 @@ def _deployment_aligned_coreset_from_pair_delta(
             budget_layer_best_target_rank = int(best_recovery[3])
             budget_layer_best_action_deficit = float(best_recovery[4])
             budget_layer_best_margin_deficit = float(best_recovery[5])
+            budget_layer_best_stage = int(best_recovery[8])
+            budget_layer_best_stage_violation = float(best_recovery[9])
+            budget_layer_best_raw_action = int(best_recovery[10])
         if preserving_rows:
             best = min(preserving_rows, key=lambda row: (row[2], row[4], row[5], row[0]))
             selected = list(best[0])
@@ -3514,12 +3579,16 @@ def _deployment_aligned_coreset_from_pair_delta(
         "deployment_coreset_budget_layer_success": bool(budget_layer_success),
         "deployment_coreset_budget_layer_evaluations": int(budget_layer_evals),
         "deployment_coreset_budget_layer_iterations": int(budget_layer_iterations_done),
+        "deployment_coreset_budget_layer_iteration_limit": int(layer_iters),
         "deployment_coreset_budget_layer_peak_width": int(budget_layer_peak_width),
         "deployment_coreset_budget_layer_unique_states": int(budget_layer_unique_states),
         "deployment_coreset_budget_layer_seed_states": int(budget_layer_seed_states),
         "deployment_coreset_budget_layer_best_target_rank": int(budget_layer_best_target_rank),
         "deployment_coreset_budget_layer_best_action_deficit": float(budget_layer_best_action_deficit),
         "deployment_coreset_budget_layer_best_margin_deficit": float(budget_layer_best_margin_deficit),
+        "deployment_coreset_budget_layer_best_stage": int(budget_layer_best_stage),
+        "deployment_coreset_budget_layer_best_stage_violation": float(budget_layer_best_stage_violation),
+        "deployment_coreset_budget_layer_best_raw_action": int(budget_layer_best_raw_action),
     }
     return selected, float(-final_loss), float(spent), diag
 
@@ -3730,6 +3799,7 @@ def runtime_greedy_selector_pair_conditioned(
         "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
         "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc",
         "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc",
+        "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc",
     }
     # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
     # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
@@ -3952,7 +4022,7 @@ def runtime_greedy_selector_pair_conditioned(
         extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), "deployment_coreset_budget_layer_width": int(deployment_coreset_budget_layer_width), "deployment_coreset_budget_layer_branch": int(deployment_coreset_budget_layer_branch), "deployment_coreset_budget_layer_iterations": int(deployment_coreset_budget_layer_iterations), "deployment_coreset_budget_layer_max_evaluations": int(deployment_coreset_budget_layer_max_evaluations), "deployment_coreset_budget_layer_exhaustive_first": bool(deployment_coreset_budget_layer_exhaustive_first), "deployment_coreset_budget_layer_seed_count": int(deployment_coreset_budget_layer_seed_count), "deployment_coreset_budget_layer_diversity_distance": int(deployment_coreset_budget_layer_diversity_distance), **hybrid_diag, **coreset_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc"}:
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc", "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
                 certificate_weight=float(action_rank_certificate_weight),

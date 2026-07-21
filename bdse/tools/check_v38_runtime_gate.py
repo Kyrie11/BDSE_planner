@@ -6,7 +6,6 @@ import math
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 
 
 THRESHOLDS = {
@@ -53,17 +52,102 @@ def _value(row: dict[str, Any], key: str) -> float | None:
     return out if math.isfinite(out) else None
 
 
-def _load_jsonl(path: Path) -> dict[tuple[str, int], dict[str, Any]]:
-    rows: dict[tuple[str, int], dict[str, Any]] = {}
-    if not path.exists():
-        return rows
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
+def _scenario_key(row: dict[str, Any]) -> tuple[str, int]:
+    return (str(row.get("scenario_token", "")), int(row.get("timestamp_us", 0) or 0))
+
+
+def _update_online(stat: list[float], value: float) -> None:
+    # [n, mean, M2], Welford's numerically stable online moments.
+    stat[0] += 1.0
+    delta = value - stat[1]
+    stat[1] += delta / stat[0]
+    stat[2] += delta * (value - stat[1])
+
+
+def _finalize_online(stats: dict[str, list[float]], metrics: dict[str, float]) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    for metric, margin in metrics.items():
+        n_f, mean, m2 = stats.get(metric, [0.0, 0.0, 0.0])
+        n = int(n_f)
+        if n < 100:
             continue
-        row = json.loads(line)
-        key = (str(row.get("scenario_token", "")), int(row.get("timestamp_us", 0) or 0))
-        rows[key] = row
-    return rows
+        variance = m2 / (n - 1) if n > 1 else 0.0
+        se = math.sqrt(max(variance, 0.0) / n) if n > 0 else 0.0
+        lcb = float(mean) - 1.645 * se
+        out[metric] = {
+            "n": float(n),
+            "mean_diff": float(mean),
+            "one_sided_95_lcb": float(lcb),
+            "margin": float(margin),
+            "pass": float(lcb >= -float(margin)),
+        }
+    return out
+
+
+def _paired_aligned_stream(
+    candidate_jsonl: Path,
+    baseline_jsonl: Path,
+    metrics: dict[str, float],
+) -> tuple[dict[str, dict[str, float]], bool]:
+    """Fast path for evaluator outputs written in the same scenario order.
+
+    Only online moments are retained.  This avoids loading two 10--15 MB JSONL
+    files into dictionaries of full per-scenario records and removes the numpy
+    import/startup cost from every runtime gate invocation.
+    """
+    from itertools import zip_longest
+
+    stats = {metric: [0.0, 0.0, 0.0] for metric in metrics}
+    with candidate_jsonl.open("r", encoding="utf-8") as fc, baseline_jsonl.open("r", encoding="utf-8") as fb:
+        for cand_line, base_line in zip_longest(fc, fb):
+            if cand_line is None or base_line is None:
+                return {}, False
+            if not cand_line.strip() and not base_line.strip():
+                continue
+            if not cand_line.strip() or not base_line.strip():
+                return {}, False
+            cand = json.loads(cand_line)
+            base = json.loads(base_line)
+            if _scenario_key(cand) != _scenario_key(base):
+                return {}, False
+            for metric in metrics:
+                a = _value(cand, metric)
+                b = _value(base, metric)
+                if a is not None and b is not None:
+                    _update_online(stats[metric], a - b)
+    return _finalize_online(stats, metrics), True
+
+
+def _paired_keyed_stream(
+    candidate_jsonl: Path,
+    baseline_jsonl: Path,
+    metrics: dict[str, float],
+) -> dict[str, dict[str, float]]:
+    # Fallback for non-aligned files.  Retain only the requested metric scalars,
+    # not the complete per-scenario dictionaries.
+    base: dict[tuple[str, int], tuple[float | None, ...]] = {}
+    with baseline_jsonl.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            base[_scenario_key(row)] = tuple(_value(row, metric) for metric in metrics)
+    stats = {metric: [0.0, 0.0, 0.0] for metric in metrics}
+    metric_names = tuple(metrics)
+    with candidate_jsonl.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            old = base.get(_scenario_key(row))
+            if old is None:
+                continue
+            for idx, metric in enumerate(metric_names):
+                a = _value(row, metric)
+                b = old[idx]
+                if a is not None and b is not None:
+                    _update_online(stats[metric], a - b)
+    return _finalize_online(stats, metrics)
 
 
 def paired_noninferiority(
@@ -71,34 +155,10 @@ def paired_noninferiority(
     baseline_jsonl: Path,
     metrics: dict[str, float],
 ) -> dict[str, dict[str, float]]:
-    cand = _load_jsonl(candidate_jsonl)
-    base = _load_jsonl(baseline_jsonl)
-    common = sorted(set(cand) & set(base))
-    out: dict[str, dict[str, float]] = {}
-    if len(common) < 100:
-        return out
-    for metric, margin in metrics.items():
-        diffs = []
-        for key in common:
-            a = _value(cand[key], metric)
-            b = _value(base[key], metric)
-            if a is None or b is None:
-                continue
-            diffs.append(a - b)
-        if len(diffs) < 100:
-            continue
-        arr = np.asarray(diffs, dtype=np.float64)
-        mean = float(arr.mean())
-        se = float(arr.std(ddof=1) / math.sqrt(arr.size)) if arr.size > 1 else 0.0
-        lcb = mean - 1.645 * se
-        out[metric] = {
-            "n": float(arr.size),
-            "mean_diff": mean,
-            "one_sided_95_lcb": lcb,
-            "margin": float(margin),
-            "pass": float(lcb >= -float(margin)),
-        }
-    return out
+    if not candidate_jsonl.exists() or not baseline_jsonl.exists():
+        return {}
+    aligned, ok = _paired_aligned_stream(candidate_jsonl, baseline_jsonl, metrics)
+    return aligned if ok else _paired_keyed_stream(candidate_jsonl, baseline_jsonl, metrics)
 
 
 def passes(

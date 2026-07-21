@@ -355,6 +355,8 @@ def _apply_certificate_utility_refinement(
         "utility_best_cost": float(utility_cost[best_util]),
         "utility_current_cost": float(utility_cost[current]) if 0 <= current < n and np.isfinite(utility_cost[current]) else float("inf"),
         "utility_pair_certificate_used": bool(pair_cert_used),
+        "utility_pair_certificate_enabled": bool(uc.get("pair_certificate_enabled", False)),
+        "utility_pair_margin_tolerance": float(max(float(uc.get("pair_margin_tolerance", 0.05)), 0.0)),
         "utility_pair_certificate_kept": int(pair_cert_kept),
     }
     return chosen, diag

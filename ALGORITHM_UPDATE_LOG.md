@@ -559,3 +559,236 @@ paired pair_sign_acc_winner_rival LCB
 - If `best_target_rank` frequently reaches 1 but exact action remains wrong: the remaining mismatch is likely caused by utility refinement/safety guard rather than raw tournament ranking; next add a guard-aware utility counterfactual diagnostic.
 - If `best_target_rank > 1` and the 2400 cap is reached: increase only iterations or branch according to unique-state growth, not all bounds.
 - If unique-state growth saturates far below the cap with no recovery: add a larger destroy-repair mutation (3-out/3-in), not another deletion-tree beam.
+
+---
+
+## v43 — SAB-DACC: Stage-Aware Budget-Layer Deployment-Aligned Certificate Coreset
+
+### Date / input
+
+- Input code: user-provided `bdse.zip` containing v42 CBL-DACC.
+- Runtime result: user-provided `outputs_v42.zip`, 1000 validation scenarios, frozen v30 checkpoint.
+- Only the strict runtime gate was run. No closed-loop or finetuning result is used in this iteration.
+
+### Observed v42 result
+
+v42 improved the actual selector objective enough to satisfy the strict preservation and paired-quality requirements:
+
+```text
+selector_deployment_coreset_target_action_preserved = 0.951  (gate floor 0.950)
+teacher_action_match                                 = 0.239
+paired teacher LCB                                   = -0.0039372  (margin -0.005)
+budget_vs_full_match                                 = 0.209
+paired B-vs-full LCB                                 = -0.00120038 (margin -0.002)
+pair_sign_acc_winner_rival                           = 0.64158287
+paired winner-rival LCB                              = -0.000345971 (margin -0.005)
+effective_query_count                                = 5383.152
+```
+
+CBL-DACC was attempted on 53 scenes and exactly recovered 4, reducing target-action failures from 53 to 49.
+
+### Why the reported gate still failed
+
+The only reported failure was:
+
+```text
+selector_deployment_coreset_budget_layer_iterations = 0.4 >= 1
+```
+
+This was a checker aggregation error, not an algorithm failure:
+
+- budget-layer recovery is conditionally executed only when the normal selector fails;
+- it was attempted on 53/1000 scenes;
+- 947 correctly preserved scenes therefore report zero executed recovery iterations;
+- among the 53 attempted scenes, conditional mean iterations were 7.547 and the minimum was 1;
+- averaging executed iterations over all 1000 scenes produces 0.4 and is not a valid activation check.
+
+The threshold is not changed. v43 checks the configured iteration limit and, when recovery is attempted, verifies the conditional minimum/mean over attempted scenes.
+
+### Residual algorithm diagnosis
+
+The 49 remaining failures reveal a downstream-stage observability problem:
+
+1. In 12/49 failures, `best_target_rank == 1` and raw score deficit is zero.
+2. These 12 scenes have no selected-action safety flag and no all-flagged guard activation.
+3. The exact deployment evaluator returns final action, post-safety scores and margins, but v42 discards the tournament diagnostics that identify the action before and after utility refinement.
+4. Therefore v42 knows that the final action is wrong but ranks the subset as if the target already has zero deficit. Its fixed-budget search loses a recovery gradient precisely when utility refinement overrides the raw tournament winner.
+5. This is a theorem/implementation mismatch: the deployment callback is exact for acceptance, but the search-state certificate is not sufficient for the full deployment map.
+
+### Hypothesis
+
+When the target is already the post-safety score winner but utility refinement selects a lower-utility rival, evidence cannot change trajectory utility. It can only recover the target by excluding the rival from the certificate-constrained utility set through one of two exact boundaries:
+
+1. push the rival below the configured score-slack band; or
+2. push the rival below the target-relative pair-certificate tolerance.
+
+The minimum distance to these two boundaries is a meaningful recovery certificate for fixed-budget search.
+
+### Algorithm changes
+
+New runtime selector alias:
+
+> **SAB-DACC / Stage-Aware Budget-Layer DACC**
+
+1. **Preserve full deployment diagnostics in the selector callback.**
+   - `deployment_evaluator` may now return `(action, scores, margins, diagnostics)`;
+   - backward-compatible 3-tuples and dictionary results remain supported;
+   - exact evaluation cache stores stage diagnostics without additional model queries.
+
+2. **Stage-aware recovery state.**
+   Each fixed-budget state distinguishes:
+   - stage 0: final target action already preserved;
+   - stage 1: target is not the post-safety score winner;
+   - stage 2: target is the post-safety score winner but utility refinement changes the final action.
+
+3. **Utility-boundary recovery certificate.**
+   For stage-2 states, the search computes:
+   - score-band exclusion distance for the final utility-selected rival;
+   - pair-certificate exclusion distance `M[rival,target] + tolerance`;
+   - the smaller exact boundary distance as the stage violation.
+
+   This replaces the v42 zero-gradient condition where raw target rank and raw score deficit are both already optimal.
+
+4. **Stage-aware lexicographic beam key.**
+   Fixed-budget states are ranked by:
+   - exact final-action preservation;
+   - exact downstream-stage violation;
+   - raw target rank;
+   - score and margin deficits;
+   - deployment distortion and deterministic diversity.
+
+5. **Rival-directed mutations remain unchanged.**
+   The current final rival continues to define oriented target support, so the new stage certificate changes the search objective rather than tuning width, branch, iterations, evaluation cap or thresholds.
+
+6. **No-regression deployment rule remains unchanged.**
+   A new subset replaces the prior v42 subset only after the unchanged complete deployment callback returns the exact Top-M target action.
+
+7. **New diagnostics.**
+
+```text
+selector_deployment_coreset_budget_layer_iteration_limit
+selector_deployment_coreset_budget_layer_best_stage
+selector_deployment_coreset_budget_layer_best_stage_violation
+selector_deployment_coreset_budget_layer_best_raw_action
+```
+
+### Runtime gate acceleration
+
+The old gate path performed:
+
+1. full `read_text().splitlines()` parsing of both JSONL files into dictionaries of complete records;
+2. NumPy allocation for each paired metric;
+3. a second full candidate JSONL parse in `analyze_v42_cbldacc.py`;
+4. two Python process startups.
+
+v43 changes this to:
+
+- aligned-order streaming fast path;
+- Welford online mean/variance for the exact same one-sided 95% LCB formula;
+- keyed fallback retaining only requested metric scalars when files are not aligned;
+- candidate conditional diagnostics and report generation integrated into the gate command;
+- `python -S` for the standard-library-only checker, avoiding unrelated site-package startup.
+
+Delivery-environment benchmark on the uploaded 1000-scene files:
+
+| Path | Wall time | Peak RSS |
+|---|---:|---:|
+| Original v42 gate checker | 2.34 s | 379 MB |
+| Original v42 analysis pass | 2.07 s | 334 MB |
+| v43 combined gate + analysis | 0.57 s | 18 MB |
+
+The numerical paired results are identical to the original checker.
+
+### Configuration
+
+The search budget/configuration is intentionally unchanged from v42:
+
+```yaml
+selector_cap_mode: stage_aware_budget_layer_coreset
+deployment_coreset_use_deployment_pair_graph: true
+deployment_coreset_beam_width: 0
+deployment_coreset_budget_layer_width: 12
+deployment_coreset_budget_layer_branch: 18
+deployment_coreset_budget_layer_iterations: 8
+deployment_coreset_budget_layer_max_evaluations: 2400
+deployment_coreset_budget_layer_exhaustive_first: true
+deployment_coreset_budget_layer_seed_count: 4
+deployment_coreset_budget_layer_diversity_distance: 4
+```
+
+### Modified / added files
+
+- `bdse/planner/selector.py`
+- `bdse/planner/nuplan_planner.py`
+- `bdse/planner/tournament.py`
+- `bdse/tools/check_v38_runtime_gate.py`
+- `bdse/tools/check_v42_cbldacc_gate.py` (backward-compatible conditional-statistics fix)
+- `bdse/tools/check_v43_sabdacc_gate.py`
+- `bdse/configs/v43_bdse_sabdacc_fast_cl.yaml`
+- `bdse/configs/v43_bdse_sabdacc_fallback_fast_cl.yaml`
+- `bdse/configs/v43_bdse_mars_control_fast_cl.yaml`
+- `bdse/tests/test_v43_sabdacc.py`
+- `run_v43_sabdacc.sh`
+- `README_V43_SABDACC.md`
+
+### Controlled variables
+
+Unchanged:
+
+- v30 checkpoint;
+- validation scenario set and ordering;
+- candidate trajectories;
+- Top-M evidence universe;
+- B=16 evidence/query budget;
+- pair/local network output;
+- MARS control;
+- safety guard, utility refinement and all-flagged guard;
+- all absolute and paired gate thresholds;
+- v42 fixed-budget search width, branch, iteration and evaluation limits.
+
+### Validation completed in the delivery environment
+
+- all Python files compile;
+- `bash -n run_v43_sabdacc.sh` passes;
+- complete test suite: **126 passed, 5 warnings**;
+- new synthetic regression reproduces the residual v42 failure mode:
+  - target is raw rank 1 in every state;
+  - final action is changed only by utility refinement;
+  - 3-field deployment feedback gives zero recovery gradient and fails;
+  - stage-aware 4-field feedback crosses multiple executable B-layer states and restores the exact target action;
+- the fast checker reproduces all original paired means and LCBs on the uploaded results;
+- the patched v42 checker directly re-evaluates the uploaded v42 files as PASS using conditional attempted-scene iterations;
+- applying corrected conditional semantics to the uploaded v42 result yields a gate pass, because the actual v42 quality requirements were already satisfied.
+
+### Runtime validation still required
+
+Run v43 on the same frozen 1000-scene setup. Do not claim additional algorithm gain until observing:
+
+```text
+selector_deployment_coreset_target_action_preserved
+selector_deployment_coreset_budget_layer_success
+selector_deployment_coreset_budget_layer_best_stage
+selector_deployment_coreset_budget_layer_best_stage_violation
+previous_failures_recovered
+previous_preserved_lost
+paired teacher_action_match LCB
+paired budget_vs_full_match LCB
+paired pair_sign_acc_winner_rival LCB
+```
+
+### Do not repeat
+
+- Do not lower the 0.95 preservation threshold; v42 already reaches 0.951.
+- Do not require an all-scenario mean conditional-iteration count to exceed one.
+- Do not increase beam width, branch, iterations or evaluation cap before testing stage-aware feedback.
+- Do not treat raw target rank 1 as final deployment-action preservation when utility refinement is enabled.
+- Do not optimize trajectory utility through evidence atoms; utility is fixed candidate geometry. Optimize certificate eligibility boundaries instead.
+- Do not parse complete JSONL records into two large dictionaries when only five paired scalars are needed.
+- Do not run the separate v42 analysis script after the new combined checker.
+
+### Next decision rule
+
+- If v43 preserves at least the v42 0.951 rate, loses zero v42-preserved scenes, and all paired gates pass: runtime gate is complete; measure selector latency and proceed to CL20/CL100.
+- If stage-2 failures are recovered but stage-1 failures remain: keep stage-aware utility logic fixed and next study multi-rival raw tournament feasibility, not utility parameters.
+- If `best_stage=2` and `best_stage_violation` reaches approximately zero without exact recovery: inspect top-k eligibility and all-flagged structural-guard diagnostics, because another downstream discrete condition is missing.
+- If v43 changes no additional action but all gates pass: retain v43 because it fixes checker correctness and deployment-state sufficiency; do not force a new algorithm change solely to increase version number.

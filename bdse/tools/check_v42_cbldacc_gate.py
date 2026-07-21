@@ -40,7 +40,6 @@ def main() -> int:
         "selector_deployment_coreset_target_action_preserved": 0.95,
         "selector_deployment_coreset_budget_layer_width": 1.0,
         "selector_deployment_coreset_budget_layer_branch": 1.0,
-        "selector_deployment_coreset_budget_layer_iterations": 1.0,
     }
     for key, floor in required.items():
         value = float(cbldacc.get(key, 0.0))
@@ -72,6 +71,23 @@ def main() -> int:
         elif stat.get("pass", 0.0) < 0.5:
             failures.append(f"paired {key} LCB={stat['one_sided_95_lcb']:.6g} < -{stat['margin']:.6g}")
 
+    # Recovery is conditional.  Validate executed iterations only on scenes
+    # where the fixed-budget layer was actually attempted; averaging 947
+    # legitimate zeros with 53 attempted scenes caused the false v42 gate fail.
+    conditional_iterations: list[float] = []
+    if cbldacc_jsonl.exists():
+        with cbldacc_jsonl.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if float(row.get("selector_deployment_coreset_budget_layer_attempted", 0.0)) >= 0.5:
+                    conditional_iterations.append(float(row.get("selector_deployment_coreset_budget_layer_iterations", 0.0)))
+    if conditional_iterations and min(conditional_iterations) < 1.0:
+        failures.append(
+            f"conditional budget-layer iterations min={min(conditional_iterations):.6g} >= 1"
+        )
+
     print("\nV42 CBL-DACC runtime gate")
     print(f"[{'PASS' if not failures else 'FAIL'}] {args.cbldacc.name}")
     for key in (
@@ -100,6 +116,11 @@ def main() -> int:
         "effective_query_count", "total_sparse_query_count",
     ):
         print(f"  {key}: {cbldacc.get(key)}")
+    if conditional_iterations:
+        print(
+            f"  conditional budget-layer iterations: mean={sum(conditional_iterations)/len(conditional_iterations):.6g}, "
+            f"min={min(conditional_iterations):.6g}, n={len(conditional_iterations)}"
+        )
     for key, stat in paired.items():
         print(
             f"  paired {key}: diff={stat['mean_diff']:.6g}, "

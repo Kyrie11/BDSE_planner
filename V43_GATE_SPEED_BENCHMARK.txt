@@ -1,0 +1,5 @@
+Uploaded v42 result files, delivery environment:
+- Original v42 gate checker: 2.34 s wall, 379000 KB peak RSS
+- Original v42 separate analysis: 2.07 s wall, 333636 KB peak RSS
+- v43 combined gate + analysis with python -S: 0.57 s wall, 17948 KB peak RSS
+- Paired means and one-sided 95% LCB values are numerically identical.
