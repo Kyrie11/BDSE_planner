@@ -2547,6 +2547,13 @@ def _deployment_aligned_coreset_from_pair_delta(
     beam_branch: int = 0,
     beam_max_evaluations: int = 0,
     beam_mismatch_fraction: float = 0.35,
+    budget_layer_width: int = 0,
+    budget_layer_branch: int = 0,
+    budget_layer_iterations: int = 0,
+    budget_layer_max_evaluations: int = 0,
+    budget_layer_exhaustive_first: bool = True,
+    budget_layer_seed_count: int = 0,
+    budget_layer_diversity_distance: int = 2,
 ) -> tuple[list[int], float, float, dict[str, Any]]:
     """Compress Top-M evidence against the actual deployed decision map.
 
@@ -2826,6 +2833,16 @@ def _deployment_aligned_coreset_from_pair_delta(
     beam_depth = 0
     beam_peak_width = 0
     beam_terminal_count = 0
+    budget_layer_attempted = False
+    budget_layer_success = False
+    budget_layer_evals = 0
+    budget_layer_iterations_done = 0
+    budget_layer_peak_width = 0
+    budget_layer_unique_states = 0
+    budget_layer_seed_states = 0
+    budget_layer_best_target_rank = 0
+    budget_layer_best_action_deficit = 0.0
+    budget_layer_best_margin_deficit = 0.0
     selected_action, _ = distortion_components(selected)
     if bool(lexicographic_action_preservation) and target_action >= 0 and selected_action != target_action:
         repair_attempted = True
@@ -3119,6 +3136,341 @@ def _deployment_aligned_coreset_from_pair_delta(
             beam_success = True
             repair_success = True
 
+
+    # v42 CBL-DACC: v41's deletion-lattice beam spent most of its exact
+    # evaluations at cardinalities larger than the executable budget and kept
+    # only ``beam_width`` terminal subsets.  Search the fixed-budget exchange
+    # graph instead.  Each edge is a one-out/one-in counterfactual, so every
+    # evaluated state is directly executable.  The search is rival-directed:
+    # it ranks a mismatching subset by the exact target-action deficit against
+    # the action currently selected by the deployment operator, not only by
+    # reconstruction error to the full Top-M scores.  It may traverse several
+    # mismatching subsets before recovering the target action.
+    selected_action, _ = distortion_components(selected)
+    layer_width = max(0, int(budget_layer_width))
+    layer_branch = max(0, int(budget_layer_branch))
+    layer_iters = max(0, int(budget_layer_iterations))
+    layer_eval_cap = max(0, int(budget_layer_max_evaluations))
+    layer_seed_cap = max(0, int(budget_layer_seed_count))
+    layer_min_distance = max(0, int(budget_layer_diversity_distance))
+    if (
+        bool(lexicographic_action_preservation)
+        and target_action >= 0
+        and selected_action != target_action
+        and layer_width > 0
+        and layer_branch > 0
+        and layer_iters > 0
+        and len(selected) > 0
+        and len(ids) > len(selected)
+    ):
+        budget_layer_attempted = True
+        layer_eval_start = len(eval_cache)
+        executable_size = int(len(selected))
+        id_set = set(map(int, ids))
+
+        # Map each rival to the pair columns oriented as target-minus-rival.
+        target_pair_cols: dict[int, list[tuple[int, float, float]]] = {}
+        for pidx, (a_raw, b_raw) in enumerate(pairs.tolist()):
+            a_i, b_i = int(a_raw), int(b_raw)
+            if a_i == target_action:
+                target_pair_cols.setdefault(b_i, []).append((int(pidx), 1.0, float(max(weights[pidx], 0.0))))
+            elif b_i == target_action:
+                target_pair_cols.setdefault(a_i, []).append((int(pidx), -1.0, float(max(weights[pidx], 0.0))))
+
+        def oriented_atom_support(rival: int) -> np.ndarray:
+            cols = target_pair_cols.get(int(rival), [])
+            if not cols:
+                return np.zeros((E,), dtype=np.float32)
+            out = np.zeros((E,), dtype=np.float32)
+            denom = 0.0
+            for pidx, orient, weight in cols:
+                w = max(float(weight), 1e-3)
+                out += float(orient) * w * d[:, int(pidx)]
+                denom += w
+            return out / max(denom, 1e-6)
+
+        global_target_support = np.zeros((E,), dtype=np.float32)
+        global_support_weight = 0.0
+        for rival, cols in target_pair_cols.items():
+            closeness = 1.0
+            if (
+                target_margins.ndim == 2
+                and 0 <= target_action < target_margins.shape[0]
+                and 0 <= int(rival) < target_margins.shape[1]
+                and np.isfinite(target_margins[target_action, int(rival)])
+            ):
+                closeness = 1.0 / (0.10 + abs(float(target_margins[target_action, int(rival)])))
+            global_target_support += float(closeness) * oriented_atom_support(int(rival))
+            global_support_weight += float(closeness)
+        if global_support_weight > 0.0:
+            global_target_support /= float(global_support_weight)
+
+        # A row contains the exact deployment state plus a recovery key.  The
+        # selected-rival and max-rival deficits remain informative when utility
+        # refinement chooses an action that is not the raw score argmax.
+        def budget_layer_row(sel_tuple: tuple[int, ...]) -> tuple[
+            tuple[int, ...], int, float, int, float, float, float, float
+        ]:
+            action, scores, margins = evaluate(list(sel_tuple))
+            _, distortion = distortion_components(list(sel_tuple))
+            m = min(int(scores.shape[0]), int(eligible.shape[0]))
+            target_rank = max(1, int(np.sum(eligible[:m])))
+            max_gap_deficit = 0.0
+            selected_gap_deficit = 0.0
+            margin_deficit = 0.0
+            if 0 <= target_action < m and bool(eligible[target_action]):
+                rivals = np.flatnonzero(eligible[:m] & (np.arange(m) != int(target_action)))
+                if rivals.size:
+                    target_score = float(scores[target_action])
+                    rival_scores = scores[rivals]
+                    target_rank = 1 + int(np.sum(rival_scores > target_score + 1e-7))
+                    max_gap_deficit = max(0.0, float(np.max(rival_scores)) - target_score) / max(target_scale, 1e-6)
+                if 0 <= int(action) < m and int(action) != int(target_action):
+                    selected_gap_deficit = max(
+                        0.0, float(scores[int(action)]) - float(scores[target_action])
+                    ) / max(target_scale, 1e-6)
+                    if (
+                        margins.ndim == 2
+                        and target_action < margins.shape[0]
+                        and int(action) < margins.shape[1]
+                        and np.isfinite(margins[target_action, int(action)])
+                    ):
+                        margin_deficit = max(0.0, -float(margins[target_action, int(action)]))
+                if margins.ndim == 2 and target_action < margins.shape[0]:
+                    kk = min(margins.shape[1], valid.shape[0])
+                    rr = valid[:kk].copy()
+                    if target_action < kk:
+                        rr[target_action] = False
+                    row = margins[target_action, :kk]
+                    finite = rr & np.isfinite(row)
+                    if bool(finite.any()):
+                        margin_deficit += 0.25 * float(np.mean(np.maximum(-row[finite], 0.0)))
+            action_deficit = float(max_gap_deficit + selected_gap_deficit)
+            return (
+                tuple(sel_tuple), int(action), float(distortion), int(target_rank),
+                float(action_deficit), float(margin_deficit),
+                float(_spent_for(list(sel_tuple), costs)),
+                float(screen_loss(base + d[np.asarray(sel_tuple, dtype=np.int64)].sum(axis=0))),
+            )
+
+        def layer_key(row: tuple[tuple[int, ...], int, float, int, float, float, float, float]) -> tuple:
+            return (
+                int(row[1] != target_action), int(row[3]), float(row[4]),
+                float(row[5]), float(row[2]), float(row[7]), row[0],
+            )
+
+        def prune_budget_layer(rows: list[tuple[tuple[int, ...], int, float, int, float, float, float, float]]) -> list[
+            tuple[tuple[int, ...], int, float, int, float, float, float, float]
+        ]:
+            unique: dict[tuple[int, ...], tuple[tuple[int, ...], int, float, int, float, float, float, float]] = {}
+            for row in rows:
+                old = unique.get(row[0])
+                if old is None or layer_key(row) < layer_key(old):
+                    unique[row[0]] = row
+            ranked = sorted(unique.values(), key=layer_key)
+            if len(ranked) <= layer_width:
+                return ranked
+
+            chosen: list[tuple[tuple[int, ...], int, float, int, float, float, float, float]] = []
+            chosen_keys: set[tuple[int, ...]] = set()
+            seen_actions: set[int] = set()
+            action_slots = max(1, layer_width // 4)
+            for row in ranked:
+                if len(chosen) >= action_slots:
+                    break
+                if int(row[1]) in seen_actions:
+                    continue
+                chosen.append(row)
+                chosen_keys.add(row[0])
+                seen_actions.add(int(row[1]))
+
+            exploit_slots = max(action_slots, int(round(0.65 * layer_width)))
+            for row in ranked:
+                if len(chosen) >= exploit_slots:
+                    break
+                if row[0] not in chosen_keys:
+                    chosen.append(row)
+                    chosen_keys.add(row[0])
+
+            # Fill exploration slots with set-diverse states from a bounded high-
+            # quality pool.  This lets the search cross a multi-swap valley while
+            # retaining deterministic behavior.
+            pool = [row for row in ranked[: max(layer_width * 8, layer_width)] if row[0] not in chosen_keys]
+            while len(chosen) < layer_width and pool:
+                best_idx = 0
+                best_div = -1
+                best_rank = None
+                for idx, row in enumerate(pool):
+                    if chosen:
+                        rset = set(row[0])
+                        diversity = min(len(rset.symmetric_difference(set(old[0]))) for old in chosen)
+                    else:
+                        diversity = executable_size * 2
+                    qualifies = int(diversity >= layer_min_distance)
+                    cand = (-qualifies, -diversity, layer_key(row))
+                    if best_rank is None or cand < best_rank:
+                        best_idx = idx
+                        best_div = diversity
+                        best_rank = cand
+                row = pool.pop(best_idx)
+                chosen.append(row)
+                chosen_keys.add(row[0])
+            if len(chosen) < layer_width:
+                for row in ranked:
+                    if len(chosen) >= layer_width:
+                        break
+                    if row[0] not in chosen_keys:
+                        chosen.append(row)
+                        chosen_keys.add(row[0])
+            return chosen[:layer_width]
+
+        def make_seed(order: np.ndarray) -> tuple[int, ...] | None:
+            picked: list[int] = []
+            picked_set: set[int] = set()
+            spent_seed = 0.0
+            ordered_ids = [int(i) for i in order.tolist() if int(i) in id_set]
+            # Satisfy the interaction floor first, then fill by the same order.
+            for want_soft in (True, False):
+                for i in ordered_ids:
+                    if i in picked_set or (want_soft and not bool(soft[i])):
+                        continue
+                    if want_soft and sum(1 for j in picked if soft[j]) >= soft_floor:
+                        break
+                    c = float(costs[i])
+                    if spent_seed + c <= float(budget) + 1e-6:
+                        picked.append(i); picked_set.add(i); spent_seed += c
+                        if len(picked) >= executable_size:
+                            break
+                if len(picked) >= executable_size:
+                    break
+            if len(picked) < executable_size:
+                for i in ordered_ids:
+                    if i in picked_set:
+                        continue
+                    c = float(costs[i])
+                    if spent_seed + c <= float(budget) + 1e-6:
+                        picked.append(i); picked_set.add(i); spent_seed += c
+                        if len(picked) >= executable_size:
+                            break
+            if len(picked) != executable_size or sum(1 for i in picked if soft[i]) < soft_floor:
+                return None
+            return tuple(sorted(picked))
+
+        initial_states: list[tuple[int, ...]] = [tuple(sorted(map(int, selected)))]
+        if layer_seed_cap > 0:
+            orders: list[np.ndarray] = [
+                np.argsort(-global_target_support, kind="stable"),
+                np.argsort(-proposal, kind="stable"),
+                np.argsort(-(global_target_support + 0.10 * proposal), kind="stable"),
+                np.argsort(np.abs(global_target_support), kind="stable"),
+            ]
+            for order in orders[:layer_seed_cap]:
+                seed = make_seed(order)
+                if seed is not None and seed not in initial_states:
+                    initial_states.append(seed)
+        budget_layer_seed_states = len(initial_states)
+
+        frontier_rows = prune_budget_layer([budget_layer_row(state) for state in initial_states])
+        budget_layer_peak_width = max(budget_layer_peak_width, len(frontier_rows))
+        seen_layer_states: set[tuple[int, ...]] = {row[0] for row in frontier_rows}
+        preserving_rows = [row for row in frontier_rows if row[1] == target_action and row[6] <= float(budget) + 1e-6]
+
+        for iteration in range(layer_iters):
+            if preserving_rows:
+                break
+            budget_layer_iterations_done = iteration + 1
+            expanded: list[tuple[tuple[int, ...], int, float, int, float, float, float, float]] = []
+            for state_idx, state_row in enumerate(frontier_rows):
+                state = state_row[0]
+                state_set = set(state)
+                outside = sorted(id_set - state_set)
+                state_soft_count = int(sum(1 for i in state if soft[i]))
+                state_margin = base + d[np.asarray(state, dtype=np.int64)].sum(axis=0)
+                rival = int(state_row[1])
+                if rival == target_action or rival not in target_pair_cols:
+                    _, scores, _ = evaluate(list(state))
+                    rr = np.flatnonzero(eligible[: min(len(scores), len(eligible))] & (
+                        np.arange(min(len(scores), len(eligible))) != int(target_action)
+                    ))
+                    if rr.size and 0 <= target_action < scores.shape[0]:
+                        rival = int(rr[int(np.argmax(scores[rr]))])
+                rival_support = oriented_atom_support(rival)
+
+                swap_rows: list[tuple[float, float, float, float, int, int, float]] = []
+                for out_i in state:
+                    for in_i in outside:
+                        if soft[out_i] and not soft[in_i] and state_soft_count - 1 < soft_floor:
+                            continue
+                        new_spent = float(state_row[6]) - float(costs[out_i]) + float(costs[in_i])
+                        if new_spent > float(budget) + 1e-6:
+                            continue
+                        trial_margin = state_margin - d[out_i] + d[in_i]
+                        cheap = float(screen_loss(trial_margin))
+                        rival_gain = float(rival_support[in_i] - rival_support[out_i])
+                        global_gain = float(global_target_support[in_i] - global_target_support[out_i])
+                        proposal_gain = float(proposal[in_i] - proposal[out_i])
+                        swap_rows.append((cheap, rival_gain, global_gain, proposal_gain, int(out_i), int(in_i), new_spent))
+                if not swap_rows:
+                    continue
+
+                chosen_swaps: list[tuple[float, float, float, float, int, int, float]] = []
+                exhaustive = bool(budget_layer_exhaustive_first) and iteration == 0 and state_idx == 0
+                if exhaustive:
+                    chosen_swaps = sorted(swap_rows, key=lambda row: (row[4], row[5]))
+                else:
+                    def add_swaps(seq, target_count: int) -> None:
+                        keys = {(row[4], row[5]) for row in chosen_swaps}
+                        for row in seq:
+                            key = (row[4], row[5])
+                            if key not in keys:
+                                chosen_swaps.append(row); keys.add(key)
+                                if len(chosen_swaps) >= target_count:
+                                    break
+                    q = max(1, layer_branch // 4)
+                    add_swaps(sorted(swap_rows, key=lambda row: (row[0], -row[1], row[4], row[5])), q)
+                    add_swaps(sorted(swap_rows, key=lambda row: (-row[1], row[0], row[4], row[5])), 2 * q)
+                    add_swaps(sorted(swap_rows, key=lambda row: (-row[2], row[0], row[4], row[5])), 3 * q)
+                    add_swaps(sorted(swap_rows, key=lambda row: (-row[3], row[0], row[4], row[5])), layer_branch)
+                    if len(chosen_swaps) < layer_branch:
+                        add_swaps(sorted(swap_rows, key=lambda row: (row[0], row[4], row[5])), layer_branch)
+
+                for _, _, _, _, out_i, in_i, _ in chosen_swaps[: (len(chosen_swaps) if exhaustive else layer_branch)]:
+                    if layer_eval_cap > 0 and len(eval_cache) - layer_eval_start >= layer_eval_cap:
+                        break
+                    child = tuple(sorted((state_set - {int(out_i)}) | {int(in_i)}))
+                    if child in seen_layer_states:
+                        continue
+                    seen_layer_states.add(child)
+                    row = budget_layer_row(child)
+                    expanded.append(row)
+                    if row[1] == target_action and row[6] <= float(budget) + 1e-6:
+                        preserving_rows.append(row)
+                if preserving_rows or (layer_eval_cap > 0 and len(eval_cache) - layer_eval_start >= layer_eval_cap):
+                    break
+            if preserving_rows or not expanded:
+                break
+            frontier_rows = prune_budget_layer(expanded)
+            budget_layer_peak_width = max(budget_layer_peak_width, len(frontier_rows))
+            if layer_eval_cap > 0 and len(eval_cache) - layer_eval_start >= layer_eval_cap:
+                break
+
+        budget_layer_evals = max(0, len(eval_cache) - layer_eval_start)
+        budget_layer_unique_states = len(seen_layer_states)
+        all_rows = list(frontier_rows) + list(preserving_rows)
+        if all_rows:
+            best_recovery = min(all_rows, key=layer_key)
+            budget_layer_best_target_rank = int(best_recovery[3])
+            budget_layer_best_action_deficit = float(best_recovery[4])
+            budget_layer_best_margin_deficit = float(best_recovery[5])
+        if preserving_rows:
+            best = min(preserving_rows, key=lambda row: (row[2], row[4], row[5], row[0]))
+            selected = list(best[0])
+            spent = float(best[6])
+            current_surrogate = base + d[np.asarray(selected, dtype=np.int64)].sum(axis=0)
+            selected_action = int(target_action)
+            budget_layer_success = True
+            repair_success = True
+
     selected = sorted(selected)
     selected_action, selected_scores, _ = evaluate(selected)
     final_loss = exact_loss(selected)
@@ -3158,6 +3510,16 @@ def _deployment_aligned_coreset_from_pair_delta(
         "deployment_coreset_beam_depth": int(beam_depth),
         "deployment_coreset_beam_peak_width": int(beam_peak_width),
         "deployment_coreset_beam_terminal_count": int(beam_terminal_count),
+        "deployment_coreset_budget_layer_attempted": bool(budget_layer_attempted),
+        "deployment_coreset_budget_layer_success": bool(budget_layer_success),
+        "deployment_coreset_budget_layer_evaluations": int(budget_layer_evals),
+        "deployment_coreset_budget_layer_iterations": int(budget_layer_iterations_done),
+        "deployment_coreset_budget_layer_peak_width": int(budget_layer_peak_width),
+        "deployment_coreset_budget_layer_unique_states": int(budget_layer_unique_states),
+        "deployment_coreset_budget_layer_seed_states": int(budget_layer_seed_states),
+        "deployment_coreset_budget_layer_best_target_rank": int(budget_layer_best_target_rank),
+        "deployment_coreset_budget_layer_best_action_deficit": float(budget_layer_best_action_deficit),
+        "deployment_coreset_budget_layer_best_margin_deficit": float(budget_layer_best_margin_deficit),
     }
     return selected, float(-final_loss), float(spent), diag
 
@@ -3255,6 +3617,13 @@ def runtime_greedy_selector_pair_conditioned(
     deployment_coreset_beam_branch: int = 0,
     deployment_coreset_beam_max_evaluations: int = 0,
     deployment_coreset_beam_mismatch_fraction: float = 0.35,
+    deployment_coreset_budget_layer_width: int = 0,
+    deployment_coreset_budget_layer_branch: int = 0,
+    deployment_coreset_budget_layer_iterations: int = 0,
+    deployment_coreset_budget_layer_max_evaluations: int = 0,
+    deployment_coreset_budget_layer_exhaustive_first: bool = True,
+    deployment_coreset_budget_layer_seed_count: int = 0,
+    deployment_coreset_budget_layer_diversity_distance: int = 2,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -3360,6 +3729,7 @@ def runtime_greedy_selector_pair_conditioned(
         "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset",
         "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
         "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc",
+        "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc",
     }
     # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
     # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
@@ -3436,6 +3806,13 @@ def runtime_greedy_selector_pair_conditioned(
                 beam_branch=int(deployment_coreset_beam_branch),
                 beam_max_evaluations=int(deployment_coreset_beam_max_evaluations),
                 beam_mismatch_fraction=float(deployment_coreset_beam_mismatch_fraction),
+                budget_layer_width=int(deployment_coreset_budget_layer_width),
+                budget_layer_branch=int(deployment_coreset_budget_layer_branch),
+                budget_layer_iterations=int(deployment_coreset_budget_layer_iterations),
+                budget_layer_max_evaluations=int(deployment_coreset_budget_layer_max_evaluations),
+                budget_layer_exhaustive_first=bool(deployment_coreset_budget_layer_exhaustive_first),
+                budget_layer_seed_count=int(deployment_coreset_budget_layer_seed_count),
+                budget_layer_diversity_distance=int(deployment_coreset_budget_layer_diversity_distance),
             )
             mode = "runtime_pair_conditioned_deployment_coreset"
         elif cap_mode_l in deployment_coreset_modes:
@@ -3572,10 +3949,10 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), **hybrid_diag, **coreset_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), "deployment_coreset_budget_layer_width": int(deployment_coreset_budget_layer_width), "deployment_coreset_budget_layer_branch": int(deployment_coreset_budget_layer_branch), "deployment_coreset_budget_layer_iterations": int(deployment_coreset_budget_layer_iterations), "deployment_coreset_budget_layer_max_evaluations": int(deployment_coreset_budget_layer_max_evaluations), "deployment_coreset_budget_layer_exhaustive_first": bool(deployment_coreset_budget_layer_exhaustive_first), "deployment_coreset_budget_layer_seed_count": int(deployment_coreset_budget_layer_seed_count), "deployment_coreset_budget_layer_diversity_distance": int(deployment_coreset_budget_layer_diversity_distance), **hybrid_diag, **coreset_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc"}:
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
                 certificate_weight=float(action_rank_certificate_weight),

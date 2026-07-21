@@ -1,0 +1,37 @@
+# V42 CBL-DACC strict runtime-gate commands
+
+cd ~/code/BDSE_planner
+
+rm -rf /tmp/BDSE_v42_CBLDACC
+mkdir -p /tmp/BDSE_v42_CBLDACC
+unzip -q /path/to/BDSE_v42_CBLDACC_optimized.zip -d /tmp/BDSE_v42_CBLDACC
+cp -a /tmp/BDSE_v42_CBLDACC/. .
+chmod +x run_v42_cbldacc.sh
+
+# Keep the checkpoint, Top-M, B=16 and validation set frozen.
+SKIP_TRAIN=1 \
+V42_CKPT=outputs_v30/train/bdse_v30_pmvrbsr.best.pt \
+V30_CKPT_IN=outputs_v30/train/bdse_v30_pmvrbsr.best.pt \
+OUT_ROOT=outputs_v42_cbldacc_runtime_v30ckpt \
+RUN_MODE=open_loop \
+OPEN_LOOP_MAX_SCENARIOS=1000 \
+ENFORCE_RUNTIME_GATE=1 \
+GPU_OL_DACC=0 \
+GPU_OL_CONTROL=1 \
+V41_JSONL_FOR_COMPARE=/absolute/path/to/open_loop_v41_prdacc.jsonl \
+bash run_v42_cbldacc.sh
+
+cat outputs_v42_cbldacc_runtime_v30ckpt/open_loop/runtime_gate.txt
+cat outputs_v42_cbldacc_runtime_v30ckpt/open_loop/cbldacc_budget_layer_analysis.txt
+cat outputs_v42_cbldacc_runtime_v30ckpt/open_loop/recommended_result_path.txt
+
+# Do not run CL20/CL100 or finetune unless runtime_gate.txt says PASS.
+
+# After PASS only:
+# V42_CKPT=outputs_v30/train/bdse_v30_pmvrbsr.best.pt \
+# OUT_ROOT=outputs_v42_cbldacc_runtime_v30ckpt \
+# RUN_MODE=cl20 CL_WORKERS_PER_RUN=2 bash run_v42_cbldacc.sh
+#
+# V42_CKPT=outputs_v30/train/bdse_v30_pmvrbsr.best.pt \
+# OUT_ROOT=outputs_v42_cbldacc_runtime_v30ckpt \
+# RUN_MODE=cl100 CL_WORKERS_PER_RUN=2 bash run_v42_cbldacc.sh

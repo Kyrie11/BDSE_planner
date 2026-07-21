@@ -533,7 +533,7 @@ class BDSEPlannerCore:
             if (
                 float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
                 or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
-                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc"}
+                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc"}
             ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
@@ -545,7 +545,7 @@ class BDSEPlannerCore:
             deployment_modes = {
                 "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset",
                 "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
-                "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc",
+                "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc",
             }
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
@@ -712,6 +712,27 @@ class BDSEPlannerCore:
                 ),
                 deployment_coreset_beam_mismatch_fraction=float(
                     sel_cfg.get("deployment_coreset_beam_mismatch_fraction", 0.35)
+                ),
+                deployment_coreset_budget_layer_width=int(
+                    sel_cfg.get("deployment_coreset_budget_layer_width", 0)
+                ),
+                deployment_coreset_budget_layer_branch=int(
+                    sel_cfg.get("deployment_coreset_budget_layer_branch", 0)
+                ),
+                deployment_coreset_budget_layer_iterations=int(
+                    sel_cfg.get("deployment_coreset_budget_layer_iterations", 0)
+                ),
+                deployment_coreset_budget_layer_max_evaluations=int(
+                    sel_cfg.get("deployment_coreset_budget_layer_max_evaluations", 0)
+                ),
+                deployment_coreset_budget_layer_exhaustive_first=bool(
+                    sel_cfg.get("deployment_coreset_budget_layer_exhaustive_first", True)
+                ),
+                deployment_coreset_budget_layer_seed_count=int(
+                    sel_cfg.get("deployment_coreset_budget_layer_seed_count", 0)
+                ),
+                deployment_coreset_budget_layer_diversity_distance=int(
+                    sel_cfg.get("deployment_coreset_budget_layer_diversity_distance", 2)
                 ),
             )
             selection.diagnostics["deployment_coreset_search_uses_rival_graph"] = bool(
