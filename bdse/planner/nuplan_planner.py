@@ -533,7 +533,7 @@ class BDSEPlannerCore:
             if (
                 float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
                 or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
-                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}
+                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc"}
             ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
@@ -542,7 +542,10 @@ class BDSEPlannerCore:
                     stage_cfg,
                 )
             cap_mode = str(sel_cfg.get("selector_cap_mode", "legacy_abs")).lower()
-            deployment_modes = {"deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}
+            deployment_modes = {
+                "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset",
+                "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
+            }
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
             deployment_evaluator = None
@@ -656,6 +659,18 @@ class BDSEPlannerCore:
                 deployment_coreset_action_weight=float(sel_cfg.get("deployment_coreset_action_weight", 4.0)),
                 deployment_coreset_gap_weight=float(sel_cfg.get("deployment_coreset_gap_weight", 2.0)),
                 deployment_coreset_margin_weight=float(sel_cfg.get("deployment_coreset_margin_weight", 1.0)),
+                deployment_coreset_lexicographic_action_preservation=bool(
+                    sel_cfg.get("deployment_coreset_lexicographic_action_preservation", False)
+                ),
+                deployment_coreset_preservation_scan_candidates=int(
+                    sel_cfg.get("deployment_coreset_preservation_scan_candidates", 0)
+                ),
+                deployment_coreset_repair_one_swap=bool(
+                    sel_cfg.get("deployment_coreset_repair_one_swap", True)
+                ),
+                deployment_coreset_repair_two_swap_candidates=int(
+                    sel_cfg.get("deployment_coreset_repair_two_swap_candidates", 0)
+                ),
             )
             tournament = run_pair_conditioned_tournament(
                 J0,

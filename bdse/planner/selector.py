@@ -2539,16 +2539,29 @@ def _deployment_aligned_coreset_from_pair_delta(
     margin_weight: float = 1.0,
     huber_delta: float = 0.25,
     margin_floor: float = 0.05,
+    lexicographic_action_preservation: bool = False,
+    preservation_scan_candidates: int = 0,
+    repair_one_swap: bool = True,
+    repair_two_swap_candidates: int = 0,
 ) -> tuple[list[int], float, float, dict[str, Any]]:
-    """Compress Top-M evidence against the *actual deployed decision map*.
+    """Compress Top-M evidence against the actual deployed decision map.
 
-    v38 optimized a Bradley--Terry/Copeland surrogate over the selector graph,
-    whereas deployment used a different rival graph, a soft-min tournament,
-    safety masking and utility refinement.  This routine treats the complete
-    deployment evaluator as the coreset target.  A cheap signed-margin loss only
-    screens removal/swap candidates; the final choice is always made by the exact
-    deployed evaluator.  No extra neural query is issued because all Top-M pair
-    deltas have already been evaluated.
+    The v39 prototype used a finite action-change penalty inside an otherwise
+    continuous reconstruction loss.  That permits a lower score-RMSE subset to
+    win even when it changes the deployment action, which is exactly the event
+    the runtime gate is intended to reject.  The optional v40 path therefore
+    uses a lexicographic objective:
+
+      1. preserve the full-Top-M deployment action whenever a feasible deletion
+         or exchange exists;
+      2. among action-preserving subsets, minimize score/gap/margin distortion;
+      3. only accept an action-changing step when no preserving step is found.
+
+    Candidate screening still uses the cheap signed-margin surrogate.  Exact
+    decisions are evaluated with the same downstream tournament, safety guard,
+    utility refinement and all-flagged guard used by deployment.  No additional
+    neural query is issued; the extra work is deterministic CPU/Numpy search over
+    already computed Top-M pair deltas.
     """
     d = np.asarray(atom_delta, dtype=np.float32)
     E = int(d.shape[0]) if d.ndim == 2 else int(np.asarray(atom_budget_costs).reshape(-1).shape[0])
@@ -2560,7 +2573,11 @@ def _deployment_aligned_coreset_from_pair_delta(
     active &= np.isfinite(costs) & (costs > 0.0)
     ids = np.flatnonzero(active).astype(np.int64).tolist()
     if not ids:
-        return [], 0.0, 0.0, {"deployment_coreset_active": True, "deployment_coreset_target_atom_count": 0}
+        return [], 0.0, 0.0, {
+            "deployment_coreset_active": True,
+            "deployment_coreset_lexicographic_active": bool(lexicographic_action_preservation),
+            "deployment_coreset_target_atom_count": 0,
+        }
 
     soft = _as_bool_mask(soft_interaction_mask, E) & active
     soft_floor = min(max(0, int(soft_interaction_quota)), int(soft.sum()))
@@ -2569,7 +2586,7 @@ def _deployment_aligned_coreset_from_pair_delta(
         raw = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
         proposal[: min(E, raw.shape[0])] = raw[: min(E, raw.shape[0])]
 
-    # The old margin loss remains only a computational screen.
+    # The MARS margin loss is retained only as a computational screen.
     base = np.asarray(base_margin, dtype=np.float32).reshape(-1)
     pairs = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
     weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
@@ -2581,6 +2598,7 @@ def _deployment_aligned_coreset_from_pair_delta(
     )
 
     eval_cache: dict[tuple[int, ...], tuple[int, np.ndarray, np.ndarray]] = {}
+    component_cache: dict[tuple[int, ...], tuple[int, float]] = {}
 
     def evaluate(sel: list[int]) -> tuple[int, np.ndarray, np.ndarray]:
         key = tuple(sorted(map(int, sel)))
@@ -2600,7 +2618,11 @@ def _deployment_aligned_coreset_from_pair_delta(
     target_scale = max(float(np.std(target_scores[:n][eligible])) if bool(eligible.any()) else 0.0, 0.1)
     hdelta = max(float(huber_delta), 1e-3)
 
-    def exact_loss(sel: list[int]) -> float:
+    def distortion_components(sel: list[int]) -> tuple[int, float]:
+        """Return deployment action and continuous distortion (no action penalty)."""
+        key = tuple(sorted(map(int, sel)))
+        if key in component_cache:
+            return component_cache[key]
         action, scores, margins = evaluate(sel)
         m = min(n, scores.shape[0])
         mask = eligible[:m] & np.isfinite(scores[:m]) & (scores[:m] > -1e8)
@@ -2610,8 +2632,6 @@ def _deployment_aligned_coreset_from_pair_delta(
             ae = np.abs(err) / hdelta
             huber = np.where(ae <= 1.0, 0.5 * ae * ae, ae - 0.5)
             loss += max(float(score_weight), 0.0) * float(np.mean(huber))
-        if target_action >= 0 and action != target_action:
-            loss += max(float(action_weight), 0.0)
         if 0 <= target_action < m and bool(mask.any()):
             rivals = np.flatnonzero(mask & (np.arange(m) != target_action))
             if rivals.size:
@@ -2628,12 +2648,21 @@ def _deployment_aligned_coreset_from_pair_delta(
                 rivals[target_action] = False
             trow = target_margins[target_action, :k]
             xrow = margins[target_action, :k]
-            informative = rivals & np.isfinite(trow) & np.isfinite(xrow) & (np.abs(trow) >= max(float(margin_floor), 0.0))
+            informative = rivals & np.isfinite(trow) & np.isfinite(xrow) & (
+                np.abs(trow) >= max(float(margin_floor), 0.0)
+            )
             if bool(informative.any()):
                 sign_err = np.mean((trow[informative] * xrow[informative] < 0.0).astype(np.float32))
                 mag_err = np.mean(np.minimum(np.abs(xrow[informative] - trow[informative]), 1.0))
                 loss += max(float(margin_weight), 0.0) * float(sign_err + 0.25 * mag_err)
-        return float(loss)
+        out = (int(action), float(loss))
+        component_cache[key] = out
+        return out
+
+    def exact_loss(sel: list[int]) -> float:
+        action, distortion = distortion_components(sel)
+        mismatch = bool(target_action >= 0 and action != target_action)
+        return float(distortion + (max(float(action_weight), 0.0) if mismatch else 0.0))
 
     def screen_loss(margin: np.ndarray) -> float:
         return _margin_coreset_objective(
@@ -2642,11 +2671,18 @@ def _deployment_aligned_coreset_from_pair_delta(
             winner_weight=1.5, action_weight=0.5,
         )
 
+    def mismatch_rank(action: int) -> int:
+        return int(target_action >= 0 and int(action) != int(target_action))
+
     selected = list(ids)
     current_surrogate = target_margin_surrogate.copy()
     spent = _spent_for(selected, costs)
     removed: list[int] = []
     exact_k = max(1, int(exact_candidates))
+    scan_limit_cfg = max(0, int(preservation_scan_candidates))
+    forced_action_flip_steps = 0
+    preservation_scan_evals = 0
+
     while spent > float(budget) + 1e-6 and selected:
         soft_count = int(sum(1 for i in selected if soft[i]))
         screened: list[tuple[float, int]] = []
@@ -2658,17 +2694,48 @@ def _deployment_aligned_coreset_from_pair_delta(
         if not screened:
             break
         screened.sort(key=lambda x: (x[0], float(proposal[x[1]]), x[1]))
-        best = None
-        best_key = (float("inf"), float("inf"), float("inf"), float("inf"))
-        for _, i in screened[:exact_k]:
+        ordered = [int(i) for _, i in screened]
+        first_count = min(exact_k, len(ordered))
+        trial_rows: list[tuple[int, float, float, int]] = []
+
+        def evaluate_removal(i: int) -> None:
             trial_sel = [j for j in selected if j != i]
-            l = exact_loss(trial_sel)
-            key = (l / max(float(costs[i]), 1e-6), l, float(proposal[i]), int(i))
-            if key < best_key:
-                best_key = key
-                best = int(i)
-        if best is None:
-            break
+            action, distortion = distortion_components(trial_sel)
+            trial_rows.append((mismatch_rank(action), float(distortion), float(proposal[i]), int(i)))
+
+        for i in ordered[:first_count]:
+            evaluate_removal(i)
+
+        if bool(lexicographic_action_preservation) and target_action >= 0:
+            # If the cheap top-k contains no action-preserving deletion, expand
+            # the exact scan.  Zero means scan every feasible deletion.
+            if not any(row[0] == 0 for row in trial_rows):
+                scan_count = len(ordered) if scan_limit_cfg <= 0 else min(len(ordered), max(first_count, scan_limit_cfg))
+                for i in ordered[first_count:scan_count]:
+                    evaluate_removal(i)
+                    preservation_scan_evals += 1
+            preserving = [row for row in trial_rows if row[0] == 0]
+            pool = preserving if preserving else trial_rows
+            if not preserving:
+                forced_action_flip_steps += 1
+            best_row = min(
+                pool,
+                key=lambda row: (
+                    row[1] / max(float(costs[row[3]]), 1e-6),
+                    row[1], row[2], row[3],
+                ),
+            )
+        else:
+            best_row = min(
+                trial_rows,
+                key=lambda row: (
+                    (row[1] + (max(float(action_weight), 0.0) if row[0] else 0.0))
+                    / max(float(costs[row[3]]), 1e-6),
+                    row[1] + (max(float(action_weight), 0.0) if row[0] else 0.0),
+                    row[2], row[3],
+                ),
+            )
+        best = int(best_row[3])
         selected.remove(best)
         removed.append(best)
         current_surrogate -= d[best]
@@ -2676,9 +2743,10 @@ def _deployment_aligned_coreset_from_pair_delta(
 
     swaps = 0
     for _ in range(max(0, int(swap_passes))):
-        current_loss = exact_loss(selected)
+        current_action, current_distortion = distortion_components(selected)
+        current_rank = mismatch_rank(current_action)
         soft_count = int(sum(1 for i in selected if soft[i]))
-        screened_swaps: list[tuple[float, int, int]] = []
+        screened_swaps: list[tuple[float, int, int, float]] = []
         for out_i in selected:
             for in_i in removed:
                 new_spent = spent - float(costs[out_i]) + float(costs[in_i])
@@ -2687,35 +2755,153 @@ def _deployment_aligned_coreset_from_pair_delta(
                 if soft[out_i] and not soft[in_i] and soft_count - 1 < soft_floor:
                     continue
                 trial_margin = current_surrogate - d[out_i] + d[in_i]
-                screened_swaps.append((screen_loss(trial_margin), int(out_i), int(in_i)))
+                screened_swaps.append((screen_loss(trial_margin), int(out_i), int(in_i), float(new_spent)))
         screened_swaps.sort(key=lambda x: (x[0], x[1], x[2]))
-        best_swap = None
-        best_loss = current_loss
-        for _, out_i, in_i in screened_swaps[:exact_k]:
-            trial_sel = [j for j in selected if j != out_i] + [in_i]
-            l = exact_loss(trial_sel)
-            if l + 1e-9 < best_loss:
-                best_loss = l
-                best_swap = (out_i, in_i)
-        if best_swap is None:
+        if not screened_swaps:
             break
-        out_i, in_i = best_swap
-        selected.remove(out_i); selected.append(in_i)
-        removed.remove(in_i); removed.append(out_i)
+
+        first_count = min(exact_k, len(screened_swaps))
+        swap_rows: list[tuple[int, float, int, int, float]] = []
+
+        def evaluate_swap(row: tuple[float, int, int, float]) -> None:
+            _, out_i, in_i, new_spent = row
+            trial_sel = [j for j in selected if j != out_i] + [in_i]
+            action, distortion = distortion_components(trial_sel)
+            swap_rows.append((mismatch_rank(action), float(distortion), int(out_i), int(in_i), float(new_spent)))
+
+        for row in screened_swaps[:first_count]:
+            evaluate_swap(row)
+        if bool(lexicographic_action_preservation) and target_action >= 0:
+            # When the current set has already flipped, exhaust the one-exchange
+            # neighborhood to actively repair it.  When it is preserved, never
+            # accept a swap that breaks the action.
+            if current_rank > 0 and not any(row[0] == 0 for row in swap_rows):
+                for row in screened_swaps[first_count:]:
+                    evaluate_swap(row)
+                    preservation_scan_evals += 1
+            candidates = [row for row in swap_rows if row[0] <= current_rank]
+            if current_rank == 0:
+                candidates = [row for row in candidates if row[0] == 0]
+            if not candidates:
+                break
+            best_row = min(candidates, key=lambda row: (row[0], row[1], row[2], row[3]))
+            if (best_row[0], best_row[1]) >= (current_rank, current_distortion - 1e-9):
+                break
+        else:
+            best_row = min(
+                swap_rows,
+                key=lambda row: (
+                    row[1] + (max(float(action_weight), 0.0) if row[0] else 0.0),
+                    row[2], row[3],
+                ),
+            )
+            best_total = best_row[1] + (max(float(action_weight), 0.0) if best_row[0] else 0.0)
+            if best_total + 1e-9 >= exact_loss(selected):
+                break
+        _, _, out_i, in_i, new_spent = best_row
+        selected.remove(out_i)
+        selected.append(in_i)
+        removed.remove(in_i)
+        removed.append(out_i)
         current_surrogate = current_surrogate - d[out_i] + d[in_i]
-        spent = spent - float(costs[out_i]) + float(costs[in_i])
+        spent = float(new_spent)
         swaps += 1
 
+    repair_attempted = False
+    repair_success = False
+    repair_one_swap_evals = 0
+    repair_two_swap_evals = 0
+    selected_action, _ = distortion_components(selected)
+    if bool(lexicographic_action_preservation) and target_action >= 0 and selected_action != target_action:
+        repair_attempted = True
+        current_soft_count = int(sum(1 for i in selected if soft[i]))
+        if bool(repair_one_swap):
+            repairing: list[tuple[float, int, int, float]] = []
+            for out_i in list(selected):
+                for in_i in list(removed):
+                    new_spent = spent - float(costs[out_i]) + float(costs[in_i])
+                    if new_spent > float(budget) + 1e-6:
+                        continue
+                    if soft[out_i] and not soft[in_i] and current_soft_count - 1 < soft_floor:
+                        continue
+                    trial_sel = [j for j in selected if j != out_i] + [in_i]
+                    action, distortion = distortion_components(trial_sel)
+                    repair_one_swap_evals += 1
+                    if action == target_action:
+                        repairing.append((float(distortion), int(out_i), int(in_i), float(new_spent)))
+            if repairing:
+                _, out_i, in_i, new_spent = min(repairing, key=lambda row: (row[0], row[1], row[2]))
+                selected.remove(out_i)
+                selected.append(in_i)
+                removed.remove(in_i)
+                removed.append(out_i)
+                current_surrogate = current_surrogate - d[out_i] + d[in_i]
+                spent = float(new_spent)
+                repair_success = True
+
+        selected_action, _ = distortion_components(selected)
+        max_two = max(0, int(repair_two_swap_candidates))
+        if selected_action != target_action and max_two > 0 and len(selected) >= 2 and len(removed) >= 2:
+            current_soft_count = int(sum(1 for i in selected if soft[i]))
+            two_screen: list[tuple[float, int, int, int, int, float]] = []
+            sel_sorted = sorted(selected)
+            rem_sorted = sorted(removed)
+            for oi, out_i in enumerate(sel_sorted[:-1]):
+                for out_j in sel_sorted[oi + 1:]:
+                    removed_soft = int(bool(soft[out_i])) + int(bool(soft[out_j]))
+                    for ii, in_i in enumerate(rem_sorted[:-1]):
+                        for in_j in rem_sorted[ii + 1:]:
+                            added_soft = int(bool(soft[in_i])) + int(bool(soft[in_j]))
+                            if current_soft_count - removed_soft + added_soft < soft_floor:
+                                continue
+                            new_spent = (
+                                spent - float(costs[out_i]) - float(costs[out_j])
+                                + float(costs[in_i]) + float(costs[in_j])
+                            )
+                            if new_spent > float(budget) + 1e-6:
+                                continue
+                            trial_margin = current_surrogate - d[out_i] - d[out_j] + d[in_i] + d[in_j]
+                            two_screen.append((
+                                screen_loss(trial_margin), int(out_i), int(out_j),
+                                int(in_i), int(in_j), float(new_spent),
+                            ))
+            two_screen.sort(key=lambda row: (row[0], row[1], row[2], row[3], row[4]))
+            repairing2: list[tuple[float, int, int, int, int, float]] = []
+            for _, out_i, out_j, in_i, in_j, new_spent in two_screen[:max_two]:
+                trial_sel = [j for j in selected if j not in {out_i, out_j}] + [in_i, in_j]
+                action, distortion = distortion_components(trial_sel)
+                repair_two_swap_evals += 1
+                if action == target_action:
+                    repairing2.append((float(distortion), out_i, out_j, in_i, in_j, float(new_spent)))
+            if repairing2:
+                _, out_i, out_j, in_i, in_j, new_spent = min(
+                    repairing2, key=lambda row: (row[0], row[1], row[2], row[3], row[4])
+                )
+                selected.remove(out_i)
+                selected.remove(out_j)
+                selected.extend([in_i, in_j])
+                removed.remove(in_i)
+                removed.remove(in_j)
+                removed.extend([out_i, out_j])
+                current_surrogate = current_surrogate - d[out_i] - d[out_j] + d[in_i] + d[in_j]
+                spent = float(new_spent)
+                repair_success = True
+
     selected = sorted(selected)
-    selected_action, selected_scores, selected_margins = evaluate(selected)
+    selected_action, selected_scores, _ = evaluate(selected)
     final_loss = exact_loss(selected)
+    _, final_distortion = distortion_components(selected)
     score_rmse = 0.0
     m = min(target_scores.shape[0], selected_scores.shape[0], valid.shape[0])
-    mask = valid[:m] & np.isfinite(target_scores[:m]) & np.isfinite(selected_scores[:m]) & (target_scores[:m] > -1e8) & (selected_scores[:m] > -1e8)
+    mask = (
+        valid[:m] & np.isfinite(target_scores[:m]) & np.isfinite(selected_scores[:m])
+        & (target_scores[:m] > -1e8) & (selected_scores[:m] > -1e8)
+    )
     if bool(mask.any()):
         score_rmse = float(np.sqrt(np.mean(np.square(selected_scores[:m][mask] - target_scores[:m][mask]))))
     diag = {
         "deployment_coreset_active": True,
+        "deployment_coreset_lexicographic_active": bool(lexicographic_action_preservation),
         "deployment_coreset_target_atom_count": int(len(ids)),
         "deployment_coreset_selected_atom_count": int(len(selected)),
         "deployment_coreset_removed_atom_count": int(len(removed)),
@@ -2724,12 +2910,18 @@ def _deployment_aligned_coreset_from_pair_delta(
         "deployment_coreset_selected_action": int(selected_action),
         "deployment_coreset_target_action_preserved": float(target_action >= 0 and selected_action == target_action),
         "deployment_coreset_score_rmse": float(score_rmse),
+        "deployment_coreset_distortion_objective": float(final_distortion),
         "deployment_coreset_objective": float(final_loss),
         "deployment_coreset_soft_floor": int(soft_floor),
         "deployment_coreset_evaluations": int(len(eval_cache)),
+        "deployment_coreset_preservation_scan_evaluations": int(preservation_scan_evals),
+        "deployment_coreset_forced_action_flip_steps": int(forced_action_flip_steps),
+        "deployment_coreset_repair_attempted": bool(repair_attempted),
+        "deployment_coreset_repair_success": bool(repair_success),
+        "deployment_coreset_repair_one_swap_evaluations": int(repair_one_swap_evals),
+        "deployment_coreset_repair_two_swap_evaluations": int(repair_two_swap_evals),
     }
     return selected, float(-final_loss), float(spent), diag
-
 
 def runtime_greedy_selector_pair_conditioned(
     predicted_base_cost: np.ndarray,
@@ -2817,6 +3009,10 @@ def runtime_greedy_selector_pair_conditioned(
     deployment_coreset_action_weight: float = 4.0,
     deployment_coreset_gap_weight: float = 2.0,
     deployment_coreset_margin_weight: float = 1.0,
+    deployment_coreset_lexicographic_action_preservation: bool = False,
+    deployment_coreset_preservation_scan_candidates: int = 0,
+    deployment_coreset_repair_one_swap: bool = True,
+    deployment_coreset_repair_two_swap_candidates: int = 0,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -2918,7 +3114,10 @@ def runtime_greedy_selector_pair_conditioned(
     hybrid_action_lcb_modes = {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank"}
     flip_rank_modes = {"flip_rank", "fliprank", "flip_boundary_rank"}
     margin_coreset_modes = {"margin_coreset", "signed_margin_coreset", "mars", "margin_preserving"}
-    deployment_coreset_modes = {"deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}
+    deployment_coreset_modes = {
+        "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset",
+        "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
+    }
     # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
     # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
     # silently bypassing flip_rank/action_rank objectives even when configs asked
@@ -2986,6 +3185,10 @@ def runtime_greedy_selector_pair_conditioned(
                 gap_weight=deployment_coreset_gap_weight,
                 margin_weight=deployment_coreset_margin_weight,
                 huber_delta=margin_coreset_huber_delta,
+                lexicographic_action_preservation=bool(deployment_coreset_lexicographic_action_preservation),
+                preservation_scan_candidates=int(deployment_coreset_preservation_scan_candidates),
+                repair_one_swap=bool(deployment_coreset_repair_one_swap),
+                repair_two_swap_candidates=int(deployment_coreset_repair_two_swap_candidates),
             )
             mode = "runtime_pair_conditioned_deployment_coreset"
         elif cap_mode_l in deployment_coreset_modes:
@@ -3122,10 +3325,10 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), **hybrid_diag, **coreset_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), **hybrid_diag, **coreset_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}:
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
                 certificate_weight=float(action_rank_certificate_weight),
@@ -3173,6 +3376,7 @@ def runtime_greedy_selector_pair_conditioned(
         interaction_utility = interaction_utility + float(direction_invariant_interaction_weight) * two_sided
         extra_diag["direction_invariant_interaction_mean"] = float(np.mean(two_sided)) if two_sided.size else 0.0
         extra_diag["direction_invariant_interaction_p90"] = float(np.quantile(two_sided, 0.90)) if two_sided.size else 0.0
+    pre_postfill_selected = list(map(int, selected))
     selected, spent_post, post_diag = _complete_safety_aware_selection(
         selected,
         atom_budget_costs,
@@ -3194,6 +3398,35 @@ def runtime_greedy_selector_pair_conditioned(
         interaction_group_ids=interaction_group_ids,
         interaction_utility=interaction_utility,
     )
+    # The generic safety-aware post-fill predates DACC and may replace atoms to
+    # satisfy quotas.  Audit the *actual returned set* with the deployment
+    # callback, otherwise selector diagnostics can claim target preservation for
+    # a pre-postfill set while the planner executes a different action.  For the
+    # lexicographic mode, revert a post-fill change that breaks an already
+    # preserved deployment action; the DACC routine itself enforces the active
+    # soft-interaction floor.
+    if cap_mode_l in deployment_coreset_modes and deployment_evaluator is not None:
+        target_action = int(extra_diag.get("deployment_coreset_target_action", -1))
+        pre_action = int(deployment_evaluator(pre_postfill_selected)[0])
+        post_action = int(deployment_evaluator(list(map(int, selected)))[0])
+        post_changed = tuple(sorted(pre_postfill_selected)) != tuple(sorted(map(int, selected)))
+        reverted = False
+        if (
+            bool(deployment_coreset_lexicographic_action_preservation)
+            and target_action >= 0
+            and pre_action == target_action
+            and post_action != target_action
+        ):
+            selected = list(pre_postfill_selected)
+            spent_post = _spent_for(selected, np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1))
+            post_action = pre_action
+            reverted = True
+        extra_diag["deployment_coreset_postfill_changed"] = bool(post_changed)
+        extra_diag["deployment_coreset_postfill_reverted"] = bool(reverted)
+        extra_diag["deployment_coreset_selected_action"] = int(post_action)
+        extra_diag["deployment_coreset_target_action_preserved"] = float(
+            target_action >= 0 and post_action == target_action
+        )
     return SelectionResult(
         selected=selected,
         objective_value=current,
