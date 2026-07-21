@@ -20,7 +20,7 @@ CKPT="$OUT_ROOT/train/bdse_v44_rads.pt"
 BEST_CKPT="$OUT_ROOT/train/bdse_v44_rads.best.pt"
 
 train() {
-  python -m bdse.experiments.train \
+  torchrun --standalone --nproc_per_node=${NPROC_PER_NODE:-2} -m bdse.experiments.train \
     --config bdse/configs/v44_bdse_rads_train.yaml \
     --split train_boston train_pittsburgh train_singapore train_vegas_2 \
     --preprocessed-dir "$BDSE_TRAIN_CACHE" \
