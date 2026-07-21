@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -2516,6 +2516,221 @@ def _signed_margin_coreset_from_pair_delta(
     return selected, float(-final_loss), float(spent), diag
 
 
+def _deployment_aligned_coreset_from_pair_delta(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    pair_weights: np.ndarray,
+    pair_indices: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    atom_active_mask: np.ndarray | None,
+    deployment_evaluator: Callable[[list[int]], tuple[int, np.ndarray, np.ndarray]],
+    *,
+    soft_interaction_mask: np.ndarray | None = None,
+    soft_interaction_quota: int = 0,
+    proposal_scores: np.ndarray | None = None,
+    exact_candidates: int = 8,
+    swap_passes: int = 1,
+    score_weight: float = 1.0,
+    action_weight: float = 4.0,
+    gap_weight: float = 2.0,
+    margin_weight: float = 1.0,
+    huber_delta: float = 0.25,
+    margin_floor: float = 0.05,
+) -> tuple[list[int], float, float, dict[str, Any]]:
+    """Compress Top-M evidence against the *actual deployed decision map*.
+
+    v38 optimized a Bradley--Terry/Copeland surrogate over the selector graph,
+    whereas deployment used a different rival graph, a soft-min tournament,
+    safety masking and utility refinement.  This routine treats the complete
+    deployment evaluator as the coreset target.  A cheap signed-margin loss only
+    screens removal/swap candidates; the final choice is always made by the exact
+    deployed evaluator.  No extra neural query is issued because all Top-M pair
+    deltas have already been evaluated.
+    """
+    d = np.asarray(atom_delta, dtype=np.float32)
+    E = int(d.shape[0]) if d.ndim == 2 else int(np.asarray(atom_budget_costs).reshape(-1).shape[0])
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    costs = costs[:E]
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
+    active &= np.isfinite(costs) & (costs > 0.0)
+    ids = np.flatnonzero(active).astype(np.int64).tolist()
+    if not ids:
+        return [], 0.0, 0.0, {"deployment_coreset_active": True, "deployment_coreset_target_atom_count": 0}
+
+    soft = _as_bool_mask(soft_interaction_mask, E) & active
+    soft_floor = min(max(0, int(soft_interaction_quota)), int(soft.sum()))
+    proposal = np.zeros((E,), dtype=np.float32)
+    if proposal_scores is not None:
+        raw = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
+        proposal[: min(E, raw.shape[0])] = raw[: min(E, raw.shape[0])]
+
+    # The old margin loss remains only a computational screen.
+    base = np.asarray(base_margin, dtype=np.float32).reshape(-1)
+    pairs = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    if d.ndim != 2 or d.shape[1] != base.shape[0]:
+        d = np.zeros((E, base.shape[0]), dtype=np.float32)
+    target_margin_surrogate = base + d[np.asarray(ids, dtype=np.int64)].sum(axis=0)
+    surrogate_target_action, _ = _pairwise_preference_action(
+        target_margin_surrogate, pairs, weights, valid_mask, runtime_safety_flags
+    )
+
+    eval_cache: dict[tuple[int, ...], tuple[int, np.ndarray, np.ndarray]] = {}
+
+    def evaluate(sel: list[int]) -> tuple[int, np.ndarray, np.ndarray]:
+        key = tuple(sorted(map(int, sel)))
+        if key not in eval_cache:
+            action, scores, margins = deployment_evaluator(list(key))
+            eval_cache[key] = (
+                int(action),
+                np.asarray(scores, dtype=np.float32).reshape(-1),
+                np.asarray(margins, dtype=np.float32),
+            )
+        return eval_cache[key]
+
+    target_action, target_scores, target_margins = evaluate(ids)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    n = min(valid.shape[0], target_scores.shape[0])
+    eligible = valid[:n] & np.isfinite(target_scores[:n]) & (target_scores[:n] > -1e8)
+    target_scale = max(float(np.std(target_scores[:n][eligible])) if bool(eligible.any()) else 0.0, 0.1)
+    hdelta = max(float(huber_delta), 1e-3)
+
+    def exact_loss(sel: list[int]) -> float:
+        action, scores, margins = evaluate(sel)
+        m = min(n, scores.shape[0])
+        mask = eligible[:m] & np.isfinite(scores[:m]) & (scores[:m] > -1e8)
+        loss = 0.0
+        if bool(mask.any()):
+            err = (scores[:m][mask] - target_scores[:m][mask]) / target_scale
+            ae = np.abs(err) / hdelta
+            huber = np.where(ae <= 1.0, 0.5 * ae * ae, ae - 0.5)
+            loss += max(float(score_weight), 0.0) * float(np.mean(huber))
+        if target_action >= 0 and action != target_action:
+            loss += max(float(action_weight), 0.0)
+        if 0 <= target_action < m and bool(mask.any()):
+            rivals = np.flatnonzero(mask & (np.arange(m) != target_action))
+            if rivals.size:
+                target_gap = float(target_scores[target_action] - np.max(target_scores[rivals]))
+                trial_gap = float(scores[target_action] - np.max(scores[rivals]))
+                loss += max(float(gap_weight), 0.0) * max(0.0, target_gap - trial_gap) / target_scale
+        if (
+            target_margins.ndim == 2 and margins.ndim == 2
+            and 0 <= target_action < min(target_margins.shape[0], margins.shape[0])
+        ):
+            k = min(target_margins.shape[1], margins.shape[1], valid.shape[0])
+            rivals = valid[:k].copy()
+            if target_action < k:
+                rivals[target_action] = False
+            trow = target_margins[target_action, :k]
+            xrow = margins[target_action, :k]
+            informative = rivals & np.isfinite(trow) & np.isfinite(xrow) & (np.abs(trow) >= max(float(margin_floor), 0.0))
+            if bool(informative.any()):
+                sign_err = np.mean((trow[informative] * xrow[informative] < 0.0).astype(np.float32))
+                mag_err = np.mean(np.minimum(np.abs(xrow[informative] - trow[informative]), 1.0))
+                loss += max(float(margin_weight), 0.0) * float(sign_err + 0.25 * mag_err)
+        return float(loss)
+
+    def screen_loss(margin: np.ndarray) -> float:
+        return _margin_coreset_objective(
+            margin, target_margin_surrogate, pairs, weights, surrogate_target_action,
+            valid_mask, runtime_safety_flags, residual_weight=1.0, sign_weight=0.8,
+            winner_weight=1.5, action_weight=0.5,
+        )
+
+    selected = list(ids)
+    current_surrogate = target_margin_surrogate.copy()
+    spent = _spent_for(selected, costs)
+    removed: list[int] = []
+    exact_k = max(1, int(exact_candidates))
+    while spent > float(budget) + 1e-6 and selected:
+        soft_count = int(sum(1 for i in selected if soft[i]))
+        screened: list[tuple[float, int]] = []
+        for i in selected:
+            if soft[i] and soft_count - 1 < soft_floor:
+                continue
+            trial_margin = current_surrogate - d[i]
+            screened.append((screen_loss(trial_margin) / max(float(costs[i]), 1e-6), int(i)))
+        if not screened:
+            break
+        screened.sort(key=lambda x: (x[0], float(proposal[x[1]]), x[1]))
+        best = None
+        best_key = (float("inf"), float("inf"), float("inf"), float("inf"))
+        for _, i in screened[:exact_k]:
+            trial_sel = [j for j in selected if j != i]
+            l = exact_loss(trial_sel)
+            key = (l / max(float(costs[i]), 1e-6), l, float(proposal[i]), int(i))
+            if key < best_key:
+                best_key = key
+                best = int(i)
+        if best is None:
+            break
+        selected.remove(best)
+        removed.append(best)
+        current_surrogate -= d[best]
+        spent -= float(costs[best])
+
+    swaps = 0
+    for _ in range(max(0, int(swap_passes))):
+        current_loss = exact_loss(selected)
+        soft_count = int(sum(1 for i in selected if soft[i]))
+        screened_swaps: list[tuple[float, int, int]] = []
+        for out_i in selected:
+            for in_i in removed:
+                new_spent = spent - float(costs[out_i]) + float(costs[in_i])
+                if new_spent > float(budget) + 1e-6:
+                    continue
+                if soft[out_i] and not soft[in_i] and soft_count - 1 < soft_floor:
+                    continue
+                trial_margin = current_surrogate - d[out_i] + d[in_i]
+                screened_swaps.append((screen_loss(trial_margin), int(out_i), int(in_i)))
+        screened_swaps.sort(key=lambda x: (x[0], x[1], x[2]))
+        best_swap = None
+        best_loss = current_loss
+        for _, out_i, in_i in screened_swaps[:exact_k]:
+            trial_sel = [j for j in selected if j != out_i] + [in_i]
+            l = exact_loss(trial_sel)
+            if l + 1e-9 < best_loss:
+                best_loss = l
+                best_swap = (out_i, in_i)
+        if best_swap is None:
+            break
+        out_i, in_i = best_swap
+        selected.remove(out_i); selected.append(in_i)
+        removed.remove(in_i); removed.append(out_i)
+        current_surrogate = current_surrogate - d[out_i] + d[in_i]
+        spent = spent - float(costs[out_i]) + float(costs[in_i])
+        swaps += 1
+
+    selected = sorted(selected)
+    selected_action, selected_scores, selected_margins = evaluate(selected)
+    final_loss = exact_loss(selected)
+    score_rmse = 0.0
+    m = min(target_scores.shape[0], selected_scores.shape[0], valid.shape[0])
+    mask = valid[:m] & np.isfinite(target_scores[:m]) & np.isfinite(selected_scores[:m]) & (target_scores[:m] > -1e8) & (selected_scores[:m] > -1e8)
+    if bool(mask.any()):
+        score_rmse = float(np.sqrt(np.mean(np.square(selected_scores[:m][mask] - target_scores[:m][mask]))))
+    diag = {
+        "deployment_coreset_active": True,
+        "deployment_coreset_target_atom_count": int(len(ids)),
+        "deployment_coreset_selected_atom_count": int(len(selected)),
+        "deployment_coreset_removed_atom_count": int(len(removed)),
+        "deployment_coreset_swap_count": int(swaps),
+        "deployment_coreset_target_action": int(target_action),
+        "deployment_coreset_selected_action": int(selected_action),
+        "deployment_coreset_target_action_preserved": float(target_action >= 0 and selected_action == target_action),
+        "deployment_coreset_score_rmse": float(score_rmse),
+        "deployment_coreset_objective": float(final_loss),
+        "deployment_coreset_soft_floor": int(soft_floor),
+        "deployment_coreset_evaluations": int(len(eval_cache)),
+    }
+    return selected, float(-final_loss), float(spent), diag
+
+
 def runtime_greedy_selector_pair_conditioned(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -2595,6 +2810,13 @@ def runtime_greedy_selector_pair_conditioned(
     margin_coreset_huber_delta: float = 0.25,
     margin_coreset_target_clip: float = 3.0,
     margin_coreset_swap_passes: int = 2,
+    deployment_evaluator: Callable[[list[int]], tuple[int, np.ndarray, np.ndarray]] | None = None,
+    deployment_coreset_exact_candidates: int = 8,
+    deployment_coreset_swap_passes: int = 1,
+    deployment_coreset_score_weight: float = 1.0,
+    deployment_coreset_action_weight: float = 4.0,
+    deployment_coreset_gap_weight: float = 2.0,
+    deployment_coreset_margin_weight: float = 1.0,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -2696,6 +2918,7 @@ def runtime_greedy_selector_pair_conditioned(
     hybrid_action_lcb_modes = {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank"}
     flip_rank_modes = {"flip_rank", "fliprank", "flip_boundary_rank"}
     margin_coreset_modes = {"margin_coreset", "signed_margin_coreset", "mars", "margin_preserving"}
+    deployment_coreset_modes = {"deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}
     # v18: selector_cap_mode must own the dispatch.  In v15-v17, merely passing
     # pair_atom_variance or family_budget_caps forced the LCB/uncertainty path,
     # silently bypassing flip_rank/action_rank objectives even when configs asked
@@ -2706,6 +2929,7 @@ def runtime_greedy_selector_pair_conditioned(
         and cap_mode_l not in hybrid_action_lcb_modes
         and cap_mode_l not in flip_rank_modes
         and cap_mode_l not in margin_coreset_modes
+        and cap_mode_l not in deployment_coreset_modes
         and (
             pair_atom_variance is not None
             or abs(float(beta_uncertainty)) > 0.0
@@ -2748,7 +2972,43 @@ def runtime_greedy_selector_pair_conditioned(
         )
         mode = "runtime_pair_conditioned_lcb_uncertainty"
     else:
-        if cap_mode_l in margin_coreset_modes:
+        if cap_mode_l in deployment_coreset_modes and deployment_evaluator is not None:
+            selected, current, spent, coreset_diag = _deployment_aligned_coreset_from_pair_delta(
+                delta, base_delta, weights, pair_arr, atom_budget_costs, budget,
+                valid_mask, runtime_safety_flags, atom_active_mask, deployment_evaluator,
+                soft_interaction_mask=soft_interaction_mask,
+                soft_interaction_quota=soft_interaction_quota,
+                proposal_scores=proposal_scores,
+                exact_candidates=deployment_coreset_exact_candidates,
+                swap_passes=deployment_coreset_swap_passes,
+                score_weight=deployment_coreset_score_weight,
+                action_weight=deployment_coreset_action_weight,
+                gap_weight=deployment_coreset_gap_weight,
+                margin_weight=deployment_coreset_margin_weight,
+                huber_delta=margin_coreset_huber_delta,
+            )
+            mode = "runtime_pair_conditioned_deployment_coreset"
+        elif cap_mode_l in deployment_coreset_modes:
+            # Training currently has no full deployment callback; preserve a
+            # well-defined stop-gradient fallback instead of silently crashing.
+            selected, current, spent, coreset_diag = _signed_margin_coreset_from_pair_delta(
+                delta, base_delta, weights, pair_arr, atom_budget_costs, budget,
+                valid_mask, runtime_safety_flags, atom_active_mask,
+                soft_interaction_mask=soft_interaction_mask,
+                soft_interaction_quota=soft_interaction_quota,
+                proposal_scores=proposal_scores,
+                residual_weight=margin_coreset_residual_weight,
+                sign_weight=margin_coreset_sign_weight,
+                winner_weight=margin_coreset_winner_weight,
+                action_weight=margin_coreset_action_weight,
+                boundary_tau=margin_coreset_boundary_tau,
+                huber_delta=margin_coreset_huber_delta,
+                target_clip=margin_coreset_target_clip,
+                swap_passes=margin_coreset_swap_passes,
+            )
+            coreset_diag["deployment_coreset_evaluator_missing"] = True
+            mode = "runtime_pair_conditioned_deployment_coreset_fallback"
+        elif cap_mode_l in margin_coreset_modes:
             selected, current, spent, coreset_diag = _signed_margin_coreset_from_pair_delta(
                 delta, base_delta, weights, pair_arr, atom_budget_costs, budget,
                 valid_mask, runtime_safety_flags, atom_active_mask,
@@ -2862,10 +3122,10 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), **hybrid_diag, **coreset_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), **hybrid_diag, **coreset_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving"}:
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
                 certificate_weight=float(action_rank_certificate_weight),

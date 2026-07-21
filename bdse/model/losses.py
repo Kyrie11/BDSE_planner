@@ -305,6 +305,17 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
     costs = _to_numpy(batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])), np.float32)
     fam_ids_t = batch.get("evidence_family_ids")
     fam_ids_np = _to_numpy(fam_ids_t, np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
+    # Keep the training-time pair selector feature-complete with the runtime
+    # selector.  v38 copied the interaction-group reservation calls below but
+    # omitted this initialization, causing the first finetune batch to fail with
+    # NameError: group_ids_np is not defined.  Missing group ids intentionally
+    # fall back to -1 (no group), matching _predicted_certificate_masks().
+    group_ids_t = batch.get("evidence_agent_group_ids")
+    group_ids_np = (
+        _to_numpy(group_ids_t, np.int64)
+        if group_ids_t is not None
+        else np.full_like(fam_ids_np, -1, dtype=np.int64)
+    )
     flags = batch.get("runtime_safety_flags")
     flags_np = _to_numpy(flags, bool) if flags is not None else np.zeros_like(valid, dtype=bool)
     evidence_features_np = _to_numpy(batch.get("evidence_features"), np.float32) if "evidence_features" in batch else None

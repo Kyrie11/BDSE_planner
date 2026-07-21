@@ -533,7 +533,7 @@ class BDSEPlannerCore:
             if (
                 float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
                 or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
-                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving"}
+                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}
             ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
@@ -541,6 +541,35 @@ class BDSEPlannerCore:
                     runtime_flags,
                     stage_cfg,
                 )
+            cap_mode = str(sel_cfg.get("selector_cap_mode", "legacy_abs")).lower()
+            deployment_modes = {"deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset"}
+            tournament_cfg = dict(stage_cfg)
+            tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
+            deployment_evaluator = None
+            if cap_mode in deployment_modes:
+                def deployment_evaluator(selected_atoms: list[int]):
+                    # Evaluate the exact downstream decision rule used after
+                    # selection: final rival graph, normalized pair margins,
+                    # soft-min tournament, safety guard, utility refinement and
+                    # the all-flagged structural guard.  This is pure inference
+                    # over already queried Top-M deltas and adds no model query.
+                    trial = run_pair_conditioned_tournament(
+                        J0,
+                        pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
+                        pred.get("rival_pair_indices", pred["pair_indices"]),
+                        selected_atoms,
+                        candidates.valid_mask,
+                        runtime_flags,
+                        tournament_cfg,
+                        pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+                        candidate_trajectories=candidates.trajectories,
+                        maneuver_ids=candidates.maneuver_ids,
+                    )
+                    trial = self._apply_all_flagged_structural_guard(
+                        trial, runtime, candidates, runtime_flags, stage_cfg
+                    )
+                    return int(trial.action_index), np.asarray(trial.scores), np.asarray(trial.margins)
+
             selection = runtime_greedy_selector_pair_conditioned(
                 J0,
                 pred["pair_atom_delta"],
@@ -620,9 +649,14 @@ class BDSEPlannerCore:
                 margin_coreset_huber_delta=float(sel_cfg.get("margin_coreset_huber_delta", 0.25)),
                 margin_coreset_target_clip=float(sel_cfg.get("margin_coreset_target_clip", 3.0)),
                 margin_coreset_swap_passes=int(sel_cfg.get("margin_coreset_swap_passes", 2)),
+                deployment_evaluator=deployment_evaluator,
+                deployment_coreset_exact_candidates=int(sel_cfg.get("deployment_coreset_exact_candidates", 8)),
+                deployment_coreset_swap_passes=int(sel_cfg.get("deployment_coreset_swap_passes", 1)),
+                deployment_coreset_score_weight=float(sel_cfg.get("deployment_coreset_score_weight", 1.0)),
+                deployment_coreset_action_weight=float(sel_cfg.get("deployment_coreset_action_weight", 4.0)),
+                deployment_coreset_gap_weight=float(sel_cfg.get("deployment_coreset_gap_weight", 2.0)),
+                deployment_coreset_margin_weight=float(sel_cfg.get("deployment_coreset_margin_weight", 1.0)),
             )
-            tournament_cfg = dict(stage_cfg)
-            tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
             tournament = run_pair_conditioned_tournament(
                 J0,
                 pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),

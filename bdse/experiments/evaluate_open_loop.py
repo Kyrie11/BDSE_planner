@@ -63,6 +63,7 @@ def main() -> None:
         mode = str(sel_diag.get("mode", ""))
         qdiag["selector_action_rank_active"] = float(mode.startswith("runtime_pair_conditioned_action_rank") or mode == "runtime_pair_conditioned_hybrid_lcb_action_rank")
         qdiag["selector_margin_coreset_active"] = float(mode == "runtime_pair_conditioned_margin_coreset")
+        qdiag["selector_deployment_coreset_active"] = float(mode == "runtime_pair_conditioned_deployment_coreset")
         qdiag["selector_hybrid_lcb_action_rank_active"] = float(mode == "runtime_pair_conditioned_hybrid_lcb_action_rank")
         qdiag["selector_flip_rank_active"] = float(mode == "runtime_pair_conditioned_flip_rank")
         qdiag["selector_lcb_active"] = float(mode == "runtime_pair_conditioned_lcb_uncertainty" or mode == "runtime_pair_conditioned_hybrid_lcb_action_rank")
