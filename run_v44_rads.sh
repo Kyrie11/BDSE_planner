@@ -30,7 +30,7 @@ TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v44_bdse_rads_train_fast_2gpu.yaml}"
 #   new: 2 GPUs x batch 4 = global batch 8
 # For a faster but not strictly optimization-equivalent run, set
 # BATCH_SIZE_PER_GPU=8 (global batch 16) and retune/record the LR if needed.
-GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-8}"
+GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-32}"
 if [[ -z "${BATCH_SIZE_PER_GPU:-}" ]]; then
   if (( GLOBAL_BATCH_SIZE % NPROC_PER_NODE != 0 )); then
     echo "GLOBAL_BATCH_SIZE=$GLOBAL_BATCH_SIZE must be divisible by NPROC_PER_NODE=$NPROC_PER_NODE" >&2
