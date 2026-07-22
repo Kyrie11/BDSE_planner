@@ -643,6 +643,67 @@ def _config_with_evidence_budget(cfg: dict[str, Any], budget: float) -> dict[str
     return local_cfg
 
 
+def _deployment_budget_entries_for_step(
+    budgets: list[float],
+    weights: list[float],
+    train_cfg: dict[str, Any],
+) -> list[tuple[float, float]]:
+    """Choose deployment budgets for one optimizer step.
+
+    ``all`` reproduces the original objective exactly.  ``weighted_round_robin``
+    evaluates one budget per DDP rank/step using a deterministic schedule whose
+    frequency is proportional to the configured loss weights.  Because the
+    original multi-budget loss is a weighted mean, this is an unbiased
+    stratified estimator of that objective while avoiding two of the three
+    expensive CPU deployment-selector calls in the common [8, 16, 24] setup.
+    """
+    entries = [(float(b), max(float(w), 0.0)) for b, w in zip(budgets, weights) if float(w) > 0.0]
+    if not entries:
+        return []
+    strategy = str(train_cfg.get("deployment_budget_strategy", "all")).strip().lower()
+    if strategy in {"all", "full", "exact"} or len(entries) == 1:
+        return entries
+    if strategy not in {"weighted_round_robin", "sampled", "stratified"}:
+        raise ValueError(
+            "training.deployment_budget_strategy must be one of "
+            "all|weighted_round_robin; got %r" % strategy
+        )
+
+    # Convert arbitrary positive weights to a compact deterministic slot table.
+    # The largest table is intentionally capped; this is a training schedule,
+    # not a floating-point exact rational expansion.
+    total = sum(w for _, w in entries)
+    max_slots = max(len(entries), int(train_cfg.get("deployment_budget_schedule_slots", 16)))
+    raw = [w / total * max_slots for _, w in entries]
+    counts = [max(1, int(round(x))) for x in raw]
+    while sum(counts) > max_slots:
+        candidates = [i for i, c in enumerate(counts) if c > 1]
+        if not candidates:
+            break
+        idx = max(candidates, key=lambda i: counts[i] - raw[i])
+        counts[idx] -= 1
+    while sum(counts) < max_slots:
+        idx = max(range(len(counts)), key=lambda i: raw[i] - counts[i])
+        counts[idx] += 1
+    schedule: list[float] = []
+    # Interleave rather than grouping identical budgets, improving short-window
+    # coverage when validation/checkpointing interrupts a run.
+    remaining = counts[:]
+    while any(c > 0 for c in remaining):
+        for i, (budget, _) in enumerate(entries):
+            if remaining[i] > 0:
+                schedule.append(float(budget))
+                remaining[i] -= 1
+
+    step = int(train_cfg.get("global_step", 0))
+    rank = int(train_cfg.get("global_rank", 0))
+    world = max(1, int(train_cfg.get("world_size", 1)))
+    slot = (step * world + rank) % max(len(schedule), 1)
+    # A sampled/stratified entry already has the correct expectation; giving it
+    # unit averaging weight avoids multiplying the loss twice by its probability.
+    return [(float(schedule[slot]), 1.0)]
+
+
 def _teacher_regret_weights(
     logits: torch.Tensor,
     target_action: torch.Tensor,
@@ -1093,7 +1154,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
 
     # Heteroscedastic uncertainty in normalized pair-margin space.
     pair_var_pred = out.get("pair_atom_var")
-    if true_atom_delta is not None and atom_pair_mask is not None and atom_weights is not None and (pair_var_pred is not None or g_var is not None):
+    uncertainty_loss_enabled = float(lw.get("uncertainty", 0.0)) > 0.0
+    if uncertainty_loss_enabled and true_atom_delta is not None and atom_pair_mask is not None and atom_weights is not None and (pair_var_pred is not None or g_var is not None):
         if pair_var_pred is not None:
             pair_var = pair_var_pred.clamp_min(1e-6)
         else:
@@ -1306,10 +1368,21 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 budget_weights = [float(x) for x in configured_weights]
                 if len(budget_weights) != len(budgets):
                     raise ValueError("training.deployment_budget_weights must match training.deployment_budgets")
+            budget_entries = _deployment_budget_entries_for_step(budgets, budget_weights, train_cfg)
             primary_budget = float(cfg.get("evidence", {}).get("budget", 16))
             primary_distance = float("inf")
-            for budget_value, budget_weight in zip(budgets, budget_weights):
+            for budget_value, budget_weight in budget_entries:
                 budget_cfg = _config_with_evidence_budget(cfg, budget_value)
+                # Training-time selector search can use fewer local swap passes
+                # without changing the deployment/evaluation configuration.  The
+                # vectorized selector already makes the exact setting much faster;
+                # setting this to 0 is an additional optional speed/accuracy tradeoff.
+                train_swap_passes = train_cfg.get("deployment_selector_swap_passes", None)
+                if train_swap_passes is not None:
+                    budget_cfg = dict(budget_cfg)
+                    local_selector = dict(budget_cfg.get("selector", {}))
+                    local_selector["margin_coreset_swap_passes"] = max(0, int(train_swap_passes))
+                    budget_cfg["selector"] = local_selector
                 pair_selected_mask = _predicted_pair_certificate_masks(out, batch, budget_cfg) & pair_action_atom_mask
                 budget_logits = _pair_conditioned_tournament_scores(
                     finite_J0,

@@ -2435,6 +2435,100 @@ def _signed_margin_coreset_from_pair_delta(
             action_weight=action_weight, boundary_tau=boundary_tau, huber_delta=huber_delta, target_clip=target_clip,
         )
 
+    # The original implementation called ``loss`` once for every possible atom
+    # removal and once for every possible swap.  With Top-M=64 this means
+    # thousands of small Python/Numpy calls per scene, and deployment-aligned
+    # training repeats that work on every DDP rank.  Precompute the invariant
+    # target weights / pair-to-action incidence matrices and score all candidate
+    # removals (or swaps) in one vectorized call.  This is algebraically identical
+    # to _margin_coreset_objective; only the candidate dimension is batched.
+    tau_vec = max(float(boundary_tau), 1e-3)
+    clip_vec = max(float(target_clip), tau_vec)
+    target_clip_vec = np.clip(target, -clip_vec, clip_vec).astype(np.float32, copy=False)
+    weights_nonneg = np.maximum(weights, 0.0).astype(np.float32, copy=False)
+    boundary_vec = np.exp(-np.abs(target_clip_vec) / tau_vec)
+    decisive_vec = np.tanh(np.abs(target_clip_vec) / tau_vec)
+    pair_objective_w = weights_nonneg * (1.0 + 1.5 * boundary_vec + 0.5 * decisive_vec)
+    pair_objective_norm = max(float(pair_objective_w.sum()), 1e-9)
+    huber_delta_vec = max(float(huber_delta), 1e-3)
+    sign_floor_vec = 0.05
+
+    valid_actions = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    action_count = int(valid_actions.shape[0])
+    pair_count = int(pairs.shape[0])
+    incidence_a = np.zeros((pair_count, action_count), dtype=np.float32)
+    incidence_b = np.zeros((pair_count, action_count), dtype=np.float32)
+    action_denom = np.zeros((action_count,), dtype=np.float32)
+    if pair_count and action_count:
+        a_all = pairs[:, 0].astype(np.int64, copy=False)
+        b_all = pairs[:, 1].astype(np.int64, copy=False)
+        pair_ok = (a_all >= 0) & (a_all < action_count) & (b_all >= 0) & (b_all < action_count)
+        if bool(pair_ok.any()):
+            ok_idx = np.flatnonzero(pair_ok)
+            pair_ok[ok_idx] &= valid_actions[a_all[ok_idx]] & valid_actions[b_all[ok_idx]]
+        ok_idx = np.flatnonzero(pair_ok)
+        if ok_idx.size:
+            incidence_a[ok_idx, a_all[ok_idx]] = weights_nonneg[ok_idx]
+            incidence_b[ok_idx, b_all[ok_idx]] = weights_nonneg[ok_idx]
+            np.add.at(action_denom, a_all[ok_idx], weights_nonneg[ok_idx])
+            np.add.at(action_denom, b_all[ok_idx], weights_nonneg[ok_idx])
+    eligible_actions = valid_actions.copy()
+    flags_vec = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    if flags_vec.shape[0] < action_count:
+        flags_vec = np.pad(flags_vec, (0, action_count - flags_vec.shape[0]), constant_values=False)
+    if action_count:
+        safe_actions = valid_actions & ~flags_vec[:action_count]
+        if bool(safe_actions.any()):
+            eligible_actions = safe_actions
+
+    target_orientation = np.zeros((pair_count,), dtype=np.float32)
+    if target_action >= 0 and pair_count:
+        target_orientation[pairs[:, 0] == target_action] = 1.0
+        target_orientation[pairs[:, 1] == target_action] = -1.0
+    oriented_target = target_clip_vec * target_orientation
+    wanted_target = (target_orientation != 0.0) & (oriented_target > 0.0)
+    winner_norm = max(float(pair_objective_w[wanted_target].sum()), 1e-9) if bool(wanted_target.any()) else 1.0
+
+    def loss_many(margins: np.ndarray) -> np.ndarray:
+        trial_matrix = np.asarray(margins, dtype=np.float32)
+        if trial_matrix.ndim == 1:
+            trial_matrix = trial_matrix[None, :]
+        if trial_matrix.ndim != 2 or trial_matrix.shape[1] != pair_count:
+            return np.full((trial_matrix.shape[0] if trial_matrix.ndim else 1,), np.inf, dtype=np.float64)
+        x = np.clip(trial_matrix, -clip_vec, clip_vec)
+        err = (x - target_clip_vec[None, :]) / huber_delta_vec
+        abs_err = np.abs(err)
+        huber = np.where(abs_err <= 1.0, 0.5 * err * err, abs_err - 0.5)
+        values = max(float(residual_weight), 0.0) * (huber * pair_objective_w[None, :]).sum(axis=1) / pair_objective_norm
+
+        if float(sign_weight) > 0.0:
+            mismatch = (x * target_clip_vec[None, :] < 0.0) & (np.abs(target_clip_vec)[None, :] >= sign_floor_vec)
+            sign_penalty = (
+                pair_objective_w[None, :]
+                * mismatch.astype(np.float32)
+                * np.minimum(np.abs(target_clip_vec), 1.0)[None, :]
+            ).sum(axis=1) / pair_objective_norm
+            values = values + max(float(sign_weight), 0.0) * sign_penalty
+
+        if target_action >= 0 and bool(wanted_target.any()) and float(winner_weight) > 0.0:
+            oriented_trial = x[:, wanted_target] * target_orientation[wanted_target][None, :]
+            soft_violation = np.log1p(np.exp(np.clip(-oriented_trial / tau_vec, -20.0, 20.0)))
+            winner_penalty = (
+                soft_violation * pair_objective_w[wanted_target][None, :]
+            ).sum(axis=1) / winner_norm
+            values = values + max(float(winner_weight), 0.0) * winner_penalty
+
+        if target_action >= 0 and action_count and bool(eligible_actions.any()) and float(action_weight) > 0.0:
+            prob = 1.0 / (1.0 + np.exp(-np.clip(trial_matrix / tau_vec, -20.0, 20.0)))
+            score = prob @ incidence_a + (1.0 - prob) @ incidence_b
+            avg = score / np.maximum(action_denom[None, :], 1e-9)
+            avg[:, ~eligible_actions] = -np.inf
+            inferred = np.argmax(avg, axis=1)
+            finite_any = np.isfinite(avg).any(axis=1)
+            mismatch_action = finite_any & (inferred != int(target_action))
+            values = values + max(float(action_weight), 0.0) * mismatch_action.astype(np.float32)
+        return np.asarray(values, dtype=np.float64)
+
     selected = list(ids)
     selected_set = set(selected)
     current = target.copy()
@@ -2442,20 +2536,17 @@ def _signed_margin_coreset_from_pair_delta(
     removed: list[int] = []
     while spent > float(budget) + 1e-6 and selected:
         soft_count = int(sum(1 for i in selected if soft[i]))
-        best = None
-        best_key = (float('inf'), float('inf'), float('inf'))
-        for i in selected:
-            if soft[i] and soft_count - 1 < soft_floor:
-                continue
-            trial = current - d[i]
-            l = loss(trial)
-            # Save expensive atoms first when losses are equal; proposal is only
-            # a deterministic tie-breaker, never the main objective.
-            key = (l / max(float(costs[i]), 1e-6), l, float(proposal[i]))
-            if key < best_key:
-                best_key = key; best = int(i)
-        if best is None:
+        candidates = [int(i) for i in selected if not (soft[i] and soft_count - 1 < soft_floor)]
+        if not candidates:
             break
+        candidate_arr = np.asarray(candidates, dtype=np.int64)
+        trial_matrix = current[None, :] - d[candidate_arr]
+        losses = loss_many(trial_matrix)
+        ratios = losses / np.maximum(costs[candidate_arr].astype(np.float64), 1e-6)
+        # np.lexsort uses the last key as primary: ratio, then raw loss, then
+        # proposal score, matching the tuple comparison in the old loop.
+        order = np.lexsort((proposal[candidate_arr], losses, ratios))
+        best = int(candidate_arr[int(order[0])])
         selected.remove(best); selected_set.remove(best); removed.append(best)
         current = current - d[best]
         spent -= float(costs[best])
@@ -2465,8 +2556,9 @@ def _signed_margin_coreset_from_pair_delta(
     for _ in range(max_passes):
         current_loss = loss(current)
         soft_count = int(sum(1 for i in selected if soft[i]))
-        best_swap = None
-        best_loss = current_loss
+        swap_out: list[int] = []
+        swap_in: list[int] = []
+        swap_spent: list[float] = []
         for out_i in list(selected):
             for in_i in list(removed):
                 new_spent = spent - float(costs[out_i]) + float(costs[in_i])
@@ -2474,13 +2566,19 @@ def _signed_margin_coreset_from_pair_delta(
                     continue
                 if soft[out_i] and not soft[in_i] and soft_count - 1 < soft_floor:
                     continue
-                trial = current - d[out_i] + d[in_i]
-                l = loss(trial)
-                if l + 1e-9 < best_loss:
-                    best_loss = l; best_swap = (int(out_i), int(in_i), trial, new_spent)
-        if best_swap is None:
+                swap_out.append(int(out_i)); swap_in.append(int(in_i)); swap_spent.append(float(new_spent))
+        if not swap_out:
             break
-        out_i, in_i, current, spent = best_swap
+        out_arr = np.asarray(swap_out, dtype=np.int64)
+        in_arr = np.asarray(swap_in, dtype=np.int64)
+        trial_matrix = current[None, :] - d[out_arr] + d[in_arr]
+        losses = loss_many(trial_matrix)
+        best_idx = int(np.argmin(losses))
+        if not (float(losses[best_idx]) + 1e-9 < float(current_loss)):
+            break
+        out_i = int(out_arr[best_idx]); in_i = int(in_arr[best_idx])
+        current = trial_matrix[best_idx]
+        spent = float(swap_spent[best_idx])
         selected.remove(out_i); selected.append(in_i)
         removed.remove(in_i); removed.append(out_i)
         selected_set.remove(out_i); selected_set.add(in_i)

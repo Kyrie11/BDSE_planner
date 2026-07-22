@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -911,6 +912,8 @@ def main() -> None:
         if not dist.is_initialized():
             dist.init_process_group(backend="nccl")
     is_main = global_rank == 0
+    cfg["training"]["global_rank"] = int(global_rank)
+    cfg["training"]["world_size"] = int(world_size)
     splits = args.split
     dataset = _make_preprocessed_dataset(
         preprocessed_dir=args.preprocessed_dir,
@@ -1024,8 +1027,11 @@ def main() -> None:
         if sampler is not None:
             sampler.set_epoch(epoch)
         model.train()
+        epoch_wall_start = time.perf_counter()
         meters: dict[str, list[float]] = {}
-        for batch in tqdm(loader, desc=f"epoch {epoch}", disable=not is_main):
+        steps_per_epoch = max(1, len(loader))
+        for batch_index, batch in enumerate(tqdm(loader, desc=f"epoch {epoch}", disable=not is_main)):
+            cfg["training"]["global_step"] = int(epoch * steps_per_epoch + batch_index)
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             opt.zero_grad(set_to_none=True)
             if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
@@ -1042,11 +1048,14 @@ def main() -> None:
                 losses = compute_bdse_losses(out, batch, cfg)
             scaler.scale(losses["loss"]).backward()
             scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg["training"]["grad_clip"]))
+            torch.nn.utils.clip_grad_norm_(trainable_parameters, float(cfg["training"]["grad_clip"]))
             scaler.step(opt)
             scaler.update()
             _append_loss_meters(meters, losses)
         epoch_metrics = _aggregate_meters(meters, device, distributed)
+        epoch_wall_s = max(time.perf_counter() - epoch_wall_start, 1e-9)
+        epoch_metrics["train_epoch_wall_time_s"] = float(epoch_wall_s)
+        epoch_metrics["train_samples_per_second"] = float(len(loader) * batch_size * world_size / epoch_wall_s)
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):
             if val_sampler is not None:
                 val_sampler.set_epoch(epoch)

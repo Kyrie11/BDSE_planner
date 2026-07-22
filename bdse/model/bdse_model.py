@@ -306,6 +306,9 @@ class BDSEModel(nn.Module):
         self.pair_feature_blocks = 10
         self.pair_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
         self.pair_var_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
+        if bool(cfg.get("training", {}).get("freeze_unused_pair_variance_head", False)):
+            for param in self.pair_var_head.parameters():
+                param.requires_grad_(False)
 
         # Hierarchical Atom Builder (HAB): family gate pi_tau followed by an
         # atom proposal conditioned on family embedding and candidate-set summary.
