@@ -25,26 +25,28 @@ OPEN_LOOP_MAX_SCENARIOS="${OPEN_LOOP_MAX_SCENARIOS:-1000}"
 EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v44_bdse_rads_fast_cl.yaml}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v44_bdse_rads_train_fast_2gpu.yaml}"
 
-# Preserve the original single-GPU global batch size by default:
-#   old: 1 GPU x batch 8 = global batch 8
-#   new: 2 GPUs x batch 4 = global batch 8
-# For a faster but not strictly optimization-equivalent run, set
-# BATCH_SIZE_PER_GPU=8 (global batch 16) and retune/record the LR if needed.
-GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-24}"
-if [[ -z "${BATCH_SIZE_PER_GPU:-}" ]]; then
-  if (( GLOBAL_BATCH_SIZE % NPROC_PER_NODE != 0 )); then
-    echo "GLOBAL_BATCH_SIZE=$GLOBAL_BATCH_SIZE must be divisible by NPROC_PER_NODE=$NPROC_PER_NODE" >&2
-    exit 2
-  fi
-  BATCH_SIZE_PER_GPU=$((GLOBAL_BATCH_SIZE / NPROC_PER_NODE))
+# Make the per-GPU batch explicit.  The previous script silently defaulted to
+# GLOBAL_BATCH_SIZE=24, which produced batch_per_gpu=12 whenever an environment
+# assignment was lost by a wrapper/nohup command.
+BATCH_SIZE_PER_GPU="${BATCH_SIZE_PER_GPU:-4}"
+if (( BATCH_SIZE_PER_GPU < 1 )); then
+  echo "BATCH_SIZE_PER_GPU must be >= 1" >&2
+  exit 2
 fi
+GLOBAL_BATCH_SIZE=$((BATCH_SIZE_PER_GPU * NPROC_PER_NODE))
 NUM_WORKERS_PER_GPU="${NUM_WORKERS_PER_GPU:-6}"
 VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-2}"
 VAL_BATCH_SIZE_PER_GPU="${VAL_BATCH_SIZE_PER_GPU:-$BATCH_SIZE_PER_GPU}"
 VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-2}"
 VAL_DENSE_DIAGNOSTIC="${VAL_DENSE_DIAGNOSTIC:-0}"
 SAVE_EVERY_N_EPOCHS="${SAVE_EVERY_N_EPOCHS:-0}"
+SAVE_EVERY_N_STEPS="${SAVE_EVERY_N_STEPS:-500}"
+AUTO_RESUME="${AUTO_RESUME:-1}"
+DETACH="${DETACH:-0}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
+SELECTOR_SCENES_PER_RANK="${SELECTOR_SCENES_PER_RANK:-2}"
+SELECTOR_EVERY_N_STEPS="${SELECTOR_EVERY_N_STEPS:-2}"
+SELECTOR_FULL_LAST_N_STEPS="${SELECTOR_FULL_LAST_N_STEPS:-128}"
 CL_WORKERS_PER_GPU="${CL_WORKERS_PER_GPU:-2}"
 CL_TOKEN_SCAN_MAX="${CL_TOKEN_SCAN_MAX:-2000}"
 
@@ -63,13 +65,33 @@ if [[ "$DEVICE" != "cuda" ]]; then
 fi
 
 export PYTHONUNBUFFERED=1
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-export NCCL_ASYNC_ERROR_HANDLING="${NCCL_ASYNC_ERROR_HANDLING:-1}"
+export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1}"
+# Do not set expandable_segments by default: the uploaded log shows that the
+# installed CUDA allocator does not support it.  A user-provided value is kept.
+if [[ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]]; then
+  export PYTORCH_CUDA_ALLOC_CONF
+fi
 
 mkdir -p "$OUT_ROOT/train" "$OUT_ROOT/open_loop" "$OUT_ROOT/closed_loop" "$OUT_ROOT/logs"
+
+# torchrun installs its own SIGHUP handler.  Plain `nohup ... &` can therefore
+# still be terminated when an SSH session or parent process group disappears.
+# DETACH=1 starts a new session with setsid and writes a stable launcher log.
+if [[ "$DETACH" == "1" && "${BDSE_DETACHED_CHILD:-0}" != "1" ]]; then
+  command -v setsid >/dev/null 2>&1 || { echo "DETACH=1 requires the setsid command" >&2; exit 2; }
+  export BDSE_DETACHED_CHILD=1 DETACH=0
+  launcher_log="$OUT_ROOT/logs/launcher_$(date +%Y%m%d_%H%M%S).log"
+  script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  setsid nohup bash "$script_path" "$@" </dev/null >>"$launcher_log" 2>&1 &
+  child_pid=$!
+  echo "$child_pid" > "$OUT_ROOT/logs/train.pid"
+  echo "[v44] detached session started pid=$child_pid log=$launcher_log"
+  exit 0
+fi
 CKPT="$OUT_ROOT/train/bdse_v44_rads.pt"
 BEST_CKPT="$OUT_ROOT/train/bdse_v44_rads.best.pt"
+LATEST_CKPT="$OUT_ROOT/train/bdse_v44_rads.latest.pt"
 
 check_checkpoint() {
   local checkpoint="$1"
@@ -87,11 +109,21 @@ wait_two() {
 }
 
 train_2gpu() {
-  check_checkpoint "$V30_CKPT_IN"
   local effective_global_batch=$((BATCH_SIZE_PER_GPU * NPROC_PER_NODE))
+  local checkpoint_args=()
+  if [[ "$AUTO_RESUME" == "1" && -f "$LATEST_CKPT" ]]; then
+    checkpoint_args+=(--resume-from "$LATEST_CKPT")
+    echo "[v44] auto-resume checkpoint=$LATEST_CKPT"
+  else
+    check_checkpoint "$V30_CKPT_IN"
+    checkpoint_args+=(--warm-start-from "$V30_CKPT_IN")
+    echo "[v44] warm-start checkpoint=$V30_CKPT_IN"
+  fi
   echo "[v44] DDP training on physical GPUs $GPU0,$GPU1"
   echo "[v44] batch_per_gpu=$BATCH_SIZE_PER_GPU global_batch=$effective_global_batch workers_per_gpu=$NUM_WORKERS_PER_GPU"
   echo "[v44] train_config=$TRAIN_CONFIG val_scenarios=$VAL_SCENARIOS val_every=$VAL_EVERY_N_EPOCHS dense_val=$VAL_DENSE_DIAGNOSTIC"
+  echo "[v44] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS"
+  echo "[v44] selector_scenes_per_rank=$SELECTOR_SCENES_PER_RANK selector_every_n_steps=$SELECTOR_EVERY_N_STEPS selector_full_last_n_steps=$SELECTOR_FULL_LAST_N_STEPS"
 
   local val_dense_args=()
   if [[ "$VAL_DENSE_DIAGNOSTIC" == "1" || "$VAL_DENSE_DIAGNOSTIC" == "true" ]]; then
@@ -104,6 +136,7 @@ train_2gpu() {
     --nnodes=1 \
     --nproc_per_node="$NPROC_PER_NODE" \
     --master_port="$MASTER_PORT" \
+    --max_restarts=0 \
     -m bdse.experiments.train \
       --config "$TRAIN_CONFIG" \
       --split train_boston train_pittsburgh train_singapore train_vegas_2 \
@@ -113,9 +146,12 @@ train_2gpu() {
       --batch-size "$BATCH_SIZE_PER_GPU" \
       --num-workers "$NUM_WORKERS_PER_GPU" \
       --prefetch-factor "$PREFETCH_FACTOR" \
+      --selector-scenes-per-rank "$SELECTOR_SCENES_PER_RANK" \
+      --selector-every-n-steps "$SELECTOR_EVERY_N_STEPS" \
+      --selector-full-last-n-steps "$SELECTOR_FULL_LAST_N_STEPS" \
       --device cuda \
       --amp \
-      --warm-start-from "$V30_CKPT_IN" \
+      "${checkpoint_args[@]}" \
       --val-preprocessed-dir "$BDSE_VAL_CACHE" \
       --val-split val \
       --val-max-scenarios "$VAL_SCENARIOS" \
@@ -125,11 +161,12 @@ train_2gpu() {
       --val-batch-size "$VAL_BATCH_SIZE_PER_GPU" \
       --val-num-workers "$VAL_NUM_WORKERS_PER_GPU" \
       --save-every-n-epochs "$SAVE_EVERY_N_EPOCHS" \
+      --save-every-n-steps "$SAVE_EVERY_N_STEPS" \
       --best-metric teacher_action_match \
       --best-metrics teacher_action_match teacher_regret \
       --log-file "$OUT_ROOT/train/bdse_v44_rads.train_log.jsonl" \
       --output "$CKPT" \
-    2>&1 | tee "$OUT_ROOT/logs/train_2gpu.out"
+    2>&1 | tee -a "$OUT_ROOT/logs/train_2gpu.out"
 }
 
 prepare_open_loop_shards() {

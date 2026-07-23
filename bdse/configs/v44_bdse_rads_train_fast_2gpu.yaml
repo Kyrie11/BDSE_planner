@@ -401,7 +401,14 @@ training:
   deployment_selector_swap_passes: 0
   prefetch_factor: 2
   pin_memory: true
+  deployment_selector_scenes_per_rank: 2
+  deployment_selector_every_n_steps: 2
+  deployment_selector_full_start_epoch: 1000000
+  allow_tf32: true
+  ddp_broadcast_buffers: false
+  ddp_gradient_as_bucket_view: true
+  deployment_selector_full_last_n_steps: 128
 experiment:
-  name: v44_rads_train_fast_2gpu
-  algorithm: RADS with vectorized coreset and stratified any-budget supervision
+  name: v44_rads_train_stable_fast_2gpu
+  algorithm: RADS mixed exact-selector curriculum with mid-epoch recovery
   warm_start_recommended: outputs_v30/train/bdse_v30_pmvrbsr.best.pt

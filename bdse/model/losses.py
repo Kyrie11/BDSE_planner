@@ -27,10 +27,12 @@ def _to_numpy(t: torch.Tensor | None, dtype: Any | None = None) -> np.ndarray | 
 
 
 def robust_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, delta: float = 1.0) -> torch.Tensor:
-    mask = mask.bool()
-    if mask.sum() == 0:
-        return pred.new_tensor(0.0)
-    return F.huber_loss(pred[mask], target[mask], delta=delta, reduction="mean")
+    mask = mask.bool() & torch.isfinite(pred) & torch.isfinite(target)
+    safe_pred = torch.where(mask, pred, torch.zeros_like(pred))
+    safe_target = torch.where(mask, target, torch.zeros_like(target))
+    terms = F.huber_loss(safe_pred, safe_target, delta=delta, reduction="none")
+    weights = mask.to(dtype=terms.dtype)
+    return (terms * weights).sum() / weights.sum().clamp_min(1.0)
 
 
 def pair_gather(values: torch.Tensor, pairs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -267,7 +269,76 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
 
 
 
-def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> torch.Tensor:
+def _slice_scene_batch(
+    values: dict[str, torch.Tensor],
+    scene_indices: torch.Tensor,
+    batch_size: int,
+) -> dict[str, torch.Tensor]:
+    """Slice only tensors whose leading dimension is the scene batch.
+
+    The deployment selector is a stop-gradient CPU routine.  Copying a full
+    training batch to CPU when only a small rotating subset needs exact selector
+    supervision wastes PCIe bandwidth and blocks both DDP ranks.  This helper
+    performs the slice on-device first so only selected scenes cross to CPU.
+    """
+    out: dict[str, torch.Tensor] = {}
+    for key, value in values.items():
+        if torch.is_tensor(value) and value.ndim > 0 and int(value.shape[0]) == int(batch_size):
+            out[key] = value.index_select(0, scene_indices)
+        else:
+            out[key] = value
+    return out
+
+
+def _deployment_selector_scene_indices(
+    batch_size: int,
+    train_cfg: dict[str, Any],
+    device: torch.device,
+) -> torch.Tensor:
+    """Return rotating scenes that receive exact predicted-selector supervision.
+
+    ``deployment_selector_scenes_per_rank=0`` means all scenes.  Before the
+    optional final full-alignment epoch, a small deterministic subset is selected
+    every N steps.  The remaining scenes keep the existing oracle curriculum,
+    yielding a low-variance mixed objective without running the CPU selector for
+    every scene on every optimizer step.
+    """
+    if batch_size <= 0:
+        return torch.empty((0,), dtype=torch.long, device=device)
+    epoch = int(train_cfg.get("current_epoch", 0))
+    step = int(train_cfg.get("global_step", 0))
+    full_start = int(train_cfg.get("deployment_selector_full_start_epoch", 10**9))
+    if epoch >= full_start:
+        return torch.arange(batch_size, dtype=torch.long, device=device)
+    # Optional short exact-alignment tail.  This is substantially cheaper than
+    # making the entire final epoch exact while still ending optimization on the
+    # deployment selector rather than the oracle curriculum.
+    full_last_steps = max(0, int(train_cfg.get("deployment_selector_full_last_n_steps", 0)))
+    steps_per_epoch = max(1, int(train_cfg.get("steps_per_epoch", 1)))
+    total_epochs = max(1, int(train_cfg.get("epochs", epoch + 1)))
+    step_in_epoch = step % steps_per_epoch
+    if epoch == total_epochs - 1 and full_last_steps > 0 and step_in_epoch >= max(0, steps_per_epoch - full_last_steps):
+        return torch.arange(batch_size, dtype=torch.long, device=device)
+    cadence = max(1, int(train_cfg.get("deployment_selector_every_n_steps", 1)))
+    if step % cadence != 0:
+        return torch.empty((0,), dtype=torch.long, device=device)
+    count = int(train_cfg.get("deployment_selector_scenes_per_rank", 0))
+    if count <= 0 or count >= batch_size:
+        return torch.arange(batch_size, dtype=torch.long, device=device)
+    # Rotate the exact scenes so every position receives predicted-selector
+    # supervision over a short window.  Rank offset is harmless because each DDP
+    # rank already owns a different sample shard.
+    rank = int(train_cfg.get("global_rank", 0))
+    start = (step * count + rank * count) % batch_size
+    return (torch.arange(count, device=device, dtype=torch.long) + start) % batch_size
+
+
+def _predicted_pair_certificate_masks(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    cfg: dict[str, Any],
+    scene_indices: torch.Tensor | None = None,
+) -> torch.Tensor:
     """Stop-gradient HAB masks for pair-conditioned action supervision.
 
     Runtime pair-conditioned BDSE selects atoms using signed atom-pair deltas
@@ -275,6 +346,11 @@ def _predicted_pair_certificate_masks(outputs: dict[str, torch.Tensor], batch: d
     parallel stop-gradient selection path so L_act can send gradients through
     the same pair-margin head used at deployment.
     """
+    full_batch_size = int(outputs["J0"].shape[0])
+    if scene_indices is not None:
+        scene_indices = scene_indices.to(device=outputs["J0"].device, dtype=torch.long)
+        outputs = _slice_scene_batch(outputs, scene_indices, full_batch_size)
+        batch = _slice_scene_batch(batch, scene_indices, full_batch_size)
     if "pair_atom_delta" not in outputs or "pair_indices" not in batch:
         return outputs["J0"].new_zeros(outputs["proposal_logits"].shape, dtype=torch.bool)
     e_cfg = cfg.get("evidence", {})
@@ -602,11 +678,18 @@ def _budgeted_tournament_scores(
     return scores
 
 
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    mask = mask.bool() & torch.isfinite(values)
+    safe = torch.where(mask, values, torch.zeros_like(values))
+    weights = mask.to(dtype=values.dtype)
+    return safe.sum() / weights.sum().clamp_min(1.0)
+
+
 def _weighted_mean(loss: torch.Tensor, weights: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    if mask.sum() == 0:
-        return loss.new_tensor(0.0)
-    w = weights.masked_fill(~mask, 0.0)
-    return (loss * w).sum() / w.sum().clamp_min(1e-6)
+    mask = mask.bool() & torch.isfinite(loss) & torch.isfinite(weights)
+    safe_loss = torch.where(mask, loss, torch.zeros_like(loss))
+    safe_weights = torch.where(mask, weights, torch.zeros_like(weights))
+    return (safe_loss * safe_weights).sum() / safe_weights.sum().clamp_min(1e-6)
 
 
 def _valid_row_scale(values: torch.Tensor, valid: torch.Tensor, min_scale: float = 1.0) -> torch.Tensor:
@@ -1083,19 +1166,17 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     if residual_target_clip > 0:
         residual_target_norm = residual_target_norm.clamp(-residual_target_clip, residual_target_clip)
     residual_weight = decision_w
-    if pair_train_mask.sum() > 0:
-        if normalize_pair_losses:
-            L_res_terms = F.huber_loss(
-                res_pred[pair_train_mask],
-                residual_target_norm[pair_train_mask],
-                delta=float(train_cfg.get("normalized_huber_delta", 1.0)),
-                reduction="none",
-            )
-        else:
-            L_res_terms = F.huber_loss(res_pred[pair_train_mask], residual_T[pair_train_mask], delta=1.0, reduction="none")
-        L_res = (L_res_terms * residual_weight[pair_train_mask]).sum() / residual_weight[pair_train_mask].sum().clamp_min(1e-6)
-    else:
-        L_res = J0.new_tensor(0.0)
+    residual_target_for_loss = residual_target_norm if normalize_pair_losses else residual_T
+    residual_delta = float(train_cfg.get("normalized_huber_delta", 1.0)) if normalize_pair_losses else 1.0
+    safe_res_pred = torch.where(pair_train_mask, res_pred, torch.zeros_like(res_pred))
+    safe_res_target = torch.where(pair_train_mask, residual_target_for_loss, torch.zeros_like(residual_target_for_loss))
+    L_res_terms = F.huber_loss(
+        safe_res_pred,
+        safe_res_target,
+        delta=residual_delta,
+        reduction="none",
+    )
+    L_res = _weighted_mean(L_res_terms, residual_weight, pair_train_mask)
 
     # Explicit action-conditioned local-cost supervision keeps the factorized
     # g_i(a) head usable for diagnostics/fallback.  For hard/safety atoms this
@@ -1181,22 +1262,21 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     base_margin_norm = (J_b_pair - J_a_pair) / pair_scale.clamp_min(1e-6) if normalize_pair_losses else (J_b_pair - J_a_pair)
     M_hat_E = base_margin_norm + pred_atom_delta.sum(dim=1)
     tau_rank = float(train_cfg.get("rank_tau", train_cfg.get("rank_margin", 1.0)))
-    if pair_train_mask.sum() > 0:
-        rank_terms = F.softplus(-M_hat_E[pair_train_mask] / max(tau_rank, 1e-6))
-        L_rank_cls = (decision_w[pair_train_mask] * rank_terms).sum() / decision_w[pair_train_mask].sum().clamp_min(1e-6)
-        target_margin_norm = batch["pair_margins"].float() / pair_scale.clamp_min(1e-6) if normalize_pair_losses else batch["pair_margins"].float()
-        if margin_target_clip > 0:
-            target_margin_norm = target_margin_norm.clamp(-margin_target_clip, margin_target_clip)
-        reg_terms = F.huber_loss(
-            M_hat_E[pair_train_mask],
-            target_margin_norm[pair_train_mask],
-            delta=float(train_cfg.get("pair_margin_reg_delta", 1.0)),
-            reduction="none",
-        )
-        L_rank_reg = (decision_w[pair_train_mask] * reg_terms).sum() / decision_w[pair_train_mask].sum().clamp_min(1e-6)
-        L_rank = L_rank_cls + float(train_cfg.get("pair_margin_reg_weight", 1.0)) * L_rank_reg
-    else:
-        L_rank = J0.new_tensor(0.0)
+    rank_terms = F.softplus(-M_hat_E / max(tau_rank, 1e-6))
+    L_rank_cls = _weighted_mean(rank_terms, decision_w, pair_train_mask)
+    target_margin_norm = batch["pair_margins"].float() / pair_scale.clamp_min(1e-6) if normalize_pair_losses else batch["pair_margins"].float()
+    if margin_target_clip > 0:
+        target_margin_norm = target_margin_norm.clamp(-margin_target_clip, margin_target_clip)
+    safe_rank_pred = torch.where(pair_train_mask, M_hat_E, torch.zeros_like(M_hat_E))
+    safe_rank_target = torch.where(pair_train_mask, target_margin_norm, torch.zeros_like(target_margin_norm))
+    reg_terms = F.huber_loss(
+        safe_rank_pred,
+        safe_rank_target,
+        delta=float(train_cfg.get("pair_margin_reg_delta", 1.0)),
+        reduction="none",
+    )
+    L_rank_reg = _weighted_mean(reg_terms, decision_w, pair_train_mask)
+    L_rank = L_rank_cls + float(train_cfg.get("pair_margin_reg_weight", 1.0)) * L_rank_reg
 
     target_sel = batch.get("oracle_selected_mask")
     decisive = batch.get("decisive_atom_mask")
@@ -1219,10 +1299,10 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         if decisive_hard is not None and bool(train_cfg.get("proposal_include_decisive_hard", False)):
             weights_prop = torch.where(decisive_hard.bool(), weights_prop * hard_w, weights_prop)
         mask_prop = e_mask & torch.isfinite(bce)
-        L_prop_bce = (bce[mask_prop] * weights_prop[mask_prop]).sum() / weights_prop[mask_prop].sum().clamp_min(1e-6) if mask_prop.sum() > 0 else J0.new_tensor(0.0)
+        L_prop_bce = _weighted_mean(bce, weights_prop, mask_prop)
     else:
         L_prop_bce = J0.new_tensor(0.0)
-    if gain is not None and e_mask.sum() > 0:
+    if gain is not None:
         target_gain = gain.float().masked_fill(~e_mask, 0.0)
         if bool(train_cfg.get("proposal_focus_interaction_only", True)):
             target_gain = target_gain * interaction_atom_mask.float()
@@ -1320,6 +1400,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     logits_action = None
     logits_pair = None
     pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
+    selector_exact_fraction = J0.new_tensor(0.0)
 
     if enable_action_loss and action_act_weight_cfg > 0.0:
         selected_mask, query_mask = _predicted_certificate_masks(out, batch, cfg)
@@ -1383,7 +1464,31 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     local_selector = dict(budget_cfg.get("selector", {}))
                     local_selector["margin_coreset_swap_passes"] = max(0, int(train_swap_passes))
                     budget_cfg["selector"] = local_selector
-                pair_selected_mask = _predicted_pair_certificate_masks(out, batch, budget_cfg) & pair_action_atom_mask
+                exact_scene_indices = _deployment_selector_scene_indices(
+                    int(J0.shape[0]), train_cfg, J0.device
+                )
+                if exact_scene_indices.numel() == int(J0.shape[0]):
+                    pair_selected_mask = _predicted_pair_certificate_masks(
+                        out, batch, budget_cfg
+                    ) & pair_action_atom_mask
+                else:
+                    # Existing oracle mask is already the epoch-0 curriculum.
+                    # Use it as the low-cost fallback while rotating exact
+                    # predicted-selector supervision across scenes.
+                    if target_sel is not None:
+                        pair_selected_mask = target_sel.bool() & pair_action_atom_mask
+                    else:
+                        pair_selected_mask = torch.zeros_like(pair_action_atom_mask)
+                    if exact_scene_indices.numel() > 0:
+                        exact_mask = _predicted_pair_certificate_masks(
+                            out, batch, budget_cfg, scene_indices=exact_scene_indices
+                        )
+                        exact_mask = exact_mask & pair_action_atom_mask.index_select(0, exact_scene_indices)
+                        pair_selected_mask = pair_selected_mask.clone()
+                        pair_selected_mask.index_copy_(0, exact_scene_indices, exact_mask)
+                selector_exact_fraction = J0.new_tensor(
+                    float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
+                )
                 budget_logits = _pair_conditioned_tournament_scores(
                     finite_J0,
                     pred_atom_delta,
@@ -1487,7 +1592,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     else:
         full_scale = _valid_row_scale(full_pred_cost, valid, min_scale=float(train_cfg.get("full_margin_min_scale", 100.0)))
     L_full_margin_terms = F.softplus((c_star - full_pred_cost) / (full_scale * max(float(train_cfg.get("full_margin_tau", 1.0)), 1e-6)))
-    L_full_margin = L_full_margin_terms[margin_mask].mean() if margin_mask.sum() > 0 else J0.new_tensor(0.0)
+    L_full_margin = _masked_mean(L_full_margin_terms, margin_mask)
 
     hard_mask = batch.get("teacher_hard_violation")
     if hard_mask is not None:
@@ -1498,7 +1603,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         feasible_pair = safe_mask.any(dim=1, keepdim=True) & hard_mask
         hard_scale = _valid_row_scale(batch["teacher_J_T"].float().masked_fill(~valid, 0.0), valid, min_scale=float(train_cfg.get("hard_feasibility_min_scale", 100.0))) if "teacher_J_T" in batch else _valid_row_scale(full_pred_cost, valid, min_scale=float(train_cfg.get("hard_feasibility_min_scale", 100.0)))
         L_hard_feas = F.softplus((safe_cost - hard_cost + float(train_cfg.get("hard_feasibility_margin", 10.0))) / (hard_scale * max(float(train_cfg.get("hard_feasibility_tau", 1.0)), 1e-6)))
-        L_hard_feas = L_hard_feas[feasible_pair].mean() if feasible_pair.sum() > 0 else J0.new_tensor(0.0)
+        L_hard_feas = _masked_mean(L_hard_feas, feasible_pair)
     else:
         L_hard_feas = J0.new_tensor(0.0)
     pair_act_weight = pair_act_weight_cfg if logits_pair is not None else 0.0
@@ -1508,16 +1613,16 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
 
     # Optional post-hoc-style calibration surrogate: penalize pair margin residuals
     # above the configured epsilon_cal so the validation quantile has a training signal.
-    if pair_mask.sum() > 0 and eps_cal > 0:
+    if eps_cal > 0:
         target_margin_for_cal = batch["pair_margins"].float() / pair_scale.clamp_min(1e-6) if normalize_pair_losses else batch["pair_margins"].float()
         if margin_target_clip > 0:
             target_margin_for_cal = target_margin_for_cal.clamp(-margin_target_clip, margin_target_clip)
-        cal_err = (M_hat_E[pair_mask] - target_margin_for_cal[pair_mask]).abs()
+        cal_err = (M_hat_E - target_margin_for_cal).abs()
         if bool(train_cfg.get("normalize_calibration_loss", True)):
             eps_train = float(train_cfg.get("epsilon_cal_normalized", 1.0))
         else:
             eps_train = eps_cal
-        L_cal = F.relu(cal_err - eps_train).mean()
+        L_cal = _masked_mean(F.relu(cal_err - eps_train), pair_mask)
     else:
         L_cal = J0.new_tensor(0.0)
 
@@ -1564,4 +1669,5 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_cert_gap": L_cert_gap if 'L_cert_gap' in locals() else J0.new_tensor(0.0),
         "L_cert_safety": L_cert_safety if 'L_cert_safety' in locals() else J0.new_tensor(0.0),
         "L_cert_frontier": L_cert_frontier if 'L_cert_frontier' in locals() else J0.new_tensor(0.0),
+        "selector_exact_fraction": selector_exact_fraction,
     }

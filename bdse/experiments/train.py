@@ -220,6 +220,7 @@ def _make_checkpoint(
     best_epoch: int | None,
     world_size: int,
     best_trackers: dict[str, dict[str, Any]] | None = None,
+    next_batch_index: int = 0,
 ) -> dict[str, Any]:
     raw_model = model.module if isinstance(model, DDP) else model
     return {
@@ -229,7 +230,8 @@ def _make_checkpoint(
         "cfg": cfg,
         "args": vars(args),
         "epoch": int(epoch),
-        "next_epoch": int(epoch) + 1,
+        "next_epoch": int(epoch) if int(next_batch_index) > 0 else int(epoch) + 1,
+        "next_batch_index": max(0, int(next_batch_index)),
         "metrics": {str(k): float(v) for k, v in metrics.items()},
         "best_metric": None if best_metric is None else float(best_metric),
         "best_epoch": None if best_epoch is None else int(best_epoch),
@@ -247,7 +249,7 @@ def _load_checkpoint_if_requested(
     scaler: Any,
     device: torch.device,
     is_main: bool,
-) -> tuple[int, float | None, int | None, dict[str, dict[str, Any]], Path | None]:
+) -> tuple[int, int, float | None, int | None, dict[str, dict[str, Any]], Path | None]:
     warm_start_from = getattr(args, "warm_start_from", None)
     if warm_start_from:
         ckpt_path = Path(warm_start_from)
@@ -264,9 +266,9 @@ def _load_checkpoint_if_requested(
             )
         if is_main:
             print(f"[bdse] warm-started weights from {ckpt_path}; optimizer/scaler/rng/epoch reset to 0", flush=True)
-        return 0, None, None, {}, ckpt_path
+        return 0, 0, None, None, {}, ckpt_path
     if not args.resume and not args.resume_from:
-        return 0, None, None, {}, None
+        return 0, 0, None, None, {}, None
     paths = _checkpoint_paths(args)
     ckpt_path = Path(args.resume_from) if args.resume_from else paths["latest"]
     if args.resume and not ckpt_path.exists() and paths["final"].exists():
@@ -277,7 +279,7 @@ def _load_checkpoint_if_requested(
             raise FileNotFoundError(f"resume checkpoint not found: {ckpt_path}")
         if is_main:
             print(f"[bdse] --resume requested but no checkpoint found at {paths['latest']}; starting from scratch.", flush=True)
-        return 0, None, None, {}, None
+        return 0, 0, None, None, {}, None
 
     ckpt = _torch_load_any(ckpt_path, map_location=device)
     state = ckpt.get("model", ckpt)
@@ -302,6 +304,7 @@ def _load_checkpoint_if_requested(
                 print(f"[bdse] warning: AMP scaler state was not restored: {type(exc).__name__}: {exc}", flush=True)
     _restore_rng_state(ckpt.get("rng_state") if isinstance(ckpt, dict) else None)
     start_epoch = int(ckpt.get("next_epoch", int(ckpt.get("epoch", -1)) + 1)) if isinstance(ckpt, dict) else 0
+    start_batch_index = max(0, int(ckpt.get("next_batch_index", 0))) if isinstance(ckpt, dict) else 0
     best_metric = ckpt.get("best_metric") if isinstance(ckpt, dict) else None
     best_metric = None if best_metric is None else float(best_metric)
     best_epoch = ckpt.get("best_epoch") if isinstance(ckpt, dict) else None
@@ -314,39 +317,57 @@ def _load_checkpoint_if_requested(
                 continue
             best_trackers[str(label)] = dict(rec)
     if is_main:
-        print(f"[bdse] resumed from {ckpt_path} at epoch={start_epoch}", flush=True)
-    return start_epoch, best_metric, best_epoch, best_trackers, ckpt_path
+        print(
+            f"[bdse] resumed from {ckpt_path} at epoch={start_epoch} batch_index={start_batch_index}",
+            flush=True,
+        )
+    return start_epoch, start_batch_index, best_metric, best_epoch, best_trackers, ckpt_path
 
 
 
 
-def _append_loss_meters(meters: dict[str, list[float]], losses: dict[str, torch.Tensor]) -> None:
-    """Append scalar losses with one device->host sync instead of one per key."""
-    items = [(str(k), v) for k, v in losses.items() if torch.is_tensor(v)]
-    if not items:
-        return
-    vals = torch.stack([v.detach().float().reshape(()) for _, v in items]).cpu().tolist()
-    for (k, _), v in zip(items, vals):
-        meters.setdefault(k, []).append(float(v))
+def _append_loss_meters(meters: dict[str, Any], losses: dict[str, torch.Tensor]) -> None:
+    """Accumulate loss scalars on-device without synchronizing every step.
 
-def _aggregate_meters(meters: dict[str, list[float]], device: torch.device, distributed: bool) -> dict[str, float]:
+    The previous implementation copied every scalar loss to CPU after each
+    optimizer update.  That introduces an implicit CUDA synchronization and is
+    particularly costly when the CPU selector is already on the critical path.
+    Host transfer now occurs only once per epoch in ``_aggregate_meters``.
+    """
+    for key, value in losses.items():
+        if not torch.is_tensor(value):
+            continue
+        scalar = value.detach().float().reshape(())
+        rec = meters.get(str(key))
+        if isinstance(rec, list) and len(rec) == 2 and torch.is_tensor(rec[0]):
+            rec[0].add_(scalar)
+            rec[1] += 1
+        else:
+            meters[str(key)] = [scalar.clone(), 1]
+
+
+def _aggregate_meters(meters: dict[str, Any], device: torch.device, distributed: bool) -> dict[str, float]:
     keys = sorted(meters)
     if not keys:
         return {}
     local = torch.zeros((len(keys), 2), dtype=torch.float64, device=device)
-    for i, k in enumerate(keys):
-        vals = [float(v) for v in meters.get(k, []) if np.isfinite(float(v))]
-        if vals:
-            local[i, 0] = float(np.sum(vals, dtype=np.float64))
-            local[i, 1] = float(len(vals))
+    for i, key in enumerate(keys):
+        rec = meters.get(key)
+        if isinstance(rec, list) and len(rec) == 2 and torch.is_tensor(rec[0]):
+            local[i, 0] = rec[0].to(device=device, dtype=torch.float64)
+            local[i, 1] = float(rec[1])
+            continue
+        values = [float(v) for v in (rec or []) if np.isfinite(float(v))]
+        if values:
+            local[i, 0] = float(np.sum(values, dtype=np.float64))
+            local[i, 1] = float(len(values))
     if distributed and dist.is_initialized():
         dist.all_reduce(local, op=dist.ReduceOp.SUM)
-    out: dict[str, float] = {}
-    for i, k in enumerate(keys):
-        count = float(local[i, 1].item())
-        out[k] = float(local[i, 0].item() / max(count, 1.0))
-    return out
-
+    cpu = local.cpu().numpy()
+    return {
+        key: float(cpu[i, 0] / max(cpu[i, 1], 1.0))
+        for i, key in enumerate(keys)
+    }
 
 def _prefix_metrics(metrics: dict[str, float], prefix: str) -> dict[str, float]:
     return {f"{prefix}{k}": float(v) for k, v in metrics.items()}
@@ -847,12 +868,16 @@ def main() -> None:
     parser.add_argument("--amp", action="store_true", help="Use CUDA mixed precision for faster training when available.")
     parser.add_argument("--local-rank", "--local_rank", dest="local_rank", type=int, default=None, help="Local rank passed by torchrun; normally inferred from LOCAL_RANK.")
     parser.add_argument("--prefetch-factor", type=int, default=None, help="DataLoader prefetch factor when num_workers > 0. Use 1 to reduce host/pinned-memory pressure.")
+    parser.add_argument("--selector-scenes-per-rank", type=int, default=None, help="Exact CPU deployment-selector scenes per DDP rank on sampled steps. 0 means the full local batch.")
+    parser.add_argument("--selector-every-n-steps", type=int, default=None, help="Run exact predicted-selector supervision every N optimizer steps before the final exact tail.")
+    parser.add_argument("--selector-full-last-n-steps", type=int, default=None, help="Use exact selector supervision for all local scenes during the final N training steps.")
     parser.add_argument("--no-pin-memory", action="store_true", help="Disable pinned host memory for DataLoader batches.")
     parser.add_argument("--resume", action="store_true", help="Resume from the latest checkpoint derived from --output, or from --resume-from when provided.")
     parser.add_argument("--resume-from", type=str, default=None, help="Explicit checkpoint path to resume from and continue its epoch counter.")
     parser.add_argument("--warm-start-from", type=str, default=None, help="Load only model weights from a checkpoint and start a new run at epoch 0. Use this for finetuning from a completed best checkpoint.")
     parser.add_argument("--checkpoint-dir", type=str, default=None, help="Directory for per-epoch checkpoints. Defaults to <output_dir>/checkpoints.")
     parser.add_argument("--save-every-n-epochs", type=int, default=1, help="Save an epoch checkpoint every N epochs. Set 0 to disable per-epoch files.")
+    parser.add_argument("--save-every-n-steps", type=int, default=0, help="Also update the latest checkpoint every N optimizer steps for mid-epoch recovery. Set 0 to disable.")
     parser.add_argument("--save-best", dest="save_best", action="store_true", default=True, help="Save <output_stem>.best.pt using --best-metric.")
     parser.add_argument("--no-save-best", dest="save_best", action="store_false", help="Disable best checkpoint saving.")
     parser.add_argument("--best-metric", type=str, default="auto", help="Primary metric used for backward-compatible <output_stem>.best.pt. 'auto' prefers val_bdse_score, then val_teacher_regret, then val_loss, then loss.")
@@ -886,6 +911,12 @@ def main() -> None:
         cfg["training"]["num_workers"] = max(0, int(args.num_workers))
     if args.prefetch_factor is not None:
         cfg["training"]["prefetch_factor"] = max(1, int(args.prefetch_factor))
+    if args.selector_scenes_per_rank is not None:
+        cfg["training"]["deployment_selector_scenes_per_rank"] = max(0, int(args.selector_scenes_per_rank))
+    if args.selector_every_n_steps is not None:
+        cfg["training"]["deployment_selector_every_n_steps"] = max(1, int(args.selector_every_n_steps))
+    if args.selector_full_last_n_steps is not None:
+        cfg["training"]["deployment_selector_full_last_n_steps"] = max(0, int(args.selector_full_last_n_steps))
     if args.no_pin_memory:
         cfg["training"]["pin_memory"] = False
     if args.seed is not None:
@@ -901,6 +932,11 @@ def main() -> None:
         print(f"[bdse] CUDA availability check failed; falling back to CPU: {type(exc).__name__}: {exc}", flush=True)
     if cuda_available:
         torch.cuda.manual_seed_all(seed)
+        if bool(cfg.get("training", {}).get("allow_tf32", True)):
+            if hasattr(torch, "set_float32_matmul_precision"):
+                torch.set_float32_matmul_precision("high")
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     distributed = world_size > 1
     local_rank = int(os.environ.get("LOCAL_RANK", args.local_rank if args.local_rank is not None else 0))
@@ -1002,9 +1038,22 @@ def main() -> None:
     _configure_trainable_modules(model, cfg, is_main)
     if distributed:
         find_unused = bool(cfg.get("training", {}).get("ddp_find_unused_parameters", True))
+        broadcast_buffers = bool(cfg.get("training", {}).get("ddp_broadcast_buffers", False))
+        gradient_as_bucket_view = bool(cfg.get("training", {}).get("ddp_gradient_as_bucket_view", True))
         if is_main:
-            print(f"[bdse] DDP find_unused_parameters={find_unused}", flush=True)
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=find_unused)
+            print(
+                f"[bdse] DDP find_unused_parameters={find_unused} "
+                f"broadcast_buffers={broadcast_buffers} gradient_as_bucket_view={gradient_as_bucket_view}",
+                flush=True,
+            )
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=find_unused,
+            broadcast_buffers=broadcast_buffers,
+            gradient_as_bucket_view=gradient_as_bucket_view,
+        )
     trainable_parameters = [p for p in model.parameters() if p.requires_grad]
     if not trainable_parameters:
         raise RuntimeError("no trainable parameters after applying training.trainable_modules")
@@ -1014,7 +1063,7 @@ def main() -> None:
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     else:
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-    start_epoch, best_metric, best_epoch, best_trackers, _ = _load_checkpoint_if_requested(
+    start_epoch, start_batch_index, best_metric, best_epoch, best_trackers, _ = _load_checkpoint_if_requested(
         args=args, model=model, optimizer=opt, scaler=scaler, device=device, is_main=is_main
     )
     log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
@@ -1028,9 +1077,14 @@ def main() -> None:
             sampler.set_epoch(epoch)
         model.train()
         epoch_wall_start = time.perf_counter()
-        meters: dict[str, list[float]] = {}
+        meters: dict[str, Any] = {}
         steps_per_epoch = max(1, len(loader))
+        cfg["training"]["steps_per_epoch"] = int(steps_per_epoch)
+        resume_at = int(start_batch_index) if epoch == start_epoch else 0
+        processed_steps = 0
         for batch_index, batch in enumerate(tqdm(loader, desc=f"epoch {epoch}", disable=not is_main)):
+            if batch_index < resume_at:
+                continue
             cfg["training"]["global_step"] = int(epoch * steps_per_epoch + batch_index)
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             opt.zero_grad(set_to_none=True)
@@ -1052,10 +1106,41 @@ def main() -> None:
             scaler.step(opt)
             scaler.update()
             _append_loss_meters(meters, losses)
+            processed_steps += 1
+            save_steps = max(0, int(getattr(args, "save_every_n_steps", 0)))
+            if (
+                save_steps > 0
+                and (batch_index + 1) % save_steps == 0
+                and (batch_index + 1) < steps_per_epoch
+            ):
+                if is_main:
+                    step_ckpt = _make_checkpoint(
+                        model=model,
+                        optimizer=opt,
+                        scaler=scaler,
+                        cfg=cfg,
+                        args=args,
+                        epoch=epoch,
+                        metrics={},
+                        best_metric=best_metric,
+                        best_epoch=best_epoch,
+                        world_size=world_size,
+                        best_trackers=best_trackers,
+                        next_batch_index=batch_index + 1,
+                    )
+                    _torch_save_atomic(step_ckpt, _checkpoint_paths(args)["latest"])
+                    print(
+                        f"[bdse] saved mid-epoch latest checkpoint: epoch={epoch} "
+                        f"next_batch_index={batch_index + 1}",
+                        flush=True,
+                    )
+                if distributed and dist.is_initialized():
+                    dist.barrier()
+        start_batch_index = 0
         epoch_metrics = _aggregate_meters(meters, device, distributed)
         epoch_wall_s = max(time.perf_counter() - epoch_wall_start, 1e-9)
         epoch_metrics["train_epoch_wall_time_s"] = float(epoch_wall_s)
-        epoch_metrics["train_samples_per_second"] = float(len(loader) * batch_size * world_size / epoch_wall_s)
+        epoch_metrics["train_samples_per_second"] = float(processed_steps * batch_size * world_size / epoch_wall_s)
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):
             if val_sampler is not None:
                 val_sampler.set_epoch(epoch)
