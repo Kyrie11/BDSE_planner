@@ -746,10 +746,46 @@ def _deployment_budget_entries_for_step(
     strategy = str(train_cfg.get("deployment_budget_strategy", "all")).strip().lower()
     if strategy in {"all", "full", "exact"} or len(entries) == 1:
         return entries
+    if strategy in {"primary_plus_aux", "primary+aux", "primary_aux"}:
+        primary_budget = float(train_cfg.get("deployment_primary_budget", entries[0][0]))
+        primary_idx = min(range(len(entries)), key=lambda i: abs(entries[i][0] - primary_budget))
+        primary = entries[primary_idx]
+        aux = [entry for i, entry in enumerate(entries) if i != primary_idx]
+        if not aux:
+            return [primary]
+        # Always optimize the paper's primary fixed budget.  The auxiliary slot
+        # is deterministically sampled in proportion to the remaining weights.
+        # Giving it the total auxiliary mass makes the per-step weighted mean an
+        # unbiased estimator of the full any-budget objective.
+        aux_total = sum(weight for _, weight in aux)
+        slots = max(len(aux), int(train_cfg.get("deployment_budget_schedule_slots", 16)))
+        raw = [weight / aux_total * slots for _, weight in aux]
+        counts = [max(1, int(round(value))) for value in raw]
+        while sum(counts) > slots:
+            candidates = [i for i, count in enumerate(counts) if count > 1]
+            if not candidates:
+                break
+            idx = max(candidates, key=lambda i: counts[i] - raw[i])
+            counts[idx] -= 1
+        while sum(counts) < slots:
+            idx = max(range(len(counts)), key=lambda i: raw[i] - counts[i])
+            counts[idx] += 1
+        schedule: list[float] = []
+        remaining = counts[:]
+        while any(count > 0 for count in remaining):
+            for i, (budget, _) in enumerate(aux):
+                if remaining[i] > 0:
+                    schedule.append(float(budget))
+                    remaining[i] -= 1
+        step = int(train_cfg.get("global_step", 0))
+        rank = int(train_cfg.get("global_rank", 0))
+        world = max(1, int(train_cfg.get("world_size", 1)))
+        slot = (step * world + rank) % max(len(schedule), 1)
+        return [(float(primary[0]), float(primary[1])), (float(schedule[slot]), float(aux_total))]
     if strategy not in {"weighted_round_robin", "sampled", "stratified"}:
         raise ValueError(
             "training.deployment_budget_strategy must be one of "
-            "all|weighted_round_robin; got %r" % strategy
+            "all|weighted_round_robin|primary_plus_aux; got %r" % strategy
         )
 
     # Convert arbitrary positive weights to a compact deterministic slot table.
@@ -1064,11 +1100,24 @@ def _certificate_action_gap_loss(
     has_hard = h.any(dim=1)
     has_safe = safe.any(dim=1)
     safe_margin = float(gc.get("safety_margin", margin))
-    L_safe_terms = F.softplus((best_hard - tscore + safe_margin) / tau)
+    # Mask *before* softplus.  Computing softplus on sentinel differences and
+    # multiplying by a zero mask afterwards is numerically unsafe: an all-hard
+    # scene has best_safe=-mask_sentinel, which can yield inf, and inf*0 is NaN.
+    safe_arg = torch.where(
+        has_hard,
+        (best_hard - tscore + safe_margin) / tau,
+        torch.zeros_like(best_hard),
+    )
+    L_safe_terms = F.softplus(safe_arg)
     L_safe = (L_safe_terms * has_hard.float()).sum() / has_hard.float().sum().clamp_min(1.0)
     frontier_margin = float(gc.get("safe_frontier_margin", safe_margin))
-    frontier_terms = F.softplus((best_hard - best_safe + frontier_margin) / tau)
     frontier_mask = has_hard & has_safe
+    frontier_arg = torch.where(
+        frontier_mask,
+        (best_hard - best_safe + frontier_margin) / tau,
+        torch.zeros_like(best_hard),
+    )
+    frontier_terms = F.softplus(frontier_arg)
     L_frontier = (frontier_terms * frontier_mask.float()).sum() / frontier_mask.float().sum().clamp_min(1.0)
     return L_gap, L_safe, L_frontier
 
@@ -1094,7 +1143,25 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     lw = train_cfg.get("loss_weights", {})
 
     finite_J0 = torch.where(torch.isfinite(J0), J0, torch.zeros_like(J0))
-    L_base = robust_loss(finite_J0, J_base_T, valid)
+    if bool(train_cfg.get("normalize_base_loss", False)):
+        base_scale = _valid_row_scale(
+            J_base_T.masked_fill(~valid, 0.0),
+            valid,
+            min_scale=float(train_cfg.get("base_loss_min_scale", 100.0)),
+        )
+        base_center = (
+            torch.where(valid, J_base_T, torch.zeros_like(J_base_T)).sum(dim=1, keepdim=True)
+            / valid.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+        ).detach()
+        pred_base_norm = (finite_J0 - base_center) / base_scale
+        target_base_norm = (J_base_T - base_center) / base_scale
+        base_clip = float(train_cfg.get("base_target_clip_normalized", 0.0))
+        if base_clip > 0.0:
+            pred_base_norm = pred_base_norm.clamp(-base_clip, base_clip)
+            target_base_norm = target_base_norm.clamp(-base_clip, base_clip)
+        L_base = robust_loss(pred_base_norm, target_base_norm, valid)
+    else:
+        L_base = robust_loss(finite_J0, J_base_T, valid)
 
     g_a, g_b = pair_gather(g, pairs)
     pair_mask = pair_valid & torch.isfinite(residual_T)
@@ -1400,6 +1467,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     logits_action = None
     logits_pair = None
     pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
+    deployment_mask_entries: list[tuple[float, torch.Tensor, torch.Tensor]] = []
     selector_exact_fraction = J0.new_tensor(0.0)
 
     if enable_action_loss and action_act_weight_cfg > 0.0:
@@ -1486,8 +1554,14 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                         exact_mask = exact_mask & pair_action_atom_mask.index_select(0, exact_scene_indices)
                         pair_selected_mask = pair_selected_mask.clone()
                         pair_selected_mask.index_copy_(0, exact_scene_indices, exact_mask)
+                exact_scene_mask = torch.zeros((int(J0.shape[0]),), dtype=torch.bool, device=J0.device)
+                if exact_scene_indices.numel() > 0:
+                    exact_scene_mask.index_fill_(0, exact_scene_indices, True)
                 selector_exact_fraction = J0.new_tensor(
                     float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
+                )
+                deployment_mask_entries.append(
+                    (max(float(budget_weight), 0.0), pair_selected_mask.detach(), exact_scene_mask)
                 )
                 budget_logits = _pair_conditioned_tournament_scores(
                     finite_J0,
@@ -1508,6 +1582,31 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 if distance < primary_distance:
                     logits_pair = budget_logits
                     primary_distance = distance
+
+    # Stop-gradient deployment-selection distillation.  The CPU margin-coreset
+    # selector is discrete, so action loss alone cannot teach proposal logits
+    # which atoms survive the fixed budget.  Distilling the exact runtime masks
+    # into the proposal head closes that training/deployment gap without changing
+    # the deployed selector or the paper's fixed-budget semantics.
+    if deployment_mask_entries:
+        target_mass = torch.zeros_like(out["proposal_logits"])
+        weight_mass = torch.zeros((int(J0.shape[0]), 1), dtype=target_mass.dtype, device=target_mass.device)
+        for mask_weight, selected_mask, exact_scene_mask in deployment_mask_entries:
+            if mask_weight <= 0.0:
+                continue
+            scene_weight = exact_scene_mask[:, None].float() * float(mask_weight)
+            target_mass = target_mass + selected_mask.float() * scene_weight
+            weight_mass = weight_mass + scene_weight
+        deploy_target = target_mass / weight_mass.clamp_min(1e-6)
+        deploy_mask = e_mask & (weight_mass > 0.0)
+        deploy_bce = F.binary_cross_entropy_with_logits(
+            out["proposal_logits"], deploy_target, reduction="none"
+        )
+        deploy_pos_weight = float(train_cfg.get("deployment_selection_positive_weight", 4.0))
+        deploy_weights = 1.0 + (deploy_pos_weight - 1.0) * deploy_target
+        L_deploy_select = _weighted_mean(deploy_bce, deploy_weights, deploy_mask)
+    else:
+        L_deploy_select = J0.new_tensor(0.0)
 
     L_cert_gap, L_cert_safety, L_cert_frontier = _certificate_action_gap_loss(logits_pair, target_action, valid, hard_action, cfg)
 
@@ -1642,6 +1741,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("calibration", 0.0)) * L_cal
         + float(lw.get("critical_pair", 0.0)) * L_cace_pair
         + float(lw.get("critical_proposal", 0.0)) * L_cace_prop
+        + float(lw.get("deployment_selection", 0.0)) * L_deploy_select
         + float(lw.get("certificate_gap", 0.0)) * L_cert_gap
         + float(lw.get("certificate_safety", 0.0)) * L_cert_safety
         + float(lw.get("certificate_safe_frontier", 0.0)) * L_cert_frontier
@@ -1666,6 +1766,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_cal": L_cal,
         "L_cace_pair": L_cace_pair if 'L_cace_pair' in locals() else J0.new_tensor(0.0),
         "L_cace_prop": L_cace_prop if 'L_cace_prop' in locals() else J0.new_tensor(0.0),
+        "L_deploy_select": L_deploy_select if 'L_deploy_select' in locals() else J0.new_tensor(0.0),
         "L_cert_gap": L_cert_gap if 'L_cert_gap' in locals() else J0.new_tensor(0.0),
         "L_cert_safety": L_cert_safety if 'L_cert_safety' in locals() else J0.new_tensor(0.0),
         "L_cert_frontier": L_cert_frontier if 'L_cert_frontier' in locals() else J0.new_tensor(0.0),

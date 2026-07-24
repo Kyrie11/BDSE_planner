@@ -422,7 +422,19 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     budget_full = finite("val_budget_vs_full_match", 0.0)
     teacher_match = finite("val_teacher_action_match", finite("val_decision_sufficiency", 0.0))
     interaction_recall = finite("val_selected_interaction_decisive_recall", 0.0)
-    hard_recall = finite("val_selected_hard_decisive_recall", finite("val_hard_evidence_recall", 0.0))
+    # Structural hard-safety evidence is intentionally budget-exempt in the
+    # deployed algorithm.  Prefer the effective recall metric so checkpointing
+    # does not penalize the model for not spending decision budget on mandatory
+    # safety checks.
+    hard_recall = finite(
+        "val_effective_hard_decisive_recall",
+        finite("val_selected_hard_decisive_recall", finite("val_hard_evidence_recall", 0.0)),
+    )
+    decisive_recall = finite(
+        "val_effective_selected_decisive_atom_recall",
+        finite("val_selected_decisive_atom_recall", 0.0),
+    )
+    full_match = finite("val_full_interface_action_match", 0.0)
     near_sign = finite("val_pair_sign_acc_near_tie", 0.0)
     sufficiency = finite("val_evidence_sufficiency", 0.0)
     fallback = finite("val_fallback_would_trigger_rate", 0.0)
@@ -442,6 +454,8 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     return float(
         160.0 * budget_full
         + 80.0 * teacher_match
+        + 40.0 * full_match
+        + 20.0 * decisive_recall
         + 35.0 * interaction_recall
         + 35.0 * hard_recall
         + 20.0 * near_sign
@@ -835,6 +849,7 @@ def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
 
     budgets = train_cfg.get("deployment_budgets", None)
     weights = train_cfg.get("deployment_budget_weights", None)
+    parsed: list[float] | None = None
     if budgets is not None:
         if not isinstance(budgets, (list, tuple)) or not budgets:
             raise ValueError("training.deployment_budgets must be a non-empty list")
@@ -847,6 +862,37 @@ def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
             parsed_weights = [float(x) for x in weights]
             if any((not np.isfinite(x)) or x < 0.0 for x in parsed_weights) or sum(parsed_weights) <= 0.0:
                 raise ValueError("training.deployment_budget_weights must be non-negative with positive total mass")
+
+    strategy = str(train_cfg.get("deployment_budget_strategy", "all")).strip().lower()
+    allowed_strategies = {"all", "full", "exact", "weighted_round_robin", "sampled", "stratified", "primary_plus_aux", "primary+aux", "primary_aux"}
+    if strategy not in allowed_strategies:
+        raise ValueError(f"unsupported training.deployment_budget_strategy={strategy!r}")
+    if strategy in {"primary_plus_aux", "primary+aux", "primary_aux"}:
+        if parsed is None:
+            raise ValueError("primary_plus_aux requires training.deployment_budgets")
+        primary = float(train_cfg.get("deployment_primary_budget", float("nan")))
+        if not np.isfinite(primary):
+            raise ValueError("primary_plus_aux requires finite training.deployment_primary_budget")
+        if min(abs(value - primary) for value in parsed) > 1e-6:
+            raise ValueError("training.deployment_primary_budget must be present in training.deployment_budgets")
+
+    min_exact = train_cfg.get("min_deployment_exact_fraction", None)
+    if min_exact is not None and not allow_oracle_only:
+        min_exact = float(min_exact)
+        if not (0.0 <= min_exact <= 1.0):
+            raise ValueError("training.min_deployment_exact_fraction must be in [0, 1]")
+        batch_size = max(1, int(train_cfg.get("batch_size", 1)))
+        scene_count = int(train_cfg.get("deployment_selector_scenes_per_rank", 0))
+        scene_fraction = 1.0 if scene_count <= 0 else min(scene_count, batch_size) / float(batch_size)
+        cadence = max(1, int(train_cfg.get("deployment_selector_every_n_steps", 1)))
+        expected_fraction = scene_fraction / float(cadence)
+        if expected_fraction + 1e-12 < min_exact:
+            raise ValueError(
+                "Deployment selector exact-supervision fraction is below the configured floor: "
+                f"expected~{expected_fraction:.6f}, required>={min_exact:.6f}. "
+                "Use deployment_selector_scenes_per_rank=0 (all local scenes) and "
+                "deployment_selector_every_n_steps=1 for exact deployment alignment."
+            )
 
 
 def main() -> None:
@@ -1100,6 +1146,25 @@ def main() -> None:
                 loss_autocast_ctx = torch.cuda.amp.autocast(enabled=False)
             with loss_autocast_ctx:
                 losses = compute_bdse_losses(out, batch, cfg)
+
+            # Never let an invalid objective silently turn a finetuning run into
+            # repeated GradScaler step skips.  Check every scalar component and
+            # synchronize the decision across DDP ranks so all workers abort
+            # together instead of hanging in the next collective.
+            nonfinite_names = [
+                name for name, value in losses.items()
+                if torch.is_tensor(value) and value.numel() == 1 and not bool(torch.isfinite(value.detach()).item())
+            ]
+            local_finite = torch.tensor(0 if nonfinite_names else 1, dtype=torch.int32, device=device)
+            if distributed and dist.is_initialized():
+                dist.all_reduce(local_finite, op=dist.ReduceOp.MIN)
+            if int(local_finite.item()) == 0:
+                detail = ", ".join(nonfinite_names) if nonfinite_names else "non-finite loss on another DDP rank"
+                raise FloatingPointError(
+                    f"Non-finite training objective at epoch={epoch} batch_index={batch_index} "
+                    f"global_step={cfg['training']['global_step']}: {detail}"
+                )
+
             scaler.scale(losses["loss"]).backward()
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(trainable_parameters, float(cfg["training"]["grad_clip"]))

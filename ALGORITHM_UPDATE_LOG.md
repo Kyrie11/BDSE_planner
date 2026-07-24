@@ -928,3 +928,200 @@ full-interface diagnostics.
   PlanTF, PLUTO, or PDM-Closed implementations.
 - Do not use mean teacher regret alone; its distribution is strongly
   heavy-tailed.
+
+---
+
+## v45 — PB-RADS: Primary-Budget Exact Deployment Supervision and Mask Distillation
+
+### Empirical diagnosis of the uploaded v44 run
+
+The uploaded `output_v44_rads_fast_2gpu_v2` run does **not** pass the v44
+open-loop gate and should not be used as evidence that RADS training improved
+the model.
+
+Observed B=16 / 1000-scenario metrics:
+
+| Metric | v44 | frozen v30/MARS control or previous reference | Interpretation |
+|---|---:|---:|---|
+| teacher action match | 0.246 | 0.238 | +0.008, below the required +0.020 |
+| full-interface teacher match | 0.269 | about 0.265 | dense model remains a low ceiling |
+| budget-vs-full match | 0.221 | 0.205 | improved, but still low |
+| winner/rival pair-sign accuracy | 0.6564 | about 0.6384 | useful improvement |
+| evidence sufficiency | 0.0820 | about 0.071 | small absolute gain; median is zero |
+| proposal decisive-atom recall | 0.8320 | high | proposal is not the main bottleneck |
+| selected decisive-atom recall | 0.3989 | low | fixed-budget allocation remains the bottleneck |
+| selected interaction decisive recall | 0.3444 | low | critical interaction evidence is often dropped |
+| MARS target-action preservation | 0.944 | 0.951 in prior fixed-budget runs | selector preservation regressed |
+| p95 planner latency | 1096.7 ms | deployment target not met | not real-time at the configured replan rate |
+
+The v44 per-sample regret distribution is heavy-tailed: median approximately
+26.1, p90 approximately 30.8k, p95 approximately 45.7k, and CVaR90
+approximately 52.6k. The frozen control JSONL was not included in the uploaded
+archive, so the required median/p90 non-regression condition cannot be verified.
+
+### P0 training-validity failure
+
+Every row of `bdse_v44_rads.train_log.jsonl` has:
+
+```text
+loss = NaN
+L_cert_frontier = NaN
+```
+
+The source is `_certificate_action_gap_loss`. When a scene has hard candidates
+but no safe candidate, `best_safe` is a large negative masking sentinel. The
+code evaluates `softplus(best_hard - best_safe)` before applying
+`frontier_mask=0`; the result is `inf * 0 = NaN`. AMP/GradScaler can then skip
+optimizer steps without making the run fail. Therefore the small v44 metric
+changes may come from runtime configuration, checkpoint selection noise, or a
+partially/fully skipped finetune rather than a clean algorithmic update.
+
+### P0 deployment-supervision mismatch
+
+The v44 README states that epochs 1--11 use exact runtime masks and that each
+batch optimizes B=8/16/24. The fast configuration actually uses:
+
+```yaml
+deployment_selector_scenes_per_rank: 2  # local batch is 4
+deployment_selector_every_n_steps: 2
+deployment_budget_strategy: weighted_round_robin
+```
+
+Thus exact predicted-selector masks cover about `2/4 * 1/2 = 25%` of local
+scene-steps. Weighted round-robin evaluates one budget per rank-step, with B=16
+on about half the slots. The primary B=16 exact deployment path therefore
+receives only about 12.5% scene-step coverage before the short final exact tail.
+The measured epoch metric `selector_exact_fraction=0.25` confirms this mismatch.
+
+### Algorithmic diagnosis
+
+1. **The dense interface is the upstream ceiling.** Full-interface teacher match
+   is only 0.269. A perfect budget selector cannot produce theoretical SOTA if
+   the complete learned evidence interface still chooses the teacher action in
+   only about one quarter of scenes.
+2. **Proposal recall is high but selected recall is low.** The 0.832 proposal
+   recall versus 0.399 selected recall localizes the current fixed-budget
+   failure to within-Top-M allocation and signed-margin preservation, not to
+   candidate atom discovery.
+3. **Action agreement is not evidence sufficiency.** Budget-vs-full match is
+   0.221 while evidence sufficiency is 0.082 with median zero. The selector can
+   occasionally reproduce an action without reconstructing or certifying the
+   decisive margin. Paper claims must prioritize one-sided decisive-margin
+   coverage rather than action agreement alone.
+4. **The paper and runtime selector are not the same algorithm.** The paper
+   describes uncertainty-aware capped LCB greedy selection with a submodular
+   interpretation, while the deployed v44 path is a signed MARS margin coreset
+   with swap passes and uncertainty disabled. The theoretical objective,
+   implementation, and ablations must be made identical before submission.
+5. **Structural safety and decision budget are conflated in reporting.** Hard
+   safety is budget-exempt in the implementation. Report structural mandatory
+   safety coverage separately from budgeted critical-evidence recall; do not
+   call raw selected hard recall a failure when the atom is intentionally in the
+   structural channel.
+6. **Checkpoint selection was noisy.** Validation used 256 scenes and selected
+   by teacher action match, reaching 0.3906 on the small validation subset but
+   only 0.246 on the fixed 1000-scene evaluation. This is selection variance,
+   not a stable generalization gain.
+
+### v45 changes implemented
+
+1. **Finite certificate losses.** Safety and safe-frontier masks are applied
+   before `softplus`, eliminating sentinel overflow and `inf * 0`.
+2. **Synchronized fail-fast.** Every scalar loss is checked for finiteness before
+   backward. A DDP all-reduce makes every rank abort together on any invalid
+   objective.
+3. **Primary-plus-aux budget schedule.** B=16 is optimized on every deployment
+   step. One auxiliary budget (B=8 or B=24) rotates with the correct aggregate
+   any-budget weighting.
+4. **Full exact deployment alignment.** The recommended configuration uses all
+   local scenes every step after epoch 0 and enforces
+   `min_deployment_exact_fraction=1.0` at startup.
+5. **Deployment-mask distillation.** Exact stop-gradient MARS masks from the
+   active budgets produce a soft selected-frequency target for proposal logits.
+   This is the missing direct signal from discrete fixed-budget selection back
+   to the learned proposal head; deployment behavior itself is unchanged.
+6. **Core-claim checkpointing.** Fixed-budget critical score now includes dense
+   full-interface match and effective decisive recall, and treats budget-exempt
+   hard safety through effective hard recall. The run uses 1000-scene dense
+   validation and saves metric-specific checkpoints.
+7. **Strict gate tool.** `check_v45_pb_rads_gate.py` verifies finite training,
+   exact selector coverage, +2 point teacher-match gain, median/p90 regret
+   non-regression, winner/rival sign gain, material evidence-sufficiency gain,
+   and a user-specified p95 latency target.
+8. **Optional base normalization support.** Code supports per-scene normalized
+   base-cost regression, but it is disabled in the first v45 run to keep the
+   validity-controlled comparison isolated. Enable it only as a separate
+   ablation after v45.
+
+### Modified / added files
+
+- `bdse/model/losses.py`
+- `bdse/experiments/train.py`
+- `bdse/configs/v45_bdse_pb_rads_train_exact_2gpu.yaml`
+- `bdse/configs/v45_bdse_pb_rads_fast_cl.yaml`
+- `bdse/configs/v45_bdse_pb_rads_b8_fast_cl.yaml`
+- `bdse/configs/v45_bdse_pb_rads_b24_fast_cl.yaml`
+- `bdse/tools/check_v45_pb_rads_gate.py`
+- `bdse/tests/test_v45_pb_rads.py`
+- `run_v45_pb_rads.sh`
+- `README_V45_PB_RADS.md`
+- `ALGORITHM_UPDATE_LOG.md`
+
+### Validation completed in the delivery environment
+
+- all Python files compile;
+- `bash -n run_v45_pb_rads.sh` passes;
+- complete test suite: **142 passed, 5 warnings**;
+- a regression test reproduces the all-hard/no-safe v44 NaN case and confirms
+  finite certificate losses;
+- schedule tests reject the v44 25% exact-supervision configuration when the
+  v45 100% floor is requested;
+- primary-plus-aux tests confirm B=16 is present on every rank-step and B=8/B=24
+  are balanced across the deterministic schedule.
+
+### Required next experiment
+
+Warm-start from the frozen v30 checkpoint, not the v44 checkpoint. The v44
+checkpoint cannot be trusted because the optimization objective was non-finite.
+Use the exact command in `README_V45_PB_RADS.md`, then run the strict gate against
+the same frozen v30/MARS 1000-scenario JSON/JSONL.
+
+### Next decision rule
+
+- **If v45 passes:** run paired CL20 on exactly the same scenario tokens as the
+  control. Proceed to CL100 only if safety is non-inferior and the primary
+  closed-loop score improves.
+- **If full-interface match rises but budgeted match/sufficiency does not:** the
+  next algorithm should replace independent signed coreset selection with one
+  nested, anytime one-sided certificate ordering; do not tune quotas or add
+  another online repair search.
+- **If full-interface match remains below 0.30:** stop changing the selector.
+  Improve pair-margin representation with hard-rival mining, antisymmetric
+  cycle consistency, and teacher-cost calibration first.
+- **If latency remains above 500 ms p95:** profile proposal construction,
+  pair-score materialization, CPU selector transfer, and utility refinement.
+  Do not claim real-time planning from two-GPU shard wall time.
+
+### CCF-A novelty path after a valid v45 result
+
+The strongest theory-aligned extension is an **anytime one-sided adverse-bound
+certificate coreset**. For each predicted winner--rival pair, assign every
+unqueried atom a calibrated adverse contribution bound. Querying an atom removes
+that worst-case penalty and replaces it with its observed lower-confidence
+margin contribution. Capped reduction of certificate deficit is monotone
+submodular under a knapsack budget, yielding a standard greedy approximation
+bound and a single nested ordering valid for every budget. This directly serves
+the paper's central idea and avoids another ad-hoc quota/search variant. It
+should be implemented only after v45 establishes that the learned dense margin
+interface is accurate enough to support such a guarantee.
+
+### Do not repeat
+
+- Do not continue from the v44 checkpoint.
+- Do not interpret v44's +0.8 point match change as a trained-model gain.
+- Do not use 256-scene validation to select the final checkpoint.
+- Do not spend more compute on beam/layer/DACC repair or quota sweeps.
+- Do not increase B or Top-M to hide low evidence sufficiency.
+- Do not report two-GPU shard throughput as per-replan latency.
+- Do not claim a submodular/uncertainty selector theorem while deploying MARS
+  with uncertainty disabled.
