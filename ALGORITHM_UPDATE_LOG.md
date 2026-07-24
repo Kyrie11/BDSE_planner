@@ -1125,3 +1125,77 @@ interface is accurate enough to support such a guarantee.
 - Do not report two-GPU shard throughput as per-replan latency.
 - Do not claim a submodular/uncertainty selector theorem while deploying MARS
   with uncertainty disabled.
+
+---
+
+## v45-fast — GPU Margin-Damage Training Surrogate with Sampled Exact Distillation
+
+### Trigger
+
+The full-exact v45 training command required almost one day for five epochs on
+2xA30 with a Xeon Gold 5220R. The DDP topology was correct; profiling the code
+showed that each rank synchronously executed the CPU/NumPy runtime selector for
+all four local scenes and two budgets on every optimizer step.
+
+### Root cause
+
+- `_predicted_pair_certificate_masks()` calls `.detach().cpu().numpy()` on the
+  pair-margin field and proposal state, forcing a GPU synchronization.
+- The signed MARS coreset then performs backward elimination in Python/NumPy.
+- `primary_plus_aux` repeats the full conversion, Top-M construction, and search
+  for B=16 plus B=8/B=24.
+- At global batch eight and 50k scenarios there are approximately 6250 steps per
+  epoch. A synthetic v45-sized batch measured about 0.57 s for one exact budget
+  on four scenes; two budgets therefore consume more than one second per rank
+  per step before forward/backward.
+- DDP amplifies this CPU imbalance because gradient synchronization cannot begin
+  until both ranks finish their local selector.
+- 1000-scene validation every two epochs with dense diagnostics performs an
+  additional dense inference and adds avoidable wall time.
+
+### Changes
+
+1. Added `training.deployment_selector_backend=hybrid_fast`.
+2. Added a GPU margin-damage surrogate that computes all configured budgets in
+   one nested ranking. Its atom score approximates exact MARS removal damage
+   using signed-margin residual, sign mismatch, winner protection, and predicted
+   action preservation.
+3. Exact runtime masks remain the target for `L_deploy_select`, sampled using
+   `deployment_exact_distill_scenes_per_rank` and
+   `deployment_exact_distill_every_n_steps`.
+4. Added surrogate/exact Jaccard agreement and separate fast/exact selector wall
+   times to the train log.
+5. Added per-stage epoch timing for data wait, host-to-device transfer, forward,
+   loss construction, and backward/optimizer step.
+6. Added a fast training configuration and launcher with reduced intermediate
+   validation and checkpoint I/O. Final 1000-scene open-loop evaluation remains
+   unchanged.
+7. Added a synthetic selector benchmark and regression tests for nested masks,
+   budget compliance, and fast-backend schedule validation.
+
+### Validation
+
+- Complete suite: **144 passed, 5 warnings**.
+- Synthetic CPU benchmark at B=4, K=32, E=128, P=192:
+  - exact full local batch, one budget: about 0.57 s;
+  - exact one-scene distillation: about 0.137 s;
+  - fast all-scene B=8+B=16 masks: about 0.006 s.
+- With one exact scene every four steps, the selector-only path is reduced by
+  roughly an order of magnitude or more; end-to-end speedup depends on model,
+  cache storage, and validation overhead.
+
+### Scientific constraint
+
+Runtime/open-loop/closed-loop evaluation still uses the exact deployed MARS
+selector. The GPU surrogate is only a structured training approximation. Final
+results must include a smaller exact-all-scenes ablation and report the exact
+mask sampling rate plus surrogate/exact agreement.
+
+### Do not repeat
+
+- Do not set all-scene exact CPU selection for every budget on every training
+  step merely to claim deployment alignment.
+- Do not interpret low GPU utilization as a DDP failure before checking
+  `selector_exact_wall_time_s` and `train_loss_ms_per_step`.
+- Do not enable dense 1000-scene validation every two epochs during exploratory
+  training; retain it for final evaluation and selected checkpoints.

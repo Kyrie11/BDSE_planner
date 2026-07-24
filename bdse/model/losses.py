@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import time
 
 import numpy as np
 import torch
@@ -593,6 +594,258 @@ def _predicted_pair_certificate_masks(
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)
+
+
+
+def _deployment_exact_distill_scene_indices(
+    batch_size: int,
+    train_cfg: dict[str, Any],
+    device: torch.device,
+) -> torch.Tensor:
+    """Sample scenes for expensive exact CPU-mask distillation.
+
+    The action loss may use the fast GPU margin surrogate on every scene, while
+    exact runtime masks are sampled only to supervise the proposal head.  This
+    keeps the fixed-budget pathway trained without forcing every DDP rank to
+    block on serial NumPy selector search at every optimizer step.
+    """
+    local_cfg = dict(train_cfg)
+    local_cfg["deployment_selector_scenes_per_rank"] = int(
+        train_cfg.get(
+            "deployment_exact_distill_scenes_per_rank",
+            train_cfg.get("deployment_selector_scenes_per_rank", 1),
+        )
+    )
+    local_cfg["deployment_selector_every_n_steps"] = int(
+        train_cfg.get(
+            "deployment_exact_distill_every_n_steps",
+            train_cfg.get("deployment_selector_every_n_steps", 4),
+        )
+    )
+    local_cfg["deployment_selector_full_last_n_steps"] = int(
+        train_cfg.get("deployment_exact_distill_full_last_n_steps", 0)
+    )
+    return _deployment_selector_scene_indices(batch_size, local_cfg, device)
+
+
+def _fast_topm_mask_torch(
+    proposal_logits: torch.Tensor,
+    active_mask: torch.Tensor,
+    costs: torch.Tensor,
+    family_ids: torch.Tensor,
+    evidence_features: torch.Tensor | None,
+    cfg: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """GPU Top-M approximation used only by the training-time fast surrogate.
+
+    It preserves the deployment-critical constraints used by v45: inactive and
+    structural safety atoms are excluded from the decision budget, and a fixed
+    number of soft interaction atoms is reserved in Top-M.  Runtime evaluation
+    continues to use the exact HAB implementation.
+    """
+    s_cfg = cfg.get("selector", {})
+    B, E = proposal_logits.shape
+    M = min(max(int(s_cfg.get("proposal_top_m", 64)), 1), E)
+    active = active_mask.bool() & torch.isfinite(costs) & (costs > 0)
+    hard_feature = (
+        evidence_features[..., 0] > 0.5
+        if evidence_features is not None and evidence_features.ndim >= 3 and evidence_features.shape[-1] > 0
+        else torch.zeros_like(active)
+    )
+    structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
+    include_feasibility = bool(s_cfg.get("structural_safety_include_feasibility", True))
+    structural = hard_feature | ((family_ids == 1) if include_feasibility else torch.zeros_like(active))
+    if structural_bypass:
+        active = active & ~structural
+
+    interaction_ids = [int(x) for x in s_cfg.get("interaction_family_ids", [2, 3])]
+    interaction = torch.zeros_like(active)
+    for fam in interaction_ids:
+        interaction |= family_ids == fam
+    soft_interaction = active & interaction & ~hard_feature
+    reserve = max(0, int(s_cfg.get("min_soft_interaction_topm_slots", 0)))
+
+    neg_inf = torch.finfo(proposal_logits.dtype).min
+    topm_mask = torch.zeros_like(active)
+    row = torch.arange(B, device=proposal_logits.device)[:, None]
+    reserve_k = min(reserve, M, E)
+    if reserve_k > 0:
+        soft_scores = proposal_logits.masked_fill(~soft_interaction, neg_inf)
+        soft_idx = torch.topk(soft_scores, k=reserve_k, dim=1, largest=True, sorted=True).indices
+        soft_ok = soft_interaction.gather(1, soft_idx)
+        topm_mask[row.expand_as(soft_idx)[soft_ok], soft_idx[soft_ok]] = True
+    active_count = active.sum(dim=1).clamp_max(M)
+    remaining = (active_count - topm_mask.sum(dim=1)).clamp_min(0)
+    candidate = active & ~topm_mask
+    global_order = torch.argsort(proposal_logits.masked_fill(~candidate, neg_inf), dim=1, descending=True)
+    global_ok = candidate.gather(1, global_order)
+    positions = torch.arange(E, device=proposal_logits.device)[None, :]
+    take = global_ok & (positions < remaining[:, None])
+    topm_mask[row.expand_as(global_order)[take], global_order[take]] = True
+    return topm_mask, soft_interaction
+
+
+def _pairwise_action_from_margin_torch(
+    margins: torch.Tensor,
+    pairs: torch.Tensor,
+    weights: torch.Tensor,
+    valid: torch.Tensor,
+    safety_flags: torch.Tensor,
+    tau: float,
+) -> torch.Tensor:
+    """Return the predicted pairwise-preference winner for each scene."""
+    B, P = margins.shape
+    K = valid.shape[1]
+    a = pairs[..., 0].long().clamp(0, K - 1)
+    b = pairs[..., 1].long().clamp(0, K - 1)
+    p = torch.sigmoid(margins / max(float(tau), 1e-3))
+    score = margins.new_zeros((B, K))
+    denom = margins.new_zeros((B, K))
+    score.scatter_add_(1, a, weights * p)
+    score.scatter_add_(1, b, weights * (1.0 - p))
+    denom.scatter_add_(1, a, weights)
+    denom.scatter_add_(1, b, weights)
+    avg = score / denom.clamp_min(1e-9)
+    eligible = valid.bool()
+    safe = eligible & ~safety_flags.bool()
+    has_safe = safe.any(dim=1, keepdim=True)
+    eligible = torch.where(has_safe, safe, eligible)
+    avg = avg.masked_fill(~eligible, torch.finfo(avg.dtype).min)
+    return avg.argmax(dim=1)
+
+
+def _fast_pair_margin_surrogate_masks(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    cfg: dict[str, Any],
+    budgets: list[float],
+) -> dict[float, torch.Tensor]:
+    """Build nested fixed-budget masks entirely on the accelerator.
+
+    This is a one-shot approximation to the exact backward-elimination MARS
+    selector.  It scores each Top-M atom by the damage caused when that atom is
+    removed from the full predicted signed margin field, including residual,
+    sign, winner-certificate, and action-preservation terms.  The expensive exact
+    NumPy selector remains the source of distillation targets on sampled scenes.
+    """
+    J0 = outputs["J0"].detach().float()
+    delta = outputs["pair_atom_delta"].detach().float()
+    logits = outputs["proposal_logits"].detach().float()
+    pair_indices = batch["pair_indices"].long()
+    pair_valid = batch["pair_valid"].bool()
+    valid = batch["candidate_valid"].bool()
+    weights = batch.get("pair_weights", torch.ones_like(pair_valid, dtype=torch.float32)).float()
+    weights = torch.where(pair_valid, weights.clamp_min(0.0), torch.zeros_like(weights))
+    active = batch.get("evidence_active", torch.ones_like(logits, dtype=torch.bool)).bool()
+    costs = batch.get("evidence_budget_costs", torch.ones_like(logits)).float()
+    fam = batch.get("evidence_family_ids", torch.zeros_like(logits, dtype=torch.long)).long()
+    features = batch.get("evidence_features")
+    flags = batch.get("runtime_safety_flags", torch.zeros_like(valid)).bool()
+    topm_mask, soft_interaction = _fast_topm_mask_torch(logits, active, costs, fam, features, cfg)
+
+    B, E, P = delta.shape
+    K = J0.shape[1]
+    a = pair_indices[..., 0].clamp(0, K - 1)
+    b = pair_indices[..., 1].clamp(0, K - 1)
+    pvalid = pair_valid & valid.gather(1, a) & valid.gather(1, b)
+    weights = weights * pvalid.float()
+    base = J0.gather(1, b) - J0.gather(1, a)
+    normalize = bool(cfg.get("model", {}).get("pair_margin_normalized", True))
+    if normalize:
+        abs_base = base.abs().masked_fill(~pvalid, 0.0)
+        q = float(cfg.get("model", {}).get("margin_normalization_quantile", 0.9))
+        q = min(max(q, 0.5), 0.99)
+        # torch.quantile over padded zero values is stable and cheap; the configured
+        # minimum dominates sparse scenes and matches the deployment normalization.
+        scale = torch.quantile(abs_base, q, dim=1, keepdim=True).clamp_min(
+            float(cfg.get("model", {}).get("margin_normalization_min_scale", 20000.0))
+        )
+        base = base / scale
+    delta = delta * pvalid[:, None, :].float()
+    target = base + (delta * topm_mask[:, :, None].float()).sum(dim=1)
+
+    s_cfg = cfg.get("selector", {})
+    tau = max(float(s_cfg.get("margin_coreset_boundary_tau", 0.3)), 1e-3)
+    clip = max(float(s_cfg.get("margin_coreset_target_clip", 3.0)), tau)
+    huber_delta = max(float(s_cfg.get("margin_coreset_huber_delta", 0.25)), 1e-3)
+    residual_w = max(float(s_cfg.get("margin_coreset_residual_weight", 1.0)), 0.0)
+    sign_w = max(float(s_cfg.get("margin_coreset_sign_weight", 1.0)), 0.0)
+    winner_w = max(float(s_cfg.get("margin_coreset_winner_weight", 2.2)), 0.0)
+    action_w = max(float(s_cfg.get("margin_coreset_action_weight", 0.8)), 0.0)
+
+    t = target.clamp(-clip, clip)
+    boundary = torch.exp(-t.abs() / tau)
+    decisive = torch.tanh(t.abs() / tau)
+    pw = weights * (1.0 + 1.5 * boundary + 0.5 * decisive)
+    pw_norm = pw.sum(dim=1, keepdim=True).clamp_min(1e-9)
+    trial = (target[:, None, :] - delta).clamp(-clip, clip)
+    err = (trial - t[:, None, :]) / huber_delta
+    abs_err = err.abs()
+    huber = torch.where(abs_err <= 1.0, 0.5 * err.square(), abs_err - 0.5)
+    score = residual_w * (huber * pw[:, None, :]).sum(dim=2) / pw_norm
+    if sign_w > 0.0:
+        mismatch = (trial * t[:, None, :] < 0.0) & (t.abs()[:, None, :] >= 0.05)
+        sign_penalty = (
+            pw[:, None, :] * mismatch.float() * t.abs().clamp_max(1.0)[:, None, :]
+        ).sum(dim=2) / pw_norm
+        score = score + sign_w * sign_penalty
+
+    target_action = _pairwise_action_from_margin_torch(target, pair_indices, weights, valid, flags, tau)
+    orient = torch.zeros_like(target)
+    orient = torch.where(a == target_action[:, None], torch.ones_like(orient), orient)
+    orient = torch.where(b == target_action[:, None], -torch.ones_like(orient), orient)
+    wanted = (orient != 0.0) & (t * orient > 0.0) & pvalid
+    if winner_w > 0.0:
+        oriented_trial = trial * orient[:, None, :]
+        winner_penalty = F.softplus(-oriented_trial / tau)
+        winner_norm = (pw * wanted.float()).sum(dim=1, keepdim=True).clamp_min(1e-9)
+        winner_value = (winner_penalty * pw[:, None, :] * wanted[:, None, :].float()).sum(dim=2) / winner_norm
+        score = score + winner_w * winner_value
+
+    if action_w > 0.0:
+        # Batched action-preservation penalty for every leave-one-out candidate.
+        for bi in range(B):
+            prob = torch.sigmoid(trial[bi] / tau)  # [E,P]
+            inc_a = trial.new_zeros((P, K))
+            inc_b = trial.new_zeros((P, K))
+            inc_a.scatter_add_(1, a[bi, :, None], weights[bi, :, None])
+            inc_b.scatter_add_(1, b[bi, :, None], weights[bi, :, None])
+            denom = (inc_a + inc_b).sum(dim=0).clamp_min(1e-9)
+            action_score = prob @ inc_a + (1.0 - prob) @ inc_b
+            avg = action_score / denom[None, :]
+            safe = valid[bi] & ~flags[bi]
+            eligible = torch.where(safe.any(), safe, valid[bi])
+            avg[:, ~eligible] = torch.finfo(avg.dtype).min
+            inferred = avg.argmax(dim=1)
+            score[bi] = score[bi] + action_w * (inferred != target_action[bi]).float()
+
+    score = score.masked_fill(~topm_mask, torch.finfo(score.dtype).min)
+    ratio = score / costs.clamp_min(1e-6)
+    soft_quota = max(0, int(s_cfg.get("soft_interaction_quota", 0)))
+    out_masks: dict[float, torch.Tensor] = {}
+    row = torch.arange(B, device=score.device)[:, None]
+    positions = torch.arange(E, device=score.device)[None, :]
+    for budget in sorted(set(float(x) for x in budgets)):
+        selected = torch.zeros_like(topm_mask)
+        soft_pool = topm_mask & soft_interaction & (costs <= float(budget) + 1e-6)
+        if soft_quota > 0:
+            soft_order = torch.argsort(ratio.masked_fill(~soft_pool, torch.finfo(ratio.dtype).min), dim=1, descending=True)
+            soft_ok = soft_pool.gather(1, soft_order)
+            soft_cost = costs.gather(1, soft_order)
+            soft_cum = soft_cost.cumsum(dim=1)
+            take_soft = soft_ok & (positions < soft_quota) & (soft_cum <= float(budget) + 1e-6)
+            selected[row.expand_as(soft_order)[take_soft], soft_order[take_soft]] = True
+        spent = (costs * selected.float()).sum(dim=1)
+        remaining = (float(budget) - spent).clamp_min(0.0)
+        pool = topm_mask & ~selected & (costs <= remaining[:, None] + 1e-6)
+        order = torch.argsort(ratio.masked_fill(~pool, torch.finfo(ratio.dtype).min), dim=1, descending=True)
+        ok = pool.gather(1, order)
+        sorted_cost = costs.gather(1, order)
+        cumulative = sorted_cost.cumsum(dim=1)
+        take = ok & (cumulative <= remaining[:, None] + 1e-6)
+        selected[row.expand_as(order)[take], order[take]] = True
+        out_masks[float(budget)] = selected
+    return out_masks
 
 
 def _pair_conditioned_tournament_scores(
@@ -1469,6 +1722,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
     deployment_mask_entries: list[tuple[float, torch.Tensor, torch.Tensor]] = []
     selector_exact_fraction = J0.new_tensor(0.0)
+    selector_surrogate_exact_agreement = J0.new_tensor(0.0)
+    selector_fast_wall_time_s = J0.new_tensor(0.0)
+    selector_exact_wall_time_s = J0.new_tensor(0.0)
 
     if enable_action_loss and action_act_weight_cfg > 0.0:
         selected_mask, query_mask = _predicted_certificate_masks(out, batch, cfg)
@@ -1520,49 +1776,91 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             budget_entries = _deployment_budget_entries_for_step(budgets, budget_weights, train_cfg)
             primary_budget = float(cfg.get("evidence", {}).get("budget", 16))
             primary_distance = float("inf")
+            selector_backend = str(train_cfg.get("deployment_selector_backend", "exact_cpu")).strip().lower()
+            fast_backends = {"hybrid_fast", "gpu_surrogate", "fast_gpu", "surrogate_plus_exact"}
+            budget_values = [float(value) for value, _ in budget_entries]
+            fast_masks: dict[float, torch.Tensor] = {}
+            if selector_backend in fast_backends:
+                _fast_started = time.perf_counter()
+                fast_masks = _fast_pair_margin_surrogate_masks(out, batch, cfg, budget_values)
+                selector_fast_wall_time_s = J0.new_tensor(time.perf_counter() - _fast_started)
+
+                # Exact masks are used only as sparse proposal-distillation targets.
+                # This is the only CPU/NumPy selector call in the fast pathway.
+                exact_scene_indices = _deployment_exact_distill_scene_indices(
+                    int(J0.shape[0]), train_cfg, J0.device
+                )
+                exact_scene_mask = torch.zeros((int(J0.shape[0]),), dtype=torch.bool, device=J0.device)
+                if exact_scene_indices.numel() > 0:
+                    exact_scene_mask.index_fill_(0, exact_scene_indices, True)
+                    exact_cfg = _config_with_evidence_budget(cfg, primary_budget)
+                    train_swap_passes = train_cfg.get("deployment_selector_swap_passes", None)
+                    if train_swap_passes is not None:
+                        exact_cfg = dict(exact_cfg)
+                        local_selector = dict(exact_cfg.get("selector", {}))
+                        local_selector["margin_coreset_swap_passes"] = max(0, int(train_swap_passes))
+                        exact_cfg["selector"] = local_selector
+                    _exact_started = time.perf_counter()
+                    exact_small = _predicted_pair_certificate_masks(
+                        out, batch, exact_cfg, scene_indices=exact_scene_indices
+                    )
+                    selector_exact_wall_time_s = J0.new_tensor(time.perf_counter() - _exact_started)
+                    exact_small = exact_small & pair_action_atom_mask.index_select(0, exact_scene_indices)
+                    exact_full = torch.zeros_like(pair_action_atom_mask)
+                    exact_full.index_copy_(0, exact_scene_indices, exact_small)
+                    deployment_mask_entries.append((1.0, exact_full.detach(), exact_scene_mask))
+                    surrogate_small = fast_masks[min(fast_masks, key=lambda value: abs(value - primary_budget))].index_select(0, exact_scene_indices)
+                    union = (surrogate_small | exact_small).float().sum(dim=1)
+                    inter = (surrogate_small & exact_small).float().sum(dim=1)
+                    selector_surrogate_exact_agreement = torch.where(
+                        union > 0.0, inter / union.clamp_min(1.0), torch.ones_like(union)
+                    ).mean()
+                selector_exact_fraction = J0.new_tensor(
+                    float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
+                )
+
             for budget_value, budget_weight in budget_entries:
                 budget_cfg = _config_with_evidence_budget(cfg, budget_value)
-                # Training-time selector search can use fewer local swap passes
-                # without changing the deployment/evaluation configuration.  The
-                # vectorized selector already makes the exact setting much faster;
-                # setting this to 0 is an additional optional speed/accuracy tradeoff.
                 train_swap_passes = train_cfg.get("deployment_selector_swap_passes", None)
                 if train_swap_passes is not None:
                     budget_cfg = dict(budget_cfg)
                     local_selector = dict(budget_cfg.get("selector", {}))
                     local_selector["margin_coreset_swap_passes"] = max(0, int(train_swap_passes))
                     budget_cfg["selector"] = local_selector
-                exact_scene_indices = _deployment_selector_scene_indices(
-                    int(J0.shape[0]), train_cfg, J0.device
-                )
-                if exact_scene_indices.numel() == int(J0.shape[0]):
-                    pair_selected_mask = _predicted_pair_certificate_masks(
-                        out, batch, budget_cfg
-                    ) & pair_action_atom_mask
+
+                if selector_backend in fast_backends:
+                    mask_key = min(fast_masks, key=lambda value: abs(value - float(budget_value)))
+                    pair_selected_mask = fast_masks[mask_key] & pair_action_atom_mask
                 else:
-                    # Existing oracle mask is already the epoch-0 curriculum.
-                    # Use it as the low-cost fallback while rotating exact
-                    # predicted-selector supervision across scenes.
-                    if target_sel is not None:
-                        pair_selected_mask = target_sel.bool() & pair_action_atom_mask
+                    exact_scene_indices = _deployment_selector_scene_indices(
+                        int(J0.shape[0]), train_cfg, J0.device
+                    )
+                    _exact_started = time.perf_counter()
+                    if exact_scene_indices.numel() == int(J0.shape[0]):
+                        pair_selected_mask = _predicted_pair_certificate_masks(out, batch, budget_cfg) & pair_action_atom_mask
                     else:
-                        pair_selected_mask = torch.zeros_like(pair_action_atom_mask)
+                        if target_sel is not None:
+                            pair_selected_mask = target_sel.bool() & pair_action_atom_mask
+                        else:
+                            pair_selected_mask = torch.zeros_like(pair_action_atom_mask)
+                        if exact_scene_indices.numel() > 0:
+                            exact_mask = _predicted_pair_certificate_masks(
+                                out, batch, budget_cfg, scene_indices=exact_scene_indices
+                            )
+                            exact_mask = exact_mask & pair_action_atom_mask.index_select(0, exact_scene_indices)
+                            pair_selected_mask = pair_selected_mask.clone()
+                            pair_selected_mask.index_copy_(0, exact_scene_indices, exact_mask)
+                    selector_exact_wall_time_s = selector_exact_wall_time_s + J0.new_tensor(time.perf_counter() - _exact_started)
+                    exact_scene_mask = torch.zeros((int(J0.shape[0]),), dtype=torch.bool, device=J0.device)
                     if exact_scene_indices.numel() > 0:
-                        exact_mask = _predicted_pair_certificate_masks(
-                            out, batch, budget_cfg, scene_indices=exact_scene_indices
-                        )
-                        exact_mask = exact_mask & pair_action_atom_mask.index_select(0, exact_scene_indices)
-                        pair_selected_mask = pair_selected_mask.clone()
-                        pair_selected_mask.index_copy_(0, exact_scene_indices, exact_mask)
-                exact_scene_mask = torch.zeros((int(J0.shape[0]),), dtype=torch.bool, device=J0.device)
-                if exact_scene_indices.numel() > 0:
-                    exact_scene_mask.index_fill_(0, exact_scene_indices, True)
-                selector_exact_fraction = J0.new_tensor(
-                    float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
-                )
-                deployment_mask_entries.append(
-                    (max(float(budget_weight), 0.0), pair_selected_mask.detach(), exact_scene_mask)
-                )
+                        exact_scene_mask.index_fill_(0, exact_scene_indices, True)
+                    selector_exact_fraction = J0.new_tensor(
+                        float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
+                    )
+                    deployment_mask_entries.append(
+                        (max(float(budget_weight), 0.0), pair_selected_mask.detach(), exact_scene_mask)
+                    )
+
                 budget_logits = _pair_conditioned_tournament_scores(
                     finite_J0,
                     pred_atom_delta,
@@ -1771,4 +2069,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_cert_safety": L_cert_safety if 'L_cert_safety' in locals() else J0.new_tensor(0.0),
         "L_cert_frontier": L_cert_frontier if 'L_cert_frontier' in locals() else J0.new_tensor(0.0),
         "selector_exact_fraction": selector_exact_fraction,
+        "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,
+        "selector_fast_wall_time_s": selector_fast_wall_time_s,
+        "selector_exact_wall_time_s": selector_exact_wall_time_s,
     }

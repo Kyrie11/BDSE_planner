@@ -77,3 +77,72 @@ def test_exact_selector_floor_rejects_v44_quarter_coverage() -> None:
 
 def test_exact_selector_floor_accepts_full_coverage() -> None:
     _validate_deployment_training_schedule(_cfg())
+
+
+def test_fast_backend_schedule_uses_exact_distillation_fraction() -> None:
+    cfg = _cfg()
+    cfg["training"].update(
+        {
+            "deployment_selector_backend": "hybrid_fast",
+            "deployment_exact_distill_scenes_per_rank": 1,
+            "deployment_exact_distill_every_n_steps": 4,
+            "min_deployment_exact_fraction": 0.05,
+        }
+    )
+    _validate_deployment_training_schedule(cfg)
+    cfg["training"]["min_deployment_exact_fraction"] = 0.1
+    with pytest.raises(ValueError, match="exact-supervision fraction"):
+        _validate_deployment_training_schedule(cfg)
+
+
+def test_fast_margin_surrogate_is_nested_and_respects_budgets() -> None:
+    from bdse.model.losses import _fast_pair_margin_surrogate_masks
+
+    torch.manual_seed(7)
+    B, K, E, P = 2, 8, 32, 24
+    pairs = torch.randint(0, K, (B, P, 2))
+    pairs[..., 1] = (pairs[..., 0] + torch.randint(1, K, (B, P))) % K
+    outputs = {
+        "J0": torch.randn(B, K) * 1000.0,
+        "pair_atom_delta": torch.randn(B, E, P) * 0.1,
+        "proposal_logits": torch.randn(B, E),
+    }
+    batch = {
+        "pair_indices": pairs,
+        "pair_valid": torch.ones(B, P, dtype=torch.bool),
+        "pair_weights": torch.rand(B, P) + 0.1,
+        "candidate_valid": torch.ones(B, K, dtype=torch.bool),
+        "runtime_safety_flags": torch.zeros(B, K, dtype=torch.bool),
+        "evidence_active": torch.ones(B, E, dtype=torch.bool),
+        "evidence_budget_costs": torch.ones(B, E),
+        "evidence_family_ids": torch.randint(2, 6, (B, E)),
+        "evidence_features": torch.zeros(B, E, 18),
+    }
+    cfg = _cfg()
+    cfg["model"] = {
+        "pair_margin_normalized": True,
+        "margin_normalization_min_scale": 100.0,
+        "margin_normalization_quantile": 0.9,
+    }
+    cfg["selector"] = {
+        "proposal_top_m": 24,
+        "decision_budget_excludes_structural_safety": True,
+        "structural_safety_include_feasibility": False,
+        "interaction_family_ids": [2, 3],
+        "min_soft_interaction_topm_slots": 8,
+        "soft_interaction_quota": 2,
+        "margin_coreset_boundary_tau": 0.3,
+        "margin_coreset_target_clip": 3.0,
+        "margin_coreset_huber_delta": 0.25,
+        "margin_coreset_residual_weight": 1.0,
+        "margin_coreset_sign_weight": 1.0,
+        "margin_coreset_winner_weight": 2.2,
+        "margin_coreset_action_weight": 0.8,
+        "force_fill_budget": True,
+    }
+    masks = _fast_pair_margin_surrogate_masks(outputs, batch, cfg, [4.0, 8.0, 16.0])
+    assert masks[4.0].sum(dim=1).tolist() == [4, 4]
+    assert masks[8.0].sum(dim=1).tolist() == [8, 8]
+    assert masks[16.0].sum(dim=1).tolist() == [16, 16]
+    assert torch.all(masks[4.0] <= masks[8.0])
+    assert torch.all(masks[8.0] <= masks[16.0])

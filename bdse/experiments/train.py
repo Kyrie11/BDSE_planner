@@ -882,16 +882,24 @@ def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
         if not (0.0 <= min_exact <= 1.0):
             raise ValueError("training.min_deployment_exact_fraction must be in [0, 1]")
         batch_size = max(1, int(train_cfg.get("batch_size", 1)))
-        scene_count = int(train_cfg.get("deployment_selector_scenes_per_rank", 0))
+        selector_backend = str(train_cfg.get("deployment_selector_backend", "exact_cpu")).strip().lower()
+        fast_backends = {"hybrid_fast", "gpu_surrogate", "fast_gpu", "surrogate_plus_exact"}
+        if selector_backend in fast_backends:
+            scene_count = int(train_cfg.get("deployment_exact_distill_scenes_per_rank", 1))
+            cadence = max(1, int(train_cfg.get("deployment_exact_distill_every_n_steps", 4)))
+        else:
+            scene_count = int(train_cfg.get("deployment_selector_scenes_per_rank", 0))
+            cadence = max(1, int(train_cfg.get("deployment_selector_every_n_steps", 1)))
         scene_fraction = 1.0 if scene_count <= 0 else min(scene_count, batch_size) / float(batch_size)
-        cadence = max(1, int(train_cfg.get("deployment_selector_every_n_steps", 1)))
         expected_fraction = scene_fraction / float(cadence)
         if expected_fraction + 1e-12 < min_exact:
             raise ValueError(
                 "Deployment selector exact-supervision fraction is below the configured floor: "
                 f"expected~{expected_fraction:.6f}, required>={min_exact:.6f}. "
-                "Use deployment_selector_scenes_per_rank=0 (all local scenes) and "
-                "deployment_selector_every_n_steps=1 for exact deployment alignment."
+                "For exact_cpu use deployment_selector_scenes_per_rank=0 and "
+                "deployment_selector_every_n_steps=1. For hybrid_fast, lower the floor or "
+                "increase deployment_exact_distill_scenes_per_rank / reduce "
+                "deployment_exact_distill_every_n_steps."
             )
 
 
@@ -917,6 +925,8 @@ def main() -> None:
     parser.add_argument("--selector-scenes-per-rank", type=int, default=None, help="Exact CPU deployment-selector scenes per DDP rank on sampled steps. 0 means the full local batch.")
     parser.add_argument("--selector-every-n-steps", type=int, default=None, help="Run exact predicted-selector supervision every N optimizer steps before the final exact tail.")
     parser.add_argument("--selector-full-last-n-steps", type=int, default=None, help="Use exact selector supervision for all local scenes during the final N training steps.")
+    parser.add_argument("--exact-distill-scenes-per-rank", type=int, default=None, help="Fast backend: exact CPU selector scenes per rank on distillation steps.")
+    parser.add_argument("--exact-distill-every-n-steps", type=int, default=None, help="Fast backend: run exact CPU-mask distillation every N optimizer steps.")
     parser.add_argument("--no-pin-memory", action="store_true", help="Disable pinned host memory for DataLoader batches.")
     parser.add_argument("--resume", action="store_true", help="Resume from the latest checkpoint derived from --output, or from --resume-from when provided.")
     parser.add_argument("--resume-from", type=str, default=None, help="Explicit checkpoint path to resume from and continue its epoch counter.")
@@ -963,6 +973,10 @@ def main() -> None:
         cfg["training"]["deployment_selector_every_n_steps"] = max(1, int(args.selector_every_n_steps))
     if args.selector_full_last_n_steps is not None:
         cfg["training"]["deployment_selector_full_last_n_steps"] = max(0, int(args.selector_full_last_n_steps))
+    if args.exact_distill_scenes_per_rank is not None:
+        cfg["training"]["deployment_exact_distill_scenes_per_rank"] = max(0, int(args.exact_distill_scenes_per_rank))
+    if args.exact_distill_every_n_steps is not None:
+        cfg["training"]["deployment_exact_distill_every_n_steps"] = max(1, int(args.exact_distill_every_n_steps))
     if args.no_pin_memory:
         cfg["training"]["pin_memory"] = False
     if args.seed is not None:
@@ -1128,24 +1142,34 @@ def main() -> None:
         cfg["training"]["steps_per_epoch"] = int(steps_per_epoch)
         resume_at = int(start_batch_index) if epoch == start_epoch else 0
         processed_steps = 0
+        stage_wall = {"data_wait": 0.0, "h2d": 0.0, "forward": 0.0, "loss": 0.0, "backward_step": 0.0}
+        previous_step_end = time.perf_counter()
         for batch_index, batch in enumerate(tqdm(loader, desc=f"epoch {epoch}", disable=not is_main)):
+            batch_received = time.perf_counter()
+            stage_wall["data_wait"] += max(batch_received - previous_step_end, 0.0)
             if batch_index < resume_at:
                 continue
             cfg["training"]["global_step"] = int(epoch * steps_per_epoch + batch_index)
+            _stage_started = time.perf_counter()
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+            stage_wall["h2d"] += time.perf_counter() - _stage_started
             opt.zero_grad(set_to_none=True)
             if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
                 autocast_ctx = torch.amp.autocast(device_type="cuda", enabled=use_amp)
             else:
                 autocast_ctx = torch.cuda.amp.autocast(enabled=use_amp)
+            _stage_started = time.perf_counter()
             with autocast_ctx:
                 out = model(batch)
+            stage_wall["forward"] += time.perf_counter() - _stage_started
             if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
                 loss_autocast_ctx = torch.amp.autocast(device_type="cuda", enabled=False)
             else:
                 loss_autocast_ctx = torch.cuda.amp.autocast(enabled=False)
+            _stage_started = time.perf_counter()
             with loss_autocast_ctx:
                 losses = compute_bdse_losses(out, batch, cfg)
+            stage_wall["loss"] += time.perf_counter() - _stage_started
 
             # Never let an invalid objective silently turn a finetuning run into
             # repeated GradScaler step skips.  Check every scalar component and
@@ -1165,13 +1189,16 @@ def main() -> None:
                     f"global_step={cfg['training']['global_step']}: {detail}"
                 )
 
+            _stage_started = time.perf_counter()
             scaler.scale(losses["loss"]).backward()
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(trainable_parameters, float(cfg["training"]["grad_clip"]))
             scaler.step(opt)
             scaler.update()
+            stage_wall["backward_step"] += time.perf_counter() - _stage_started
             _append_loss_meters(meters, losses)
             processed_steps += 1
+            previous_step_end = time.perf_counter()
             save_steps = max(0, int(getattr(args, "save_every_n_steps", 0)))
             if (
                 save_steps > 0
@@ -1206,6 +1233,10 @@ def main() -> None:
         epoch_wall_s = max(time.perf_counter() - epoch_wall_start, 1e-9)
         epoch_metrics["train_epoch_wall_time_s"] = float(epoch_wall_s)
         epoch_metrics["train_samples_per_second"] = float(processed_steps * batch_size * world_size / epoch_wall_s)
+        denom_steps = max(processed_steps, 1)
+        for stage_name, stage_seconds in stage_wall.items():
+            epoch_metrics[f"train_{stage_name}_wall_time_s"] = float(stage_seconds)
+            epoch_metrics[f"train_{stage_name}_ms_per_step"] = float(1000.0 * stage_seconds / denom_steps)
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):
             if val_sampler is not None:
                 val_sampler.set_epoch(epoch)
