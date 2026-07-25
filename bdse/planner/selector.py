@@ -498,17 +498,20 @@ def _complete_safety_aware_selection(
         # After that quota, do not let all hard atoms consume the residual budget;
         # use the learned interaction/proposal utility to fill the remaining slots.
         filler_key = lambda i: (-float(util[i]), float(costs[i]), int(i))
-    filler_order = sorted(np.flatnonzero(active).tolist(), key=filler_key)
-    for i in filler_order:
-        if i in seen:
-            continue
-        if not can_add(i):
-            continue
-        if len(out) < fill_target or fill_budget:
-            out.append(int(i))
-            seen.add(int(i))
-        if not fill_budget and len(out) >= fill_target:
-            break
+    # Avoid sorting every active atom when acquisition fill is disabled and the
+    # already-selected support satisfies the requested minimum (the v46 path).
+    if fill_budget or len(out) < fill_target:
+        filler_order = sorted(np.flatnonzero(active).tolist(), key=filler_key)
+        for i in filler_order:
+            if i in seen:
+                continue
+            if not can_add(i):
+                continue
+            if len(out) < fill_target or fill_budget:
+                out.append(int(i))
+                seen.add(int(i))
+            if not fill_budget and len(out) >= fill_target:
+                break
 
     final_spent = spent()
     diag = {
@@ -3691,6 +3694,313 @@ def _deployment_aligned_coreset_from_pair_delta(
     return selected, float(-final_loss), float(spent), diag
 
 
+def _build_anytime_one_sided_adverse_certificate_state(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    pair_weights: np.ndarray,
+    pair_indices: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    atom_active_mask: np.ndarray | None = None,
+    *,
+    atom_pair_variance: np.ndarray | None = None,
+    adverse_beta: float = 1.0,
+    adverse_epsilon: float = 0.05,
+    prior_radius: float = 0.10,
+    certificate_margin: float = 0.0,
+    boundary_tau: float = 0.25,
+    stop_when_certified: bool = True,
+    max_target_rivals: int = 0,
+) -> dict[str, Any]:
+    """Build the budget-independent AOCC greedy order once."""
+    d = np.asarray(atom_delta, dtype=np.float32)
+    base = np.asarray(base_margin, dtype=np.float32).reshape(-1)
+    pairs = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    valid_arr = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    flags_arr = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    E = int(d.shape[0]) if d.ndim == 2 else int(costs.shape[0])
+    if d.ndim != 2 or d.shape[1] != base.shape[0]:
+        d = np.zeros((E, base.shape[0]), dtype=np.float32)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    costs = costs[:E]
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
+    active &= np.isfinite(costs) & (costs > 0.0)
+    if weights.shape[0] != pairs.shape[0]:
+        weights = np.ones((pairs.shape[0],), dtype=np.float32)
+    weights = np.maximum(weights[: pairs.shape[0]], 0.0)
+    var_input = None if atom_pair_variance is None else np.asarray(atom_pair_variance, dtype=np.float32)
+    cache_inputs = {
+        "d": d,
+        "base": base,
+        "pairs": pairs,
+        "weights": weights,
+        "costs": costs,
+        "active": active,
+        "valid": valid_arr,
+        "flags": flags_arr,
+        "var": var_input,
+        "params": (
+            float(adverse_beta),
+            float(adverse_epsilon),
+            float(prior_radius),
+            float(certificate_margin),
+            float(boundary_tau),
+            bool(stop_when_certified),
+            int(max_target_rivals),
+        ),
+    }
+    if pairs.shape[0] == 0 or not bool(active.any()):
+        return {
+            "terminal": True,
+            "cache_inputs": cache_inputs,
+            "diag": {
+                "aocc_target_action": -1,
+                "aocc_target_confidence": 0.0,
+                "aocc_pair_count": 0,
+                "aocc_initial_deficit": 0.0,
+                "aocc_final_deficit": 0.0,
+                "aocc_certified_pair_fraction": 1.0,
+                "aocc_nested_order_length": 0,
+                "aocc_bound_calibrated": False,
+            },
+        }
+
+    active_idx = np.flatnonzero(active)
+    full_margin = base + d[active_idx].sum(axis=0)
+    target_action, target_conf = _pairwise_preference_action(
+        full_margin, pairs, weights, valid_arr, flags_arr,
+        tau=max(float(boundary_tau), 1e-3),
+    )
+    if target_action < 0:
+        return {
+            "terminal": True,
+            "cache_inputs": cache_inputs,
+            "diag": {
+                "aocc_target_action": -1,
+                "aocc_target_confidence": 0.0,
+                "aocc_pair_count": 0,
+                "aocc_initial_deficit": 0.0,
+                "aocc_final_deficit": 0.0,
+                "aocc_certified_pair_fraction": 0.0,
+                "aocc_nested_order_length": 0,
+                "aocc_bound_calibrated": False,
+            },
+        }
+
+    orient = np.zeros((pairs.shape[0],), dtype=np.float32)
+    orient[pairs[:, 0] == int(target_action)] = 1.0
+    orient[pairs[:, 1] == int(target_action)] = -1.0
+    pair_keep = (orient != 0.0) & (weights > 0.0)
+    if bool(pair_keep.any()) and int(max_target_rivals) > 0 and int(pair_keep.sum()) > int(max_target_rivals):
+        ids = np.flatnonzero(pair_keep)
+        priority = weights[ids] / (np.abs(full_margin[ids]) + max(float(boundary_tau), 1e-3))
+        chosen = ids[np.argsort(-priority, kind="stable")[: int(max_target_rivals)]]
+        pair_keep[:] = False
+        pair_keep[chosen] = True
+    if not bool(pair_keep.any()):
+        return {
+            "terminal": True,
+            "cache_inputs": cache_inputs,
+            "diag": {
+                "aocc_target_action": int(target_action),
+                "aocc_target_confidence": float(target_conf),
+                "aocc_pair_count": 0,
+                "aocc_initial_deficit": 0.0,
+                "aocc_final_deficit": 0.0,
+                "aocc_certified_pair_fraction": 1.0,
+                "aocc_nested_order_length": 0,
+                "aocc_bound_calibrated": False,
+            },
+        }
+
+    o = orient[pair_keep]
+    w = weights[pair_keep].astype(np.float32)
+    w = w / max(float(w.sum()), 1e-9)
+    oriented_base = base[pair_keep] * o
+    oriented_delta = d[:, pair_keep] * o[None, :]
+
+    if var_input is not None:
+        var = var_input
+        if var.shape != d.shape:
+            var = np.zeros_like(d, dtype=np.float32)
+        sigma = np.sqrt(np.maximum(var[:, pair_keep], 0.0) + max(float(prior_radius), 0.0) ** 2)
+        has_learned_variance = bool(np.any(var[:, pair_keep] > 0.0))
+    else:
+        sigma = np.full_like(oriented_delta, max(float(prior_radius), 0.0), dtype=np.float32)
+        has_learned_variance = False
+    radius = max(float(adverse_beta), 0.0) * sigma + max(float(adverse_epsilon), 0.0)
+    lower = np.minimum(0.0, oriented_delta - radius).astype(np.float32)
+    improvement = np.maximum(oriented_delta - lower, 0.0).astype(np.float32)
+    c0 = oriented_base + lower[active_idx].sum(axis=0)
+    gamma = float(certificate_margin)
+    deficit0 = np.maximum(gamma - c0, 0.0).astype(np.float32)
+
+    order_gain_state = np.zeros_like(deficit0)
+    full_order: list[int] = []
+    full_order_gain: list[float] = []
+    remaining = active.copy()
+    while bool(remaining.any()):
+        ids = np.flatnonzero(remaining)
+        before = np.minimum(deficit0, order_gain_state)
+        after = np.minimum(deficit0[None, :], order_gain_state[None, :] + improvement[ids])
+        marginal = ((after - before[None, :]) * w[None, :]).sum(axis=1)
+        ratio = marginal / np.maximum(costs[ids], 1e-6)
+        best_pos = int(np.lexsort((ids, costs[ids], -marginal, -ratio))[0])
+        best = int(ids[best_pos])
+        best_gain = float(marginal[best_pos])
+        if best_gain <= 1e-12:
+            break
+        full_order.append(best)
+        full_order_gain.append(best_gain)
+        order_gain_state = order_gain_state + improvement[best]
+        remaining[best] = False
+        order_deficit_vec = np.maximum(deficit0 - order_gain_state, 0.0)
+        if bool(stop_when_certified) and bool(np.all(order_deficit_vec <= 1e-8)):
+            break
+
+    full_oriented = oriented_base + oriented_delta[active_idx].sum(axis=0)
+    lower_violation = np.maximum(lower - oriented_delta, 0.0)
+    return {
+        "terminal": False,
+        "cache_inputs": cache_inputs,
+        "costs": costs,
+        "full_order": full_order,
+        "full_order_gain": full_order_gain,
+        "improvement": improvement,
+        "deficit0": deficit0,
+        "weights_kept": w,
+        "c0": c0,
+        "gamma": gamma,
+        "static_diag": {
+            "aocc_target_action": int(target_action),
+            "aocc_target_confidence": float(target_conf),
+            "aocc_pair_count": int(pair_keep.sum()),
+            "aocc_initial_deficit": float(np.sum(w * deficit0)),
+            "aocc_full_target_certified_pair_fraction": float(np.mean(full_oriented >= gamma - 1e-8)),
+            "aocc_initial_certified_pair_fraction": float(np.mean(c0 >= gamma - 1e-8)),
+            "aocc_nested_order_length": int(len(full_order)),
+            "aocc_full_order_cost": float(sum(float(costs[i]) for i in full_order)),
+            "aocc_max_lower_bound_violation": float(np.max(lower_violation)) if lower_violation.size else 0.0,
+            "aocc_bound_calibrated": bool(has_learned_variance and (float(adverse_beta) > 0.0 or float(adverse_epsilon) > 0.0)),
+            "aocc_adverse_beta": float(adverse_beta),
+            "aocc_adverse_epsilon": float(adverse_epsilon),
+            "aocc_prior_radius": float(prior_radius),
+            "aocc_certificate_margin": float(certificate_margin),
+            "aocc_stop_when_certified": bool(stop_when_certified),
+        },
+    }
+
+
+def _anytime_aocc_state_matches(
+    state: dict[str, Any],
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    pair_weights: np.ndarray,
+    pair_indices: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    atom_active_mask: np.ndarray | None,
+    atom_pair_variance: np.ndarray | None,
+    *,
+    adverse_beta: float,
+    adverse_epsilon: float,
+    prior_radius: float,
+    certificate_margin: float,
+    boundary_tau: float,
+    stop_when_certified: bool,
+    max_target_rivals: int,
+) -> bool:
+    """Exact guard for reusing an AOCC order across budgets."""
+    saved = state.get("cache_inputs")
+    if not isinstance(saved, dict):
+        return False
+    params = (
+        float(adverse_beta), float(adverse_epsilon), float(prior_radius),
+        float(certificate_margin), float(boundary_tau), bool(stop_when_certified),
+        int(max_target_rivals),
+    )
+    if saved.get("params") != params:
+        return False
+    d = np.asarray(atom_delta, dtype=np.float32)
+    base = np.asarray(base_margin, dtype=np.float32).reshape(-1)
+    pairs = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    E = int(d.shape[0]) if d.ndim == 2 else int(costs.shape[0])
+    if d.ndim != 2 or d.shape[1] != base.shape[0]:
+        d = np.zeros((E, base.shape[0]), dtype=np.float32)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    costs = costs[:E]
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
+    active &= np.isfinite(costs) & (costs > 0.0)
+    if weights.shape[0] != pairs.shape[0]:
+        weights = np.ones((pairs.shape[0],), dtype=np.float32)
+    weights = np.maximum(weights[: pairs.shape[0]], 0.0)
+    var = None if atom_pair_variance is None else np.asarray(atom_pair_variance, dtype=np.float32)
+    checks = (
+        np.array_equal(saved.get("d"), d),
+        np.array_equal(saved.get("base"), base),
+        np.array_equal(saved.get("pairs"), pairs),
+        np.array_equal(saved.get("weights"), weights),
+        np.array_equal(saved.get("costs"), costs),
+        np.array_equal(saved.get("active"), active),
+        np.array_equal(saved.get("valid"), np.asarray(valid_mask, dtype=bool).reshape(-1)),
+        np.array_equal(saved.get("flags"), np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)),
+        (saved.get("var") is None and var is None)
+        or (saved.get("var") is not None and var is not None and np.array_equal(saved.get("var"), var)),
+    )
+    return bool(all(checks))
+
+
+def _materialize_anytime_one_sided_adverse_certificate(
+    state: dict[str, Any],
+    budget: float,
+) -> tuple[list[int], float, float, dict[str, Any]]:
+    if bool(state.get("terminal", False)):
+        return [], 0.0, 0.0, dict(state.get("diag", {}))
+    costs = np.asarray(state["costs"], dtype=np.float32)
+    full_order = list(map(int, state["full_order"]))
+    selected: list[int] = []
+    spent = 0.0
+    for atom_id in full_order:
+        next_spent = spent + float(costs[atom_id])
+        if next_spent > float(budget) + 1e-6:
+            break
+        selected.append(int(atom_id))
+        spent = next_spent
+
+    improvement = np.asarray(state["improvement"], dtype=np.float32)
+    deficit0 = np.asarray(state["deficit0"], dtype=np.float32)
+    w = np.asarray(state["weights_kept"], dtype=np.float32)
+    c0 = np.asarray(state["c0"], dtype=np.float32)
+    gamma = float(state["gamma"])
+    if selected:
+        current_gain = improvement[np.asarray(selected, dtype=np.int64)].sum(axis=0)
+    else:
+        current_gain = np.zeros_like(deficit0)
+    objective = float(np.sum(w * np.minimum(deficit0, current_gain)))
+    final_certificate = c0 + current_gain
+    final_deficit = np.maximum(gamma - final_certificate, 0.0)
+    full_order_gain = list(map(float, state["full_order_gain"]))
+    selected_order_gain = full_order_gain[: len(selected)]
+    diag = {
+        **dict(state["static_diag"]),
+        "aocc_final_deficit": float(np.sum(w * final_deficit)),
+        "aocc_deficit_reduction": float(np.sum(w * (deficit0 - final_deficit))),
+        "aocc_certified_pair_fraction": float(np.mean(final_certificate >= gamma - 1e-8)),
+        "aocc_selected_prefix_length": int(len(selected)),
+        "aocc_anytime_stop_budget": float(spent),
+        "aocc_mean_selected_marginal_gain": float(np.mean(selected_order_gain)) if selected_order_gain else 0.0,
+    }
+    return selected, float(objective), float(spent), diag
+
+
 def _anytime_one_sided_adverse_certificate_from_pair_delta(
     atom_delta: np.ndarray,
     base_margin: np.ndarray,
@@ -3710,192 +4020,57 @@ def _anytime_one_sided_adverse_certificate_from_pair_delta(
     boundary_tau: float = 0.25,
     stop_when_certified: bool = True,
     max_target_rivals: int = 0,
+    state_cache: dict[str, Any] | None = None,
 ) -> tuple[list[int], float, float, dict[str, Any]]:
     """Nested one-sided adverse-bound certificate coreset.
 
-    The full Top-M pair field defines a predicted target action.  For each
-    target-vs-rival comparison we conservatively replace every unselected atom
-    by a one-sided adverse lower bound ``ell_i <= d_i``.  Selecting an atom
-    replaces ``ell_i`` by its scored contribution ``d_i`` and therefore gives a
-    non-negative certificate improvement.  The weighted capped-coverage
-    objective is monotone submodular.  We construct one budget-independent
-    gain-per-cost greedy order and expose every budget as a strict cumulative-
-    cost prefix, so smaller-budget selections are nested in larger ones.
-
-    This implementation is label-free and can run identically in training and
-    deployment.  A formal statistical certificate additionally requires
-    ``adverse_beta/adverse_epsilon/prior_radius`` to be calibrated on a held-out
-    split; without calibration the returned values are conservative scores, not
-    a coverage guarantee.
+    The expensive greedy order is budget-independent.  ``state_cache`` is used
+    only when a caller evaluates the exact same scene under several budgets;
+    every input is compared exactly before reuse, so single-budget deployment
+    behavior and numerical results remain unchanged.
     """
-    d = np.asarray(atom_delta, dtype=np.float32)
-    base = np.asarray(base_margin, dtype=np.float32).reshape(-1)
-    pairs = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
-    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
-    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
-    E = int(d.shape[0]) if d.ndim == 2 else int(costs.shape[0])
-    if d.ndim != 2 or d.shape[1] != base.shape[0]:
-        d = np.zeros((E, base.shape[0]), dtype=np.float32)
-    if costs.shape[0] < E:
-        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
-    costs = costs[:E]
-    active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
-    active &= np.isfinite(costs) & (costs > 0.0)
-    if weights.shape[0] != pairs.shape[0]:
-        weights = np.ones((pairs.shape[0],), dtype=np.float32)
-    weights = np.maximum(weights[: pairs.shape[0]], 0.0)
-    if pairs.shape[0] == 0 or not bool(active.any()):
-        return [], 0.0, 0.0, {
-            "aocc_target_action": -1,
-            "aocc_target_confidence": 0.0,
-            "aocc_pair_count": 0,
-            "aocc_initial_deficit": 0.0,
-            "aocc_final_deficit": 0.0,
-            "aocc_certified_pair_fraction": 1.0,
-            "aocc_nested_order_length": 0,
-            "aocc_bound_calibrated": False,
-        }
+    state = state_cache.get("state") if isinstance(state_cache, dict) else None
+    if not isinstance(state, dict) or not _anytime_aocc_state_matches(
+        state,
+        atom_delta,
+        base_margin,
+        pair_weights,
+        pair_indices,
+        atom_budget_costs,
+        valid_mask,
+        runtime_safety_flags,
+        atom_active_mask,
+        atom_pair_variance,
+        adverse_beta=adverse_beta,
+        adverse_epsilon=adverse_epsilon,
+        prior_radius=prior_radius,
+        certificate_margin=certificate_margin,
+        boundary_tau=boundary_tau,
+        stop_when_certified=stop_when_certified,
+        max_target_rivals=max_target_rivals,
+    ):
+        state = _build_anytime_one_sided_adverse_certificate_state(
+            atom_delta,
+            base_margin,
+            pair_weights,
+            pair_indices,
+            atom_budget_costs,
+            valid_mask,
+            runtime_safety_flags,
+            atom_active_mask,
+            atom_pair_variance=atom_pair_variance,
+            adverse_beta=adverse_beta,
+            adverse_epsilon=adverse_epsilon,
+            prior_radius=prior_radius,
+            certificate_margin=certificate_margin,
+            boundary_tau=boundary_tau,
+            stop_when_certified=stop_when_certified,
+            max_target_rivals=max_target_rivals,
+        )
+        if isinstance(state_cache, dict):
+            state_cache["state"] = state
+    return _materialize_anytime_one_sided_adverse_certificate(state, budget)
 
-    active_idx = np.flatnonzero(active)
-    full_margin = base + d[active_idx].sum(axis=0)
-    target_action, target_conf = _pairwise_preference_action(
-        full_margin, pairs, weights, valid_mask, runtime_safety_flags,
-        tau=max(float(boundary_tau), 1e-3),
-    )
-    if target_action < 0:
-        return [], 0.0, 0.0, {
-            "aocc_target_action": -1,
-            "aocc_target_confidence": 0.0,
-            "aocc_pair_count": 0,
-            "aocc_initial_deficit": 0.0,
-            "aocc_final_deficit": 0.0,
-            "aocc_certified_pair_fraction": 0.0,
-            "aocc_nested_order_length": 0,
-            "aocc_bound_calibrated": False,
-        }
-
-    orient = np.zeros((pairs.shape[0],), dtype=np.float32)
-    orient[pairs[:, 0] == int(target_action)] = 1.0
-    orient[pairs[:, 1] == int(target_action)] = -1.0
-    pair_keep = (orient != 0.0) & (weights > 0.0)
-    if bool(pair_keep.any()) and int(max_target_rivals) > 0 and int(pair_keep.sum()) > int(max_target_rivals):
-        ids = np.flatnonzero(pair_keep)
-        # Prioritize near-boundary and high-weight rivals.  The sort is fixed
-        # before greedy selection, so nestedness across budgets is preserved.
-        priority = weights[ids] / (np.abs(full_margin[ids]) + max(float(boundary_tau), 1e-3))
-        chosen = ids[np.argsort(-priority, kind="stable")[: int(max_target_rivals)]]
-        pair_keep[:] = False
-        pair_keep[chosen] = True
-    if not bool(pair_keep.any()):
-        return [], 0.0, 0.0, {
-            "aocc_target_action": int(target_action),
-            "aocc_target_confidence": float(target_conf),
-            "aocc_pair_count": 0,
-            "aocc_initial_deficit": 0.0,
-            "aocc_final_deficit": 0.0,
-            "aocc_certified_pair_fraction": 1.0,
-            "aocc_nested_order_length": 0,
-            "aocc_bound_calibrated": False,
-        }
-
-    o = orient[pair_keep]
-    w = weights[pair_keep].astype(np.float32)
-    w = w / max(float(w.sum()), 1e-9)
-    oriented_base = base[pair_keep] * o
-    oriented_delta = d[:, pair_keep] * o[None, :]
-
-    if atom_pair_variance is not None:
-        var = np.asarray(atom_pair_variance, dtype=np.float32)
-        if var.shape != d.shape:
-            var = np.zeros_like(d, dtype=np.float32)
-        sigma = np.sqrt(np.maximum(var[:, pair_keep], 0.0) + max(float(prior_radius), 0.0) ** 2)
-        has_learned_variance = bool(np.any(var[:, pair_keep] > 0.0))
-    else:
-        sigma = np.full_like(oriented_delta, max(float(prior_radius), 0.0), dtype=np.float32)
-        has_learned_variance = False
-    radius = max(float(adverse_beta), 0.0) * sigma + max(float(adverse_epsilon), 0.0)
-    # Unqueried positive support is not assumed; adverse negative support is
-    # retained.  This makes ell <= d and every query improvement non-negative.
-    lower = np.minimum(0.0, oriented_delta - radius).astype(np.float32)
-    improvement = np.maximum(oriented_delta - lower, 0.0).astype(np.float32)
-    c0 = oriented_base + lower[active_idx].sum(axis=0)
-    gamma = float(certificate_margin)
-    deficit0 = np.maximum(gamma - c0, 0.0).astype(np.float32)
-    # Build one budget-independent greedy order first, then expose every budget
-    # as a strict cumulative-cost prefix.  Filtering candidates by the current
-    # budget inside the greedy loop would let a small budget skip an expensive
-    # atom and choose another atom that is not a prefix of the larger-budget
-    # solution, violating the advertised anytime nestedness for non-unit costs.
-    order_gain_state = np.zeros_like(deficit0)
-    full_order: list[int] = []
-    full_order_gain: list[float] = []
-    remaining = active.copy()
-
-    while bool(remaining.any()):
-        ids = np.flatnonzero(remaining)
-        before = np.minimum(deficit0, order_gain_state)
-        after = np.minimum(deficit0[None, :], order_gain_state[None, :] + improvement[ids])
-        marginal = ((after - before[None, :]) * w[None, :]).sum(axis=1)
-        ratio = marginal / np.maximum(costs[ids], 1e-6)
-        # Deterministic tie break: gain/cost, raw marginal, lower cost, atom id.
-        best_pos = int(np.lexsort((ids, costs[ids], -marginal, -ratio))[0])
-        best = int(ids[best_pos])
-        best_gain = float(marginal[best_pos])
-        if best_gain <= 1e-12:
-            break
-        full_order.append(best)
-        full_order_gain.append(best_gain)
-        order_gain_state = order_gain_state + improvement[best]
-        remaining[best] = False
-        order_deficit_vec = np.maximum(deficit0 - order_gain_state, 0.0)
-        if bool(stop_when_certified) and bool(np.all(order_deficit_vec <= 1e-8)):
-            break
-
-    selected: list[int] = []
-    spent = 0.0
-    for atom_id in full_order:
-        next_spent = spent + float(costs[atom_id])
-        if next_spent > float(budget) + 1e-6:
-            # Strict prefix: do not skip an item that does not fit.
-            break
-        selected.append(int(atom_id))
-        spent = next_spent
-
-    if selected:
-        current_gain = improvement[np.asarray(selected, dtype=np.int64)].sum(axis=0)
-    else:
-        current_gain = np.zeros_like(deficit0)
-    objective = float(np.sum(w * np.minimum(deficit0, current_gain)))
-    selected_order_gain = full_order_gain[: len(selected)]
-    final_certificate = c0 + current_gain
-    final_deficit = np.maximum(gamma - final_certificate, 0.0)
-    full_oriented = oriented_base + oriented_delta[active_idx].sum(axis=0)
-    # Numerical audit of the one-sided construction.
-    lower_violation = np.maximum(lower - oriented_delta, 0.0)
-    diag = {
-        "aocc_target_action": int(target_action),
-        "aocc_target_confidence": float(target_conf),
-        "aocc_pair_count": int(pair_keep.sum()),
-        "aocc_initial_deficit": float(np.sum(w * deficit0)),
-        "aocc_final_deficit": float(np.sum(w * final_deficit)),
-        "aocc_deficit_reduction": float(np.sum(w * (deficit0 - final_deficit))),
-        "aocc_certified_pair_fraction": float(np.mean(final_certificate >= gamma - 1e-8)),
-        "aocc_full_target_certified_pair_fraction": float(np.mean(full_oriented >= gamma - 1e-8)),
-        "aocc_initial_certified_pair_fraction": float(np.mean(c0 >= gamma - 1e-8)),
-        "aocc_nested_order_length": int(len(full_order)),
-        "aocc_selected_prefix_length": int(len(selected)),
-        "aocc_full_order_cost": float(sum(float(costs[i]) for i in full_order)),
-        "aocc_anytime_stop_budget": float(spent),
-        "aocc_mean_selected_marginal_gain": float(np.mean(selected_order_gain)) if selected_order_gain else 0.0,
-        "aocc_max_lower_bound_violation": float(np.max(lower_violation)) if lower_violation.size else 0.0,
-        "aocc_bound_calibrated": bool(has_learned_variance and (float(adverse_beta) > 0.0 or float(adverse_epsilon) > 0.0)),
-        "aocc_adverse_beta": float(adverse_beta),
-        "aocc_adverse_epsilon": float(adverse_epsilon),
-        "aocc_prior_radius": float(prior_radius),
-        "aocc_certificate_margin": float(certificate_margin),
-        "aocc_stop_when_certified": bool(stop_when_certified),
-    }
-    return selected, float(objective), float(spent), diag
 
 def runtime_greedy_selector_pair_conditioned(
     predicted_base_cost: np.ndarray,
@@ -4004,6 +4179,7 @@ def runtime_greedy_selector_pair_conditioned(
     adverse_certificate_margin: float = 0.0,
     adverse_certificate_stop_when_certified: bool = True,
     adverse_certificate_max_target_rivals: int = 0,
+    aocc_state_cache: dict[str, Any] | None = None,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -4179,6 +4355,7 @@ def runtime_greedy_selector_pair_conditioned(
                 boundary_tau=margin_coreset_boundary_tau,
                 stop_when_certified=adverse_certificate_stop_when_certified,
                 max_target_rivals=adverse_certificate_max_target_rivals,
+                state_cache=aocc_state_cache,
             )
             mode = "runtime_pair_conditioned_anytime_adverse_certificate"
         elif cap_mode_l in deployment_coreset_modes and deployment_evaluator is not None:
@@ -4347,8 +4524,35 @@ def runtime_greedy_selector_pair_conditioned(
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
         extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), "deployment_coreset_budget_layer_width": int(deployment_coreset_budget_layer_width), "deployment_coreset_budget_layer_branch": int(deployment_coreset_budget_layer_branch), "deployment_coreset_budget_layer_iterations": int(deployment_coreset_budget_layer_iterations), "deployment_coreset_budget_layer_max_evaluations": int(deployment_coreset_budget_layer_max_evaluations), "deployment_coreset_budget_layer_exhaustive_first": bool(deployment_coreset_budget_layer_exhaustive_first), "deployment_coreset_budget_layer_seed_count": int(deployment_coreset_budget_layer_seed_count), "deployment_coreset_budget_layer_diversity_distance": int(deployment_coreset_budget_layer_diversity_distance), "adverse_certificate_beta": float(adverse_certificate_beta), "adverse_certificate_epsilon": float(adverse_certificate_epsilon), "adverse_certificate_prior_radius": float(adverse_certificate_prior_radius), "adverse_certificate_margin": float(adverse_certificate_margin), "adverse_certificate_stop_when_certified": bool(adverse_certificate_stop_when_certified), "adverse_certificate_max_target_rivals": int(adverse_certificate_max_target_rivals), **hybrid_diag, **coreset_diag}
-    utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
-    if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
+    # The ranking utility below is only consumed by the generic post-fill stage.
+    # AOCC v46 disables every post-fill mechanism (no mandatory mask/quotas,
+    # no minimum support, and no force-fill), so evaluating action-rank utility
+    # here was a pure duplicate O(E*P + E*A) CPU computation for every budget.
+    # Keep the generic behavior bit-for-bit whenever post-fill can modify the set.
+    _costs_for_postfill = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    _E_for_postfill = int(_costs_for_postfill.shape[0])
+    _active_for_postfill = (
+        np.ones((_E_for_postfill,), dtype=bool)
+        if atom_active_mask is None
+        else _as_bool_mask(atom_active_mask, _E_for_postfill)
+    )
+    _active_for_postfill &= np.isfinite(_costs_for_postfill) & (_costs_for_postfill > 0)
+    _mandatory_for_postfill = _as_bool_mask(mandatory_atom_mask, _E_for_postfill) & _active_for_postfill
+    _selected_valid_count = len({
+        int(i) for i in np.asarray(selected, dtype=np.int64).reshape(-1).tolist()
+        if 0 <= int(i) < _E_for_postfill and bool(_active_for_postfill[int(i)])
+    })
+    _postfill_utility_required = bool(
+        _mandatory_for_postfill.any()
+        or int(soft_interaction_quota) > 0
+        or int(interaction_family_quota) > 0
+        or int(decision_family_quota) > 0
+        or bool(force_fill_budget)
+        or int(min_selected_atoms) > int(_selected_valid_count)
+    )
+
+    utility = np.zeros((_E_for_postfill,), dtype=np.float32)
+    if _postfill_utility_required and np.asarray(delta).ndim == 2 and np.asarray(delta).size:
         if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc", "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc", "anytime_adverse_certificate", "one_sided_adverse_certificate", "aocc", "aobcc", "nested_certificate"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
@@ -4374,7 +4578,7 @@ def runtime_greedy_selector_pair_conditioned(
                 flip_mode=str(flip_mode),
                 flip_temperature=float(flip_temperature),
             )
-    if proposal_scores is not None and float(proposal_fill_weight) > 0.0:
+    if _postfill_utility_required and proposal_scores is not None and float(proposal_fill_weight) > 0.0:
         prop = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
         if prop.shape[0] < utility.shape[0]:
             prop = np.pad(prop, (0, utility.shape[0] - prop.shape[0]), constant_values=-60.0)
@@ -4384,7 +4588,11 @@ def runtime_greedy_selector_pair_conditioned(
         prop_prior = 1.0 / (1.0 + np.exp(-np.clip(prop, -20.0, 20.0)))
         utility = utility + float(proposal_fill_weight) * prop_prior.astype(np.float32)
     interaction_utility = utility.copy()
-    if float(direction_invariant_interaction_weight) > 0.0 and np.asarray(delta).ndim == 2 and np.asarray(delta).size:
+    if (
+        float(direction_invariant_interaction_weight) > 0.0
+        and np.asarray(delta).ndim == 2
+        and np.asarray(delta).size
+    ):
         two_sided = _direction_invariant_interaction_utility(
             delta,
             base_delta,

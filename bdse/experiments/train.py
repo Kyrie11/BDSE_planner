@@ -346,6 +346,32 @@ def _append_loss_meters(meters: dict[str, Any], losses: dict[str, torch.Tensor])
             meters[str(key)] = [scalar.clone(), 1]
 
 
+def _scalar_loss_finite_flag(
+    losses: dict[str, torch.Tensor],
+) -> tuple[list[str], torch.Tensor]:
+    """Return scalar-loss names and one on-device all-finite flag.
+
+    A separate ``Tensor.item()`` for every reported loss serializes the CUDA
+    stream once per component.  v46 exposes more than twenty scalar metrics, so
+    the old safety check introduced dozens of avoidable synchronizations per
+    optimizer step.  This helper keeps all predicates on device and reduces the
+    common path to one aggregate synchronization.
+    """
+    names: list[str] = []
+    flags: list[torch.Tensor] = []
+    for name, value in losses.items():
+        if torch.is_tensor(value) and value.numel() == 1:
+            names.append(str(name))
+            flags.append(torch.isfinite(value.detach()).reshape(()))
+    if flags:
+        return names, torch.stack(flags).all()
+    device = next(
+        (value.device for value in losses.values() if torch.is_tensor(value)),
+        torch.device("cpu"),
+    )
+    return names, torch.ones((), dtype=torch.bool, device=device)
+
+
 def _aggregate_meters(meters: dict[str, Any], device: torch.device, distributed: bool) -> dict[str, float]:
     keys = sorted(meters)
     if not keys:
@@ -1175,14 +1201,22 @@ def main() -> None:
             # repeated GradScaler step skips.  Check every scalar component and
             # synchronize the decision across DDP ranks so all workers abort
             # together instead of hanging in the next collective.
-            nonfinite_names = [
-                name for name, value in losses.items()
-                if torch.is_tensor(value) and value.numel() == 1 and not bool(torch.isfinite(value.detach()).item())
-            ]
-            local_finite = torch.tensor(0 if nonfinite_names else 1, dtype=torch.int32, device=device)
+            scalar_names, local_finite_bool = _scalar_loss_finite_flag(losses)
+            local_finite = local_finite_bool.to(dtype=torch.int32)
             if distributed and dist.is_initialized():
                 dist.all_reduce(local_finite, op=dist.ReduceOp.MIN)
             if int(local_finite.item()) == 0:
+                nonfinite_names: list[str] = []
+                if not bool(local_finite_bool.item()):
+                    local_flags = torch.stack(
+                        [
+                            torch.isfinite(losses[name].detach()).reshape(())
+                            for name in scalar_names
+                        ]
+                    ).to(device="cpu")
+                    nonfinite_names = [
+                        name for name, ok in zip(scalar_names, local_flags.tolist()) if not bool(ok)
+                    ]
                 detail = ", ".join(nonfinite_names) if nonfinite_names else "non-finite loss on another DDP rank"
                 raise FloatingPointError(
                     f"Non-finite training objective at epoch={epoch} batch_index={batch_index} "

@@ -334,11 +334,62 @@ def _deployment_selector_scene_indices(
     return (torch.arange(count, device=device, dtype=torch.long) + start) % batch_size
 
 
+def _build_predicted_pair_numpy_cache(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Copy all exact-selector inputs to CPU once for one local batch.
+
+    Multi-budget supervision changes only the evidence budget.  The model
+    outputs, pair graph, masks, costs and metadata are identical across those
+    budgets, so copying them from CUDA for every budget is pure duplication.
+    """
+    s_cfg = cfg.get("selector", {})
+    t_cfg = cfg.get("tournament", {})
+    pair_head_needs_local = bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)) or float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0)) > 0.0
+    selector_needs_pair_var = (
+        float(t_cfg.get("beta_uncertainty", 0.0)) > 0.0
+        or float(s_cfg.get("lambda_info", 0.0)) > 0.0
+        or bool(s_cfg.get("force_uncertainty_objective", False))
+    )
+    logits = _to_numpy(outputs["proposal_logits"], np.float32)
+    family_logits = outputs.get("family_logits")
+    valid = _to_numpy(batch["candidate_valid"], bool)
+    fam_ids_t = batch.get("evidence_family_ids")
+    group_ids_t = batch.get("evidence_agent_group_ids")
+    flags = batch.get("runtime_safety_flags")
+    pair_var_t = outputs.get("pair_atom_var")
+    assert logits is not None and valid is not None
+    fam_ids_np = _to_numpy(fam_ids_t, np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
+    return {
+        "J0": _to_numpy(outputs["J0"], np.float32),
+        "g_np": _to_numpy(outputs.get("g"), np.float32) if pair_head_needs_local and "g" in outputs else None,
+        "delta": _to_numpy(outputs["pair_atom_delta"], np.float32),
+        "pair_var": _to_numpy(pair_var_t, np.float32) if (pair_var_t is not None and selector_needs_pair_var) else None,
+        "pairs": _to_numpy(batch["pair_indices"], np.int64),
+        "pair_valid": _to_numpy(batch["pair_valid"], bool),
+        "pair_weights": _to_numpy(batch.get("pair_weights", torch.ones_like(batch["pair_valid"], dtype=torch.float32)), np.float32),
+        "logits": logits,
+        "family_logits_np": _to_numpy(family_logits, np.float32) if family_logits is not None else None,
+        "valid": valid,
+        "active": _to_numpy(batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()), bool),
+        "costs": _to_numpy(batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])), np.float32),
+        "fam_ids_np": fam_ids_np,
+        "group_ids_np": _to_numpy(group_ids_t, np.int64) if group_ids_t is not None else np.full_like(fam_ids_np, -1, dtype=np.int64),
+        "flags_np": _to_numpy(flags, bool) if flags is not None else np.zeros_like(valid, dtype=bool),
+        "evidence_features_np": _to_numpy(batch.get("evidence_features"), np.float32) if "evidence_features" in batch else None,
+        "decisive_hard_np": _to_numpy(batch.get("decisive_hard_mask"), bool) if "decisive_hard_mask" in batch else None,
+    }
+
+
 def _predicted_pair_certificate_masks(
     outputs: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
     cfg: dict[str, Any],
     scene_indices: torch.Tensor | None = None,
+    _numpy_cache: dict[str, Any] | None = None,
+    _aocc_scene_caches: list[dict[str, Any]] | None = None,
 ) -> torch.Tensor:
     """Stop-gradient HAB masks for pair-conditioned action supervision.
 
@@ -360,43 +411,25 @@ def _predicted_pair_certificate_masks(
     c_cfg = cfg.get("calibration", {})
     normalize_margins = bool(cfg.get("model", {}).get("pair_margin_normalized", True))
     pair_head_needs_local = bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)) or float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0)) > 0.0
-    selector_needs_pair_var = (
-        float(t_cfg.get("beta_uncertainty", 0.0)) > 0.0
-        or float(s_cfg.get("lambda_info", 0.0)) > 0.0
-        or bool(s_cfg.get("force_uncertainty_objective", False))
-    )
 
-    J0 = _to_numpy(outputs["J0"], np.float32)
-    g_np = _to_numpy(outputs.get("g"), np.float32) if pair_head_needs_local and "g" in outputs else None
-    delta = _to_numpy(outputs["pair_atom_delta"], np.float32)
-    pair_var_t = outputs.get("pair_atom_var")
-    pair_var = _to_numpy(pair_var_t, np.float32) if (pair_var_t is not None and selector_needs_pair_var) else None
-    pairs = _to_numpy(batch["pair_indices"], np.int64)
-    pair_valid = _to_numpy(batch["pair_valid"], bool)
-    pair_weights = _to_numpy(batch.get("pair_weights", torch.ones_like(batch["pair_valid"], dtype=torch.float32)), np.float32)
-    logits = _to_numpy(outputs["proposal_logits"], np.float32)
-    family_logits = outputs.get("family_logits")
-    family_logits_np = _to_numpy(family_logits, np.float32) if family_logits is not None else None
-    valid = _to_numpy(batch["candidate_valid"], bool)
-    active = _to_numpy(batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()), bool)
-    costs = _to_numpy(batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])), np.float32)
-    fam_ids_t = batch.get("evidence_family_ids")
-    fam_ids_np = _to_numpy(fam_ids_t, np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
-    # Keep the training-time pair selector feature-complete with the runtime
-    # selector.  v38 copied the interaction-group reservation calls below but
-    # omitted this initialization, causing the first finetune batch to fail with
-    # NameError: group_ids_np is not defined.  Missing group ids intentionally
-    # fall back to -1 (no group), matching _predicted_certificate_masks().
-    group_ids_t = batch.get("evidence_agent_group_ids")
-    group_ids_np = (
-        _to_numpy(group_ids_t, np.int64)
-        if group_ids_t is not None
-        else np.full_like(fam_ids_np, -1, dtype=np.int64)
-    )
-    flags = batch.get("runtime_safety_flags")
-    flags_np = _to_numpy(flags, bool) if flags is not None else np.zeros_like(valid, dtype=bool)
-    evidence_features_np = _to_numpy(batch.get("evidence_features"), np.float32) if "evidence_features" in batch else None
-    decisive_hard_np = _to_numpy(batch.get("decisive_hard_mask"), bool) if "decisive_hard_mask" in batch else None
+    cache = _numpy_cache if _numpy_cache is not None else _build_predicted_pair_numpy_cache(outputs, batch, cfg)
+    J0 = cache["J0"]
+    g_np = cache["g_np"]
+    delta = cache["delta"]
+    pair_var = cache["pair_var"]
+    pairs = cache["pairs"]
+    pair_valid = cache["pair_valid"]
+    pair_weights = cache["pair_weights"]
+    logits = cache["logits"]
+    family_logits_np = cache["family_logits_np"]
+    valid = cache["valid"]
+    active = cache["active"]
+    costs = cache["costs"]
+    fam_ids_np = cache["fam_ids_np"]
+    group_ids_np = cache["group_ids_np"]
+    flags_np = cache["flags_np"]
+    evidence_features_np = cache["evidence_features_np"]
+    decisive_hard_np = cache["decisive_hard_np"]
 
     Bsz, E = logits.shape
     selected_mask = np.zeros((Bsz, E), dtype=bool)
@@ -429,7 +462,7 @@ def _predicted_pair_certificate_masks(
         # logits are still immature.  This is not dense leakage into the final
         # certificate; it only expands the Top-M candidate pool before the same
         # budgeted greedy selector runs.
-        if (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and "decisive_hard_mask" in batch:
+        if (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and decisive_hard_np is not None:
             hard_train = (decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx]
             forced = np.flatnonzero(hard_train)
             if forced.size:
@@ -504,7 +537,7 @@ def _predicted_pair_certificate_masks(
             active[bidx],
             include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
         )
-        if (not structural_bypass) and "decisive_hard_mask" in batch and bool(s_cfg.get("force_decisive_hard_topm", True)):
+        if (not structural_bypass) and decisive_hard_np is not None and bool(s_cfg.get("force_decisive_hard_topm", True)):
             mandatory = mandatory | ((decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx])
         if structural_bypass:
             atom_active &= ~mandatory
@@ -597,9 +630,50 @@ def _predicted_pair_certificate_masks(
             adverse_certificate_margin=float(s_cfg.get("adverse_certificate_margin", 0.0)),
             adverse_certificate_stop_when_certified=bool(s_cfg.get("adverse_certificate_stop_when_certified", True)),
             adverse_certificate_max_target_rivals=int(s_cfg.get("adverse_certificate_max_target_rivals", 0)),
+            aocc_state_cache=(
+                _aocc_scene_caches[bidx]
+                if _aocc_scene_caches is not None and bidx < len(_aocc_scene_caches)
+                else None
+            ),
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)
+
+
+
+def _predicted_pair_certificate_masks_multi_budget(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    budget_cfgs: list[dict[str, Any]],
+    scene_indices: torch.Tensor | None = None,
+) -> list[torch.Tensor]:
+    """Exact masks for several budgets with one CUDA-to-CPU snapshot.
+
+    The selector itself remains unchanged and is still evaluated independently
+    for each configured budget.  Only duplicated tensor slicing and host copies
+    are removed, so this is numerically identical to repeated calls to
+    :func:`_predicted_pair_certificate_masks`.
+    """
+    if not budget_cfgs:
+        return []
+    full_batch_size = int(outputs["J0"].shape[0])
+    if scene_indices is not None:
+        scene_indices = scene_indices.to(device=outputs["J0"].device, dtype=torch.long)
+        outputs = _slice_scene_batch(outputs, scene_indices, full_batch_size)
+        batch = _slice_scene_batch(batch, scene_indices, full_batch_size)
+    cache = _build_predicted_pair_numpy_cache(outputs, batch, budget_cfgs[0])
+    scene_caches = [dict() for _ in range(int(outputs["J0"].shape[0]))]
+    return [
+        _predicted_pair_certificate_masks(
+            outputs,
+            batch,
+            local_cfg,
+            scene_indices=None,
+            _numpy_cache=cache,
+            _aocc_scene_caches=scene_caches,
+        )
+        for local_cfg in budget_cfgs
+    ]
 
 
 
@@ -1276,60 +1350,94 @@ def _pair_cycle_consistency_loss(
 ) -> torch.Tensor:
     """Triangle consistency for pair-conditioned scalar-cost differences.
 
-    For a fixed scene/evidence interface, margins should satisfy
-    M(a,b)+M(b,c)+M(c,a)=0.  We build a sparse antisymmetric matrix from the
-    cached pair graph and deterministically prioritize triangles containing the
-    teacher action, then near-boundary triangles.  The pair head is already
-    antisymmetric by construction; this loss addresses transitivity, which is a
-    separate property.
+    The selected triangle set is discrete and therefore stop-gradient.  Build
+    it from a single batched CPU snapshot instead of repeatedly calling
+    ``item()`` / ``bool()`` on CUDA tensors inside Python loops.  The selected
+    margins are then gathered from the original GPU tensor, preserving the exact
+    objective and gradients while eliminating hundreds of per-step CUDA
+    synchronizations.
     """
     train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
     ccfg = train_cfg.get("cycle_consistency", {}) or {}
     max_triangles = max(1, int(ccfg.get("max_triangles_per_scene", 64)))
     delta = max(float(ccfg.get("huber_delta", 0.15)), 1e-6)
-    losses: list[torch.Tensor] = []
     B, P = predicted_margin.shape
     K = int(valid_actions.shape[1])
+
+    # Collect all topology/ranking inputs in one batched snapshot phase rather
+    # than synchronizing from inside the pair/triangle loops. ``predicted_margin``
+    # is detached only for triangle ranking; gradients flow through the gather below.
+    pair_np = pairs.detach().to(device="cpu").numpy()
+    mask_np = pair_mask.detach().to(device="cpu").numpy().astype(bool, copy=False)
+    target_np = target_action.detach().to(device="cpu").numpy()
+    valid_np = valid_actions.detach().to(device="cpu").numpy().astype(bool, copy=False)
+    margin_np = predicted_margin.detach().float().to(device="cpu").numpy()
+
+    scene_ids: list[int] = []
+    pair_ids: list[tuple[int, int, int]] = []
+    pair_signs: list[tuple[float, float, float]] = []
     for bi in range(B):
-        edge: dict[tuple[int, int], torch.Tensor] = {}
+        # Match the legacy dict semantics exactly: later duplicate pair entries
+        # overwrite earlier ones, and every directed edge also installs its
+        # antisymmetric reverse edge.
+        edge: dict[tuple[int, int], tuple[int, float]] = {}
         for pi in range(P):
-            if not bool(pair_mask[bi, pi]):
+            if not bool(mask_np[bi, pi]):
                 continue
-            a = int(pairs[bi, pi, 0].item())
-            b = int(pairs[bi, pi, 1].item())
+            a = int(pair_np[bi, pi, 0])
+            b = int(pair_np[bi, pi, 1])
             if a == b or not (0 <= a < K and 0 <= b < K):
                 continue
-            value = predicted_margin[bi, pi]
-            edge[(a, b)] = value
-            edge[(b, a)] = -value
-        actions = [int(x) for x in torch.nonzero(valid_actions[bi], as_tuple=False).flatten().tolist()]
-        tgt = int(target_action[bi].item())
-        candidates: list[tuple[float, int, int, int, torch.Tensor]] = []
+            edge[(a, b)] = (pi, 1.0)
+            edge[(b, a)] = (pi, -1.0)
+
+        actions = np.flatnonzero(valid_np[bi]).astype(np.int64, copy=False).tolist()
+        tgt = int(target_np[bi])
+        candidates: list[
+            tuple[
+                int,
+                float,
+                int,
+                int,
+                int,
+                tuple[int, int, int],
+                tuple[float, float, float],
+            ]
+        ] = []
         for ia, a in enumerate(actions):
             for ib in range(ia + 1, len(actions)):
-                b = actions[ib]
+                b = int(actions[ib])
                 for ic in range(ib + 1, len(actions)):
-                    c = actions[ic]
-                    if (a, b) not in edge or (b, c) not in edge or (c, a) not in edge:
+                    c = int(actions[ic])
+                    refs = (edge.get((a, b)), edge.get((b, c)), edge.get((c, a)))
+                    if any(ref is None for ref in refs):
                         continue
-                    cyc = edge[(a, b)] + edge[(b, c)] + edge[(c, a)]
-                    contains_tgt = 0 if tgt in (a, b, c) else 1
-                    boundary = float(
-                        min(
-                            abs(float(edge[(a, b)].detach().item())),
-                            abs(float(edge[(b, c)].detach().item())),
-                            abs(float(edge[(c, a)].detach().item())),
-                        )
+                    r0, r1, r2 = refs  # type: ignore[misc]
+                    ids = (int(r0[0]), int(r1[0]), int(r2[0]))
+                    signs = (float(r0[1]), float(r1[1]), float(r2[1]))
+                    boundary = min(
+                        abs(signs[0] * float(margin_np[bi, ids[0]])),
+                        abs(signs[1] * float(margin_np[bi, ids[1]])),
+                        abs(signs[2] * float(margin_np[bi, ids[2]])),
                     )
-                    candidates.append((contains_tgt, boundary, a, b, c, cyc))
+                    contains_tgt = 0 if tgt in (a, b, c) else 1
+                    candidates.append((contains_tgt, boundary, a, b, c, ids, signs))
         candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
         for item in candidates[:max_triangles]:
-            cyc = item[-1]
-            abs_cyc = cyc.abs()
-            losses.append(torch.where(abs_cyc <= delta, 0.5 * cyc.square() / delta, abs_cyc - 0.5 * delta))
-    if not losses:
+            scene_ids.append(bi)
+            pair_ids.append(item[5])
+            pair_signs.append(item[6])
+
+    if not scene_ids:
         return predicted_margin.new_tensor(0.0)
-    return torch.stack(losses).mean()
+
+    scene_t = torch.as_tensor(scene_ids, dtype=torch.long, device=predicted_margin.device)
+    pair_t = torch.as_tensor(pair_ids, dtype=torch.long, device=predicted_margin.device)
+    sign_t = torch.as_tensor(pair_signs, dtype=predicted_margin.dtype, device=predicted_margin.device)
+    gathered = predicted_margin[scene_t[:, None], pair_t]
+    cyc = (gathered * sign_t).sum(dim=1)
+    abs_cyc = cyc.abs()
+    return torch.where(abs_cyc <= delta, 0.5 * cyc.square() / delta, abs_cyc - 0.5 * delta).mean()
 
 
 
@@ -1936,6 +2044,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
                 )
 
+            prepared_budget_entries: list[tuple[float, float, dict[str, Any]]] = []
             for budget_value, budget_weight in budget_entries:
                 budget_cfg = _config_with_evidence_budget(cfg, budget_value)
                 train_swap_passes = train_cfg.get("deployment_selector_swap_passes", None)
@@ -1944,36 +2053,50 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     local_selector = dict(budget_cfg.get("selector", {}))
                     local_selector["margin_coreset_swap_passes"] = max(0, int(train_swap_passes))
                     budget_cfg["selector"] = local_selector
+                prepared_budget_entries.append((float(budget_value), float(budget_weight), budget_cfg))
 
+            exact_scene_indices = torch.empty((0,), dtype=torch.long, device=J0.device)
+            exact_scene_mask = torch.zeros((int(J0.shape[0]),), dtype=torch.bool, device=J0.device)
+            exact_budget_masks: list[torch.Tensor] = []
+            if selector_backend not in fast_backends and prepared_budget_entries:
+                exact_scene_indices = _deployment_selector_scene_indices(
+                    int(J0.shape[0]), train_cfg, J0.device
+                )
+                if exact_scene_indices.numel() > 0:
+                    exact_scene_mask.index_fill_(0, exact_scene_indices, True)
+                    _exact_started = time.perf_counter()
+                    exact_budget_masks = _predicted_pair_certificate_masks_multi_budget(
+                        out,
+                        batch,
+                        [entry[2] for entry in prepared_budget_entries],
+                        scene_indices=(
+                            None
+                            if exact_scene_indices.numel() == int(J0.shape[0])
+                            else exact_scene_indices
+                        ),
+                    )
+                    selector_exact_wall_time_s = J0.new_tensor(time.perf_counter() - _exact_started)
+                selector_exact_fraction = J0.new_tensor(
+                    float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
+                )
+
+            for budget_index, (budget_value, budget_weight, budget_cfg) in enumerate(prepared_budget_entries):
                 if selector_backend in fast_backends:
                     mask_key = min(fast_masks, key=lambda value: abs(value - float(budget_value)))
                     pair_selected_mask = fast_masks[mask_key] & pair_action_atom_mask
                 else:
-                    exact_scene_indices = _deployment_selector_scene_indices(
-                        int(J0.shape[0]), train_cfg, J0.device
-                    )
-                    _exact_started = time.perf_counter()
                     if exact_scene_indices.numel() == int(J0.shape[0]):
-                        pair_selected_mask = _predicted_pair_certificate_masks(out, batch, budget_cfg) & pair_action_atom_mask
+                        pair_selected_mask = exact_budget_masks[budget_index] & pair_action_atom_mask
                     else:
                         if target_sel is not None:
                             pair_selected_mask = target_sel.bool() & pair_action_atom_mask
                         else:
                             pair_selected_mask = torch.zeros_like(pair_action_atom_mask)
                         if exact_scene_indices.numel() > 0:
-                            exact_mask = _predicted_pair_certificate_masks(
-                                out, batch, budget_cfg, scene_indices=exact_scene_indices
-                            )
+                            exact_mask = exact_budget_masks[budget_index]
                             exact_mask = exact_mask & pair_action_atom_mask.index_select(0, exact_scene_indices)
                             pair_selected_mask = pair_selected_mask.clone()
                             pair_selected_mask.index_copy_(0, exact_scene_indices, exact_mask)
-                    selector_exact_wall_time_s = selector_exact_wall_time_s + J0.new_tensor(time.perf_counter() - _exact_started)
-                    exact_scene_mask = torch.zeros((int(J0.shape[0]),), dtype=torch.bool, device=J0.device)
-                    if exact_scene_indices.numel() > 0:
-                        exact_scene_mask.index_fill_(0, exact_scene_indices, True)
-                    selector_exact_fraction = J0.new_tensor(
-                        float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
-                    )
                     deployment_mask_entries.append(
                         (max(float(budget_weight), 0.0), pair_selected_mask.detach(), exact_scene_mask)
                     )
