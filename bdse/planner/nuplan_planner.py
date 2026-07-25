@@ -155,6 +155,10 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
         "pair_delta_tournament_local_weight_mean": float(pred.get("pair_delta_tournament_local_weight_mean", 0.0)),
         "pair_delta_tournament_sign_disagreement_rate": float(pred.get("pair_delta_tournament_sign_disagreement_rate", 0.0)),
         "viability_pair_weight_mean": float(pred.get("viability_viability_pair_weight_mean", pred.get("viability_pair_weight_mean", 0.0))),
+        "stage_predict_ms": float(pred.get("stage_predict_ms", 0.0)),
+        "stage_selector_ms": float(pred.get("stage_selector_ms", 0.0)),
+        "stage_tournament_ms": float(pred.get("stage_tournament_ms", 0.0)),
+        "stage_total_internal_ms": float(pred.get("stage_total_internal_ms", 0.0)),
     }
 
 
@@ -505,7 +509,13 @@ class BDSEPlannerCore:
         return pred, selection, tournament
 
     def _run_certificate_stage(self, runtime: RuntimeFeatures, candidates, evidence_bank, stage_cfg: dict[str, Any]) -> tuple[dict[str, Any], Any, Any, np.ndarray]:
+        stage_started = time.perf_counter()
         pred = self._predict_runtime_certificate(runtime, candidates, evidence_bank, stage_cfg)
+        predict_finished = time.perf_counter()
+        selector_started = predict_finished
+        selection_finished = predict_finished
+        tournament_started = predict_finished
+        tournament_finished = predict_finished
         J0, g = pred["J0"], pred["g"]
         g_var = pred.get("g_var", None)
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, stage_cfg)
@@ -533,7 +543,7 @@ class BDSEPlannerCore:
             if (
                 float(sel_cfg.get("action_utility_weight", 0.0)) > 0.0
                 or float(sel_cfg.get("action_pair_utility_weight", 0.0)) > 0.0
-                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc", "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc"}
+                or str(sel_cfg.get("selector_cap_mode", "")).lower() in {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc", "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc", "anytime_adverse_certificate", "one_sided_adverse_certificate", "aocc", "aobcc", "nested_certificate"}
             ):
                 action_utility_cost = _trajectory_utility_cost_np(
                     candidates.trajectories,
@@ -604,6 +614,7 @@ class BDSEPlannerCore:
                     )
                     return int(trial.action_index), np.asarray(trial.scores), np.asarray(trial.margins), dict(trial.diagnostics)
 
+            selector_started = time.perf_counter()
             selection = runtime_greedy_selector_pair_conditioned(
                 J0,
                 search_pair_delta,
@@ -675,6 +686,12 @@ class BDSEPlannerCore:
                 direction_invariant_flip_bonus=float(sel_cfg.get("direction_invariant_flip_bonus", 0.5)),
                 collapse_reciprocal_pairs=bool(sel_cfg.get("collapse_reciprocal_pairs", True)),
                 force_uncertainty_objective=bool(sel_cfg.get("force_uncertainty_objective", False)),
+                adverse_certificate_beta=float(sel_cfg.get("adverse_certificate_beta", 1.0)),
+                adverse_certificate_epsilon=float(sel_cfg.get("adverse_certificate_epsilon", 0.05)),
+                adverse_certificate_prior_radius=float(sel_cfg.get("adverse_certificate_prior_radius", 0.10)),
+                adverse_certificate_margin=float(sel_cfg.get("adverse_certificate_margin", 0.0)),
+                adverse_certificate_stop_when_certified=bool(sel_cfg.get("adverse_certificate_stop_when_certified", True)),
+                adverse_certificate_max_target_rivals=int(sel_cfg.get("adverse_certificate_max_target_rivals", 0)),
                 margin_coreset_residual_weight=float(sel_cfg.get("margin_coreset_residual_weight", 1.0)),
                 margin_coreset_sign_weight=float(sel_cfg.get("margin_coreset_sign_weight", 0.8)),
                 margin_coreset_winner_weight=float(sel_cfg.get("margin_coreset_winner_weight", 1.5)),
@@ -736,9 +753,11 @@ class BDSEPlannerCore:
                     sel_cfg.get("deployment_coreset_budget_layer_diversity_distance", 2)
                 ),
             )
+            selection_finished = time.perf_counter()
             selection.diagnostics["deployment_coreset_search_uses_rival_graph"] = bool(
                 deployment_search_uses_rival_graph
             )
+            tournament_started = time.perf_counter()
             tournament = run_pair_conditioned_tournament(
                 J0,
                 pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
@@ -752,6 +771,7 @@ class BDSEPlannerCore:
                 maneuver_ids=candidates.maneuver_ids,
             )
         else:
+            selector_started = time.perf_counter()
             selection = runtime_greedy_selector(
                 J0, g, evidence_bank.budget_costs(), candidates.valid_mask, runtime_flags,
                 budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
@@ -781,7 +801,9 @@ class BDSEPlannerCore:
                 progress_pair_count=int(sel_cfg.get("progress_pair_count", 0)),
                 maneuver_pair_count=int(sel_cfg.get("maneuver_pair_count", 0)),
             )
+            selection_finished = time.perf_counter()
             sigma = selected_pair_sigma_from_action_variance(g_var, selection.selected, candidates.valid_mask)
+            tournament_started = time.perf_counter()
             tournament = run_tournament(
                 J0, g, selection.selected, candidates.valid_mask, runtime_flags, stage_cfg, sigma=sigma,
                 candidate_trajectories=candidates.trajectories,
@@ -790,6 +812,14 @@ class BDSEPlannerCore:
         tournament = self._apply_all_flagged_structural_guard(
             tournament, runtime, candidates, runtime_flags, stage_cfg
         )
+        tournament_finished = time.perf_counter()
+        pred = dict(pred)
+        pred.update({
+            "stage_predict_ms": 1000.0 * (predict_finished - stage_started),
+            "stage_selector_ms": 1000.0 * (selection_finished - selector_started),
+            "stage_tournament_ms": 1000.0 * (tournament_finished - tournament_started),
+            "stage_total_internal_ms": 1000.0 * (tournament_finished - stage_started),
+        })
         selection.diagnostics.update({
             "structural_safety_bypass": bool(structural_safety_bypass),
             "structural_safety_atom_count": int(structural_mask.sum()),

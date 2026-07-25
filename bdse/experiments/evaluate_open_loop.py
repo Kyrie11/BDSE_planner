@@ -12,6 +12,8 @@ from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
+from bdse.planner.fallback import runtime_safety_flags_from_runtime
+from bdse.planner.tournament import run_pair_conditioned_tournament
 from bdse.utils import configure_torch_for_device, resolve_torch_device
 from bdse.external_baselines.model_factory import load_model_for_config
 
@@ -62,7 +64,7 @@ def main() -> None:
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         planner_start = time.perf_counter()
-        pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
+        pred, sel, tour, stage_atom_active = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         planner_latency_ms = 1000.0 * (time.perf_counter() - planner_start)
@@ -75,6 +77,7 @@ def main() -> None:
         mode = str(sel_diag.get("mode", ""))
         qdiag["selector_action_rank_active"] = float(mode.startswith("runtime_pair_conditioned_action_rank") or mode == "runtime_pair_conditioned_hybrid_lcb_action_rank")
         qdiag["selector_margin_coreset_active"] = float(mode == "runtime_pair_conditioned_margin_coreset")
+        qdiag["selector_anytime_adverse_certificate_active"] = float(mode == "runtime_pair_conditioned_anytime_adverse_certificate")
         qdiag["selector_deployment_coreset_active"] = float(mode == "runtime_pair_conditioned_deployment_coreset")
         qdiag["selector_hybrid_lcb_action_rank_active"] = float(mode == "runtime_pair_conditioned_hybrid_lcb_action_rank")
         qdiag["selector_flip_rank_active"] = float(mode == "runtime_pair_conditioned_flip_rank")
@@ -85,6 +88,35 @@ def main() -> None:
             elif isinstance(v, (int, float, np.integer, np.floating)) and np.isfinite(float(v)):
                 qdiag[f"selector_{k}"] = float(v)
         qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
+        # Pair-conditioned full-support diagnostic using the exact same final
+        # tournament as deployment.  The legacy full_interface_action_match is
+        # computed from the action-conditioned g head and is not the ceiling of
+        # the pair-conditioned selector/tournament path.
+        pair_full_action = -1
+        if "pair_atom_delta" in pred and "pair_indices" in pred:
+            full_atoms = np.flatnonzero(np.asarray(stage_atom_active, dtype=bool)).astype(np.int64).tolist()
+            sel_cfg = cfg.get("selector", {})
+            if bool(sel_cfg.get("decision_budget_excludes_structural_safety", False)):
+                structural = np.asarray(pred.get("mandatory_atom_mask", np.zeros_like(stage_atom_active)), dtype=bool).reshape(-1)
+                full_atoms = [i for i in full_atoms if i >= structural.shape[0] or not bool(structural[i])]
+            runtime_flags = runtime_safety_flags_from_runtime(sample.runtime, sample.candidates, cfg)
+            pair_full_tour = run_pair_conditioned_tournament(
+                pred["J0"],
+                pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
+                pred.get("rival_pair_indices", pred["pair_indices"]),
+                full_atoms,
+                sample.candidates.valid_mask,
+                runtime_flags,
+                {**cfg, "runtime_pair_margin_scale": float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))},
+                pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+                candidate_trajectories=sample.candidates.trajectories,
+                maneuver_ids=sample.candidates.maneuver_ids,
+            )
+            pair_full_tour = core._apply_all_flagged_structural_guard(
+                pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
+            )
+            pair_full_action = int(pair_full_tour.action_index)
+
         dense = None
         if not args.disable_dense_diagnostic and hasattr(model, "predict_dense_numpy"):
             dense = model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
@@ -104,6 +136,10 @@ def main() -> None:
             dense_predicted_atom_costs=None if dense is None else dense["g"],
             certificate_margin_matrix=tour.margins,
         )
+        if pair_full_action >= 0:
+            diag.values["pair_full_interface_action_match"] = float(pair_full_action == int(sample.teacher.a_star))
+            diag.values["budget_vs_pair_full_match"] = float(int(tour.action_index) == pair_full_action)
+            diag.details["pair_full_action"] = int(pair_full_action)
         results.append(diag)
         if args.per_sample_output:
             row = {
@@ -113,6 +149,7 @@ def main() -> None:
                 "teacher_action": int(getattr(sample.teacher, "a_star", -1)),
                 "bdse_action": int(tour.action_index),
                 "full_action": int(diag.details.get("full_action", -1)),
+                "pair_full_action": int(diag.details.get("pair_full_action", -1)),
                 "fallback_would_trigger": bool(qdiag.get("fallback_would_trigger", False)),
                 "planner_latency_ms": float(planner_latency_ms),
             }

@@ -591,6 +591,12 @@ def _predicted_pair_certificate_masks(
             direction_invariant_flip_bonus=float(s_cfg.get("direction_invariant_flip_bonus", 0.5)),
             collapse_reciprocal_pairs=bool(s_cfg.get("collapse_reciprocal_pairs", True)),
             force_uncertainty_objective=bool(s_cfg.get("force_uncertainty_objective", False)),
+            adverse_certificate_beta=float(s_cfg.get("adverse_certificate_beta", 1.0)),
+            adverse_certificate_epsilon=float(s_cfg.get("adverse_certificate_epsilon", 0.05)),
+            adverse_certificate_prior_radius=float(s_cfg.get("adverse_certificate_prior_radius", 0.10)),
+            adverse_certificate_margin=float(s_cfg.get("adverse_certificate_margin", 0.0)),
+            adverse_certificate_stop_when_certified=bool(s_cfg.get("adverse_certificate_stop_when_certified", True)),
+            adverse_certificate_max_target_rivals=int(s_cfg.get("adverse_certificate_max_target_rivals", 0)),
         )
         selected_mask[bidx, result.selected] = True
     return torch.from_numpy(selected_mask).to(outputs["J0"].device)
@@ -1222,6 +1228,111 @@ def _decision_pair_weights(
 
 
 
+def _online_teacher_hard_rival_loss(
+    predicted_margin: torch.Tensor,
+    pairs: torch.Tensor,
+    pair_mask: torch.Tensor,
+    target_action: torch.Tensor,
+    cfg: dict[str, Any],
+) -> torch.Tensor:
+    """Mine the currently most dangerous teacher-vs-rival pairs online.
+
+    Cached pair labels already contain teacher-vs-top rivals and near ties.  This
+    term changes *which of those pairs receives the strongest gradient at the
+    current checkpoint*: it selects the smallest predicted oriented margins,
+    including sign-flipped failures, instead of relying only on static weights.
+    """
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    hcfg = train_cfg.get("online_hard_rival", {}) or {}
+    top_k = max(1, int(hcfg.get("top_k", 4)))
+    tau = max(float(hcfg.get("tau", 0.12)), 1e-6)
+    margin = float(hcfg.get("margin", 0.08))
+    B, P = predicted_margin.shape
+    tgt = target_action[:, None]
+    a = pairs[..., 0].long()
+    b = pairs[..., 1].long()
+    orient = torch.where(a == tgt, torch.ones_like(predicted_margin), torch.zeros_like(predicted_margin))
+    orient = torch.where(b == tgt, -torch.ones_like(predicted_margin), orient)
+    valid = pair_mask.bool() & (orient != 0.0)
+    oriented = predicted_margin * orient
+    # Lowest oriented margins are the online hard rivals.  Detached selection
+    # keeps the mining discrete while the selected margins retain gradients.
+    rank_value = oriented.detach().masked_fill(~valid, torch.finfo(oriented.dtype).max)
+    k = min(top_k, P)
+    idx = torch.topk(rank_value, k=k, dim=1, largest=False, sorted=False).indices
+    chosen_valid = valid.gather(1, idx)
+    chosen_margin = oriented.gather(1, idx)
+    loss = F.softplus((margin - chosen_margin) / tau)
+    return (loss * chosen_valid.float()).sum() / chosen_valid.float().sum().clamp_min(1.0)
+
+
+def _pair_cycle_consistency_loss(
+    predicted_margin: torch.Tensor,
+    pairs: torch.Tensor,
+    pair_mask: torch.Tensor,
+    target_action: torch.Tensor,
+    valid_actions: torch.Tensor,
+    cfg: dict[str, Any],
+) -> torch.Tensor:
+    """Triangle consistency for pair-conditioned scalar-cost differences.
+
+    For a fixed scene/evidence interface, margins should satisfy
+    M(a,b)+M(b,c)+M(c,a)=0.  We build a sparse antisymmetric matrix from the
+    cached pair graph and deterministically prioritize triangles containing the
+    teacher action, then near-boundary triangles.  The pair head is already
+    antisymmetric by construction; this loss addresses transitivity, which is a
+    separate property.
+    """
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    ccfg = train_cfg.get("cycle_consistency", {}) or {}
+    max_triangles = max(1, int(ccfg.get("max_triangles_per_scene", 64)))
+    delta = max(float(ccfg.get("huber_delta", 0.15)), 1e-6)
+    losses: list[torch.Tensor] = []
+    B, P = predicted_margin.shape
+    K = int(valid_actions.shape[1])
+    for bi in range(B):
+        edge: dict[tuple[int, int], torch.Tensor] = {}
+        for pi in range(P):
+            if not bool(pair_mask[bi, pi]):
+                continue
+            a = int(pairs[bi, pi, 0].item())
+            b = int(pairs[bi, pi, 1].item())
+            if a == b or not (0 <= a < K and 0 <= b < K):
+                continue
+            value = predicted_margin[bi, pi]
+            edge[(a, b)] = value
+            edge[(b, a)] = -value
+        actions = [int(x) for x in torch.nonzero(valid_actions[bi], as_tuple=False).flatten().tolist()]
+        tgt = int(target_action[bi].item())
+        candidates: list[tuple[float, int, int, int, torch.Tensor]] = []
+        for ia, a in enumerate(actions):
+            for ib in range(ia + 1, len(actions)):
+                b = actions[ib]
+                for ic in range(ib + 1, len(actions)):
+                    c = actions[ic]
+                    if (a, b) not in edge or (b, c) not in edge or (c, a) not in edge:
+                        continue
+                    cyc = edge[(a, b)] + edge[(b, c)] + edge[(c, a)]
+                    contains_tgt = 0 if tgt in (a, b, c) else 1
+                    boundary = float(
+                        min(
+                            abs(float(edge[(a, b)].detach().item())),
+                            abs(float(edge[(b, c)].detach().item())),
+                            abs(float(edge[(c, a)].detach().item())),
+                        )
+                    )
+                    candidates.append((contains_tgt, boundary, a, b, c, cyc))
+        candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+        for item in candidates[:max_triangles]:
+            cyc = item[-1]
+            abs_cyc = cyc.abs()
+            losses.append(torch.where(abs_cyc <= delta, 0.5 * cyc.square() / delta, abs_cyc - 0.5 * delta))
+    if not losses:
+        return predicted_margin.new_tensor(0.0)
+    return torch.stack(losses).mean()
+
+
+
 def _critical_pair_mask(
     pairs: torch.Tensor,
     target_action: torch.Tensor,
@@ -1597,6 +1708,12 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     )
     L_rank_reg = _weighted_mean(reg_terms, decision_w, pair_train_mask)
     L_rank = L_rank_cls + float(train_cfg.get("pair_margin_reg_weight", 1.0)) * L_rank_reg
+    L_online_hard_rival = _online_teacher_hard_rival_loss(
+        M_hat_E, pairs, pair_train_mask, target_action, cfg
+    )
+    L_cycle = _pair_cycle_consistency_loss(
+        M_hat_E, pairs, pair_train_mask, target_action, valid, cfg
+    )
 
     target_sel = batch.get("oracle_selected_mask")
     decisive = batch.get("decisive_atom_mask")
@@ -2043,6 +2160,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("certificate_gap", 0.0)) * L_cert_gap
         + float(lw.get("certificate_safety", 0.0)) * L_cert_safety
         + float(lw.get("certificate_safe_frontier", 0.0)) * L_cert_frontier
+        + float(lw.get("online_hard_rival", 0.0)) * L_online_hard_rival
+        + float(lw.get("cycle_consistency", 0.0)) * L_cycle
     )
     return {
         "loss": total,
@@ -2068,6 +2187,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_cert_gap": L_cert_gap if 'L_cert_gap' in locals() else J0.new_tensor(0.0),
         "L_cert_safety": L_cert_safety if 'L_cert_safety' in locals() else J0.new_tensor(0.0),
         "L_cert_frontier": L_cert_frontier if 'L_cert_frontier' in locals() else J0.new_tensor(0.0),
+        "L_online_hard_rival": L_online_hard_rival,
+        "L_cycle": L_cycle,
         "selector_exact_fraction": selector_exact_fraction,
         "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,
         "selector_fast_wall_time_s": selector_fast_wall_time_s,

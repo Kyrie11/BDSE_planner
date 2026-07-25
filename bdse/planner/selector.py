@@ -3690,6 +3690,213 @@ def _deployment_aligned_coreset_from_pair_delta(
     }
     return selected, float(-final_loss), float(spent), diag
 
+
+def _anytime_one_sided_adverse_certificate_from_pair_delta(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    pair_weights: np.ndarray,
+    pair_indices: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    atom_active_mask: np.ndarray | None = None,
+    *,
+    atom_pair_variance: np.ndarray | None = None,
+    adverse_beta: float = 1.0,
+    adverse_epsilon: float = 0.05,
+    prior_radius: float = 0.10,
+    certificate_margin: float = 0.0,
+    boundary_tau: float = 0.25,
+    stop_when_certified: bool = True,
+    max_target_rivals: int = 0,
+) -> tuple[list[int], float, float, dict[str, Any]]:
+    """Nested one-sided adverse-bound certificate coreset.
+
+    The full Top-M pair field defines a predicted target action.  For each
+    target-vs-rival comparison we conservatively replace every unselected atom
+    by a one-sided adverse lower bound ``ell_i <= d_i``.  Selecting an atom
+    replaces ``ell_i`` by its scored contribution ``d_i`` and therefore gives a
+    non-negative certificate improvement.  The weighted capped-coverage
+    objective is monotone submodular.  We construct one budget-independent
+    gain-per-cost greedy order and expose every budget as a strict cumulative-
+    cost prefix, so smaller-budget selections are nested in larger ones.
+
+    This implementation is label-free and can run identically in training and
+    deployment.  A formal statistical certificate additionally requires
+    ``adverse_beta/adverse_epsilon/prior_radius`` to be calibrated on a held-out
+    split; without calibration the returned values are conservative scores, not
+    a coverage guarantee.
+    """
+    d = np.asarray(atom_delta, dtype=np.float32)
+    base = np.asarray(base_margin, dtype=np.float32).reshape(-1)
+    pairs = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    E = int(d.shape[0]) if d.ndim == 2 else int(costs.shape[0])
+    if d.ndim != 2 or d.shape[1] != base.shape[0]:
+        d = np.zeros((E, base.shape[0]), dtype=np.float32)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    costs = costs[:E]
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
+    active &= np.isfinite(costs) & (costs > 0.0)
+    if weights.shape[0] != pairs.shape[0]:
+        weights = np.ones((pairs.shape[0],), dtype=np.float32)
+    weights = np.maximum(weights[: pairs.shape[0]], 0.0)
+    if pairs.shape[0] == 0 or not bool(active.any()):
+        return [], 0.0, 0.0, {
+            "aocc_target_action": -1,
+            "aocc_target_confidence": 0.0,
+            "aocc_pair_count": 0,
+            "aocc_initial_deficit": 0.0,
+            "aocc_final_deficit": 0.0,
+            "aocc_certified_pair_fraction": 1.0,
+            "aocc_nested_order_length": 0,
+            "aocc_bound_calibrated": False,
+        }
+
+    active_idx = np.flatnonzero(active)
+    full_margin = base + d[active_idx].sum(axis=0)
+    target_action, target_conf = _pairwise_preference_action(
+        full_margin, pairs, weights, valid_mask, runtime_safety_flags,
+        tau=max(float(boundary_tau), 1e-3),
+    )
+    if target_action < 0:
+        return [], 0.0, 0.0, {
+            "aocc_target_action": -1,
+            "aocc_target_confidence": 0.0,
+            "aocc_pair_count": 0,
+            "aocc_initial_deficit": 0.0,
+            "aocc_final_deficit": 0.0,
+            "aocc_certified_pair_fraction": 0.0,
+            "aocc_nested_order_length": 0,
+            "aocc_bound_calibrated": False,
+        }
+
+    orient = np.zeros((pairs.shape[0],), dtype=np.float32)
+    orient[pairs[:, 0] == int(target_action)] = 1.0
+    orient[pairs[:, 1] == int(target_action)] = -1.0
+    pair_keep = (orient != 0.0) & (weights > 0.0)
+    if bool(pair_keep.any()) and int(max_target_rivals) > 0 and int(pair_keep.sum()) > int(max_target_rivals):
+        ids = np.flatnonzero(pair_keep)
+        # Prioritize near-boundary and high-weight rivals.  The sort is fixed
+        # before greedy selection, so nestedness across budgets is preserved.
+        priority = weights[ids] / (np.abs(full_margin[ids]) + max(float(boundary_tau), 1e-3))
+        chosen = ids[np.argsort(-priority, kind="stable")[: int(max_target_rivals)]]
+        pair_keep[:] = False
+        pair_keep[chosen] = True
+    if not bool(pair_keep.any()):
+        return [], 0.0, 0.0, {
+            "aocc_target_action": int(target_action),
+            "aocc_target_confidence": float(target_conf),
+            "aocc_pair_count": 0,
+            "aocc_initial_deficit": 0.0,
+            "aocc_final_deficit": 0.0,
+            "aocc_certified_pair_fraction": 1.0,
+            "aocc_nested_order_length": 0,
+            "aocc_bound_calibrated": False,
+        }
+
+    o = orient[pair_keep]
+    w = weights[pair_keep].astype(np.float32)
+    w = w / max(float(w.sum()), 1e-9)
+    oriented_base = base[pair_keep] * o
+    oriented_delta = d[:, pair_keep] * o[None, :]
+
+    if atom_pair_variance is not None:
+        var = np.asarray(atom_pair_variance, dtype=np.float32)
+        if var.shape != d.shape:
+            var = np.zeros_like(d, dtype=np.float32)
+        sigma = np.sqrt(np.maximum(var[:, pair_keep], 0.0) + max(float(prior_radius), 0.0) ** 2)
+        has_learned_variance = bool(np.any(var[:, pair_keep] > 0.0))
+    else:
+        sigma = np.full_like(oriented_delta, max(float(prior_radius), 0.0), dtype=np.float32)
+        has_learned_variance = False
+    radius = max(float(adverse_beta), 0.0) * sigma + max(float(adverse_epsilon), 0.0)
+    # Unqueried positive support is not assumed; adverse negative support is
+    # retained.  This makes ell <= d and every query improvement non-negative.
+    lower = np.minimum(0.0, oriented_delta - radius).astype(np.float32)
+    improvement = np.maximum(oriented_delta - lower, 0.0).astype(np.float32)
+    c0 = oriented_base + lower[active_idx].sum(axis=0)
+    gamma = float(certificate_margin)
+    deficit0 = np.maximum(gamma - c0, 0.0).astype(np.float32)
+    # Build one budget-independent greedy order first, then expose every budget
+    # as a strict cumulative-cost prefix.  Filtering candidates by the current
+    # budget inside the greedy loop would let a small budget skip an expensive
+    # atom and choose another atom that is not a prefix of the larger-budget
+    # solution, violating the advertised anytime nestedness for non-unit costs.
+    order_gain_state = np.zeros_like(deficit0)
+    full_order: list[int] = []
+    full_order_gain: list[float] = []
+    remaining = active.copy()
+
+    while bool(remaining.any()):
+        ids = np.flatnonzero(remaining)
+        before = np.minimum(deficit0, order_gain_state)
+        after = np.minimum(deficit0[None, :], order_gain_state[None, :] + improvement[ids])
+        marginal = ((after - before[None, :]) * w[None, :]).sum(axis=1)
+        ratio = marginal / np.maximum(costs[ids], 1e-6)
+        # Deterministic tie break: gain/cost, raw marginal, lower cost, atom id.
+        best_pos = int(np.lexsort((ids, costs[ids], -marginal, -ratio))[0])
+        best = int(ids[best_pos])
+        best_gain = float(marginal[best_pos])
+        if best_gain <= 1e-12:
+            break
+        full_order.append(best)
+        full_order_gain.append(best_gain)
+        order_gain_state = order_gain_state + improvement[best]
+        remaining[best] = False
+        order_deficit_vec = np.maximum(deficit0 - order_gain_state, 0.0)
+        if bool(stop_when_certified) and bool(np.all(order_deficit_vec <= 1e-8)):
+            break
+
+    selected: list[int] = []
+    spent = 0.0
+    for atom_id in full_order:
+        next_spent = spent + float(costs[atom_id])
+        if next_spent > float(budget) + 1e-6:
+            # Strict prefix: do not skip an item that does not fit.
+            break
+        selected.append(int(atom_id))
+        spent = next_spent
+
+    if selected:
+        current_gain = improvement[np.asarray(selected, dtype=np.int64)].sum(axis=0)
+    else:
+        current_gain = np.zeros_like(deficit0)
+    objective = float(np.sum(w * np.minimum(deficit0, current_gain)))
+    selected_order_gain = full_order_gain[: len(selected)]
+    final_certificate = c0 + current_gain
+    final_deficit = np.maximum(gamma - final_certificate, 0.0)
+    full_oriented = oriented_base + oriented_delta[active_idx].sum(axis=0)
+    # Numerical audit of the one-sided construction.
+    lower_violation = np.maximum(lower - oriented_delta, 0.0)
+    diag = {
+        "aocc_target_action": int(target_action),
+        "aocc_target_confidence": float(target_conf),
+        "aocc_pair_count": int(pair_keep.sum()),
+        "aocc_initial_deficit": float(np.sum(w * deficit0)),
+        "aocc_final_deficit": float(np.sum(w * final_deficit)),
+        "aocc_deficit_reduction": float(np.sum(w * (deficit0 - final_deficit))),
+        "aocc_certified_pair_fraction": float(np.mean(final_certificate >= gamma - 1e-8)),
+        "aocc_full_target_certified_pair_fraction": float(np.mean(full_oriented >= gamma - 1e-8)),
+        "aocc_initial_certified_pair_fraction": float(np.mean(c0 >= gamma - 1e-8)),
+        "aocc_nested_order_length": int(len(full_order)),
+        "aocc_selected_prefix_length": int(len(selected)),
+        "aocc_full_order_cost": float(sum(float(costs[i]) for i in full_order)),
+        "aocc_anytime_stop_budget": float(spent),
+        "aocc_mean_selected_marginal_gain": float(np.mean(selected_order_gain)) if selected_order_gain else 0.0,
+        "aocc_max_lower_bound_violation": float(np.max(lower_violation)) if lower_violation.size else 0.0,
+        "aocc_bound_calibrated": bool(has_learned_variance and (float(adverse_beta) > 0.0 or float(adverse_epsilon) > 0.0)),
+        "aocc_adverse_beta": float(adverse_beta),
+        "aocc_adverse_epsilon": float(adverse_epsilon),
+        "aocc_prior_radius": float(prior_radius),
+        "aocc_certificate_margin": float(certificate_margin),
+        "aocc_stop_when_certified": bool(stop_when_certified),
+    }
+    return selected, float(objective), float(spent), diag
+
 def runtime_greedy_selector_pair_conditioned(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -3791,6 +3998,12 @@ def runtime_greedy_selector_pair_conditioned(
     deployment_coreset_budget_layer_exhaustive_first: bool = True,
     deployment_coreset_budget_layer_seed_count: int = 0,
     deployment_coreset_budget_layer_diversity_distance: int = 2,
+    adverse_certificate_beta: float = 1.0,
+    adverse_certificate_epsilon: float = 0.05,
+    adverse_certificate_prior_radius: float = 0.10,
+    adverse_certificate_margin: float = 0.0,
+    adverse_certificate_stop_when_certified: bool = True,
+    adverse_certificate_max_target_rivals: int = 0,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
 
@@ -3892,6 +4105,7 @@ def runtime_greedy_selector_pair_conditioned(
     hybrid_action_lcb_modes = {"safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank"}
     flip_rank_modes = {"flip_rank", "fliprank", "flip_boundary_rank"}
     margin_coreset_modes = {"margin_coreset", "signed_margin_coreset", "mars", "margin_preserving"}
+    adverse_certificate_modes = {"anytime_adverse_certificate", "one_sided_adverse_certificate", "aocc", "aobcc", "nested_certificate"}
     deployment_coreset_modes = {
         "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset",
         "lexicographic_deployment_coreset", "lex_dacc", "lexdacc",
@@ -3909,6 +4123,7 @@ def runtime_greedy_selector_pair_conditioned(
         and cap_mode_l not in hybrid_action_lcb_modes
         and cap_mode_l not in flip_rank_modes
         and cap_mode_l not in margin_coreset_modes
+        and cap_mode_l not in adverse_certificate_modes
         and cap_mode_l not in deployment_coreset_modes
         and (
             pair_atom_variance is not None
@@ -3952,7 +4167,21 @@ def runtime_greedy_selector_pair_conditioned(
         )
         mode = "runtime_pair_conditioned_lcb_uncertainty"
     else:
-        if cap_mode_l in deployment_coreset_modes and deployment_evaluator is not None:
+        if cap_mode_l in adverse_certificate_modes:
+            selected, current, spent, coreset_diag = _anytime_one_sided_adverse_certificate_from_pair_delta(
+                delta, base_delta, weights, pair_arr, atom_budget_costs, budget,
+                valid_mask, runtime_safety_flags, atom_active_mask,
+                atom_pair_variance=pair_atom_variance,
+                adverse_beta=adverse_certificate_beta,
+                adverse_epsilon=adverse_certificate_epsilon,
+                prior_radius=adverse_certificate_prior_radius,
+                certificate_margin=adverse_certificate_margin,
+                boundary_tau=margin_coreset_boundary_tau,
+                stop_when_certified=adverse_certificate_stop_when_certified,
+                max_target_rivals=adverse_certificate_max_target_rivals,
+            )
+            mode = "runtime_pair_conditioned_anytime_adverse_certificate"
+        elif cap_mode_l in deployment_coreset_modes and deployment_evaluator is not None:
             selected, current, spent, coreset_diag = _deployment_aligned_coreset_from_pair_delta(
                 delta, base_delta, weights, pair_arr, atom_budget_costs, budget,
                 valid_mask, runtime_safety_flags, atom_active_mask, deployment_evaluator,
@@ -4117,10 +4346,10 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), "deployment_coreset_budget_layer_width": int(deployment_coreset_budget_layer_width), "deployment_coreset_budget_layer_branch": int(deployment_coreset_budget_layer_branch), "deployment_coreset_budget_layer_iterations": int(deployment_coreset_budget_layer_iterations), "deployment_coreset_budget_layer_max_evaluations": int(deployment_coreset_budget_layer_max_evaluations), "deployment_coreset_budget_layer_exhaustive_first": bool(deployment_coreset_budget_layer_exhaustive_first), "deployment_coreset_budget_layer_seed_count": int(deployment_coreset_budget_layer_seed_count), "deployment_coreset_budget_layer_diversity_distance": int(deployment_coreset_budget_layer_diversity_distance), **hybrid_diag, **coreset_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), "deployment_coreset_budget_layer_width": int(deployment_coreset_budget_layer_width), "deployment_coreset_budget_layer_branch": int(deployment_coreset_budget_layer_branch), "deployment_coreset_budget_layer_iterations": int(deployment_coreset_budget_layer_iterations), "deployment_coreset_budget_layer_max_evaluations": int(deployment_coreset_budget_layer_max_evaluations), "deployment_coreset_budget_layer_exhaustive_first": bool(deployment_coreset_budget_layer_exhaustive_first), "deployment_coreset_budget_layer_seed_count": int(deployment_coreset_budget_layer_seed_count), "deployment_coreset_budget_layer_diversity_distance": int(deployment_coreset_budget_layer_diversity_distance), "adverse_certificate_beta": float(adverse_certificate_beta), "adverse_certificate_epsilon": float(adverse_certificate_epsilon), "adverse_certificate_prior_radius": float(adverse_certificate_prior_radius), "adverse_certificate_margin": float(adverse_certificate_margin), "adverse_certificate_stop_when_certified": bool(adverse_certificate_stop_when_certified), "adverse_certificate_max_target_rivals": int(adverse_certificate_max_target_rivals), **hybrid_diag, **coreset_diag}
     utility = np.zeros((int(np.asarray(atom_budget_costs).shape[0]),), dtype=np.float32)
     if np.asarray(delta).ndim == 2 and np.asarray(delta).size:
-        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc", "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc"}:
+        if str(selector_cap_mode or "legacy_abs").lower() in {"action_rank", "action_flip_rank", "tournament_rank", "safety_gated_action_rank", "lcb_action_rank_hybrid", "hybrid_lcb_action_rank", "safe_action_rank", "adaptive_safety_gated_action_rank", "adaptive_hybrid_lcb_action_rank", "margin_coreset", "signed_margin_coreset", "mars", "margin_preserving", "deployment_coreset", "deployment_aligned_coreset", "dacc", "exact_tournament_coreset", "lexicographic_deployment_coreset", "lex_dacc", "lexdacc", "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc", "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc", "anytime_adverse_certificate", "one_sided_adverse_certificate", "aocc", "aobcc", "nested_certificate"}:
             utility = _action_rank_atom_utility(
                 delta, base_delta, caps, weights, pair_arr,
                 certificate_weight=float(action_rank_certificate_weight),
