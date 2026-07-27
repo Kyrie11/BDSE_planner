@@ -137,8 +137,26 @@ def main() -> None:
             certificate_margin_matrix=tour.margins,
         )
         if pair_full_action >= 0:
-            diag.values["pair_full_interface_action_match"] = float(pair_full_action == int(sample.teacher.a_star))
-            diag.values["budget_vs_pair_full_match"] = float(int(tour.action_index) == pair_full_action)
+            teacher_action = int(sample.teacher.a_star)
+            budget_action = int(tour.action_index)
+            dense_action = int(diag.details.get("full_action", -1))
+            pair_full_correct = pair_full_action == teacher_action
+            budget_correct = budget_action == teacher_action
+            diag.values["pair_full_interface_action_match"] = float(pair_full_correct)
+            diag.values["budget_vs_pair_full_match"] = float(budget_action == pair_full_action)
+            diag.values["pair_full_to_budget_flip_rate"] = float(budget_action != pair_full_action)
+            diag.values["harmful_pair_compression_rate"] = float(pair_full_correct and not budget_correct)
+            diag.values["beneficial_pair_compression_rate"] = float((not pair_full_correct) and budget_correct)
+            if dense_action >= 0:
+                dense_correct = dense_action == teacher_action
+                diag.values["dense_to_pair_full_flip_rate"] = float(dense_action != pair_full_action)
+                diag.values["harmful_pair_interface_rate"] = float(dense_correct and not pair_full_correct)
+                diag.values["beneficial_pair_interface_rate"] = float((not dense_correct) and pair_full_correct)
+            cert_fraction = float(qdiag.get("selector_aocc_certified_pair_fraction", float("nan")))
+            fully_certified = bool(np.isfinite(cert_fraction) and cert_fraction >= 1.0 - 1e-8)
+            diag.values["aocc_fully_certified_scene_rate"] = float(fully_certified)
+            diag.values["teacher_action_match_fully_certified"] = float(budget_correct) if fully_certified else float("nan")
+            diag.values["teacher_action_match_not_fully_certified"] = float(budget_correct) if not fully_certified else float("nan")
             diag.details["pair_full_action"] = int(pair_full_action)
         results.append(diag)
         if args.per_sample_output:

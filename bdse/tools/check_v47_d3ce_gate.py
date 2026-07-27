@@ -114,7 +114,7 @@ def _training_health(path: Path | None, min_exact_fraction: float) -> tuple[list
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Strict v46 AOCC open-loop gate with token-paired regret")
+    parser = argparse.ArgumentParser(description="Strict v47 D3CE/AOCC open-loop gate with token-paired regret")
     parser.add_argument("candidate", type=Path)
     parser.add_argument("control", type=Path)
     parser.add_argument("--candidate-jsonl", type=Path, required=True)
@@ -152,7 +152,7 @@ def main() -> int:
     cand_suff, ctrl_suff = gain_gate("evidence_sufficiency", args.min_sufficiency_gain, "evidence_sufficiency")
     pair_full = _finite(candidate, "pair_full_interface_action_match")
     if not math.isfinite(pair_full):
-        failures.append("pair_full_interface_action_match missing; rerun with v46 evaluator")
+        failures.append("pair_full_interface_action_match missing; rerun with v47 evaluator")
     elif pair_full < args.min_pair_full_match:
         failures.append(f"pair_full_interface_action_match={pair_full:.6f} < {args.min_pair_full_match:.6f}")
     certified_fraction = _finite(candidate, "selector_aocc_certified_pair_fraction")

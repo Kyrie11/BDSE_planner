@@ -10,7 +10,7 @@ import yaml
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Apply the calibrated one-sided adverse epsilon to a BDSE v46 YAML config"
+        description="Apply the calibrated one-sided adverse epsilon to a BDSE v47 YAML config"
     )
     parser.add_argument("--config-in", required=True)
     parser.add_argument("--calibration-json", required=True)

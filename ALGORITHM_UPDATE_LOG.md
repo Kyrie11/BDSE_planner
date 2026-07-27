@@ -1199,3 +1199,175 @@ mask sampling rate plus surrogate/exact agreement.
   `selector_exact_wall_time_s` and `train_loss_ms_per_step`.
 - Do not enable dense 1000-scene validation every two epochs during exploratory
   training; retain it for final evaluation and selected checkpoints.
+
+---
+
+## v46 result audit and v47 D3CE — Deployment-Consistent Calibrated Critical Evidence
+
+### Trigger
+
+The exact two-GPU v46 AOCC run completed with finite losses and
+`selector_exact_fraction=1.0`, but the open-loop gate still failed. Uploaded
+1000-scenario results were audited together with full validation diagnostics,
+a partial test diagnostic build, and 1000-scenario per-city training diagnostics.
+
+### v46 measured result
+
+- teacher action match: **0.226**;
+- evidence sufficiency: **0.080087**;
+- dense full-interface action match: **0.298**;
+- pair-full exact-tournament action match: **0.237**;
+- budget vs pair-full match: **0.823**;
+- dense winner/rival sign accuracy: **0.8076**;
+- pair-head winner/rival sign accuracy: **0.5738**;
+- dense near-tie sign accuracy: **0.6481**;
+- pair-head near-tie sign accuracy: **0.3663**;
+- proposal decisive recall: **0.8320**;
+- selected decisive recall: **0.5287**;
+- AOCC certified-pair fraction: **0.0867**;
+- p95 single-scenario planner latency: **867.09 ms**;
+- mean prediction stage: **567.26 ms**;
+- mean selector stage: **3.04 ms**;
+- mean tournament stage: **7.27 ms**.
+
+### Status of the three v45 failure causes
+
+1. **Exact runtime-selector alignment: solved operationally.** Every post-warmup
+   epoch reports exact fraction 1.0. This removes the v45 6.25% coverage defect.
+2. **Upstream pair/dense interface: not solved.** Dense full match changed only
+   from 0.296 to 0.298, while the deployment pair-full path is lower at 0.237.
+   The independent pair head is especially weak on near ties.
+3. **Budget compression: only partially solved relative to the wrong target.**
+   AOCC preserves pair-full actions fairly often, but the pair-full target itself
+   is frequently wrong. Dense-to-pair-full loses 154 correct scenes and rescues
+   93; pair-full-to-budget loses 18 and rescues 7; dense-to-budget loses 164 and
+   rescues 92. End-to-end harmful compression therefore did not improve.
+
+### Additional root causes
+
+- The AOCC target was selected by an internal pairwise preference proxy rather
+  than the exact final tournament including utility and safety guards.
+- The raw base-cost loss remained around 2,400 with a 0.35 weight, dominating
+  normalized action/critical-evidence losses. `normalize_base_loss` was false.
+- `action_conditioned_action_loss_weight` was zero, despite the dense/local head
+  being much more accurate than the independent pair head.
+- The AOCC mean target confidence was only about 0.05 and only 8.7% of target
+  pairs were certified at B=16. Fallback was disabled, so uncertified actions
+  were used as ordinary decisions.
+- Prediction accounts for roughly 90% of end-to-end latency; further selector
+  micro-optimization alone cannot meet a 500 ms p95 target.
+- v46 reported `aocc_bound_calibrated=1` even though no independent calibration
+  run or provenance existed. The flag was implementation-derived, not evidence
+  of a valid held-out calibration protocol.
+
+### Dataset audit
+
+Validation oracle capacity is high: full-interface match **0.9657**, B=16 oracle
+sufficiency **0.9120**, runtime teacher match **0.7490**. Therefore the main val
+bottleneck is learned representation/decision alignment, not evidence-bank
+capacity.
+
+The partial test cache is not preprocessing-compatible with validation:
+
+- drivable polygon count: **0.0** test vs **31.74** val;
+- safe candidate exists: **0.4937** vs **0.7173**;
+- B=16 oracle sufficiency: **0.8065** vs **0.9120**;
+- route-distance p95-p90: **20.66 m** vs **3.26 m**.
+
+No final test claim is allowed until the complete test cache passes the new
+split-parity gate.
+
+### v47 algorithm changes
+
+1. **Exact-tournament AOCC target.** AOCC receives the full Top-M action produced
+   by the exact deployment tournament, rival graph, safety filter, utility
+   refinement and all-flagged guard. The proxy Copeland target is no longer used
+   when the planner can provide an exact target.
+2. **Teacher-targeted exact selector training.** Stop-gradient AOCC masks use the
+   teacher action during training, so the selector is taught evidence that
+   protects the desired action rather than its current mistaken winner.
+3. **Integrable local margin plus sparse residual.** The action-conditioned head
+   defines the margin for every pair. The antisymmetric pair head learns only a
+   residual and is evaluated at runtime on at most 48 boundary/safety/winner
+   pairs; unrefined pairs remain valid local margins.
+4. **Counterfactual critical-evidence loss.** Current teacher-vs-hard-rival pairs
+   define a cost-normalized distribution over atoms with positive teacher-margin
+   support. Pair residual and proposal logits receive listwise supervision on
+   that distribution.
+5. **Loss-scale correction.** Enable normalized base regression, nonzero
+   action-conditioned action loss and stronger normalized full-action,
+   hard-rival, deployment-selection and critical-evidence objectives.
+6. **Honest calibration provenance.** The calibrated flag requires a
+   group-disjoint calibration-only provenance JSON. A hand-set epsilon and
+   learned variance no longer imply calibration.
+7. **Group-disjoint validation protocol.** Added deterministic log-level
+   `val_tune`/`val_calib` manifests. Checkpoints and hyperparameters use
+   `val_tune`; one-sided calibration uses `val_calib`; test remains untouched.
+8. **Uncertified fallback.** Closed-loop config can trigger a same-budget rival
+   expansion/fallback when the AOCC certified-pair fraction is below the
+   configured floor.
+9. **Error-decomposition metrics.** Evaluator now reports pair-interface flips,
+   harmful/beneficial pair compression, harmful/beneficial pair-interface
+   changes, fully certified scene rate, and conditional teacher match.
+10. **Dataset parity gate.** Added a diagnostic checker for map-feature,
+    safe-candidate, oracle-capacity and route-tail drift before final test use.
+
+### Motivation and definition decisions
+
+- The seven existing macro-action labels are retained. Validation oracle capacity
+  shows that replacing the maneuver taxonomy is not the current limiting factor.
+  A new taxonomy now would confound the fixed-budget evidence contribution.
+- Existing evidence families are retained because proposal decisive recall is
+  already high and B=16 oracle sufficiency exceeds 0.91 on validation. The model
+  must learn *which* atoms change teacher-vs-rival decisions, not merely emit more
+  atom types.
+- Candidate generation remains a separate error component. Test safe-candidate
+  failure and missing map polygons must be fixed in preprocessing/candidate
+  coverage before claiming model or selector gains.
+
+### Added / modified files
+
+- `bdse/configs/v47_bdse_d3ce_train_2gpu.yaml`
+- `bdse/configs/v47_bdse_d3ce_cl.yaml`
+- `bdse/model/bdse_model.py`
+- `bdse/model/losses.py`
+- `bdse/planner/selector.py`
+- `bdse/planner/nuplan_planner.py`
+- `bdse/experiments/evaluate_open_loop.py`
+- `bdse/tools/build_group_disjoint_calibration_split.py`
+- `bdse/tools/calibrate_v47_adverse_bounds.py`
+- `bdse/tools/apply_v47_calibration.py`
+- `bdse/tools/check_v47_d3ce_gate.py`
+- `bdse/tools/check_dataset_diagnostics_parity.py`
+- `bdse/tests/test_v47_d3ce.py`
+- `run_v47_d3ce.sh`
+- `NEXT_COMMANDS_V47_D3CE.sh`
+- `README_V47_D3CE.md`
+
+### Validation completed
+
+- complete unit suite: **154 passed, 5 warnings**;
+- Python compile check: pass;
+- `bash -n run_v47_d3ce.sh`: pass;
+- `bash -n NEXT_COMMANDS_V47_D3CE.sh`: pass;
+- uploaded partial test diagnostics correctly fail the new parity gate.
+
+### Required experiment order
+
+1. Build group-disjoint `val_tune` and `val_calib` manifests.
+2. Retrain from the frozen v30 checkpoint using only `val_tune` for selection.
+3. Calibrate adverse residuals only on `val_calib` with provenance.
+4. Replay v47 and frozen control on identical `val_tune` rows.
+5. Run strict token-paired gate; proceed to CL20 only after PASS.
+6. Complete and repair test preprocessing, pass parity gate, then evaluate test
+   once as final evidence.
+
+### CCF-A claim boundary
+
+The defensible core contribution is a deployment-identical, calibrated, nested
+fixed-budget critical-evidence selector with a three-term error decomposition:
+candidate coverage, full-interface decision error, and budget-compression error.
+The one-sided certificate preserves the learned full-interface action under its
+calibration assumptions; it does not make a wrong full-interface action correct.
+The paper must report certificate coverage, conditional action preservation,
+budget curves, scenario/city slices, latency stages, and candidate oracle bounds.

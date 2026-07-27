@@ -1306,16 +1306,80 @@ class BDSEModel(nn.Module):
         # selector graph itself is the decision/tournament graph, while query
         # accounting still reports the original cheap runtime-pair count.
         actual_unique_pair_count = 0
+        scored_unique_pair_count = 0
+        pair_residual_refinement_diag: dict[str, Any] = {
+            "pair_residual_refinement_enabled": False,
+            "pair_residual_refined_pair_count": 0,
+            "pair_residual_total_pair_count": 0,
+            "pair_residual_refined_fraction": 0.0,
+        }
         if len(selection_pairs) or len(rival_pairs):
             t_pair = time.perf_counter()
             all_pairs = np.concatenate([selection_pairs.reshape(-1, 2), rival_pairs.reshape(-1, 2)], axis=0)
             unique_pairs, inverse = np.unique(all_pairs, axis=0, return_inverse=True)
             actual_unique_pair_count = int(len(unique_pairs))
-            all_pair_delta, all_pair_var = self._score_pair_indices_numpy(ctx, runtime, candidates, evidence_bank, topm, unique_pairs, cfg)
+
+            # D3CE selective residual refinement: the local action-conditioned
+            # interface provides an integrable margin for every pair.  The more
+            # expensive pair head is treated as a residual and is evaluated only
+            # on near-boundary, safety-crossing, or current-winner pairs.  Unscored
+            # residuals are exactly zero, so all pairs still have a valid local
+            # margin and the final tournament graph is unchanged.
+            refine_cap = int(runtime_cfg.get("pair_residual_refine_max_pairs", 0))
+            residual_mode = bool(mcfg.get("pair_head_residual_over_local", False))
+            refine_ids = np.arange(len(unique_pairs), dtype=np.int64)
+            if residual_mode and refine_cap > 0 and len(unique_pairs) > refine_cap:
+                a_u = np.clip(unique_pairs[:, 0], 0, candidates.K - 1)
+                b_u = np.clip(unique_pairs[:, 1], 0, candidates.K - 1)
+                local_full_cost = J0 + g_sparse[np.asarray(topm, dtype=np.int64)].sum(axis=0)
+                local_margin_raw = local_full_cost[b_u] - local_full_cost[a_u]
+                local_scale = margin_normalization_scale(
+                    local_margin_raw, min_scale=min_scale, quantile=q_scale
+                ) if normalize_pairs else 1.0
+                local_margin = local_margin_raw / max(float(local_scale), 1e-6)
+                flags_u = np.asarray(flags, dtype=bool).reshape(-1)
+                if flags_u.shape[0] < candidates.K:
+                    flags_u = np.pad(flags_u, (0, candidates.K - flags_u.shape[0]), constant_values=False)
+                safety_cross = flags_u[a_u] ^ flags_u[b_u]
+                valid_cost = np.asarray(local_full_cost, dtype=np.float64).copy()
+                valid_cost[~np.asarray(candidates.valid_mask, dtype=bool)] = np.inf
+                local_winner = int(np.argmin(valid_cost)) if np.isfinite(valid_cost).any() else -1
+                winner_pair = (a_u == local_winner) | (b_u == local_winner)
+                tau_refine = max(float(runtime_cfg.get("pair_residual_refine_boundary_tau", 0.35)), 1e-6)
+                priority = (
+                    1.0 / (np.abs(local_margin) + tau_refine)
+                    + float(runtime_cfg.get("pair_residual_refine_safety_bonus", 4.0)) * safety_cross.astype(np.float32)
+                    + float(runtime_cfg.get("pair_residual_refine_winner_bonus", 2.0)) * winner_pair.astype(np.float32)
+                )
+                refine_ids = np.argsort(-priority, kind="stable")[:refine_cap].astype(np.int64)
+                pair_residual_refinement_diag.update({
+                    "pair_residual_refinement_enabled": True,
+                    "pair_residual_refined_pair_count": int(len(refine_ids)),
+                    "pair_residual_total_pair_count": int(len(unique_pairs)),
+                    "pair_residual_refined_fraction": float(len(refine_ids) / max(len(unique_pairs), 1)),
+                    "pair_residual_local_winner": int(local_winner),
+                })
+
+            scored_pairs = unique_pairs[refine_ids]
+            scored_delta, scored_var = self._score_pair_indices_numpy(
+                ctx, runtime, candidates, evidence_bank, topm, scored_pairs, cfg
+            )
+            scored_unique_pair_count = int(len(scored_pairs))
+            all_pair_delta = np.zeros((evidence_bank.E, len(unique_pairs)), dtype=np.float32)
+            all_pair_var = np.zeros((evidence_bank.E, len(unique_pairs)), dtype=np.float32)
+            all_pair_delta[:, refine_ids] = scored_delta
+            all_pair_var[:, refine_ids] = scored_var
+            if not pair_residual_refinement_diag["pair_residual_refinement_enabled"]:
+                pair_residual_refinement_diag.update({
+                    "pair_residual_refined_pair_count": int(len(unique_pairs)),
+                    "pair_residual_total_pair_count": int(len(unique_pairs)),
+                    "pair_residual_refined_fraction": 1.0 if len(unique_pairs) else 0.0,
+                })
             if profile_enabled:
                 model_timing["model_pair_scoring_s"] = float(time.perf_counter() - t_pair)
                 model_timing["model_unique_pair_count"] = float(len(unique_pairs))
-                model_timing["model_pair_atom_score_count"] = float(len(topm) * len(unique_pairs))
+                model_timing["model_scored_unique_pair_count"] = float(len(scored_pairs))
+                model_timing["model_pair_atom_score_count"] = float(len(topm) * len(scored_pairs))
             n_selector_pairs = int(len(selection_pairs))
             selector_inv = inverse[:n_selector_pairs]
             rival_inv = inverse[n_selector_pairs:]
@@ -1417,12 +1481,12 @@ class BDSEModel(nn.Module):
             # actual model call scores the unique selector/tournament union once.
             "selector_pair_atom_query_count": int(len(topm) * len(selection_pairs)),
             "tournament_pair_atom_query_count": int(len(topm) * len(rival_pairs)),
-            "unique_pair_atom_query_count": int(len(topm) * actual_unique_pair_count),
+            "unique_pair_atom_query_count": int(len(topm) * scored_unique_pair_count),
             "runtime_pair_count": int(len(pairs)),
             "selector_pair_count": int(len(selection_pairs)),
             "tournament_pair_count": int(len(rival_pairs)),
             "actual_unique_pair_count": int(actual_unique_pair_count),
-            "queried_pair_count": int(len(atom_ids) + len(topm) * actual_unique_pair_count),
+            "queried_pair_count": int(len(atom_ids) + len(topm) * scored_unique_pair_count),
             "pair_atom_delta": selector_pair_delta,
             "pair_atom_var": selector_pair_var,
             "pair_indices": selection_pairs,
@@ -1444,6 +1508,7 @@ class BDSEModel(nn.Module):
             **base_prior_diag,
             **structural_residual_diag,
             **pair_delta_calibration_diag,
+            **pair_residual_refinement_diag,
         }
         if profile_enabled:
             result["model_timing"] = model_timing

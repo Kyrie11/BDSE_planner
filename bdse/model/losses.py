@@ -111,6 +111,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
 
     e_cfg = cfg.get("evidence", {})
     s_cfg = cfg.get("selector", {})
+    train_cfg = cfg.get("training", {})
     t_cfg = cfg.get("tournament", {})
     c_cfg = cfg.get("calibration", {})
     budget = float(e_cfg.get("budget", 16))
@@ -380,6 +381,7 @@ def _build_predicted_pair_numpy_cache(
         "flags_np": _to_numpy(flags, bool) if flags is not None else np.zeros_like(valid, dtype=bool),
         "evidence_features_np": _to_numpy(batch.get("evidence_features"), np.float32) if "evidence_features" in batch else None,
         "decisive_hard_np": _to_numpy(batch.get("decisive_hard_mask"), bool) if "decisive_hard_mask" in batch else None,
+        "teacher_a_star_np": _to_numpy(batch.get("teacher_a_star"), np.int64) if "teacher_a_star" in batch else None,
     }
 
 
@@ -407,6 +409,7 @@ def _predicted_pair_certificate_masks(
         return outputs["J0"].new_zeros(outputs["proposal_logits"].shape, dtype=torch.bool)
     e_cfg = cfg.get("evidence", {})
     s_cfg = cfg.get("selector", {})
+    train_cfg = cfg.get("training", {})
     t_cfg = cfg.get("tournament", {})
     c_cfg = cfg.get("calibration", {})
     normalize_margins = bool(cfg.get("model", {}).get("pair_margin_normalized", True))
@@ -430,6 +433,7 @@ def _predicted_pair_certificate_masks(
     flags_np = cache["flags_np"]
     evidence_features_np = cache["evidence_features_np"]
     decisive_hard_np = cache["decisive_hard_np"]
+    teacher_a_star_np = cache.get("teacher_a_star_np")
 
     Bsz, E = logits.shape
     selected_mask = np.zeros((Bsz, E), dtype=bool)
@@ -630,6 +634,13 @@ def _predicted_pair_certificate_masks(
             adverse_certificate_margin=float(s_cfg.get("adverse_certificate_margin", 0.0)),
             adverse_certificate_stop_when_certified=bool(s_cfg.get("adverse_certificate_stop_when_certified", True)),
             adverse_certificate_max_target_rivals=int(s_cfg.get("adverse_certificate_max_target_rivals", 0)),
+            adverse_certificate_target_action=(
+                int(teacher_a_star_np[bidx])
+                if bool(train_cfg.get("aocc_teacher_target_training", True))
+                and teacher_a_star_np is not None
+                else None
+            ),
+            adverse_certificate_calibrated=False,
             aocc_state_cache=(
                 _aocc_scene_caches[bidx]
                 if _aocc_scene_caches is not None and bidx < len(_aocc_scene_caches)
@@ -1340,6 +1351,76 @@ def _online_teacher_hard_rival_loss(
     return (loss * chosen_valid.float()).sum() / chosen_valid.float().sum().clamp_min(1.0)
 
 
+def _counterfactual_critical_evidence_loss(
+    true_atom_delta: torch.Tensor,
+    pred_atom_delta: torch.Tensor,
+    predicted_margin: torch.Tensor,
+    pairs: torch.Tensor,
+    pair_mask: torch.Tensor,
+    target_action: torch.Tensor,
+    atom_mask: torch.Tensor,
+    atom_costs: torch.Tensor,
+    proposal_logits: torch.Tensor,
+    cfg: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Teach which evidence changes the teacher-vs-hard-rival decision.
+
+    The target is cost-normalized positive margin support on the *currently*
+    hardest teacher/rival pairs.  This differs from generic oracle-mask BCE: it
+    directly supervises the pair residual and proposal ordering on evidence whose
+    removal would erase the teacher action's decision margin.
+    """
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    ccfg = train_cfg.get("counterfactual_critical_evidence", {}) or {}
+    top_k = max(1, int(ccfg.get("top_k_rivals", 3)))
+    rival_tau = max(float(ccfg.get("rival_temperature", 0.12)), 1e-6)
+    atom_tau = max(float(ccfg.get("atom_temperature", 0.20)), 1e-6)
+    proposal_tau = max(float(ccfg.get("proposal_temperature", 0.35)), 1e-6)
+    cost_power = max(float(ccfg.get("cost_power", 1.0)), 0.0)
+    min_gain = max(float(ccfg.get("min_gain", 1e-5)), 0.0)
+
+    B, E, P = pred_atom_delta.shape
+    tgt = target_action[:, None]
+    a = pairs[..., 0].long()
+    b = pairs[..., 1].long()
+    orient = torch.where(a == tgt, torch.ones_like(predicted_margin), torch.zeros_like(predicted_margin))
+    orient = torch.where(b == tgt, -torch.ones_like(predicted_margin), orient)
+    valid_pair = pair_mask.bool() & (orient != 0.0)
+    oriented_margin = predicted_margin * orient
+    rank = oriented_margin.detach().masked_fill(~valid_pair, torch.finfo(oriented_margin.dtype).max)
+    k = min(top_k, P)
+    hard_idx = torch.topk(rank, k=k, dim=1, largest=False, sorted=False).indices
+    hard_valid = valid_pair.gather(1, hard_idx)
+    hard_margin = oriented_margin.detach().gather(1, hard_idx)
+    hard_weight = torch.softmax((-hard_margin / rival_tau).masked_fill(~hard_valid, -1e4), dim=1)
+    hard_weight = hard_weight * hard_valid.float()
+    hard_weight = hard_weight / hard_weight.sum(dim=1, keepdim=True).clamp_min(1e-6)
+    pair_weight = torch.zeros_like(predicted_margin)
+    pair_weight.scatter_add_(1, hard_idx, hard_weight)
+    oriented_true = true_atom_delta * orient[:, None, :]
+    oriented_pred = pred_atom_delta * orient[:, None, :]
+    true_gain = (torch.relu(oriented_true) * pair_weight[:, None, :]).sum(dim=2)
+    pred_gain = (oriented_pred * pair_weight[:, None, :]).sum(dim=2)
+
+    costs = atom_costs.float().clamp_min(1e-3)
+    if costs.shape != true_gain.shape:
+        costs = torch.ones_like(true_gain)
+    cost_adjust = costs.pow(cost_power)
+    target_gain = (true_gain / cost_adjust).masked_fill(~atom_mask.bool(), 0.0)
+    scene_has_target = target_gain.sum(dim=1) > min_gain
+    target_dist = target_gain / target_gain.sum(dim=1, keepdim=True).clamp_min(1e-6)
+
+    mask_value = _neg_mask_value(pred_gain)
+    pair_logits = (pred_gain / cost_adjust) / atom_tau
+    pair_logits = pair_logits.masked_fill(~atom_mask.bool(), mask_value)
+    pair_ce = -(target_dist * F.log_softmax(pair_logits, dim=1)).sum(dim=1)
+    proposal_score = (proposal_logits / cost_adjust) / proposal_tau
+    proposal_score = proposal_score.masked_fill(~atom_mask.bool(), mask_value)
+    proposal_ce = -(target_dist * F.log_softmax(proposal_score, dim=1)).sum(dim=1)
+    denom = scene_has_target.float().sum().clamp_min(1.0)
+    return (pair_ce * scene_has_target.float()).sum() / denom, (proposal_ce * scene_has_target.float()).sum() / denom
+
+
 def _pair_cycle_consistency_loss(
     predicted_margin: torch.Tensor,
     pairs: torch.Tensor,
@@ -1822,6 +1903,17 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     L_cycle = _pair_cycle_consistency_loss(
         M_hat_E, pairs, pair_train_mask, target_action, valid, cfg
     )
+    if true_atom_delta is not None:
+        atom_costs_for_critical = batch.get(
+            "evidence_budget_costs", torch.ones_like(out["proposal_logits"])
+        )
+        L_cf_critical_pair, L_cf_critical_proposal = _counterfactual_critical_evidence_loss(
+            true_atom_delta, pred_atom_delta, M_hat_E, pairs, pair_train_mask,
+            target_action, e_mask, atom_costs_for_critical, out["proposal_logits"], cfg
+        )
+    else:
+        L_cf_critical_pair = J0.new_tensor(0.0)
+        L_cf_critical_proposal = J0.new_tensor(0.0)
 
     target_sel = batch.get("oracle_selected_mask")
     decisive = batch.get("decisive_atom_mask")
@@ -2285,6 +2377,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("certificate_safe_frontier", 0.0)) * L_cert_frontier
         + float(lw.get("online_hard_rival", 0.0)) * L_online_hard_rival
         + float(lw.get("cycle_consistency", 0.0)) * L_cycle
+        + float(lw.get("counterfactual_critical_pair", 0.0)) * L_cf_critical_pair
+        + float(lw.get("counterfactual_critical_proposal", 0.0)) * L_cf_critical_proposal
     )
     return {
         "loss": total,
@@ -2312,6 +2406,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_cert_frontier": L_cert_frontier if 'L_cert_frontier' in locals() else J0.new_tensor(0.0),
         "L_online_hard_rival": L_online_hard_rival,
         "L_cycle": L_cycle,
+        "L_cf_critical_pair": L_cf_critical_pair,
+        "L_cf_critical_proposal": L_cf_critical_proposal,
         "selector_exact_fraction": selector_exact_fraction,
         "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,
         "selector_fast_wall_time_s": selector_fast_wall_time_s,

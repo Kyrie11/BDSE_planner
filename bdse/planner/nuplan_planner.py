@@ -558,6 +558,10 @@ class BDSEPlannerCore:
                 "path_relaxed_deployment_coreset", "pr_dacc", "prdacc", "beam_dacc", "counterfactual_budget_layer_coreset", "cbl_dacc", "cbldacc", "budget_layer_dacc",
                 "stage_aware_budget_layer_coreset", "sab_dacc", "sabdacc", "stage_aware_dacc",
             }
+            adverse_modes = {
+                "anytime_adverse_certificate", "one_sided_adverse_certificate",
+                "aocc", "aobcc", "nested_certificate",
+            }
             tournament_cfg = dict(stage_cfg)
             tournament_cfg["runtime_pair_margin_scale"] = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
 
@@ -590,7 +594,7 @@ class BDSEPlannerCore:
                     deployment_search_uses_rival_graph = True
 
             deployment_evaluator = None
-            if cap_mode in deployment_modes:
+            if cap_mode in (deployment_modes | adverse_modes):
                 def deployment_evaluator(selected_atoms: list[int]):
                     # Evaluate the exact downstream decision rule used after
                     # selection: final rival graph, normalized pair margins,
@@ -613,6 +617,21 @@ class BDSEPlannerCore:
                         trial, runtime, candidates, runtime_flags, stage_cfg
                     )
                     return int(trial.action_index), np.asarray(trial.scores), np.asarray(trial.margins), dict(trial.diagnostics)
+
+            adverse_target_action = None
+            if cap_mode in adverse_modes and deployment_evaluator is not None:
+                # AOCC must preserve the action selected by the exact downstream
+                # tournament, not a different Copeland-style proxy.  This full
+                # Top-M evaluation reuses already queried deltas and adds no neural
+                # evidence query.
+                full_topm_atoms = np.flatnonzero(decision_atom_active).astype(np.int64).tolist()
+                adverse_target_action = int(deployment_evaluator(full_topm_atoms)[0])
+
+            calibration_cfg = stage_cfg.get("calibration", {}) if isinstance(stage_cfg, dict) else {}
+            adverse_calibrated = bool(
+                calibration_cfg.get("independent", False)
+                and sel_cfg.get("adverse_certificate_calibrated", False)
+            )
 
             selector_started = time.perf_counter()
             selection = runtime_greedy_selector_pair_conditioned(
@@ -692,6 +711,8 @@ class BDSEPlannerCore:
                 adverse_certificate_margin=float(sel_cfg.get("adverse_certificate_margin", 0.0)),
                 adverse_certificate_stop_when_certified=bool(sel_cfg.get("adverse_certificate_stop_when_certified", True)),
                 adverse_certificate_max_target_rivals=int(sel_cfg.get("adverse_certificate_max_target_rivals", 0)),
+                adverse_certificate_target_action=adverse_target_action,
+                adverse_certificate_calibrated=adverse_calibrated,
                 margin_coreset_residual_weight=float(sel_cfg.get("margin_coreset_residual_weight", 1.0)),
                 margin_coreset_sign_weight=float(sel_cfg.get("margin_coreset_sign_weight", 0.8)),
                 margin_coreset_winner_weight=float(sel_cfg.get("margin_coreset_winner_weight", 1.5)),
@@ -757,6 +778,9 @@ class BDSEPlannerCore:
             selection.diagnostics["deployment_coreset_search_uses_rival_graph"] = bool(
                 deployment_search_uses_rival_graph
             )
+            selection.diagnostics["aocc_exact_tournament_target_active"] = bool(
+                cap_mode in adverse_modes and adverse_target_action is not None
+            )
             tournament_started = time.perf_counter()
             tournament = run_pair_conditioned_tournament(
                 J0,
@@ -809,6 +833,14 @@ class BDSEPlannerCore:
                 candidate_trajectories=candidates.trajectories,
                 maneuver_ids=candidates.maneuver_ids,
             )
+        # Expose selector certificate diagnostics to the fallback controller.
+        for key in (
+            "aocc_certified_pair_fraction", "aocc_final_deficit",
+            "aocc_bound_calibrated", "aocc_target_action",
+            "aocc_exact_tournament_target_active",
+        ):
+            if key in selection.diagnostics:
+                tournament.diagnostics[key] = selection.diagnostics[key]
         tournament = self._apply_all_flagged_structural_guard(
             tournament, runtime, candidates, runtime_flags, stage_cfg
         )
@@ -928,6 +960,11 @@ class BDSEPlannerCore:
         if not bool(fcfg.get("enabled", True)):
             return "disabled"
         tau_delta, safety_thr = self._fallback_thresholds(cfg)
+        if bool(fcfg.get("trigger_on_uncertified_aocc", False)):
+            certified_fraction = float(tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0))
+            min_fraction = float(fcfg.get("min_aocc_certified_pair_fraction", 1.0))
+            if certified_fraction < min_fraction:
+                return "uncertified_aocc"
         if bool(tournament.diagnostics.get("selected_action_safety_flag", False)):
             return "selected_action_safety_flag"
         safety_lcb = float(tournament.diagnostics.get("safety_lcb_min", float("inf")))

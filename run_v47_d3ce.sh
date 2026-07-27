@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Allow either:
-#   GPUS=0,1 RUN_MODE=train_open_loop bash run_v46_aocc.sh
+#   GPUS=0,1 RUN_MODE=train_open_loop bash run_v47_d3ce.sh
 # or:
-#   bash run_v46_aocc.sh GPUS=0,1 RUN_MODE=train_open_loop
+#   bash run_v47_d3ce.sh GPUS=0,1 RUN_MODE=train_open_loop
 for kv in "$@"; do
   [[ "$kv" == *=* ]] && export "$kv"
 done
@@ -13,7 +13,7 @@ done
 : "${BDSE_VAL_CACHE:?Set BDSE_VAL_CACHE to the preprocessed validation cache}"
 
 V30_CKPT_IN="${V30_CKPT_IN:-outputs_v30/train/bdse_v30_pmvrbsr.best.pt}"
-OUT_ROOT="${OUT_ROOT:-outputs_v46_aocc_2gpu}"
+OUT_ROOT="${OUT_ROOT:-outputs_v47_d3ce_2gpu}"
 RUN_MODE="${RUN_MODE:-train_open_loop}"
 DEVICE="${DEVICE:-cuda}"
 GPUS="${GPUS:-0,1}"
@@ -22,8 +22,13 @@ MASTER_PORT="${MASTER_PORT:-29545}"
 MAX_TRAIN_SCENARIOS="${MAX_TRAIN_SCENARIOS:-50000}"
 VAL_SCENARIOS="${VAL_SCENARIOS:-500}"
 OPEN_LOOP_MAX_SCENARIOS="${OPEN_LOOP_MAX_SCENARIOS:-1000}"
-EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v46_bdse_aocc_cl.yaml}"
-TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v46_bdse_aocc_train_2gpu.yaml}"
+EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v47_bdse_d3ce_cl.yaml}"
+TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v47_bdse_d3ce_train_2gpu.yaml}"
+# Paper-grade protocol: checkpoint/hyperparameter selection uses val_tune only;
+# one-sided residual calibration uses the log-disjoint val_calib manifest only.
+VAL_SPLIT="${VAL_SPLIT:-val_tune}"
+OPEN_LOOP_SPLIT="${OPEN_LOOP_SPLIT:-$VAL_SPLIT}"
+CL_TOKEN_SPLIT="${CL_TOKEN_SPLIT:-$OPEN_LOOP_SPLIT}"
 
 # Make the per-GPU batch explicit.  The previous script silently defaulted to
 # GLOBAL_BATCH_SIZE=24, which produced batch_per_gpu=12 whenever an environment
@@ -92,12 +97,12 @@ if [[ "$DETACH" == "1" && "${BDSE_DETACHED_CHILD:-0}" != "1" ]]; then
   setsid nohup bash "$script_path" "$@" </dev/null >>"$launcher_log" 2>&1 &
   child_pid=$!
   echo "$child_pid" > "$OUT_ROOT/logs/train.pid"
-  echo "[v46] detached session started pid=$child_pid log=$launcher_log"
+  echo "[v47] detached session started pid=$child_pid log=$launcher_log"
   exit 0
 fi
-CKPT="$OUT_ROOT/train/bdse_v46_aocc.pt"
-BEST_CKPT="$OUT_ROOT/train/bdse_v46_aocc.best.pt"
-LATEST_CKPT="$OUT_ROOT/train/bdse_v46_aocc.latest.pt"
+CKPT="$OUT_ROOT/train/bdse_v47_d3ce.pt"
+BEST_CKPT="$OUT_ROOT/train/bdse_v47_d3ce.best.pt"
+LATEST_CKPT="$OUT_ROOT/train/bdse_v47_d3ce.latest.pt"
 
 check_checkpoint() {
   local checkpoint="$1"
@@ -119,17 +124,17 @@ train_2gpu() {
   local checkpoint_args=()
   if [[ "$AUTO_RESUME" == "1" && -f "$LATEST_CKPT" ]]; then
     checkpoint_args+=(--resume-from "$LATEST_CKPT")
-    echo "[v46] auto-resume checkpoint=$LATEST_CKPT"
+    echo "[v47] auto-resume checkpoint=$LATEST_CKPT"
   else
     check_checkpoint "$V30_CKPT_IN"
     checkpoint_args+=(--warm-start-from "$V30_CKPT_IN")
-    echo "[v46] warm-start checkpoint=$V30_CKPT_IN"
+    echo "[v47] warm-start checkpoint=$V30_CKPT_IN"
   fi
-  echo "[v46] DDP training on physical GPUs $GPU0,$GPU1"
-  echo "[v46] batch_per_gpu=$BATCH_SIZE_PER_GPU global_batch=$effective_global_batch workers_per_gpu=$NUM_WORKERS_PER_GPU"
-  echo "[v46] train_config=$TRAIN_CONFIG val_scenarios=$VAL_SCENARIOS val_every=$VAL_EVERY_N_EPOCHS dense_val=$VAL_DENSE_DIAGNOSTIC"
-  echo "[v46] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS"
-  echo "[v46-aocc] exact nested certificate masks on every local scene"
+  echo "[v47] DDP training on physical GPUs $GPU0,$GPU1"
+  echo "[v47] batch_per_gpu=$BATCH_SIZE_PER_GPU global_batch=$effective_global_batch workers_per_gpu=$NUM_WORKERS_PER_GPU"
+  echo "[v47] train_config=$TRAIN_CONFIG val_split=$VAL_SPLIT val_scenarios=$VAL_SCENARIOS val_every=$VAL_EVERY_N_EPOCHS dense_val=$VAL_DENSE_DIAGNOSTIC"
+  echo "[v47] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS"
+  echo "[v47-d3ce] exact nested certificate masks on every local scene"
 
   local val_dense_args=()
   if [[ "$VAL_DENSE_DIAGNOSTIC" == "1" || "$VAL_DENSE_DIAGNOSTIC" == "true" ]]; then
@@ -161,7 +166,7 @@ train_2gpu() {
       --amp \
       "${checkpoint_args[@]}" \
       --val-preprocessed-dir "$BDSE_VAL_CACHE" \
-      --val-split val \
+      --val-split "$VAL_SPLIT" \
       --val-max-scenarios "$VAL_SCENARIOS" \
       --val-mode open_loop \
       "${val_dense_args[@]}" \
@@ -172,7 +177,7 @@ train_2gpu() {
       --save-every-n-steps "$SAVE_EVERY_N_STEPS" \
       --best-metric fixed_budget_critical_score \
       --best-metrics fixed_budget_critical_score teacher_action_match teacher_regret full_interface_action_match \
-      --log-file "$OUT_ROOT/train/bdse_v46_aocc.train_log.jsonl" \
+      --log-file "$OUT_ROOT/train/bdse_v47_d3ce.train_log.jsonl" \
       --output "$CKPT" \
     2>&1 | tee -a "$OUT_ROOT/logs/train_2gpu.out"
 }
@@ -182,7 +187,7 @@ prepare_open_loop_shards() {
   rm -rf "$shard_root"
   mkdir -p "$shard_root/gpu0/val" "$shard_root/gpu1/val"
 
-  python - "$BDSE_VAL_CACHE" "$shard_root" "$OPEN_LOOP_MAX_SCENARIOS" <<'PY'
+  python - "$BDSE_VAL_CACHE" "$shard_root" "$OPEN_LOOP_MAX_SCENARIOS" "$OPEN_LOOP_SPLIT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -192,7 +197,8 @@ from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
 cache_root = Path(sys.argv[1])
 shard_root = Path(sys.argv[2])
 limit = int(sys.argv[3])
-paths = PreprocessedBDSEDataset(cache_root, split=["val"], max_scenarios=limit).build_index()
+source_split = str(sys.argv[4])
+paths = PreprocessedBDSEDataset(cache_root, split=[source_split], max_scenarios=limit).build_index()
 if not paths:
     raise SystemExit("No validation samples found")
 
@@ -213,6 +219,7 @@ for shard in range(2):
     )
 
 meta = {
+    "source_split": source_split,
     "requested_scenarios": limit,
     "selected_scenarios": len(paths),
     "gpu0_scenarios": len(records[0]),
@@ -233,8 +240,8 @@ run_open_loop_shard() {
     --split val \
     --preprocessed-dir "$shard_cache" \
     --device cuda \
-    --output "$OUT_ROOT/open_loop/open_loop_v46_aocc.gpu${shard_id}.json" \
-    --per-sample-output "$OUT_ROOT/open_loop/open_loop_v46_aocc.gpu${shard_id}.jsonl" \
+    --output "$OUT_ROOT/open_loop/open_loop_v47_d3ce.gpu${shard_id}.json" \
+    --per-sample-output "$OUT_ROOT/open_loop/open_loop_v47_d3ce.gpu${shard_id}.jsonl" \
     > "$OUT_ROOT/logs/open_loop_gpu${shard_id}.out" 2>&1
 }
 
@@ -251,8 +258,8 @@ import numpy as np
 
 root = Path(sys.argv[1])
 wall_seconds = float(sys.argv[2])
-summary_paths = [root / f"open_loop_v46_aocc.gpu{i}.json" for i in range(2)]
-row_paths = [root / f"open_loop_v46_aocc.gpu{i}.jsonl" for i in range(2)]
+summary_paths = [root / f"open_loop_v47_d3ce.gpu{i}.json" for i in range(2)]
+row_paths = [root / f"open_loop_v47_d3ce.gpu{i}.jsonl" for i in range(2)]
 
 summaries = [json.loads(path.read_text(encoding="utf-8")) for path in summary_paths]
 shard_rows = []
@@ -318,8 +325,8 @@ for idx, peak in enumerate(peaks):
     if math.isfinite(peak):
         out[f"cuda_peak_memory_mb_gpu{idx}"] = peak
 
-(root / "open_loop_v46_aocc.json").write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
-with (root / "open_loop_v46_aocc.jsonl").open("w", encoding="utf-8") as f:
+(root / "open_loop_v47_d3ce.json").write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+with (root / "open_loop_v47_d3ce.jsonl").open("w", encoding="utf-8") as f:
     for row in rows:
         f.write(json.dumps(row, sort_keys=True) + "\n")
 print(json.dumps(out, indent=2, sort_keys=True))
@@ -327,12 +334,12 @@ PY
 }
 
 open_loop_2gpu() {
-  local checkpoint="${V46_CKPT:-$BEST_CKPT}"
+  local checkpoint="${V47_CKPT:-$BEST_CKPT}"
   check_checkpoint "$checkpoint"
   local shard_root="$OUT_ROOT/open_loop/.two_gpu_shards"
   prepare_open_loop_shards "$shard_root"
 
-  echo "[v46] Open-loop evaluation split across physical GPUs $GPU0 and $GPU1"
+  echo "[v47] Open-loop source_split=$OPEN_LOOP_SPLIT across physical GPUs $GPU0 and $GPU1"
   local start_time end_time
   start_time=$(date +%s)
   run_open_loop_shard "$GPU0" 0 "$checkpoint" "$shard_root" & local pid0=$!
@@ -347,7 +354,7 @@ prepare_closed_loop_token_shards() {
   rm -rf "$token_root"
   mkdir -p "$token_root"
 
-  python - "$BDSE_VAL_CACHE" "$token_root" "$limit" "$CL_TOKEN_SCAN_MAX" <<'PY'
+  python - "$BDSE_VAL_CACHE" "$token_root" "$limit" "$CL_TOKEN_SCAN_MAX" "$CL_TOKEN_SPLIT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -359,7 +366,8 @@ cache_root = Path(sys.argv[1])
 token_root = Path(sys.argv[2])
 limit = int(sys.argv[3])
 scan_max = max(limit, int(sys.argv[4]))
-paths = PreprocessedBDSEDataset(cache_root, split=["val"], max_scenarios=scan_max).build_index()
+source_split = str(sys.argv[5])
+paths = PreprocessedBDSEDataset(cache_root, split=[source_split], max_scenarios=scan_max).build_index()
 
 tokens = []
 seen = set()
@@ -390,7 +398,8 @@ meta = {
     "total": len(tokens),
     "gpu0": len(shards[0]),
     "gpu1": len(shards[1]),
-    "selection": "first unique tokens from deterministic val-cache order, alternated across GPUs",
+    "source_split": source_split,
+    "selection": "first unique tokens from deterministic source-cache order, alternated across GPUs",
 }
 (token_root / "shard_metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 print(json.dumps(meta, sort_keys=True))
@@ -411,7 +420,7 @@ run_closed_loop_shard() {
     --challenge closed_loop_nonreactive_agents \
     --metric-aggregator closed_loop_nonreactive_agents_weighted_average \
     --output-dir "$run_root/gpu${shard_id}" \
-    --experiment-uid "v46_aocc_${limit}_gpu${shard_id}" \
+    --experiment-uid "v47_d3ce_${limit}_gpu${shard_id}" \
     --nuplan-module nuplan.planning.script.run_simulation \
     --scenario-builder nuplan \
     --worker single_machine_thread_pool \
@@ -481,17 +490,17 @@ PY
 closed_loop_2gpu() {
   local limit="$1"
   : "${NUPLAN_ROOT:?Set NUPLAN_ROOT for closed-loop evaluation}"
-  local checkpoint="${V46_CKPT:-$BEST_CKPT}"
+  local checkpoint="${V47_CKPT:-$BEST_CKPT}"
   check_checkpoint "$checkpoint"
 
-  local run_root="$OUT_ROOT/closed_loop/v46_aocc_${limit}"
+  local run_root="$OUT_ROOT/closed_loop/v47_d3ce_${limit}"
   local token_root="$run_root/scenario_token_shards"
   rm -rf "$run_root"
   mkdir -p "$run_root"
   prepare_closed_loop_token_shards "$limit" "$token_root"
 
-  echo "[v46] Closed-loop $limit scenarios split across physical GPUs $GPU0 and $GPU1"
-  echo "[v46] Reuse $token_root/scenario_tokens_all.json for every compared method to keep the CL subset identical."
+  echo "[v47] Closed-loop token_source_split=$CL_TOKEN_SPLIT, $limit scenarios across physical GPUs $GPU0 and $GPU1"
+  echo "[v47] Reuse $token_root/scenario_tokens_all.json for every compared method to keep the CL subset identical."
   local start_time end_time
   start_time=$(date +%s)
   run_closed_loop_shard "$GPU0" 0 "$limit" "$checkpoint" "$token_root" "$run_root" & local pid0=$!
