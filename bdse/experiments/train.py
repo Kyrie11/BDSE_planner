@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import BatchSampler, DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
@@ -58,6 +58,36 @@ class OnTheFlyDataset(Dataset):
                 allow_pickle=False,
             )
         return self.source[idx]
+
+
+class ResumableBatchSampler:
+    """Skip completed DDP batches without loading or tensorizing them again.
+
+    ``DistributedSampler.set_epoch`` deterministically reconstructs the same
+    sample order after a restart.  Applying the offset at the batch-sampler
+    layer therefore resumes at the exact next batch, whereas a ``continue`` in
+    the training loop still makes DataLoader workers read, decode and collate
+    every already-completed sample.
+    """
+
+    def __init__(self, batch_sampler: BatchSampler):
+        self.batch_sampler = batch_sampler
+        self.start_batch = 0
+
+    @property
+    def total_batches(self) -> int:
+        return len(self.batch_sampler)
+
+    def set_start_batch(self, start_batch: int) -> None:
+        self.start_batch = min(max(0, int(start_batch)), self.total_batches)
+
+    def __iter__(self):
+        for batch_index, indices in enumerate(self.batch_sampler):
+            if batch_index >= self.start_batch:
+                yield indices
+
+    def __len__(self) -> int:
+        return max(0, self.total_batches - self.start_batch)
 
 
 def sample_to_tensors(sample: Sample, cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -599,14 +629,23 @@ def _make_loader(
     wrapped = OnTheFlyDataset(dataset)
     sampler = DistributedSampler(wrapped, num_replicas=world_size, rank=global_rank, shuffle=shuffle, seed=seed) if distributed else None
     loader_kwargs: dict[str, Any] = {
-        "batch_size": batch_size,
-        "shuffle": shuffle and sampler is None,
         "num_workers": num_workers,
         "pin_memory": bool(cfg["training"].get("pin_memory", cuda_available) and cuda_available),
         "persistent_workers": num_workers > 0,
         "collate_fn": lambda x: collate(x, cfg),
-        "sampler": sampler,
     }
+    if sampler is not None:
+        loader_kwargs["batch_sampler"] = ResumableBatchSampler(
+            BatchSampler(sampler, batch_size=batch_size, drop_last=False)
+        )
+    else:
+        loader_kwargs.update(
+            {
+                "batch_size": batch_size,
+                "shuffle": shuffle,
+                "sampler": None,
+            }
+        )
     if num_workers > 0:
         loader_kwargs["prefetch_factor"] = int(cfg["training"].get("prefetch_factor", 1))
     return DataLoader(wrapped, **loader_kwargs), sampler
@@ -1164,16 +1203,35 @@ def main() -> None:
         model.train()
         epoch_wall_start = time.perf_counter()
         meters: dict[str, Any] = {}
-        steps_per_epoch = max(1, len(loader))
+        resumable_batch_sampler = (
+            loader.batch_sampler
+            if isinstance(getattr(loader, "batch_sampler", None), ResumableBatchSampler)
+            else None
+        )
+        steps_per_epoch = max(
+            1,
+            resumable_batch_sampler.total_batches
+            if resumable_batch_sampler is not None
+            else len(loader),
+        )
         cfg["training"]["steps_per_epoch"] = int(steps_per_epoch)
         resume_at = int(start_batch_index) if epoch == start_epoch else 0
+        if resumable_batch_sampler is not None:
+            resumable_batch_sampler.set_start_batch(resume_at)
+            if is_main and resume_at > 0:
+                print(
+                    f"[bdse] DataLoader resumes directly at batch_index={resume_at}; "
+                    f"skipped_decode_batches={resume_at}",
+                    flush=True,
+                )
         processed_steps = 0
         stage_wall = {"data_wait": 0.0, "h2d": 0.0, "forward": 0.0, "loss": 0.0, "backward_step": 0.0}
         previous_step_end = time.perf_counter()
-        for batch_index, batch in enumerate(tqdm(loader, desc=f"epoch {epoch}", disable=not is_main)):
+        for loader_batch_index, batch in enumerate(tqdm(loader, desc=f"epoch {epoch}", disable=not is_main)):
+            batch_index = loader_batch_index + (resume_at if resumable_batch_sampler is not None else 0)
             batch_received = time.perf_counter()
             stage_wall["data_wait"] += max(batch_received - previous_step_end, 0.0)
-            if batch_index < resume_at:
+            if resumable_batch_sampler is None and batch_index < resume_at:
                 continue
             cfg["training"]["global_step"] = int(epoch * steps_per_epoch + batch_index)
             _stage_started = time.perf_counter()
@@ -1262,6 +1320,8 @@ def main() -> None:
                     )
                 if distributed and dist.is_initialized():
                     dist.barrier()
+        if resumable_batch_sampler is not None:
+            resumable_batch_sampler.set_start_batch(0)
         start_batch_index = 0
         epoch_metrics = _aggregate_meters(meters, device, distributed)
         epoch_wall_s = max(time.perf_counter() - epoch_wall_start, 1e-9)

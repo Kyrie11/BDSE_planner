@@ -47,6 +47,7 @@ VAL_DENSE_DIAGNOSTIC="${VAL_DENSE_DIAGNOSTIC:-0}"
 SAVE_EVERY_N_EPOCHS="${SAVE_EVERY_N_EPOCHS:-0}"
 SAVE_EVERY_N_STEPS="${SAVE_EVERY_N_STEPS:-2000}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
+RESUME_FROM="${RESUME_FROM:-}"
 DETACH="${DETACH:-0}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-3}"
 SELECTOR_SCENES_PER_RANK="${SELECTOR_SCENES_PER_RANK:-0}"
@@ -112,6 +113,47 @@ check_checkpoint() {
   }
 }
 
+discover_latest_checkpoint() {
+  python - "$LATEST_CKPT" "$OUT_ROOT/train/checkpoints" "$CKPT" <<'PY'
+import sys
+from pathlib import Path
+
+import torch
+
+latest = Path(sys.argv[1])
+checkpoint_dir = Path(sys.argv[2])
+legacy_final = Path(sys.argv[3])
+candidates = [latest, legacy_final]
+if checkpoint_dir.is_dir():
+    candidates.extend(checkpoint_dir.glob("*.pt"))
+
+best = None
+for path in dict.fromkeys(candidates):
+    if not path.is_file():
+        continue
+    try:
+        try:
+            state = torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError:
+            state = torch.load(path, map_location="cpu")
+    except Exception as exc:
+        print(f"[v47] ignore unreadable checkpoint {path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        continue
+    # A final inference-only model is not resumable; optimizer and epoch state
+    # are required to continue the same training run.
+    if not isinstance(state, dict) or "optimizer" not in state or "epoch" not in state:
+        continue
+    next_epoch = int(state.get("next_epoch", int(state.get("epoch", -1)) + 1))
+    next_batch = max(0, int(state.get("next_batch_index", 0)))
+    score = (next_epoch, next_batch, path.stat().st_mtime_ns)
+    if best is None or score > best[0]:
+        best = (score, path)
+
+if best is not None:
+    print(best[1])
+PY
+}
+
 wait_two() {
   local pid0="$1" pid1="$2" status=0
   wait "$pid0" || status=$?
@@ -122,9 +164,16 @@ wait_two() {
 train_2gpu() {
   local effective_global_batch=$((BATCH_SIZE_PER_GPU * NPROC_PER_NODE))
   local checkpoint_args=()
-  if [[ "$AUTO_RESUME" == "1" && -f "$LATEST_CKPT" ]]; then
-    checkpoint_args+=(--resume-from "$LATEST_CKPT")
-    echo "[v47] auto-resume checkpoint=$LATEST_CKPT"
+  local resume_checkpoint=""
+  if [[ -n "$RESUME_FROM" ]]; then
+    check_checkpoint "$RESUME_FROM"
+    resume_checkpoint="$RESUME_FROM"
+  elif [[ "$AUTO_RESUME" == "1" || "$AUTO_RESUME" == "true" ]]; then
+    resume_checkpoint="$(discover_latest_checkpoint)"
+  fi
+  if [[ -n "$resume_checkpoint" ]]; then
+    checkpoint_args+=(--resume-from "$resume_checkpoint")
+    echo "[v47] resume checkpoint=$resume_checkpoint"
   else
     check_checkpoint "$V30_CKPT_IN"
     checkpoint_args+=(--warm-start-from "$V30_CKPT_IN")

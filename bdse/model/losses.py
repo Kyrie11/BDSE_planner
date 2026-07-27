@@ -27,6 +27,43 @@ def _to_numpy(t: torch.Tensor | None, dtype: Any | None = None) -> np.ndarray | 
     return arr.astype(dtype, copy=False) if dtype is not None else arr
 
 
+def _packed_numpy_snapshot(
+    tensors: dict[str, tuple[torch.Tensor | None, torch.dtype]],
+) -> dict[str, np.ndarray | None]:
+    """Copy heterogeneous selector inputs to CPU with one sync per dtype.
+
+    The exact deployment selector intentionally runs on NumPy/CPU.  Copying
+    each CUDA tensor independently serializes the stream once per ``.cpu()``
+    call, which made the selector path pay more than a dozen synchronization
+    points per optimizer step.  Packing tensors by destination dtype preserves
+    every value and shape while reducing that to at most float/bool/int syncs.
+    Returned arrays are views of the packed CPU buffers and remain valid for
+    the lifetime of the result dictionary.
+    """
+    result: dict[str, np.ndarray | None] = {
+        name: None for name, (tensor, _) in tensors.items() if tensor is None
+    }
+    groups: dict[torch.dtype, list[tuple[str, torch.Tensor]]] = {}
+    for name, (tensor, dtype) in tensors.items():
+        if tensor is not None:
+            groups.setdefault(dtype, []).append((name, tensor.detach()))
+
+    for dtype, entries in groups.items():
+        shapes = [tuple(tensor.shape) for _, tensor in entries]
+        sizes = [int(tensor.numel()) for _, tensor in entries]
+        flat = [
+            tensor.to(dtype=dtype, copy=False).reshape(-1)
+            for _, tensor in entries
+        ]
+        packed = torch.cat(flat, dim=0) if len(flat) > 1 else flat[0]
+        packed_np = packed.cpu().numpy()
+        offset = 0
+        for (name, _), shape, size in zip(entries, shapes, sizes):
+            result[name] = packed_np[offset : offset + size].reshape(shape)
+            offset += size
+    return result
+
+
 def robust_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, delta: float = 1.0) -> torch.Tensor:
     mask = mask.bool() & torch.isfinite(pred) & torch.isfinite(target)
     safe_pred = torch.where(mask, pred, torch.zeros_like(pred))
@@ -354,34 +391,96 @@ def _build_predicted_pair_numpy_cache(
         or float(s_cfg.get("lambda_info", 0.0)) > 0.0
         or bool(s_cfg.get("force_uncertainty_objective", False))
     )
-    logits = _to_numpy(outputs["proposal_logits"], np.float32)
     family_logits = outputs.get("family_logits")
-    valid = _to_numpy(batch["candidate_valid"], bool)
     fam_ids_t = batch.get("evidence_family_ids")
     group_ids_t = batch.get("evidence_agent_group_ids")
     flags = batch.get("runtime_safety_flags")
     pair_var_t = outputs.get("pair_atom_var")
+    active_t = batch.get("evidence_active")
+    costs_t = batch.get("evidence_budget_costs")
+    pair_weights_t = batch.get("pair_weights")
+    evidence_features_t = batch.get("evidence_features")
+    decisive_hard_t = batch.get("decisive_hard_mask")
+    teacher_a_star_t = batch.get("teacher_a_star")
+
+    snapshot = _packed_numpy_snapshot(
+        {
+            "J0": (outputs["J0"], torch.float32),
+            "g_np": (
+                outputs.get("g") if pair_head_needs_local and "g" in outputs else None,
+                torch.float32,
+            ),
+            "delta": (outputs["pair_atom_delta"], torch.float32),
+            "pair_var": (
+                pair_var_t if pair_var_t is not None and selector_needs_pair_var else None,
+                torch.float32,
+            ),
+            "pair_weights": (
+                pair_weights_t
+                if pair_weights_t is not None
+                else torch.ones_like(batch["pair_valid"], dtype=torch.float32),
+                torch.float32,
+            ),
+            "logits": (outputs["proposal_logits"], torch.float32),
+            "family_logits_np": (family_logits, torch.float32),
+            "costs": (
+                costs_t
+                if costs_t is not None
+                else torch.ones_like(outputs["proposal_logits"]),
+                torch.float32,
+            ),
+            "evidence_features_np": (evidence_features_t, torch.float32),
+            "pairs": (batch["pair_indices"], torch.int64),
+            "fam_ids_np": (fam_ids_t, torch.int64),
+            "group_ids_np": (group_ids_t, torch.int64),
+            "teacher_a_star_np": (teacher_a_star_t, torch.int64),
+            "valid": (batch["candidate_valid"], torch.bool),
+            "pair_valid": (batch["pair_valid"], torch.bool),
+            "active": (
+                active_t
+                if active_t is not None
+                else torch.ones_like(outputs["proposal_logits"], dtype=torch.bool),
+                torch.bool,
+            ),
+            "flags_np": (flags, torch.bool),
+            "decisive_hard_np": (decisive_hard_t, torch.bool),
+        }
+    )
+    logits = snapshot["logits"]
+    valid = snapshot["valid"]
     assert logits is not None and valid is not None
-    fam_ids_np = _to_numpy(fam_ids_t, np.int64) if fam_ids_t is not None else np.zeros_like(logits, dtype=np.int64)
+    fam_ids_np = (
+        snapshot["fam_ids_np"]
+        if snapshot["fam_ids_np"] is not None
+        else np.zeros_like(logits, dtype=np.int64)
+    )
     return {
-        "J0": _to_numpy(outputs["J0"], np.float32),
-        "g_np": _to_numpy(outputs.get("g"), np.float32) if pair_head_needs_local and "g" in outputs else None,
-        "delta": _to_numpy(outputs["pair_atom_delta"], np.float32),
-        "pair_var": _to_numpy(pair_var_t, np.float32) if (pair_var_t is not None and selector_needs_pair_var) else None,
-        "pairs": _to_numpy(batch["pair_indices"], np.int64),
-        "pair_valid": _to_numpy(batch["pair_valid"], bool),
-        "pair_weights": _to_numpy(batch.get("pair_weights", torch.ones_like(batch["pair_valid"], dtype=torch.float32)), np.float32),
+        "J0": snapshot["J0"],
+        "g_np": snapshot["g_np"],
+        "delta": snapshot["delta"],
+        "pair_var": snapshot["pair_var"],
+        "pairs": snapshot["pairs"],
+        "pair_valid": snapshot["pair_valid"],
+        "pair_weights": snapshot["pair_weights"],
         "logits": logits,
-        "family_logits_np": _to_numpy(family_logits, np.float32) if family_logits is not None else None,
+        "family_logits_np": snapshot["family_logits_np"],
         "valid": valid,
-        "active": _to_numpy(batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"]).bool()), bool),
-        "costs": _to_numpy(batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])), np.float32),
+        "active": snapshot["active"],
+        "costs": snapshot["costs"],
         "fam_ids_np": fam_ids_np,
-        "group_ids_np": _to_numpy(group_ids_t, np.int64) if group_ids_t is not None else np.full_like(fam_ids_np, -1, dtype=np.int64),
-        "flags_np": _to_numpy(flags, bool) if flags is not None else np.zeros_like(valid, dtype=bool),
-        "evidence_features_np": _to_numpy(batch.get("evidence_features"), np.float32) if "evidence_features" in batch else None,
-        "decisive_hard_np": _to_numpy(batch.get("decisive_hard_mask"), bool) if "decisive_hard_mask" in batch else None,
-        "teacher_a_star_np": _to_numpy(batch.get("teacher_a_star"), np.int64) if "teacher_a_star" in batch else None,
+        "group_ids_np": (
+            snapshot["group_ids_np"]
+            if snapshot["group_ids_np"] is not None
+            else np.full_like(fam_ids_np, -1, dtype=np.int64)
+        ),
+        "flags_np": (
+            snapshot["flags_np"]
+            if snapshot["flags_np"] is not None
+            else np.zeros_like(valid, dtype=bool)
+        ),
+        "evidence_features_np": snapshot["evidence_features_np"],
+        "decisive_hard_np": snapshot["decisive_hard_np"],
+        "teacher_a_star_np": snapshot["teacher_a_star_np"],
     }
 
 
