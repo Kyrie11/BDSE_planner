@@ -1454,29 +1454,39 @@ def _counterfactual_critical_evidence_loss(
     true_atom_delta: torch.Tensor,
     pred_atom_delta: torch.Tensor,
     predicted_margin: torch.Tensor,
+    true_margin: torch.Tensor,
     pairs: torch.Tensor,
     pair_mask: torch.Tensor,
+    pair_weights: torch.Tensor,
     target_action: torch.Tensor,
     atom_mask: torch.Tensor,
     atom_costs: torch.Tensor,
     proposal_logits: torch.Tensor,
     cfg: dict[str, Any],
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Teach which evidence changes the teacher-vs-hard-rival decision.
+    """Decision-boundary critical evidence supervision.
 
-    The target is cost-normalized positive margin support on the *currently*
-    hardest teacher/rival pairs.  This differs from generic oracle-mask BCE: it
-    directly supervises the pair residual and proposal ordering on evidence whose
-    removal would erase the teacher action's decision margin.
+    V47 rewarded every positive teacher/rival atom contribution.  That target
+    increased interaction recall, but it did not identify whether removing an
+    atom would actually erase the teacher action's margin.  V48 instead uses a
+    leave-one-atom-out boundary deficit.  Rivals are mined from the union of the
+    teacher-nearest and model-most-confused pairs, and each atom is weighted by
+    the increase in decision deficit caused by removing it, divided by query
+    cost.  The pair head and proposal head are trained with the same listwise
+    target, so the learned ranking matches the fixed-budget selector objective.
     """
     train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
     ccfg = train_cfg.get("counterfactual_critical_evidence", {}) or {}
-    top_k = max(1, int(ccfg.get("top_k_rivals", 3)))
+    top_k = max(1, int(ccfg.get("top_k_rivals", 4)))
     rival_tau = max(float(ccfg.get("rival_temperature", 0.12)), 1e-6)
     atom_tau = max(float(ccfg.get("atom_temperature", 0.20)), 1e-6)
     proposal_tau = max(float(ccfg.get("proposal_temperature", 0.35)), 1e-6)
     cost_power = max(float(ccfg.get("cost_power", 1.0)), 0.0)
     min_gain = max(float(ccfg.get("min_gain", 1e-5)), 0.0)
+    boundary_margin = float(ccfg.get("boundary_margin", 0.08))
+    support_floor = max(float(ccfg.get("positive_support_floor", 0.05)), 0.0)
+    teacher_rival_mix = float(ccfg.get("teacher_rival_mix", 0.6))
+    teacher_rival_mix = min(max(teacher_rival_mix, 0.0), 1.0)
 
     B, E, P = pred_atom_delta.shape
     tgt = target_action[:, None]
@@ -1485,21 +1495,48 @@ def _counterfactual_critical_evidence_loss(
     orient = torch.where(a == tgt, torch.ones_like(predicted_margin), torch.zeros_like(predicted_margin))
     orient = torch.where(b == tgt, -torch.ones_like(predicted_margin), orient)
     valid_pair = pair_mask.bool() & (orient != 0.0)
-    oriented_margin = predicted_margin * orient
-    rank = oriented_margin.detach().masked_fill(~valid_pair, torch.finfo(oriented_margin.dtype).max)
+
+    oriented_pred_margin = predicted_margin * orient
+    oriented_true_margin = true_margin * orient
+    rank_teacher = oriented_true_margin.detach().masked_fill(~valid_pair, torch.finfo(oriented_true_margin.dtype).max)
+    rank_model = oriented_pred_margin.detach().masked_fill(~valid_pair, torch.finfo(oriented_pred_margin.dtype).max)
     k = min(top_k, P)
-    hard_idx = torch.topk(rank, k=k, dim=1, largest=False, sorted=False).indices
-    hard_valid = valid_pair.gather(1, hard_idx)
-    hard_margin = oriented_margin.detach().gather(1, hard_idx)
-    hard_weight = torch.softmax((-hard_margin / rival_tau).masked_fill(~hard_valid, -1e4), dim=1)
-    hard_weight = hard_weight * hard_valid.float()
+    teacher_idx = torch.topk(rank_teacher, k=k, dim=1, largest=False, sorted=False).indices
+    model_idx = torch.topk(rank_model, k=k, dim=1, largest=False, sorted=False).indices
+    hard_mask = torch.zeros_like(valid_pair)
+    hard_mask.scatter_(1, teacher_idx, valid_pair.gather(1, teacher_idx))
+    hard_mask.scatter_(1, model_idx, valid_pair.gather(1, model_idx))
+
+    base_pair_weight = pair_weights.float().clamp_min(0.0)
+    if base_pair_weight.shape != predicted_margin.shape:
+        base_pair_weight = torch.ones_like(predicted_margin)
+    teacher_logits = -oriented_true_margin.detach() / rival_tau
+    model_logits = -oriented_pred_margin.detach() / rival_tau
+    hard_logits = teacher_rival_mix * teacher_logits + (1.0 - teacher_rival_mix) * model_logits
+    hard_logits = hard_logits + torch.log1p(base_pair_weight.detach())
+    hard_logits = hard_logits.masked_fill(~hard_mask, -1e4)
+    hard_weight = torch.softmax(hard_logits, dim=1) * hard_mask.float()
     hard_weight = hard_weight / hard_weight.sum(dim=1, keepdim=True).clamp_min(1e-6)
-    pair_weight = torch.zeros_like(predicted_margin)
-    pair_weight.scatter_add_(1, hard_idx, hard_weight)
-    oriented_true = true_atom_delta * orient[:, None, :]
-    oriented_pred = pred_atom_delta * orient[:, None, :]
-    true_gain = (torch.relu(oriented_true) * pair_weight[:, None, :]).sum(dim=2)
-    pred_gain = (oriented_pred * pair_weight[:, None, :]).sum(dim=2)
+
+    oriented_true_atom = true_atom_delta * orient[:, None, :]
+    oriented_pred_atom = pred_atom_delta * orient[:, None, :]
+    # Removing atom i changes m to m-d_i.  The positive difference between the
+    # resulting boundary deficit and the full-interface deficit is the causal
+    # contribution of that atom to preserving the teacher/rival decision.
+    full_true_deficit = torch.relu(boundary_margin - oriented_true_margin)[:, None, :]
+    loo_true_deficit = torch.relu(boundary_margin - (oriented_true_margin[:, None, :] - oriented_true_atom))
+    true_utility_pair = torch.relu(loo_true_deficit - full_true_deficit)
+    if support_floor > 0.0:
+        true_utility_pair = true_utility_pair + support_floor * torch.relu(oriented_true_atom)
+
+    full_pred_deficit = torch.relu(boundary_margin - oriented_pred_margin)[:, None, :]
+    loo_pred_deficit = torch.relu(boundary_margin - (oriented_pred_margin[:, None, :] - oriented_pred_atom))
+    pred_utility_pair = torch.relu(loo_pred_deficit - full_pred_deficit)
+    if support_floor > 0.0:
+        pred_utility_pair = pred_utility_pair + support_floor * torch.relu(oriented_pred_atom)
+
+    true_gain = (true_utility_pair * hard_weight[:, None, :]).sum(dim=2)
+    pred_gain = (pred_utility_pair * hard_weight[:, None, :]).sum(dim=2)
 
     costs = atom_costs.float().clamp_min(1e-3)
     if costs.shape != true_gain.shape:
@@ -1518,7 +1555,6 @@ def _counterfactual_critical_evidence_loss(
     proposal_ce = -(target_dist * F.log_softmax(proposal_score, dim=1)).sum(dim=1)
     denom = scene_has_target.float().sum().clamp_min(1.0)
     return (pair_ce * scene_has_target.float()).sum() / denom, (proposal_ce * scene_has_target.float()).sum() / denom
-
 
 def _pair_cycle_consistency_loss(
     predicted_margin: torch.Tensor,
@@ -2007,8 +2043,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             "evidence_budget_costs", torch.ones_like(out["proposal_logits"])
         )
         L_cf_critical_pair, L_cf_critical_proposal = _counterfactual_critical_evidence_loss(
-            true_atom_delta, pred_atom_delta, M_hat_E, pairs, pair_train_mask,
-            target_action, e_mask, atom_costs_for_critical, out["proposal_logits"], cfg
+            true_atom_delta, pred_atom_delta, M_hat_E, target_margin_norm,
+            pairs, pair_train_mask, pair_weights, target_action, e_mask,
+            atom_costs_for_critical, out["proposal_logits"], cfg
         )
     else:
         L_cf_critical_pair = J0.new_tensor(0.0)

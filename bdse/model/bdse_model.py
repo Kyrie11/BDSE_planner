@@ -1439,8 +1439,23 @@ class BDSEModel(nn.Module):
             return blended.astype(np.float32)
 
         if bool(mcfg.get("pair_head_residual_over_local", False)):
+            # V48 confidence-shrunk residual integration.  V47 always added the
+            # pair residual at full strength and skipped the existing local/pair
+            # calibration path; this improved broad winner/rival accuracy but
+            # damaged near-tie signs.  Form the integrable local+residual margin
+            # first, then shrink it toward the local margin when residual variance
+            # is high or the two interfaces disagree.
             selector_pair_delta = _local_pair_delta(selection_pairs, pair_margin_scale) + selector_pair_delta
             rival_pair_delta = _local_pair_delta(rival_pairs, rival_pair_margin_scale) + rival_pair_delta
+            if pair_cal_enabled:
+                selector_pair_delta = _calibrate_pair_delta(
+                    selector_pair_delta, selector_pair_var, selection_pairs,
+                    pair_margin_scale, "selector"
+                )
+                rival_pair_delta = _calibrate_pair_delta(
+                    rival_pair_delta, rival_pair_var, rival_pairs,
+                    rival_pair_margin_scale, "tournament"
+                )
         elif pair_cal_enabled:
             selector_pair_delta = _calibrate_pair_delta(selector_pair_delta, selector_pair_var, selection_pairs, pair_margin_scale, "selector")
             rival_pair_delta = _calibrate_pair_delta(rival_pair_delta, rival_pair_var, rival_pairs, rival_pair_margin_scale, "tournament")

@@ -464,24 +464,27 @@ def _validation_bdse_score(metrics: dict[str, float]) -> float:
 
 
 def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
-    """Checkpoint score aligned with the fixed-budget paper claim.
+    """Checkpoint score aligned with deployment-boundary correctness.
 
-    Unlike the historical score, this proxy gives direct weight to the true
-    dense full-interface match and to selected critical interaction/hard atom
-    recall.  It should be used together with ``--val-dense-diagnostic``; without
-    dense scoring, budget-vs-full may only represent a sparse approximation.
+    Raw decisive/interaction recall can be maximized by selecting almost every
+    interaction atom and is therefore only a weak diagnostic.  V48 prioritizes
+    teacher correctness, the exact pair-full deployment interface, near-boundary
+    sign accuracy, and budget preservation, while retaining hard-safety hurdles.
     """
     def finite(name: str, default: float = 0.0) -> float:
         value = float(metrics.get(name, default))
         return value if np.isfinite(value) else default
 
-    budget_full = finite("val_budget_vs_full_match", 0.0)
     teacher_match = finite("val_teacher_action_match", finite("val_decision_sufficiency", 0.0))
-    interaction_recall = finite("val_selected_interaction_decisive_recall", 0.0)
-    # Structural hard-safety evidence is intentionally budget-exempt in the
-    # deployed algorithm.  Prefer the effective recall metric so checkpointing
-    # does not penalize the model for not spending decision budget on mandatory
-    # safety checks.
+    full_match = finite("val_full_interface_action_match", 0.0)
+    pair_full = finite(
+        "val_pair_full_interface_action_match",
+        finite("val_sparse_full_interface_action_match", 0.0),
+    )
+    budget_pair = finite("val_budget_vs_pair_full_match", finite("val_budget_vs_full_match", 0.0))
+    near_sign = finite("val_pair_sign_acc_near_tie", 0.0)
+    winner_sign = finite("val_pair_sign_acc_winner_rival", 0.0)
+    sufficiency = finite("val_evidence_sufficiency", 0.0)
     hard_recall = finite(
         "val_effective_hard_decisive_recall",
         finite("val_selected_hard_decisive_recall", finite("val_hard_evidence_recall", 0.0)),
@@ -490,39 +493,32 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
         "val_effective_selected_decisive_atom_recall",
         finite("val_selected_decisive_atom_recall", 0.0),
     )
-    full_match = finite("val_full_interface_action_match", 0.0)
-    near_sign = finite("val_pair_sign_acc_near_tie", 0.0)
-    sufficiency = finite("val_evidence_sufficiency", 0.0)
     fallback = finite("val_fallback_would_trigger_rate", 0.0)
     regret = max(0.0, finite("val_teacher_regret", 1e6))
-    effective_queries = max(0.0, finite("val_effective_query_count", 0.0))
-    total_queries = max(0.0, finite("val_total_sparse_query_count", 0.0))
+    latency_p95 = max(0.0, finite("val_planner_latency_ms_p95", 0.0))
 
-    # Feasibility-first checkpointing.  V32's unconstrained weighted sum selected
-    # epochs whose teacher match improved by a few tenths of a point while hard
-    # evidence recall continued to fall.  These hinge penalties encode the
-    # minimum evidence coverage needed before dense-match gains are rewarded.
     hard_shortfall = max(0.0, 0.60 - hard_recall)
-    interaction_shortfall = max(0.0, 0.32 - interaction_recall)
-    fallback_excess = max(0.0, fallback - 0.02)
-    query_excess = max(0.0, effective_queries / 8500.0 - 1.0)
-    sparse_query_excess = max(0.0, total_queries / 33000.0 - 1.0)
+    pair_shortfall = max(0.0, 0.28 - pair_full)
+    near_shortfall = max(0.0, 0.55 - near_sign)
+    fallback_excess = max(0.0, fallback - 0.50)
+    latency_excess = max(0.0, latency_p95 / 500.0 - 1.0) if latency_p95 > 0.0 else 0.0
+
     return float(
-        160.0 * budget_full
-        + 80.0 * teacher_match
-        + 40.0 * full_match
-        + 20.0 * decisive_recall
-        + 35.0 * interaction_recall
-        + 35.0 * hard_recall
-        + 20.0 * near_sign
-        + 10.0 * sufficiency
-        - 20.0 * fallback
-        - 5.0 * np.log1p(regret / 1000.0)
-        - 180.0 * hard_shortfall
-        - 90.0 * interaction_shortfall
-        - 120.0 * fallback_excess
-        - 3.0 * query_excess
-        - 2.0 * sparse_query_excess
+        220.0 * teacher_match
+        + 100.0 * full_match
+        + 120.0 * pair_full
+        + 55.0 * budget_pair
+        + 45.0 * near_sign
+        + 20.0 * winner_sign
+        + 20.0 * sufficiency
+        + 8.0 * hard_recall
+        + 3.0 * decisive_recall
+        - 9.0 * np.log1p(regret / 1000.0)
+        - 120.0 * hard_shortfall
+        - 150.0 * pair_shortfall
+        - 80.0 * near_shortfall
+        - 50.0 * fallback_excess
+        - 4.0 * latency_excess
     )
 
 

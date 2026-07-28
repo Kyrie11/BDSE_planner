@@ -3809,12 +3809,47 @@ def _build_anytime_one_sided_adverse_certificate_state(
     orient[pairs[:, 0] == int(target_action)] = 1.0
     orient[pairs[:, 1] == int(target_action)] = -1.0
     pair_keep = (orient != 0.0) & (weights > 0.0)
+    frontier_original_count = int(pair_keep.sum())
+    frontier_original_weight = float(weights[pair_keep].sum()) if frontier_original_count else 0.0
+    # V48 tournament-active rival frontier.  Requiring every pair incident to the
+    # target to be individually certified made the certificate far more
+    # conservative than the soft-min tournament it was intended to protect.  Keep
+    # the closest target/rival margins and all safety-crossing rivals, then cap the
+    # frontier deterministically.  This is still a deployment-only construction:
+    # it uses predicted full margins, pair weights, and runtime safety flags.
     if bool(pair_keep.any()) and int(max_target_rivals) > 0 and int(pair_keep.sum()) > int(max_target_rivals):
         ids = np.flatnonzero(pair_keep)
-        priority = weights[ids] / (np.abs(full_margin[ids]) + max(float(boundary_tau), 1e-3))
-        chosen = ids[np.argsort(-priority, kind="stable")[: int(max_target_rivals)]]
+        oriented_full = full_margin[ids] * orient[ids]
+        closest = float(np.min(oriented_full))
+        frontier_tau = max(float(boundary_tau), 1e-3)
+        flags_safe = np.asarray(flags_arr, dtype=bool).reshape(-1)
+        a_ids = pairs[ids, 0].clip(0, max(flags_safe.shape[0] - 1, 0))
+        b_ids = pairs[ids, 1].clip(0, max(flags_safe.shape[0] - 1, 0))
+        safety_cross = flags_safe[a_ids] ^ flags_safe[b_ids] if flags_safe.size else np.zeros((ids.size,), dtype=bool)
+        frontier_mask = (oriented_full <= closest + frontier_tau) | safety_cross
+        frontier_ids = ids[frontier_mask]
+        min_frontier = min(max(3, int(np.ceil(np.sqrt(max(ids.size, 1))))), int(max_target_rivals))
+        priority = (
+            weights[ids] / (np.maximum(oriented_full - closest, 0.0) + frontier_tau)
+            + 2.0 * safety_cross.astype(np.float32)
+        )
+        ranked = ids[np.argsort(-priority, kind="stable")]
+        chosen_list = list(map(int, frontier_ids.tolist()))
+        for idx in ranked.tolist():
+            if int(idx) not in chosen_list:
+                chosen_list.append(int(idx))
+            if len(chosen_list) >= max(min_frontier, int(max_target_rivals)):
+                break
+        # Keep the highest-priority members when the safety/near frontier itself
+        # exceeds the requested cap.
+        chosen_set = set(chosen_list)
+        chosen = np.asarray([int(i) for i in ranked.tolist() if int(i) in chosen_set][: int(max_target_rivals)], dtype=np.int64)
         pair_keep[:] = False
         pair_keep[chosen] = True
+    frontier_retained_weight = (
+        float(weights[pair_keep].sum()) / max(frontier_original_weight, 1e-9)
+        if frontier_original_count else 1.0
+    )
     if not bool(pair_keep.any()):
         return {
             "terminal": True,
@@ -3894,6 +3929,8 @@ def _build_anytime_one_sided_adverse_certificate_state(
             "aocc_target_action": int(target_action),
             "aocc_target_confidence": float(target_conf),
             "aocc_pair_count": int(pair_keep.sum()),
+            "aocc_frontier_original_pair_count": int(frontier_original_count),
+            "aocc_frontier_retained_weight_fraction": float(frontier_retained_weight),
             "aocc_initial_deficit": float(np.sum(w * deficit0)),
             "aocc_full_target_certified_pair_fraction": float(np.mean(full_oriented >= gamma - 1e-8)),
             "aocc_initial_certified_pair_fraction": float(np.mean(c0 >= gamma - 1e-8)),

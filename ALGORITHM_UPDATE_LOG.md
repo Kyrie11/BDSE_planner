@@ -1371,3 +1371,153 @@ The one-sided certificate preserves the learned full-interface action under its
 calibration assumptions; it does not make a wrong full-interface action correct.
 The paper must report certificate coverage, conditional action preservation,
 budget curves, scenario/city slices, latency stages, and candidate oracle bounds.
+
+---
+
+## v48 DBCE — Deployment-Boundary Critical Evidence (2026-07-27)
+
+### Why v47 did not enter closed loop
+
+The v47 pipeline stopped intentionally at the strict paired open-loop gate.  The
+closed-loop directory is empty because the gate command returned nonzero under
+`set -e`; this was not a nuPlan simulator startup failure.  The uploaded run had:
+
+- teacher action match `0.249` versus control `0.238`, a `+0.011` gain below the
+  required `+0.020`;
+- evidence sufficiency `0.073575` versus `0.070400`, a `+0.003175` gain below
+  the required `+0.010`;
+- pair-full deployment match `0.248 < 0.300`;
+- certified target-pair fraction `0.135 < 0.500` and fully certified scene rate
+  `0.028`;
+- planner p95 latency `1365.15 ms > 500 ms`;
+- paired regret regression at both median and p90.
+
+A second experiment-integrity issue was discovered: two launcher logs began
+about two minutes apart and the training JSONL contains two rows for every epoch
+(24 rows for 12 unique epochs).  These independent jobs wrote to the same output
+root.  V47 remains useful for diagnosis, but it is not a clean paper-grade run.
+
+### What v47 learned and what it did not
+
+**Effective components**
+
+1. Exact-selector supervision reached `1.0` after epoch zero.
+2. Full-interface match improved from `0.265` to `0.319`.
+3. Winner/rival pair sign accuracy improved from `0.638` to `0.692`.
+4. Actual sparse query count fell from about `11252` to `2285` per scenario.
+5. Budget-to-pair-full preservation reached `0.895`; pair-to-budget harmful
+   compression was only `0.018`.
+
+**Ineffective or misleading components**
+
+1. Near-tie pair sign accuracy fell from `0.583` to `0.469`; the residual head
+   learned broad corrections but damaged the decision boundary.
+2. `L_cf_critical_pair` remained essentially flat (`3.612 -> 3.610`).  The v47
+   target rewarded all positive teacher support, not the counterfactual effect
+   of removing an atom from the teacher/rival boundary.
+3. Proposal loss decreased, but `proposal_top_m=64` covered essentially the
+   entire average decision evidence pool (`~29.97` atoms); proposal ranking had
+   no deployment consequence.
+4. `min_soft_interaction_topm_slots=24` caused about `15.30 / 15.87 = 96.4%` of
+   the decision budget to be filled by interaction-family evidence.  High recall
+   therefore did not imply causal decision support.
+5. AOCC protected the pair-full action well, but the pair-full action itself was
+   correct only `0.248` of the time.  Dense-to-pair interface error, not final
+   budget compression, remained the dominant action-loss source.
+6. The per-atom prior radius `0.10` was roughly five times the observed raw
+   atom-pair MAE and accumulated across omitted atoms.  B=16 therefore certified
+   only a small fraction even though the full-order target was usually
+   certifiable.
+
+### v48 core algorithm changes
+
+1. **Leave-one-out deployment-boundary criticality.**  For teacher action `w`,
+   rival `r`, full teacher margin `m_wr`, and atom support `d_i`, the target is
+
+   `relu(gamma - (m_wr - d_i)) - relu(gamma - m_wr)`.
+
+   This is nonzero only when removing the atom increases the boundary deficit.
+   It is divided by query cost and used as the shared listwise target for the
+   pair residual and proposal heads.
+2. **Teacher-nearest + model-confused rival mining.**  Critical evidence is
+   learned against the union of teacher-nearest rivals and current model errors,
+   rather than predicted-hard rivals alone.
+3. **Confidence-shrunk integrable pair interface.**  Runtime margins use the
+   integrable local action-conditioned margin plus a sparse antisymmetric
+   residual.  The combined margin is shrunk back toward the local interface when
+   residual variance is high or signs disagree.  V47 skipped this calibration in
+   residual mode.
+4. **Tournament-active AOCC frontier.**  AOCC protects near-boundary target
+   rivals and safety-crossing rivals instead of requiring every target-incident
+   pair.  It reports original frontier size and retained pair-weight fraction.
+5. **Real proposal competition.**  `proposal_top_m` is reduced `64 -> 24`, while
+   reserved interaction slots are reduced `24 -> 8`.  Interaction evidence must
+   now compete with route, progress, regularity, and other decision families.
+6. **Less over-conservative bounds.**  Calibration prior radius is reduced
+   `0.10 -> 0.02`, protected target rivals `16 -> 6`, and calibration remains
+   group-disjoint and provenance-gated.
+7. **Boundary-aligned checkpointing.**  Best-checkpoint selection now emphasizes
+   teacher match, exact/sparse pair-full match, near-tie sign, budget-to-pair
+   preservation, sufficiency, regret, and safety.  Raw interaction recall has
+   only a small diagnostic weight.
+8. **Latency-oriented caps.**  Pair residual refinement is reduced `48 -> 32`,
+   selector pairs `128 -> 96`, runtime pair queries `320 -> 192`, tournament
+   rivals `16 -> 12`, and utility refinement `12 -> 8`.
+9. **Experiment single-writer enforcement.**  Both the run script and full
+   pipeline create PID-bearing lock directories.  A second writer to the same
+   `OUT_ROOT` fails immediately.
+10. **Stricter gate.**  The gate now rejects duplicate epochs, near-tie
+    regression, interaction-budget saturation, excessive fallback, inadequate
+    AOCC frontier weight, weak certificate coverage, pair-full error, regret
+    regression, and latency failure.
+11. **Automatic gated CL20.**  The prior command file contained only a commented
+    closed-loop example.  V48 starts CL20 automatically after PASS when
+    `RUN_CLOSED_LOOP_AFTER_GATE=1` and `NUPLAN_ROOT` is set.
+
+### Configuration changes
+
+- new train config: `bdse/configs/v48_bdse_dbce_train_2gpu.yaml`;
+- new closed-loop config: `bdse/configs/v48_bdse_dbce_cl.yaml`;
+- training epochs: `12 -> 16`;
+- counterfactual rivals: `3 -> 4`;
+- counterfactual pair/proposal weights: `4/3 -> 8/4`;
+- old non-causal critical pair/proposal weights: `8/2 -> 2/0.5`;
+- online hard-rival weight: `3 -> 5`;
+- full-action weight: `4 -> 6`;
+- pair calibration enabled for the local+residual interface.
+
+### Files added or modified
+
+- `bdse/model/losses.py`
+- `bdse/model/bdse_model.py`
+- `bdse/planner/selector.py`
+- `bdse/experiments/train.py`
+- `bdse/configs/v48_bdse_dbce_train_2gpu.yaml`
+- `bdse/configs/v48_bdse_dbce_cl.yaml`
+- `bdse/tools/calibrate_v48_adverse_bounds.py`
+- `bdse/tools/apply_v48_calibration.py`
+- `bdse/tools/check_v48_dbce_gate.py`
+- `bdse/tests/test_v47_d3ce.py`
+- `bdse/tests/test_v46_aocc.py`
+- `run_v48_dbce.sh`
+- `V48_DBCE_NEXT_COMMANDS.sh`
+- `README_V48_DBCE.md`
+
+### Validation completed
+
+- Python compile check: pass;
+- `bash -n run_v48_dbce.sh`: pass;
+- `bash -n V48_DBCE_NEXT_COMMANDS.sh`: pass;
+- complete unit suite: **158 passed, 5 warnings**;
+- v48 strict gate replayed on v47 and correctly detected every original failure,
+  the near-tie regression, interaction saturation, and all duplicate epochs.
+
+### Claim boundary
+
+V48 is a code-level and objective-level correction, not an assertion that the
+new training run will necessarily pass.  The strongest defensible contribution
+is the combination of deployment-boundary leave-one-out criticality, an
+integrable local margin with calibrated sparse residuals, and a nested
+fixed-budget deployment certificate.  Statistical claims remain conditional on
+log-disjoint calibration and exchangeability; teacher-action correctness also
+depends on candidate coverage and full-interface representation quality.
