@@ -237,3 +237,20 @@ def test_aocc_skips_unused_postfill_utility(monkeypatch) -> None:
     result = selector_mod.runtime_greedy_selector_pair_conditioned(**kwargs)
     assert result.selected
     assert result.diagnostics["postfill_selected_atoms"] == len(result.selected)
+
+
+def test_threaded_multi_budget_exact_masks_equal_sequential() -> None:
+    outputs, batch, cfg = _selector_case()
+    seq_cfgs = [_config_with_evidence_budget(cfg, budget) for budget in (1.0, 2.0, 4.0)]
+    for local_cfg in seq_cfgs:
+        local_cfg.setdefault("training", {})["deployment_selector_cpu_threads"] = 1
+        local_cfg["training"]["deployment_selector_cpu_backend"] = "sequential"
+    expected = _predicted_pair_certificate_masks_multi_budget(outputs, batch, seq_cfgs)
+
+    par_cfgs = [copy.deepcopy(local_cfg) for local_cfg in seq_cfgs]
+    for local_cfg in par_cfgs:
+        local_cfg.setdefault("training", {})["deployment_selector_cpu_threads"] = 2
+        local_cfg["training"]["deployment_selector_cpu_backend"] = "thread"
+    actual = _predicted_pair_certificate_masks_multi_budget(outputs, batch, par_cfgs)
+    for sequential, threaded in zip(expected, actual):
+        assert torch.equal(sequential, threaded)

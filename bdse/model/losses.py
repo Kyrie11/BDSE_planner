@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
 from typing import Any
+import atexit
+import multiprocessing as mp
 import time
 
 import numpy as np
@@ -764,6 +768,96 @@ def _predicted_pair_certificate_masks(
 
 
 
+def _slice_numpy_scene_cache(cache: dict[str, Any], scene_index: int, batch_size: int) -> dict[str, Any]:
+    """Return a one-scene view of an exact-selector NumPy snapshot.
+
+    Arrays whose leading dimension is the scene batch are sliced; static values
+    are shared read-only.  This permits independent scene selection in CPU
+    threads without additional CUDA synchronization or host copies.
+    """
+    out: dict[str, Any] = {}
+    for key, value in cache.items():
+        if isinstance(value, np.ndarray) and value.ndim > 0 and int(value.shape[0]) == int(batch_size):
+            out[key] = value[scene_index : scene_index + 1]
+        else:
+            out[key] = value
+    return out
+
+
+def _exact_selector_stub_tensors(cache: dict[str, Any]) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Create tiny CPU tensor stubs for a cache-backed exact selector call.
+
+    ``_predicted_pair_certificate_masks`` consumes all numerical inputs from the
+    supplied NumPy cache.  Only tensor shapes, key presence, and the final output
+    device are needed from ``outputs``/``batch``.  CPU stubs prevent worker
+    threads from touching the CUDA context.
+    """
+    j0 = np.asarray(cache["J0"])
+    logits = np.asarray(cache["logits"])
+    pairs = np.asarray(cache["pairs"])
+    delta = np.asarray(cache["delta"])
+    outputs_stub = {
+        "J0": torch.empty(tuple(j0.shape), dtype=torch.float32),
+        "proposal_logits": torch.empty(tuple(logits.shape), dtype=torch.float32),
+        "pair_atom_delta": torch.empty(tuple(delta.shape), dtype=torch.float32),
+    }
+    batch_stub = {
+        "pair_indices": torch.empty(tuple(pairs.shape), dtype=torch.long),
+    }
+    return outputs_stub, batch_stub
+
+
+_EXACT_SELECTOR_PROCESS_POOLS: dict[int, ProcessPoolExecutor] = {}
+
+
+def _shutdown_exact_selector_process_pools() -> None:
+    for pool in list(_EXACT_SELECTOR_PROCESS_POOLS.values()):
+        try:
+            pool.shutdown(wait=True, cancel_futures=True)
+        except Exception:
+            pass
+    _EXACT_SELECTOR_PROCESS_POOLS.clear()
+
+
+atexit.register(_shutdown_exact_selector_process_pools)
+
+
+def _get_exact_selector_process_pool(worker_count: int) -> ProcessPoolExecutor:
+    worker_count = max(1, int(worker_count))
+    pool = _EXACT_SELECTOR_PROCESS_POOLS.get(worker_count)
+    if pool is None:
+        # ``spawn`` is mandatory here: training ranks already own CUDA contexts,
+        # and forking such a process is unsafe.  Workers receive NumPy snapshots
+        # only and never initialize CUDA.
+        pool = ProcessPoolExecutor(
+            max_workers=worker_count,
+            mp_context=mp.get_context("spawn"),
+        )
+        _EXACT_SELECTOR_PROCESS_POOLS[worker_count] = pool
+    return pool
+
+
+def _run_exact_selector_scene_job(
+    payload: tuple[dict[str, Any], list[dict[str, Any]]],
+) -> list[np.ndarray]:
+    """Process-safe exact selector job for one independent scene."""
+    scene_cache, budget_cfgs = payload
+    outputs_stub, batch_stub = _exact_selector_stub_tensors(scene_cache)
+    aocc_cache: list[dict[str, Any]] = [dict()]
+    masks: list[np.ndarray] = []
+    for local_cfg in budget_cfgs:
+        mask = _predicted_pair_certificate_masks(
+            outputs_stub,
+            batch_stub,
+            local_cfg,
+            scene_indices=None,
+            _numpy_cache=scene_cache,
+            _aocc_scene_caches=aocc_cache,
+        )
+        masks.append(mask.numpy()[0].astype(bool, copy=False))
+    return masks
+
+
 def _predicted_pair_certificate_masks_multi_budget(
     outputs: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
@@ -772,10 +866,16 @@ def _predicted_pair_certificate_masks_multi_budget(
 ) -> list[torch.Tensor]:
     """Exact masks for several budgets with one CUDA-to-CPU snapshot.
 
-    The selector itself remains unchanged and is still evaluated independently
-    for each configured budget.  Only duplicated tensor slicing and host copies
-    are removed, so this is numerically identical to repeated calls to
-    :func:`_predicted_pair_certificate_masks`.
+    The selector objective and exact runtime implementation are unchanged.  The
+    optimization is purely execution-level:
+
+    1. copy/snapshot the local batch once;
+    2. reuse the per-scene AOCC state across budgets;
+    3. optionally evaluate independent scenes in a bounded CPU thread pool;
+    4. perform one host-to-device mask transfer after all scenes finish.
+
+    Scene threading is deterministic because each scene owns an isolated state
+    cache and results are reassembled by original scene index.
     """
     if not budget_cfgs:
         return []
@@ -785,19 +885,47 @@ def _predicted_pair_certificate_masks_multi_budget(
         outputs = _slice_scene_batch(outputs, scene_indices, full_batch_size)
         batch = _slice_scene_batch(batch, scene_indices, full_batch_size)
     cache = _build_predicted_pair_numpy_cache(outputs, batch, budget_cfgs[0])
-    scene_caches = [dict() for _ in range(int(outputs["J0"].shape[0]))]
-    return [
-        _predicted_pair_certificate_masks(
-            outputs,
-            batch,
-            local_cfg,
-            scene_indices=None,
-            _numpy_cache=cache,
-            _aocc_scene_caches=scene_caches,
-        )
-        for local_cfg in budget_cfgs
-    ]
+    batch_size = int(outputs["J0"].shape[0])
+    target_device = outputs["J0"].device
+    train_cfg = budget_cfgs[0].get("training", {}) if isinstance(budget_cfgs[0], dict) else {}
+    cpu_backend = str(train_cfg.get("deployment_selector_cpu_backend", "sequential")).strip().lower()
+    requested_workers = max(
+        1,
+        int(
+            train_cfg.get(
+                "deployment_selector_cpu_workers",
+                train_cfg.get("deployment_selector_cpu_threads", 1),
+            )
+        ),
+    )
+    worker_count = min(requested_workers, max(batch_size, 1))
+    scene_caches = [_slice_numpy_scene_cache(cache, i, batch_size) for i in range(batch_size)]
 
+    if worker_count <= 1 or batch_size <= 1 or cpu_backend in {"sequential", "serial", "none"}:
+        by_scene = [_run_exact_selector_scene_job((scene_cache, budget_cfgs)) for scene_cache in scene_caches]
+    elif cpu_backend in {"thread", "threads"}:
+        # Retained as a compatibility/debug backend.  The selector contains
+        # Python control flow, so threads generally do not improve realistic
+        # workloads because of the GIL.
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="bdse-exact-selector") as pool:
+            by_scene = list(pool.map(_run_exact_selector_scene_job, [(x, budget_cfgs) for x in scene_caches]))
+    elif cpu_backend in {"process", "processes", "spawn"}:
+        # Independent scenes are exact and embarrassingly parallel.  A persistent
+        # spawn pool avoids the Python GIL while preserving the deployed selector,
+        # selected masks, budget schedule, and every training loss.
+        pool = _get_exact_selector_process_pool(worker_count)
+        by_scene = list(pool.map(_run_exact_selector_scene_job, [(x, budget_cfgs) for x in scene_caches]))
+    else:
+        raise ValueError(
+            "training.deployment_selector_cpu_backend must be one of "
+            "sequential|thread|process"
+        )
+
+    results: list[torch.Tensor] = []
+    for budget_index in range(len(budget_cfgs)):
+        stacked = np.stack([by_scene[scene_index][budget_index] for scene_index in range(batch_size)], axis=0)
+        results.append(torch.from_numpy(stacked).to(device=target_device, non_blocking=True))
+    return results
 
 
 def _deployment_exact_distill_scene_indices(

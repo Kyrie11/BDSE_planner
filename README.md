@@ -1,3 +1,9 @@
+# v50 Full-Retrain Entry Point
+
+The historical v30 checkpoint is no longer required. See `README_V50_FULLTRAIN_FAST.md` and run `V50_DBAP_RI_NEXT_COMMANDS.sh`; the pipeline rebuilds a matched v30-compatible foundation checkpoint before v50 training and uses exact-selector spawn-process acceleration without changing selected masks or loss logic.
+
+---
+
 # BDSE nuPlan implementation
 
 This repository implements **Budgeted Decision-Sufficient Evidence (BDSE)** for nuPlan-style candidate-set planning.  The code in this package has been aligned with the paper's deployment constraint: the runtime planner may use current observations, route/map context, candidate rollouts, cheap atom features, Top-M proposal, sparse action-atom queries, greedy budgeted certificate selection, and a budgeted tournament.  It must not access logged future ego/agent labels inside `compute_trajectory()`.

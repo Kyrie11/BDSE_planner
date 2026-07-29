@@ -1,36 +1,44 @@
-# 1. Enter the extracted v50 code root.
-cd /path/to/bdse_v50_dbap_ri
+# 1. Enter the extracted code root.
+cd /path/to/bdse_v50_fulltrain_fast
 
-# 2. Set data/checkpoint paths.
+# 2. Set nuPlan/cache paths. Do NOT set V30_CKPT_IN when the historical
+#    outputs_v30 checkpoint has been deleted: the pipeline will rebuild a
+#    v30-compatible foundation checkpoint first and use it for both v50 and
+#    the frozen matched control.
 export NUPLAN_ROOT=/path/to/nuplan
 export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
 export BDSE_VAL_CACHE_ORIGINAL=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
-export V30_CKPT_IN=outputs_v30/train/bdse_v30_pmvrbsr.best.pt
-export OUT_ROOT=outputs_v50_dbap_ri_exact_2gpu_v1
+export OUT_ROOT=outputs_v50_dbap_ri_fulltrain_fast_2gpu_v1
 
-# 3. Run the ordered two-A30 pipeline. A fresh OUT_ROOT is mandatory.
+# 3. Run the ordered two-A30 pipeline.
+#    Exact selector logic is unchanged. Independent local scenes use four
+#    persistent spawn CPU workers per DDP rank.
 PIPELINE_DETACH=1 \
 RUN_CLOSED_LOOP_AFTER_GATE=1 \
 RUN_CL100_AFTER_CL20=0 \
+REBUILD_FOUNDATION_IF_MISSING=1 \
+EXACT_SELECTOR_CPU_BACKEND=process \
+EXACT_SELECTOR_WORKERS_PER_RANK=4 \
 GPUS=0,1 \
 bash V50_DBAP_RI_NEXT_COMMANDS.sh
 
-# 4. Monitor.
+# 4. Monitor the complete pipeline.
 tail -f "$OUT_ROOT"/logs/pipeline_*.log
 
-# 5. Check the current incomplete test set without using it for tuning.
-TEST_DIAGNOSTICS=/path/to/diagnostics_test.json \
-VAL_DIAGNOSTICS=/path/to/diagnostics_val.json \
-TEST_CACHE=/path/to/current/partial/test/cache \
-TRAIN_CACHE="$BDSE_TRAIN_CACHE" \
-VAL_CACHE="$BDSE_VAL_CACHE_ORIGINAL" \
-OUT="$OUT_ROOT/partial_test_readiness.json" \
-bash CHECK_PARTIAL_TEST_SET.sh
+# Foundation-specific logs/checkpoints:
+tail -f "$OUT_ROOT"/foundation_v30/logs/train_foundation_2gpu.out
+ls -lh "$OUT_ROOT"/foundation_v30/train/bdse_v30_pmvrbsr_rebuilt.best.pt
+cat "$OUT_ROOT"/provenance/foundation_checkpoint.json
 
-# 6. Continue/rebuild the official test cache with matched preprocessing.
-TEST_OUT=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_v50_matched \
-VAL_DIAGNOSTICS=/path/to/diagnostics_val.json \
-TRAIN_CACHE="$BDSE_TRAIN_CACHE" \
-VAL_CACHE="$BDSE_VAL_CACHE_ORIGINAL" \
-ALLOW_INCOMPLETE=0 \
-bash BUILD_MATCHED_TEST_SET.sh
+# v50 training log:
+tail -f "$OUT_ROOT"/logs/train_2gpu.out
+
+# 5. Optional: benchmark exact-selector execution on this server. The final
+#    repeat is steady state; the first process repeat includes spawn startup.
+python tools/benchmark_v50_training_hotpath.py \
+  --batch-size 4 --atoms 128 --actions 32 --pairs 56 \
+  --process-workers 4 --repeats 2
+
+# 6. Direct v50 random initialization is an ablation only. It is not the main
+#    protocol and still requires a separately trained matched control:
+# V50_INIT_MODE=scratch CONTROL_CKPT=/path/to/matched/control.pt ...

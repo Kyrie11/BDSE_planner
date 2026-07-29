@@ -1769,3 +1769,98 @@ AOCC certification, fallback control, nested budget fill, and final compression 
 - tests: 164 passed, 5 warnings.
 
 No v50 performance claim is made before a fresh two-A30 train/calibrate/paired-gate run. Closed-loop remains strictly gated.
+
+---
+
+# v50-FR — Rebuilt Foundation and Exact-Selector Execution Acceleration
+
+## Trigger
+
+The historical warm-start checkpoint `outputs_v30/train/bdse_v30_pmvrbsr.best.pt` was deleted. The v50 launcher therefore could not start, and direct random initialization would have changed the comparison protocol relative to the previous v49/v50 experiments. The exact CPU selector was also the dominant training wall-time bottleneck.
+
+## Experimental-protocol decision
+
+1. Rebuild a v30-compatible foundation checkpoint from random initialization with the current code and the original v30 objective schedule.
+2. Warm-start v50 from the rebuilt best checkpoint.
+3. Use the exact same rebuilt checkpoint as the frozen control.
+4. Recompute control, calibration, paired replay and gate outputs; never reuse historical control/calibration files.
+5. Treat historical v49/v50 metrics as diagnostic only. Absolute cross-run comparison is invalid when the foundation checkpoint differs.
+6. Direct v50 scratch training remains an explicit ablation, not the primary experiment.
+
+## Foundation rebuild
+
+Added:
+
+- `bdse/configs/v50_rebuild_v30_from_scratch_2gpu.yaml`;
+- `RUN_MODE=foundation` in `run_v50_dbap_ri.sh`;
+- automatic rebuild in `V50_DBAP_RI_NEXT_COMMANDS.sh` when `V30_CKPT_IN` is absent;
+- mid-epoch resume discovery for the foundation stage;
+- `bdse/tools/write_checkpoint_provenance.py`;
+- SHA-256/config/cache-manifest provenance at `OUT_ROOT/provenance/foundation_checkpoint.json`.
+
+The rebuilt foundation uses the v30 objective for four epochs, seed 17 by default, two-GPU DDP and `teacher_action_match` checkpoint selection. `allow_oracle_only_selector_training=true` is explicit because the original v30 predicted-selector start is after the foundation epoch count.
+
+## Training hot-path diagnosis
+
+The main bottleneck is exact selector execution within the loss:
+
+- packed CUDA-to-CPU synchronization;
+- per-scene Python/NumPy HAB and AOCC logic;
+- primary-plus-auxiliary exact budgets;
+- DDP waits for both ranks before backward synchronization.
+
+At 50k scenarios and global batch eight there are approximately 6,250 optimizer steps per epoch. Data loading, validation and checkpoint I/O are secondary but measurable through existing per-stage metrics.
+
+## Logic-preserving acceleration
+
+Added an optional exact-selector CPU backend:
+
+```yaml
+training:
+  deployment_selector_cpu_backend: process
+  deployment_selector_cpu_workers: 4
+```
+
+Implementation details:
+
+- persistent `ProcessPoolExecutor` per DDP rank;
+- `spawn` multiprocessing context to avoid forking an initialized CUDA process;
+- one NumPy snapshot per rank/step;
+- independent scenes distributed to CPU workers;
+- unchanged exact `_predicted_pair_certificate_masks` in every worker;
+- deterministic reassembly by scene index;
+- one host-to-device mask transfer after all scene results return;
+- sequential and thread backends retained for debugging/fallback.
+
+Representative B=4, K=32, E=128, P=56, B16+B8 benchmark:
+
+- sequential steady state: 1.679 s;
+- four spawn workers steady state: 0.428 s;
+- speedup: 3.92x;
+- masks: exactly equal.
+
+The first process invocation includes approximately eight seconds of one-time spawn/import cost. A two-rank nested process-pool smoke test passed.
+
+## Additional execution-only changes
+
+- fused AdamW on supported CUDA builds, with standard fallback;
+- foreach gradient clipping, with standard fallback;
+- explicit DataLoader workers/prefetch/pinned memory;
+- checkpoint interval 2,000 steps;
+- foundation and v50 mid-epoch resume;
+- included `tools/benchmark_v50_training_hotpath.py`.
+
+The exact selector cadence, exact-scene coverage, budget schedule, losses, validation protocol, calibration and gate were not changed.
+
+## Validation
+
+- compile: passed;
+- shell syntax: passed;
+- YAML load: passed;
+- full unit suite: **165 passed, 5 warnings**;
+- exact sequential/process equality: passed;
+- two-rank process-pool smoke test: passed.
+
+## Claim boundary
+
+The rebuilt foundation preserves attribution only inside the new matched experiment family. It is not the deleted historical checkpoint and must not be used for direct absolute comparison with old v49/v50 numbers. Component-level v49-versus-v50 claims require variants initialized from the same rebuilt foundation and evaluated on identical rows with identical calibration provenance.

@@ -1062,6 +1062,20 @@ def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
         if min(abs(value - primary) for value in parsed) > 1e-6:
             raise ValueError("training.deployment_primary_budget must be present in training.deployment_budgets")
 
+    cpu_backend = str(train_cfg.get("deployment_selector_cpu_backend", "sequential")).strip().lower()
+    if cpu_backend not in {"sequential", "serial", "none", "thread", "threads", "process", "processes", "spawn"}:
+        raise ValueError(
+            "training.deployment_selector_cpu_backend must be sequential, thread, or process"
+        )
+    cpu_workers = int(
+        train_cfg.get(
+            "deployment_selector_cpu_workers",
+            train_cfg.get("deployment_selector_cpu_threads", 1),
+        )
+    )
+    if cpu_workers < 1:
+        raise ValueError("training.deployment_selector_cpu_workers must be >= 1")
+
     min_exact = train_cfg.get("min_deployment_exact_fraction", None)
     if min_exact is not None and not allow_oracle_only:
         min_exact = float(min_exact)
@@ -1089,6 +1103,58 @@ def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
             )
 
 
+def _build_adamw_optimizer(
+    parameters: list[torch.nn.Parameter],
+    *,
+    lr: float,
+    weight_decay: float,
+    device: torch.device,
+    cfg: dict[str, Any],
+    is_main: bool,
+) -> torch.optim.AdamW:
+    """Construct AdamW using faster kernels without changing its objective.
+
+    ``fused=True`` is used only on CUDA when the installed PyTorch build accepts
+    it.  Unsupported builds fall back to the standard implementation.  This
+    changes kernel implementation, not the optimizer equations or schedule.
+    """
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    request_fused = bool(train_cfg.get("optimizer_fused", False)) and device.type == "cuda"
+    request_foreach = bool(train_cfg.get("optimizer_foreach", not request_fused))
+    kwargs: dict[str, Any] = {"lr": float(lr), "weight_decay": float(weight_decay)}
+    if request_fused:
+        kwargs["fused"] = True
+    elif request_foreach:
+        kwargs["foreach"] = True
+    try:
+        optimizer = torch.optim.AdamW(parameters, **kwargs)
+        if is_main:
+            mode = "fused" if request_fused else ("foreach" if request_foreach else "standard")
+            print(f"[bdse] AdamW implementation={mode}", flush=True)
+        return optimizer
+    except (TypeError, RuntimeError, ValueError) as exc:
+        if is_main:
+            print(
+                f"[bdse] warning: requested accelerated AdamW is unavailable; "
+                f"falling back to standard AdamW: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        return torch.optim.AdamW(parameters, lr=float(lr), weight_decay=float(weight_decay))
+
+
+def _clip_grad_norm_fast(
+    parameters: list[torch.nn.Parameter],
+    max_norm: float,
+    cfg: dict[str, Any],
+) -> torch.Tensor:
+    """Use the foreach clipping kernel when available; preserve exact clipping semantics."""
+    use_foreach = bool((cfg.get("training", {}) or {}).get("grad_clip_foreach", True))
+    try:
+        return torch.nn.utils.clip_grad_norm_(parameters, float(max_norm), foreach=use_foreach)
+    except TypeError:
+        return torch.nn.utils.clip_grad_norm_(parameters, float(max_norm))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
@@ -1113,6 +1179,9 @@ def main() -> None:
     parser.add_argument("--selector-full-last-n-steps", type=int, default=None, help="Use exact selector supervision for all local scenes during the final N training steps.")
     parser.add_argument("--exact-distill-scenes-per-rank", type=int, default=None, help="Fast backend: exact CPU selector scenes per rank on distillation steps.")
     parser.add_argument("--exact-distill-every-n-steps", type=int, default=None, help="Fast backend: run exact CPU-mask distillation every N optimizer steps.")
+    parser.add_argument("--selector-cpu-threads", type=int, default=None, help="Compatibility alias for exact-selector CPU workers per DDP rank.")
+    parser.add_argument("--selector-cpu-workers", type=int, default=None, help="Exact CPU selector workers per DDP rank.")
+    parser.add_argument("--selector-cpu-backend", choices=["sequential", "thread", "process"], default=None, help="Scene-parallel exact selector backend. process uses spawn workers and preserves exact masks.")
     parser.add_argument("--no-pin-memory", action="store_true", help="Disable pinned host memory for DataLoader batches.")
     parser.add_argument("--resume", action="store_true", help="Resume from the latest checkpoint derived from --output, or from --resume-from when provided.")
     parser.add_argument("--resume-from", type=str, default=None, help="Explicit checkpoint path to resume from and continue its epoch counter.")
@@ -1163,6 +1232,12 @@ def main() -> None:
         cfg["training"]["deployment_exact_distill_scenes_per_rank"] = max(0, int(args.exact_distill_scenes_per_rank))
     if args.exact_distill_every_n_steps is not None:
         cfg["training"]["deployment_exact_distill_every_n_steps"] = max(1, int(args.exact_distill_every_n_steps))
+    selector_workers = args.selector_cpu_workers if args.selector_cpu_workers is not None else args.selector_cpu_threads
+    if selector_workers is not None:
+        cfg["training"]["deployment_selector_cpu_workers"] = max(1, int(selector_workers))
+        cfg["training"]["deployment_selector_cpu_threads"] = max(1, int(selector_workers))
+    if args.selector_cpu_backend is not None:
+        cfg["training"]["deployment_selector_cpu_backend"] = str(args.selector_cpu_backend)
     if args.no_pin_memory:
         cfg["training"]["pin_memory"] = False
     if args.seed is not None:
@@ -1292,18 +1367,27 @@ def main() -> None:
                 f"broadcast_buffers={broadcast_buffers} gradient_as_bucket_view={gradient_as_bucket_view}",
                 flush=True,
             )
-        model = DDP(
-            model,
-            device_ids=[local_rank],
-            output_device=local_rank,
-            find_unused_parameters=find_unused,
-            broadcast_buffers=broadcast_buffers,
-            gradient_as_bucket_view=gradient_as_bucket_view,
-        )
+        ddp_kwargs: dict[str, Any] = {
+            "device_ids": [local_rank],
+            "output_device": local_rank,
+            "find_unused_parameters": find_unused,
+            "broadcast_buffers": broadcast_buffers,
+            "gradient_as_bucket_view": gradient_as_bucket_view,
+        }
+        if bool(cfg.get("training", {}).get("ddp_static_graph", False)):
+            ddp_kwargs["static_graph"] = True
+        model = DDP(model, **ddp_kwargs)
     trainable_parameters = [p for p in model.parameters() if p.requires_grad]
     if not trainable_parameters:
         raise RuntimeError("no trainable parameters after applying training.trainable_modules")
-    opt = torch.optim.AdamW(trainable_parameters, lr=float(cfg["training"]["lr"]), weight_decay=float(cfg["training"]["weight_decay"]))
+    opt = _build_adamw_optimizer(
+        trainable_parameters,
+        lr=float(cfg["training"]["lr"]),
+        weight_decay=float(cfg["training"]["weight_decay"]),
+        device=device,
+        cfg=cfg,
+        is_main=is_main,
+    )
     use_amp = bool(args.amp and device.type == "cuda")
     if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -1405,7 +1489,7 @@ def main() -> None:
             _stage_started = time.perf_counter()
             scaler.scale(losses["loss"]).backward()
             scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(trainable_parameters, float(cfg["training"]["grad_clip"]))
+            _clip_grad_norm_fast(trainable_parameters, float(cfg["training"]["grad_clip"]), cfg)
             scaler.step(opt)
             scaler.update()
             stage_wall["backward_step"] += time.perf_counter() - _stage_started

@@ -13,6 +13,9 @@ done
 : "${BDSE_VAL_CACHE:?Set BDSE_VAL_CACHE to the preprocessed validation cache}"
 
 V30_CKPT_IN="${V30_CKPT_IN:-outputs_v30/train/bdse_v30_pmvrbsr.best.pt}"
+INIT_MODE="${INIT_MODE:-warm_start}"  # warm_start | scratch
+FOUNDATION_CONFIG="${FOUNDATION_CONFIG:-bdse/configs/v50_rebuild_v30_from_scratch_2gpu.yaml}"
+FOUNDATION_OUT_ROOT="${FOUNDATION_OUT_ROOT:-outputs_v30_rebuilt_current_code}"
 OUT_ROOT="${OUT_ROOT:-outputs_v50_dbap_ri_2gpu}"
 RUN_MODE="${RUN_MODE:-train_open_loop}"
 DEVICE="${DEVICE:-cuda}"
@@ -39,7 +42,7 @@ if (( BATCH_SIZE_PER_GPU < 1 )); then
   exit 2
 fi
 GLOBAL_BATCH_SIZE=$((BATCH_SIZE_PER_GPU * NPROC_PER_NODE))
-NUM_WORKERS_PER_GPU="${NUM_WORKERS_PER_GPU:-8}"
+NUM_WORKERS_PER_GPU="${NUM_WORKERS_PER_GPU:-4}"
 VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-2}"
 VAL_BATCH_SIZE_PER_GPU="${VAL_BATCH_SIZE_PER_GPU:-$BATCH_SIZE_PER_GPU}"
 VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-3}"
@@ -49,7 +52,10 @@ SAVE_EVERY_N_STEPS="${SAVE_EVERY_N_STEPS:-2000}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME_FROM="${RESUME_FROM:-}"
 DETACH="${DETACH:-0}"
-PREFETCH_FACTOR="${PREFETCH_FACTOR:-3}"
+PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
+EXACT_SELECTOR_THREADS_PER_RANK="${EXACT_SELECTOR_THREADS_PER_RANK:-4}" # compatibility alias
+EXACT_SELECTOR_WORKERS_PER_RANK="${EXACT_SELECTOR_WORKERS_PER_RANK:-$EXACT_SELECTOR_THREADS_PER_RANK}"
+EXACT_SELECTOR_CPU_BACKEND="${EXACT_SELECTOR_CPU_BACKEND:-process}"
 SELECTOR_SCENES_PER_RANK="${SELECTOR_SCENES_PER_RANK:-0}"
 SELECTOR_EVERY_N_STEPS="${SELECTOR_EVERY_N_STEPS:-1}"
 SELECTOR_FULL_LAST_N_STEPS="${SELECTOR_FULL_LAST_N_STEPS:-0}"
@@ -71,6 +77,18 @@ if [[ "$DEVICE" != "cuda" ]]; then
   echo "The two-GPU path requires DEVICE=cuda." >&2
   exit 2
 fi
+if [[ "$INIT_MODE" != "warm_start" && "$INIT_MODE" != "scratch" ]]; then
+  echo "INIT_MODE must be warm_start or scratch" >&2
+  exit 2
+fi
+if (( EXACT_SELECTOR_WORKERS_PER_RANK < 1 )); then
+  echo "EXACT_SELECTOR_WORKERS_PER_RANK must be >= 1" >&2
+  exit 2
+fi
+case "$EXACT_SELECTOR_CPU_BACKEND" in
+  sequential|thread|process) ;;
+  *) echo "EXACT_SELECTOR_CPU_BACKEND must be sequential, thread, or process" >&2; exit 2 ;;
+esac
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
@@ -129,7 +147,10 @@ check_checkpoint() {
 }
 
 discover_latest_checkpoint() {
-  python - "$LATEST_CKPT" "$OUT_ROOT/train/checkpoints" "$CKPT" <<'PY'
+  local latest_path="${1:-$LATEST_CKPT}"
+  local checkpoint_dir_path="${2:-$OUT_ROOT/train/checkpoints}"
+  local final_path="${3:-$CKPT}"
+  python - "$latest_path" "$checkpoint_dir_path" "$final_path" <<'PY'
 import sys
 from pathlib import Path
 
@@ -189,15 +210,18 @@ train_2gpu() {
   if [[ -n "$resume_checkpoint" ]]; then
     checkpoint_args+=(--resume-from "$resume_checkpoint")
     echo "[v50] resume checkpoint=$resume_checkpoint"
-  else
+  elif [[ "$INIT_MODE" == "warm_start" ]]; then
     check_checkpoint "$V30_CKPT_IN"
     checkpoint_args+=(--warm-start-from "$V30_CKPT_IN")
     echo "[v50] warm-start checkpoint=$V30_CKPT_IN"
+  else
+    echo "[v50] training from random initialization (INIT_MODE=scratch)"
   fi
   echo "[v50] DDP training on physical GPUs $GPU0,$GPU1"
   echo "[v50] batch_per_gpu=$BATCH_SIZE_PER_GPU global_batch=$effective_global_batch workers_per_gpu=$NUM_WORKERS_PER_GPU"
   echo "[v50] train_config=$TRAIN_CONFIG val_split=$VAL_SPLIT val_scenarios=$VAL_SCENARIOS val_every=$VAL_EVERY_N_EPOCHS dense_val=$VAL_DENSE_DIAGNOSTIC"
-  echo "[v50] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS"
+  echo "[v50] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS init_mode=$INIT_MODE"
+  echo "[v50] exact_selector_cpu_backend=$EXACT_SELECTOR_CPU_BACKEND workers_per_rank=$EXACT_SELECTOR_WORKERS_PER_RANK"
   echo "[v50-dbap] exact-budget nested certificate masks on every local scene"
 
   local val_dense_args=()
@@ -226,6 +250,8 @@ train_2gpu() {
       --selector-full-last-n-steps "$SELECTOR_FULL_LAST_N_STEPS" \
       --exact-distill-scenes-per-rank "$EXACT_DISTILL_SCENES_PER_RANK" \
       --exact-distill-every-n-steps "$EXACT_DISTILL_EVERY_N_STEPS" \
+      --selector-cpu-workers "$EXACT_SELECTOR_WORKERS_PER_RANK" \
+      --selector-cpu-backend "$EXACT_SELECTOR_CPU_BACKEND" \
       --device cuda \
       --amp \
       "${checkpoint_args[@]}" \
@@ -244,6 +270,69 @@ train_2gpu() {
       --log-file "$OUT_ROOT/train/bdse_v50_dbap_ri.train_log.jsonl" \
       --output "$CKPT" \
     2>&1 | tee -a "$OUT_ROOT/logs/train_2gpu.out"
+}
+
+train_foundation_2gpu() {
+  local foundation_ckpt="$FOUNDATION_OUT_ROOT/train/bdse_v30_pmvrbsr_rebuilt.pt"
+  local foundation_best="$FOUNDATION_OUT_ROOT/train/bdse_v30_pmvrbsr_rebuilt.best.pt"
+  mkdir -p "$FOUNDATION_OUT_ROOT/train" "$FOUNDATION_OUT_ROOT/logs"
+  if [[ "$AUTO_RESUME" != "0" && -s "$foundation_best" && -s "$foundation_ckpt" ]]; then
+    echo "[v50-foundation] reuse rebuilt foundation checkpoint=$foundation_best"
+    return 0
+  fi
+  local foundation_checkpoint_args=()
+  if [[ "$AUTO_RESUME" != "0" ]]; then
+    local foundation_resume=""
+    foundation_resume="$(discover_latest_checkpoint \
+      "$FOUNDATION_OUT_ROOT/train/bdse_v30_pmvrbsr_rebuilt.latest.pt" \
+      "$FOUNDATION_OUT_ROOT/train/checkpoints" \
+      "$foundation_ckpt")"
+    if [[ -n "$foundation_resume" ]]; then
+      foundation_checkpoint_args+=(--resume-from "$foundation_resume")
+      echo "[v50-foundation] resume checkpoint=$foundation_resume"
+    fi
+  fi
+  if [[ ${#foundation_checkpoint_args[@]} -eq 0 ]]; then
+    echo "[v50-foundation] train v30-compatible foundation from random initialization"
+  fi
+  echo "[v50-foundation] config=$FOUNDATION_CONFIG output=$foundation_ckpt"
+  CUDA_VISIBLE_DEVICES="$GPUS" \
+  torchrun \
+    --standalone \
+    --nnodes=1 \
+    --nproc_per_node="$NPROC_PER_NODE" \
+    --master_port="$((MASTER_PORT + 1))" \
+    --max_restarts=0 \
+    -m bdse.experiments.train \
+      --config "$FOUNDATION_CONFIG" \
+      --split train_boston train_pittsburgh train_singapore train_vegas_2 \
+      --preprocessed-dir "$BDSE_TRAIN_CACHE" \
+      --max-scenarios "$MAX_TRAIN_SCENARIOS" \
+      --max-scenarios-per-split $((MAX_TRAIN_SCENARIOS / 4)) \
+      --batch-size "$BATCH_SIZE_PER_GPU" \
+      --num-workers "$NUM_WORKERS_PER_GPU" \
+      --prefetch-factor "$PREFETCH_FACTOR" \
+      --selector-cpu-workers 1 \
+      --selector-cpu-backend sequential \
+      --device cuda \
+      --amp \
+      "${foundation_checkpoint_args[@]}" \
+      --val-preprocessed-dir "$BDSE_VAL_CACHE" \
+      --val-split "$VAL_SPLIT" \
+      --val-max-scenarios "$VAL_SCENARIOS" \
+      --val-mode open_loop \
+      --val-every-n-epochs 1 \
+      --val-batch-size "$VAL_BATCH_SIZE_PER_GPU" \
+      --val-num-workers "$VAL_NUM_WORKERS_PER_GPU" \
+      --save-every-n-epochs 0 \
+      --save-every-n-steps "$SAVE_EVERY_N_STEPS" \
+      --best-metric teacher_action_match \
+      --best-metrics teacher_action_match teacher_regret full_interface_action_match \
+      --log-file "$FOUNDATION_OUT_ROOT/train/bdse_v30_pmvrbsr_rebuilt.train_log.jsonl" \
+      --output "$foundation_ckpt" \
+    2>&1 | tee -a "$FOUNDATION_OUT_ROOT/logs/train_foundation_2gpu.out"
+  check_checkpoint "$foundation_best"
+  echo "[v50-foundation] rebuilt best checkpoint=$foundation_best"
 }
 
 prepare_open_loop_shards() {
@@ -575,6 +664,7 @@ closed_loop_2gpu() {
 }
 
 case "$RUN_MODE" in
+  foundation) train_foundation_2gpu ;;
   train) train_2gpu ;;
   open_loop) open_loop_2gpu ;;
   train_open_loop) train_2gpu; open_loop_2gpu ;;
@@ -582,7 +672,7 @@ case "$RUN_MODE" in
   cl50) closed_loop_2gpu 50 ;;
   cl100) closed_loop_2gpu 100 ;;
   *)
-    echo "Unknown RUN_MODE=$RUN_MODE (train|open_loop|train_open_loop|cl20|cl50|cl100)" >&2
+    echo "Unknown RUN_MODE=$RUN_MODE (foundation|train|open_loop|train_open_loop|cl20|cl50|cl100)" >&2
     exit 2
     ;;
 esac

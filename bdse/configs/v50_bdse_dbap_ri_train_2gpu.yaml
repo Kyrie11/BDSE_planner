@@ -484,6 +484,12 @@ training:
     near_boundary_weight: 2.0
     boundary_tau: 0.35
     max_weight: 6.0
+  deployment_selector_cpu_threads: 4
+  deployment_selector_cpu_workers: 4
+  deployment_selector_cpu_backend: process
+  optimizer_fused: true
+  grad_clip_foreach: true
+  ddp_static_graph: false
 experiment:
   name: v50_dbap_ri_train_2gpu
   algorithm: deployment-boundary action preservation with deployment-aligned residual

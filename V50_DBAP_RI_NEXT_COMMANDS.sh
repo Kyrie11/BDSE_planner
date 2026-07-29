@@ -7,11 +7,17 @@ export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data
 export BDSE_VAL_CACHE_ORIGINAL="${BDSE_VAL_CACHE_ORIGINAL:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
 export BDSE_SPLIT_CACHE="${BDSE_SPLIT_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v50_split}"
 export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_v2}"
+export OUT_ROOT="${OUT_ROOT:-outputs_v50_dbap_ri_fulltrain_fast_2gpu_v1}"
+export FOUNDATION_ROOT="${FOUNDATION_ROOT:-$OUT_ROOT/foundation_v30}"
+export FOUNDATION_CONFIG="${FOUNDATION_CONFIG:-bdse/configs/v50_rebuild_v30_from_scratch_2gpu.yaml}"
 export V30_CKPT_IN="${V30_CKPT_IN:-outputs_v30/train/bdse_v30_pmvrbsr.best.pt}"
-export OUT_ROOT="${OUT_ROOT:-outputs_v50_dbap_ri_exact_2gpu_v1}"
+export REBUILD_FOUNDATION_IF_MISSING="${REBUILD_FOUNDATION_IF_MISSING:-1}"
+export V50_INIT_MODE="${V50_INIT_MODE:-warm_start}"
+export EXACT_SELECTOR_WORKERS_PER_RANK="${EXACT_SELECTOR_WORKERS_PER_RANK:-4}"
+export EXACT_SELECTOR_CPU_BACKEND="${EXACT_SELECTOR_CPU_BACKEND:-process}"
 export CONTROL_CONFIG="${CONTROL_CONFIG:-bdse/configs/v43_bdse_mars_control_fast_cl.yaml}"
-export CONTROL_CKPT="${CONTROL_CKPT:-outputs_v30/train/bdse_v30_pmvrbsr.best.pt}"
-export CONTROL_ROOT="${CONTROL_ROOT:-outputs_v47_control_val_tune}"
+export CONTROL_CKPT="${CONTROL_CKPT:-$V30_CKPT_IN}"
+export CONTROL_ROOT="${CONTROL_ROOT:-$OUT_ROOT/control_v30_matched}"
 export PIPELINE_DETACH="${PIPELINE_DETACH:-1}"
 export PIPELINE_FORCE="${PIPELINE_FORCE:-0}"
 export RUN_CLOSED_LOOP_AFTER_GATE="${RUN_CLOSED_LOOP_AFTER_GATE:-1}"
@@ -86,6 +92,63 @@ fi
 export BDSE_VAL_CACHE="$BDSE_SPLIT_CACHE"
 
 # ---------------------------------------------------------------------------
+# 0.5 Rebuild the deleted v30-compatible foundation checkpoint from scratch.
+#     The v50 paper run still warm-starts from a matched foundation, and the
+#     frozen control uses the same rebuilt checkpoint.  This preserves the
+#     attribution protocol; direct v50 scratch training remains an explicit
+#     ablation via V50_INIT_MODE=scratch.
+# ---------------------------------------------------------------------------
+FOUNDATION_SOURCE="historical_external"
+if [[ "$V50_INIT_MODE" == "warm_start" ]]; then
+  if [[ ! -s "$V30_CKPT_IN" ]]; then
+    if [[ "$REBUILD_FOUNDATION_IF_MISSING" != "1" ]]; then
+      echo "Missing foundation checkpoint and rebuilding is disabled: $V30_CKPT_IN" >&2
+      exit 2
+    fi
+    echo "[v50] missing historical v30 checkpoint; rebuilding with current code"
+    DETACH=0 \
+    GPUS=0,1 \
+    OUT_ROOT="$FOUNDATION_ROOT" \
+    FOUNDATION_OUT_ROOT="$FOUNDATION_ROOT" \
+    FOUNDATION_CONFIG="$FOUNDATION_CONFIG" \
+    RUN_MODE=foundation \
+    AUTO_RESUME=1 \
+    VAL_SPLIT=val_tune \
+    VAL_SCENARIOS=1000 \
+    BATCH_SIZE_PER_GPU=4 \
+    NUM_WORKERS_PER_GPU=4 \
+    PREFETCH_FACTOR=2 \
+    SAVE_EVERY_N_STEPS=2000 \
+    bash run_v50_dbap_ri.sh
+    V30_CKPT_IN="$FOUNDATION_ROOT/train/bdse_v30_pmvrbsr_rebuilt.best.pt"
+    FOUNDATION_SOURCE="rebuilt_current_code"
+  fi
+  [[ -s "$V30_CKPT_IN" ]] || { echo "Foundation rebuild did not produce $V30_CKPT_IN" >&2; exit 2; }
+  if [[ "$V30_CKPT_IN" == "$FOUNDATION_ROOT"/* ]]; then
+    FOUNDATION_SOURCE="rebuilt_current_code"
+  fi
+  CONTROL_CKPT="$V30_CKPT_IN"
+else
+  echo "[v50] V50_INIT_MODE=scratch: v50 starts randomly; this is an ablation and is not directly comparable to warm-started v49."
+  if [[ ! -s "$CONTROL_CKPT" ]]; then
+    echo "A matched control checkpoint is still required for the paired gate: CONTROL_CKPT=$CONTROL_CKPT" >&2
+    exit 2
+  fi
+fi
+export V30_CKPT_IN CONTROL_CKPT
+
+FOUNDATION_PROVENANCE="$OUT_ROOT/provenance/foundation_checkpoint.json"
+if ! is_fresh "$FOUNDATION_PROVENANCE" "$V30_CKPT_IN" "$FOUNDATION_CONFIG"; then
+  python -m bdse.tools.write_checkpoint_provenance \
+    --checkpoint "$V30_CKPT_IN" \
+    --config "$FOUNDATION_CONFIG" \
+    --train-cache "$BDSE_TRAIN_CACHE" \
+    --val-cache "$BDSE_SPLIT_CACHE" \
+    --source "$FOUNDATION_SOURCE" \
+    --output "$FOUNDATION_PROVENANCE"
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Main v50 training. Use val_tune only for checkpoint selection.
 #    Main paper run starts from the frozen v30 checkpoint, not v46.
 # ---------------------------------------------------------------------------
@@ -95,15 +158,18 @@ else
   DETACH=0 \
   GPUS=0,1 \
   V30_CKPT_IN="$V30_CKPT_IN" \
+  INIT_MODE="$V50_INIT_MODE" \
+  EXACT_SELECTOR_WORKERS_PER_RANK="$EXACT_SELECTOR_WORKERS_PER_RANK" \
+  EXACT_SELECTOR_CPU_BACKEND="$EXACT_SELECTOR_CPU_BACKEND" \
   OUT_ROOT="$OUT_ROOT" \
   RUN_MODE=train \
   AUTO_RESUME=0 \
   VAL_SPLIT=val_tune \
   OPEN_LOOP_SPLIT=val_tune \
   BATCH_SIZE_PER_GPU=4 \
-  NUM_WORKERS_PER_GPU=6 \
+  NUM_WORKERS_PER_GPU=4 \
   PREFETCH_FACTOR=2 \
-  SAVE_EVERY_N_STEPS=500 \
+  SAVE_EVERY_N_STEPS=2000 \
   SELECTOR_SCENES_PER_RANK=0 \
   SELECTOR_EVERY_N_STEPS=1 \
   EXACT_DISTILL_SCENES_PER_RANK=0 \
