@@ -1663,3 +1663,109 @@ integrable local margin with calibrated sparse residuals, and a nested
 fixed-budget deployment certificate.  Statistical claims remain conditional on
 log-disjoint calibration and exchangeability; teacher-action correctness also
 depends on candidate coverage and full-interface representation quality.
+
+---
+
+# v50 DBAP-RI — Deployment-aligned Residual Intervention
+
+## Result trigger
+
+v49 failed the strict open-loop gate. The decisive failure moved to the pair interface:
+
+- teacher action match 0.232 vs control 0.286;
+- near-tie sign 0.462 vs control 0.593;
+- pair-full action match 0.231;
+- dense-to-pair-full flip rate 0.692;
+- harmful dense-to-pair intervention 0.176 vs beneficial 0.047;
+- pair-full-to-budget harmful compression only 0.009;
+- p95 latency 854.84 ms.
+
+AOCC certification, fallback control, nested budget fill, and final compression remained effective. v50 therefore preserves those components and fixes the local-to-pair residual interface.
+
+## Algorithm changes
+
+1. Added a shared deployment residual gate in `bdse/model/residual_gate.py`.
+   - NumPy runtime and Torch training use the same trust equation.
+   - Trust uses variance, boundary strength, raw local/residual sign disagreement, and magnitude ratio.
+
+2. Added pair-level aggregate residual intervention control.
+   - Multiple small atom residuals can no longer accumulate into an unconfident pair-sign flip.
+   - Unconfident flips are sign-preserving capped.
+   - A flip is allowed only when the residual lower-confidence correction exceeds the local margin plus a configurable flip margin.
+
+3. Changed pair residual learning from full reconstruction to correction-focused learning.
+   - Local-sign errors receive the largest residual regression weight.
+   - Teacher/local near-boundary pairs receive elevated weight.
+   - Already-correct, far-from-boundary pairs receive only a small background weight.
+   - All action/rank/certificate losses use the exact deployment-gated interface.
+
+4. Added local-only pair-full decomposition.
+   - `local_pair_full_interface_action_match`
+   - `local_pair_full_to_residual_flip_rate`
+   - `harmful_residual_intervention_rate`
+   - `beneficial_residual_intervention_rate`
+   - `dense_to_local_pair_full_flip_rate`
+
+5. Reworked checkpoint selection.
+   - Rewards local pair-full and residual-combined pair-full.
+   - Penalizes residual interface drop and net harmful residual intervention.
+   - Missing local/residual diagnostics are treated as a failed diagnostic path.
+
+6. Added validation-aware early stopping.
+   - Default patience: 3 validation events.
+   - Prevents prolonged residual fine-tuning from overwriting a stronger early local interface.
+
+7. Tightened genuine cross-family budget competition.
+   - maximum interaction prefix fraction 0.80 -> 0.75;
+   - soft interaction Top-M reserve 4 -> 2;
+   - decision family boost 0.10 -> 0.0.
+
+8. Retained effective downstream modules.
+   - nested AOCC frontier;
+   - independent calibration;
+   - exact-budget action preservation;
+   - candidate/interface/compression error decomposition;
+   - teacher-nearest + model-confused rival union.
+
+## Runtime changes
+
+- max runtime pair queries: 128 -> 96;
+- max selector pairs: 64 -> 56;
+- tournament `L_infer`: 10 -> 8;
+- residual refinement pairs: 24 -> 16;
+- utility refinement top-k: 6 -> 4;
+- exact decision prefix is force-filled to B=16.
+
+## Test-set protocol changes
+
+1. Added `bdse/tools/check_test_set_readiness.py`.
+2. Build integrity is now separate from distribution parity.
+3. Hard checks include:
+   - config parity with val;
+   - missing labels and duplicate identity;
+   - test/train and test/val manifest overlap when caches are supplied;
+   - failed-preprocess fraction;
+   - minimum preliminary sample count.
+4. An incomplete cache may return `PRELIMINARY_PASS`, but cannot be reported as the final paper test.
+5. Natural val-to-test distribution shift is a warning and must not be tuned away.
+
+## New configs and scripts
+
+- `bdse/configs/v50_bdse_dbap_ri_train_2gpu.yaml`
+- `bdse/configs/v50_bdse_dbap_ri_cl.yaml`
+- `bdse/tools/check_v50_dbap_ri_gate.py`
+- `bdse/tools/check_test_set_readiness.py`
+- `run_v50_dbap_ri.sh`
+- `V50_DBAP_RI_NEXT_COMMANDS.sh`
+- `NEXT_COMMANDS_V50_DBAP_RI.txt`
+- `BUILD_MATCHED_TEST_SET.sh`
+- `CHECK_PARTIAL_TEST_SET.sh`
+
+## Validation
+
+- compileall: passed;
+- YAML loading: passed;
+- shell syntax: passed;
+- tests: 164 passed, 5 warnings.
+
+No v50 performance claim is made before a fresh two-A30 train/calibrate/paired-gate run. Closed-loop remains strictly gated.

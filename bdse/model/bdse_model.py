@@ -13,6 +13,7 @@ from torch import nn
 from bdse.data.tensorizer import runtime_to_model_numpy
 from bdse.model.action_encoder import ActionEncoder
 from bdse.model.evidence_encoder import EvidenceEncoder
+from bdse.model.residual_gate import confidence_shrunk_residual_pair_delta_numpy
 from bdse.model.scene_encoder import SceneEncoder
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, compute_query_features_for_pairs
 from bdse.planner.fallback import runtime_risk_scores, runtime_safety_flags_from_runtime
@@ -30,56 +31,8 @@ def _confidence_shrunk_residual_pair_delta_np(
     variance: np.ndarray,
     cfg: dict[str, Any],
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Apply an uncertainty- and boundary-aware trust gate to a sparse residual.
-
-    The local action-conditioned margin is the integrable interface.  The pair
-    head is allowed to add only a bounded correction.  Trust decreases when the
-    residual is uncertain, when the local pair is close to the deployment
-    boundary, when the residual points against the local sign, or when its
-    magnitude is implausibly large relative to the local margin.
-    """
-    local = np.asarray(local, dtype=np.float32)
-    residual = np.asarray(residual, dtype=np.float32)
-    if local.shape != residual.shape or local.size == 0:
-        return residual.astype(np.float32), {
-            "residual_trust_mean": 0.0,
-            "residual_trust_p90": 0.0,
-            "residual_sign_disagreement_rate": 0.0,
-        }
-    rcfg = cfg or {}
-    max_w = float(np.clip(float(rcfg.get("max_residual_weight", 0.35)), 0.0, 1.0))
-    min_w = float(np.clip(float(rcfg.get("min_residual_weight", 0.02)), 0.0, max_w))
-    variance_tau = max(float(rcfg.get("variance_tau", 0.15)), 1e-6)
-    boundary_tau = max(float(rcfg.get("boundary_tau", 0.30)), 1e-6)
-    min_boundary_trust = float(np.clip(float(rcfg.get("min_boundary_trust", 0.10)), 0.0, 1.0))
-    disagreement_penalty = float(np.clip(float(rcfg.get("disagreement_penalty", 0.85)), 0.0, 1.0))
-    magnitude_ratio_tau = max(float(rcfg.get("magnitude_ratio_tau", 1.5)), 1e-3)
-
-    var = np.asarray(variance, dtype=np.float32)
-    if var.shape != residual.shape:
-        var = np.zeros_like(residual, dtype=np.float32)
-    std = np.sqrt(np.maximum(var, 0.0))
-    variance_trust = 1.0 / (1.0 + std / variance_tau)
-    boundary_strength = np.tanh(np.abs(local) / boundary_tau).astype(np.float32)
-    boundary_trust = min_boundary_trust + (1.0 - min_boundary_trust) * boundary_strength
-    disagreement = (local * residual < 0.0).astype(np.float32)
-    sign_trust = 1.0 - disagreement_penalty * disagreement
-    ratio = np.abs(residual) / (np.abs(local) + boundary_tau)
-    magnitude_trust = 1.0 / (1.0 + np.maximum(ratio / magnitude_ratio_tau - 1.0, 0.0))
-
-    trust = max_w * variance_trust * boundary_trust * sign_trust * magnitude_trust
-    trust = np.clip(trust, min_w, max_w).astype(np.float32)
-    combined = local + trust * residual
-    return combined.astype(np.float32), {
-        "residual_trust_mean": float(np.mean(trust)),
-        "residual_trust_p50": float(np.quantile(trust, 0.50)),
-        "residual_trust_p90": float(np.quantile(trust, 0.90)),
-        "residual_sign_disagreement_rate": float(np.mean(disagreement)),
-        "residual_abs_mean": float(np.mean(np.abs(residual))),
-        "local_abs_mean": float(np.mean(np.abs(local))),
-        "combined_abs_mean": float(np.mean(np.abs(combined))),
-    }
-
+    """Backward-compatible wrapper around the shared V50 residual gate."""
+    return confidence_shrunk_residual_pair_delta_numpy(local, residual, variance, cfg)
 
 def _robust_rank_cost_np(cost: np.ndarray, valid_mask: np.ndarray, *, clip: float = 4.0) -> np.ndarray:
     """Return a robust dimensionless cost where lower remains better.

@@ -96,6 +96,7 @@ def main() -> None:
         # computed from the action-conditioned g head and is not the ceiling of
         # the pair-conditioned selector/tournament path.
         pair_full_action = -1
+        local_pair_full_action = -1
         if "pair_atom_delta" in pred and "pair_indices" in pred:
             full_atoms = np.flatnonzero(np.asarray(stage_atom_active, dtype=bool)).astype(np.int64).tolist()
             sel_cfg = cfg.get("selector", {})
@@ -119,6 +120,28 @@ def main() -> None:
                 pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
             )
             pair_full_action = int(pair_full_tour.action_index)
+
+            # Local-only pair-full ceiling, using the exact deployed pair graph
+            # and tournament but no learned residual intervention.
+            rival_pairs_np = np.asarray(pred.get("rival_pair_indices", pred["pair_indices"]), dtype=np.int64).reshape(-1, 2)
+            local_scale = max(float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0))), 1e-6)
+            g_sparse_np = np.asarray(pred["g"], dtype=np.float32)
+            if rival_pairs_np.size:
+                local_pair_delta = (g_sparse_np[:, rival_pairs_np[:, 1]] - g_sparse_np[:, rival_pairs_np[:, 0]])
+                if bool(pred.get("pair_margin_normalized", True)):
+                    local_pair_delta = local_pair_delta / local_scale
+                local_pair_full_tour = run_pair_conditioned_tournament(
+                    pred["J0"], local_pair_delta, rival_pairs_np, full_atoms,
+                    sample.candidates.valid_mask, runtime_flags,
+                    {**cfg, "runtime_pair_margin_scale": local_scale},
+                    pair_atom_variance=None,
+                    candidate_trajectories=sample.candidates.trajectories,
+                    maneuver_ids=sample.candidates.maneuver_ids,
+                )
+                local_pair_full_tour = core._apply_all_flagged_structural_guard(
+                    local_pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
+                )
+                local_pair_full_action = int(local_pair_full_tour.action_index)
 
         dense = None
         if not args.disable_dense_diagnostic and hasattr(model, "predict_dense_numpy"):
@@ -155,12 +178,21 @@ def main() -> None:
                 diag.values["dense_to_pair_full_flip_rate"] = float(dense_action != pair_full_action)
                 diag.values["harmful_pair_interface_rate"] = float(dense_correct and not pair_full_correct)
                 diag.values["beneficial_pair_interface_rate"] = float((not dense_correct) and pair_full_correct)
+            if local_pair_full_action >= 0:
+                local_correct = local_pair_full_action == teacher_action
+                diag.values["local_pair_full_interface_action_match"] = float(local_correct)
+                diag.values["local_pair_full_to_residual_flip_rate"] = float(local_pair_full_action != pair_full_action)
+                diag.values["harmful_residual_intervention_rate"] = float(local_correct and not pair_full_correct)
+                diag.values["beneficial_residual_intervention_rate"] = float((not local_correct) and pair_full_correct)
+                if dense_action >= 0:
+                    diag.values["dense_to_local_pair_full_flip_rate"] = float(dense_action != local_pair_full_action)
             cert_fraction = float(qdiag.get("selector_aocc_certified_pair_fraction", float("nan")))
             fully_certified = bool(np.isfinite(cert_fraction) and cert_fraction >= 1.0 - 1e-8)
             diag.values["aocc_fully_certified_scene_rate"] = float(fully_certified)
             diag.values["teacher_action_match_fully_certified"] = float(budget_correct) if fully_certified else float("nan")
             diag.values["teacher_action_match_not_fully_certified"] = float(budget_correct) if not fully_certified else float("nan")
             diag.details["pair_full_action"] = int(pair_full_action)
+            diag.details["local_pair_full_action"] = int(local_pair_full_action)
         results.append(diag)
         if args.per_sample_output:
             row = {
@@ -171,6 +203,7 @@ def main() -> None:
                 "bdse_action": int(tour.action_index),
                 "full_action": int(diag.details.get("full_action", -1)),
                 "pair_full_action": int(diag.details.get("pair_full_action", -1)),
+                "local_pair_full_action": int(diag.details.get("local_pair_full_action", -1)),
                 "fallback_would_trigger": bool(qdiag.get("fallback_would_trigger", False)),
                 "planner_latency_ms": float(planner_latency_ms),
             }

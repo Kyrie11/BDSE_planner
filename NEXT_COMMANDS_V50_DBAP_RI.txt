@@ -1,0 +1,36 @@
+# 1. Enter the extracted v50 code root.
+cd /path/to/bdse_v50_dbap_ri
+
+# 2. Set data/checkpoint paths.
+export NUPLAN_ROOT=/path/to/nuplan
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE_ORIGINAL=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export V30_CKPT_IN=outputs_v30/train/bdse_v30_pmvrbsr.best.pt
+export OUT_ROOT=outputs_v50_dbap_ri_exact_2gpu_v1
+
+# 3. Run the ordered two-A30 pipeline. A fresh OUT_ROOT is mandatory.
+PIPELINE_DETACH=1 \
+RUN_CLOSED_LOOP_AFTER_GATE=1 \
+RUN_CL100_AFTER_CL20=0 \
+GPUS=0,1 \
+bash V50_DBAP_RI_NEXT_COMMANDS.sh
+
+# 4. Monitor.
+tail -f "$OUT_ROOT"/logs/pipeline_*.log
+
+# 5. Check the current incomplete test set without using it for tuning.
+TEST_DIAGNOSTICS=/path/to/diagnostics_test.json \
+VAL_DIAGNOSTICS=/path/to/diagnostics_val.json \
+TEST_CACHE=/path/to/current/partial/test/cache \
+TRAIN_CACHE="$BDSE_TRAIN_CACHE" \
+VAL_CACHE="$BDSE_VAL_CACHE_ORIGINAL" \
+OUT="$OUT_ROOT/partial_test_readiness.json" \
+bash CHECK_PARTIAL_TEST_SET.sh
+
+# 6. Continue/rebuild the official test cache with matched preprocessing.
+TEST_OUT=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_v50_matched \
+VAL_DIAGNOSTICS=/path/to/diagnostics_val.json \
+TRAIN_CACHE="$BDSE_TRAIN_CACHE" \
+VAL_CACHE="$BDSE_VAL_CACHE_ORIGINAL" \
+ALLOW_INCOMPLETE=0 \
+bash BUILD_MATCHED_TEST_SET.sh

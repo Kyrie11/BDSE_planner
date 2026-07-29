@@ -7,6 +7,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from bdse.model.residual_gate import confidence_shrunk_residual_pair_delta_numpy, confidence_shrunk_residual_pair_delta_torch
+
 from bdse.planner.hab import select_topm_atoms_hab
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, restrict_pairs_to_viability_frontier
 from bdse.planner.selector import (
@@ -651,7 +653,12 @@ def _predicted_pair_certificate_masks(
             b_np = pair_arr[:, 1].clip(0, g_np.shape[2] - 1)
             local_delta_arr = (g_np[bidx][:, b_np] - g_np[bidx][:, a_np]) / max(float(mscale), 1e-6) if normalize_margins else (g_np[bidx][:, b_np] - g_np[bidx][:, a_np])
             if bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)):
-                delta_arr = local_delta_arr + delta_arr
+                delta_arr, _ = confidence_shrunk_residual_pair_delta_numpy(
+                    local_delta_arr,
+                    delta_arr,
+                    np.zeros_like(delta_arr, dtype=np.float32) if var_arr is None else var_arr,
+                    (cfg.get("runtime", {}).get("pair_residual_trust", {}) or {}),
+                )
             else:
                 w_local = float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0))
                 if w_local > 0.0:
@@ -1910,9 +1917,18 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     raw_atom_delta = g_b - g_a
     local_atom_delta = raw_atom_delta / pair_scale[:, None, :].clamp_min(1e-6) if normalize_pair_losses else raw_atom_delta
     pair_head_residual = bool(cfg.get("model", {}).get("pair_head_residual_over_local", False))
+    pair_var_pred = out.get("pair_atom_var")
     if "pair_atom_delta" in out:
         pair_head_delta = out["pair_atom_delta"]
-        pred_atom_delta = local_atom_delta + pair_head_delta if pair_head_residual else pair_head_delta
+        if pair_head_residual:
+            pred_atom_delta = confidence_shrunk_residual_pair_delta_torch(
+                local_atom_delta,
+                pair_head_delta,
+                pair_var_pred,
+                (cfg.get("runtime", {}).get("pair_residual_trust", {}) or {}),
+            )
+        else:
+            pred_atom_delta = pair_head_delta
     else:
         pair_head_delta = local_atom_delta
         pred_atom_delta = local_atom_delta
@@ -1939,10 +1955,31 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         cfg,
     )
 
+    # V50 DBAP-RI: the residual head is a boundary intervention, not a second
+    # full reconstruction interface.  Concentrate residual regression on pairs
+    # for which the integrable local interface is wrong or close to the teacher
+    # boundary.  Decision/action losses below still supervise the exact gated
+    # deployment path on every decision-weighted pair.
+    correction_focus = torch.ones_like(decision_w)
+    focus_cfg = train_cfg.get("residual_correction_focus", {}) or {}
+    if pair_head_residual and bool(focus_cfg.get("enabled", True)):
+        early_J_a, early_J_b = pair_gather(finite_J0, pairs)
+        early_base = (early_J_b - early_J_a) / pair_scale.clamp_min(1e-6) if normalize_pair_losses else (early_J_b - early_J_a)
+        local_margin_for_focus = early_base + local_atom_delta.detach().sum(dim=1)
+        teacher_margin_for_focus = batch["pair_margins"].float() / pair_scale.clamp_min(1e-6) if normalize_pair_losses else batch["pair_margins"].float()
+        tau_focus = float(focus_cfg.get("boundary_tau", 0.35))
+        wrong_sign = (local_margin_for_focus.detach() * teacher_margin_for_focus.detach()) <= 0.0
+        near_boundary = (local_margin_for_focus.detach().abs() <= tau_focus) | (teacher_margin_for_focus.detach().abs() <= tau_focus)
+        correction_focus = torch.full_like(decision_w, float(focus_cfg.get("default_weight", 0.10)))
+        correction_focus = correction_focus + float(focus_cfg.get("wrong_sign_weight", 4.0)) * wrong_sign.float()
+        correction_focus = correction_focus + float(focus_cfg.get("near_boundary_weight", 2.0)) * near_boundary.float()
+        correction_focus = correction_focus.clamp(max=float(focus_cfg.get("max_weight", 6.0)))
+        correction_focus = torch.where(pair_mask, correction_focus, torch.zeros_like(correction_focus))
+
     residual_target_norm = residual_T / pair_scale.clamp_min(1e-6)
     if residual_target_clip > 0:
         residual_target_norm = residual_target_norm.clamp(-residual_target_clip, residual_target_clip)
-    residual_weight = decision_w
+    residual_weight = decision_w * correction_focus
     residual_target_for_loss = residual_target_norm if normalize_pair_losses else residual_T
     residual_delta = float(train_cfg.get("normalized_huber_delta", 1.0)) if normalize_pair_losses else 1.0
     safe_res_pred = torch.where(pair_train_mask, res_pred, torch.zeros_like(res_pred))
@@ -1986,7 +2023,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         atom_pair_mask = pair_atom_train_mask[:, :, None] & pair_train_mask[:, None, :]
         nonzero = true_atom_delta.abs() > 1e-6
         zero_w = float(train_cfg.get("pair_zero_weight", 0.1))
-        atom_weights = decision_w[:, None, :] * (zero_w + (1.0 - zero_w) * nonzero.float())
+        atom_weights = (decision_w * correction_focus)[:, None, :] * (zero_w + (1.0 - zero_w) * nonzero.float())
         if bool(train_cfg.get("upweight_interaction_atoms", True)):
             atom_weights = torch.where(
                 interaction_atom_mask[:, :, None],

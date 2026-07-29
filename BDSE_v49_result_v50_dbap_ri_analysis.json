@@ -1,0 +1,34 @@
+{
+  "v49_gate": "FAIL",
+  "primary_failure_layer": "dense/local-to-pair residual interface",
+  "candidate_teacher_action_match": 0.232,
+  "control_teacher_action_match": 0.286,
+  "near_tie_sign": 0.4620987987441391,
+  "pair_full_action_match": 0.231,
+  "dense_full_interface_action_match": 0.36,
+  "dense_to_pair_full_flip_rate": 0.692,
+  "harmful_pair_interface_rate": 0.176,
+  "beneficial_pair_interface_rate": 0.047,
+  "harmful_pair_compression_rate": 0.009,
+  "budget_vs_pair_full_match": 0.913,
+  "certified_pair_fraction": 0.8819666666666667,
+  "fallback_rate": 0.115,
+  "fixed_budget_fill_fraction": 0.974,
+  "planner_latency_p95_ms": 854.8375345300882,
+  "partial_test": {
+    "status": "PRELIMINARY_PASS",
+    "num_samples": 12920,
+    "duplicate_identity_count": 0,
+    "missing_label_count": 0,
+    "config_matches_val": true,
+    "final_test_ready": false,
+    "unverified": [
+      "train-test identity overlap",
+      "val-test identity overlap",
+      "failed preprocess fraction",
+      "log/city coverage",
+      "preprocessing completion"
+    ]
+  },
+  "v50_core_fix": "deployment-aligned pair-level residual intervention control"
+}

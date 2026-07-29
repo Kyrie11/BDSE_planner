@@ -478,10 +478,16 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
         return value if np.isfinite(value) else default
 
     pair_metric_present = "val_pair_full_interface_action_match" in metrics
+    local_pair_metric_present = "val_local_pair_full_interface_action_match" in metrics
+    residual_metric_present = "val_harmful_residual_intervention_rate" in metrics
     interaction_metric_present = "val_selector_interaction_family_selected" in metrics
     teacher_match = finite("val_teacher_action_match", finite("val_decision_sufficiency", 0.0))
     full_match = finite("val_full_interface_action_match", 0.0)
     pair_full = finite("val_pair_full_interface_action_match", 0.0)
+    local_pair_full = finite("val_local_pair_full_interface_action_match", 0.0)
+    harmful_residual = finite("val_harmful_residual_intervention_rate", 1.0)
+    beneficial_residual = finite("val_beneficial_residual_intervention_rate", 0.0)
+    residual_interface_drop = max(0.0, local_pair_full - pair_full)
     budget_pair = finite("val_budget_vs_pair_full_match", 0.0)
     near_sign = finite("val_pair_sign_acc_near_tie", 0.0)
     winner_sign = finite("val_pair_sign_acc_winner_rival", 0.0)
@@ -504,11 +510,17 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     latency_excess = max(0.0, latency_p95 / 500.0 - 1.0) if latency_p95 > 0.0 else 0.0
     interaction_excess = max(0.0, interaction_fraction - 0.85)
     fill_shortfall = max(0.0, 0.95 - exact_budget_fill)
-    missing_diag_penalty = (0.0 if pair_metric_present else 180.0) + (0.0 if interaction_metric_present else 80.0)
+    missing_diag_penalty = (
+        (0.0 if pair_metric_present else 180.0)
+        + (0.0 if local_pair_metric_present else 120.0)
+        + (0.0 if residual_metric_present else 120.0)
+        + (0.0 if interaction_metric_present else 80.0)
+    )
 
     return float(
         220.0 * teacher_match
         + 100.0 * full_match
+        + 80.0 * local_pair_full
         + 140.0 * pair_full
         + 60.0 * budget_pair
         + 55.0 * near_sign
@@ -520,6 +532,8 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
         - 9.0 * np.log1p(regret / 1000.0)
         - 100.0 * hard_shortfall
         - 180.0 * pair_shortfall
+        - 220.0 * residual_interface_drop
+        - 120.0 * max(0.0, harmful_residual - beneficial_residual)
         - 100.0 * near_shortfall
         - 50.0 * fallback_excess
         - 5.0 * latency_excess
@@ -737,6 +751,7 @@ def _run_validation_open_loop(
             qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
 
             pair_full_action = -1
+            local_pair_full_action = -1
             if "pair_atom_delta" in pred and "pair_indices" in pred:
                 full_atoms = np.flatnonzero(np.asarray(stage_atom_active, dtype=bool)).astype(np.int64).tolist()
                 sel_cfg = cfg.get("selector", {})
@@ -762,6 +777,30 @@ def _run_validation_open_loop(
                     pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
                 )
                 pair_full_action = int(pair_full_tour.action_index)
+
+                # Local-only pair-full ceiling.  This uses the exact same pair
+                # graph and tournament as deployment, but removes the learned
+                # residual intervention.  It separates an upstream local/pair
+                # graph error from a harmful residual correction.
+                rival_pairs_np = np.asarray(pred.get("rival_pair_indices", pred["pair_indices"]), dtype=np.int64).reshape(-1, 2)
+                local_scale = max(float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0))), 1e-6)
+                g_sparse_np = np.asarray(pred["g"], dtype=np.float32)
+                if rival_pairs_np.size:
+                    local_pair_delta = (g_sparse_np[:, rival_pairs_np[:, 1]] - g_sparse_np[:, rival_pairs_np[:, 0]])
+                    if bool(pred.get("pair_margin_normalized", True)):
+                        local_pair_delta = local_pair_delta / local_scale
+                    local_pair_full_tour = run_pair_conditioned_tournament(
+                        pred["J0"], local_pair_delta, rival_pairs_np, full_atoms,
+                        sample.candidates.valid_mask, runtime_flags,
+                        {**cfg, "runtime_pair_margin_scale": local_scale},
+                        pair_atom_variance=None,
+                        candidate_trajectories=sample.candidates.trajectories,
+                        maneuver_ids=sample.candidates.maneuver_ids,
+                    )
+                    local_pair_full_tour = core._apply_all_flagged_structural_guard(
+                        local_pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
+                    )
+                    local_pair_full_action = int(local_pair_full_tour.action_index)
 
             dense = None
             if dense_diagnostic and hasattr(raw_model, "predict_dense_numpy"):
@@ -798,6 +837,14 @@ def _run_validation_open_loop(
                     diag.values["dense_to_pair_full_flip_rate"] = float(dense_action != pair_full_action)
                     diag.values["harmful_pair_interface_rate"] = float(dense_correct and not pair_full_correct)
                     diag.values["beneficial_pair_interface_rate"] = float((not dense_correct) and pair_full_correct)
+                if local_pair_full_action >= 0:
+                    local_correct = local_pair_full_action == teacher_action
+                    diag.values["local_pair_full_interface_action_match"] = float(local_correct)
+                    diag.values["local_pair_full_to_residual_flip_rate"] = float(local_pair_full_action != pair_full_action)
+                    diag.values["harmful_residual_intervention_rate"] = float(local_correct and not pair_full_correct)
+                    diag.values["beneficial_residual_intervention_rate"] = float((not local_correct) and pair_full_correct)
+                    if dense_action >= 0:
+                        diag.values["dense_to_local_pair_full_flip_rate"] = float(dense_action != local_pair_full_action)
                 cert_fraction = float(qdiag.get("selector_aocc_certified_pair_fraction", float("nan")))
                 fully_certified = bool(np.isfinite(cert_fraction) and cert_fraction >= 1.0 - 1e-8)
                 diag.values["aocc_fully_certified_scene_rate"] = float(fully_certified)
@@ -1461,6 +1508,23 @@ def main() -> None:
         )
         if distributed and dist.is_initialized():
             dist.barrier()
+        # Optional validation-aware early stopping.  It prevents the residual
+        # head from continuing to overwrite a stronger early local interface,
+        # while the saved best checkpoint remains the source for evaluation.
+        patience_validations = max(0, int(cfg.get("training", {}).get("early_stopping_patience_validations", 0)))
+        min_stop_epoch = max(0, int(cfg.get("training", {}).get("early_stopping_min_epoch", 0)))
+        validated_this_epoch = validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0)
+        if patience_validations > 0 and validated_this_epoch and best_epoch is not None and epoch >= min_stop_epoch:
+            stale_epochs = int(epoch) - int(best_epoch)
+            patience_epochs = patience_validations * max(1, int(args.val_every_n_epochs))
+            if stale_epochs >= patience_epochs:
+                if is_main:
+                    print(
+                        f"[bdse] early stopping at epoch={epoch}: best_epoch={best_epoch}, "
+                        f"stale_epochs={stale_epochs}, patience_epochs={patience_epochs}",
+                        flush=True,
+                    )
+                break
     if is_main:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)

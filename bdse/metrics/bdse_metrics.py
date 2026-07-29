@@ -398,6 +398,7 @@ def compute_bdse_diagnostics(
         "pair_delta_tournament_residual_trust_mean": float(qdiag.get("pair_delta_tournament_residual_trust_mean", 0.0)),
         "pair_delta_tournament_residual_trust_p90": float(qdiag.get("pair_delta_tournament_residual_trust_p90", 0.0)),
         "pair_delta_tournament_residual_sign_disagreement_rate": float(qdiag.get("pair_delta_tournament_residual_sign_disagreement_rate", 0.0)),
+        **{k: float(v) for k, v in qdiag.items() if str(k).startswith("pair_delta_") and isinstance(v, (int, float, np.integer, np.floating, bool, np.bool_)) and np.isfinite(float(v))},
         "action_atom_query_count": float(qdiag.get("action_atom_query_count", query_atom_count * query_action_count)),
         "selector_pair_atom_query_count": float(qdiag.get("selector_pair_atom_query_count", 0.0)),
         "tournament_pair_atom_query_count": float(qdiag.get("tournament_pair_atom_query_count", 0.0)),
