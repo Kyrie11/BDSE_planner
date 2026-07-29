@@ -740,6 +740,12 @@ def _predicted_pair_certificate_masks(
                 else None
             ),
             adverse_certificate_calibrated=False,
+            adverse_certificate_fill_to_budget_after_certified=bool(
+                s_cfg.get("adverse_certificate_fill_to_budget_after_certified", False)
+            ),
+            adverse_certificate_max_interaction_prefix_fraction=float(
+                s_cfg.get("adverse_certificate_max_interaction_prefix_fraction", 1.0)
+            ),
             aocc_state_cache=(
                 _aocc_scene_caches[bidx]
                 if _aocc_scene_caches is not None and bidx < len(_aocc_scene_caches)
@@ -1484,7 +1490,9 @@ def _counterfactual_critical_evidence_loss(
     cost_power = max(float(ccfg.get("cost_power", 1.0)), 0.0)
     min_gain = max(float(ccfg.get("min_gain", 1e-5)), 0.0)
     boundary_margin = float(ccfg.get("boundary_margin", 0.08))
-    support_floor = max(float(ccfg.get("positive_support_floor", 0.05)), 0.0)
+    support_floor = max(float(ccfg.get("positive_support_floor", 0.0)), 0.0)
+    target_top_k_atoms = max(0, int(ccfg.get("target_top_k_atoms", 0)))
+    min_relative_gain = min(max(float(ccfg.get("min_relative_gain", 0.0)), 0.0), 1.0)
     teacher_rival_mix = float(ccfg.get("teacher_rival_mix", 0.6))
     teacher_rival_mix = min(max(teacher_rival_mix, 0.0), 1.0)
 
@@ -1543,6 +1551,20 @@ def _counterfactual_critical_evidence_loss(
         costs = torch.ones_like(true_gain)
     cost_adjust = costs.pow(cost_power)
     target_gain = (true_gain / cost_adjust).masked_fill(~atom_mask.bool(), 0.0)
+    # DBAP uses a sparse boundary-critical target.  Retaining every atom with a
+    # tiny positive gain turns the objective back into positive-support recall
+    # and makes the pair loss approach the entropy of the entire evidence bank.
+    # The optional relative threshold and top-k are computed from detached
+    # teacher utilities, so they only define the target support.
+    if min_relative_gain > 0.0:
+        scene_max = target_gain.detach().amax(dim=1, keepdim=True)
+        target_gain = target_gain.masked_fill(target_gain < min_relative_gain * scene_max, 0.0)
+    if target_top_k_atoms > 0 and target_top_k_atoms < E:
+        k_atom = min(target_top_k_atoms, E)
+        keep_idx = torch.topk(target_gain.detach(), k=k_atom, dim=1, largest=True, sorted=False).indices
+        keep_mask = torch.zeros_like(atom_mask, dtype=torch.bool)
+        keep_mask.scatter_(1, keep_idx, True)
+        target_gain = target_gain.masked_fill(~keep_mask, 0.0)
     scene_has_target = target_gain.sum(dim=1) > min_gain
     target_dist = target_gain / target_gain.sum(dim=1, keepdim=True).clamp_min(1e-6)
 

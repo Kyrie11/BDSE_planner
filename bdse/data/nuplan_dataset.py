@@ -844,7 +844,37 @@ class NuPlanBDSEDataset:
         # Keep each requested split/folder self-contained.  For example,
         # preprocessing ``--split train_1 train_2 --output-dir ROOT`` writes
         # samples and manifests under ``ROOT/train_1`` and ``ROOT/train_2``.
-        manifest_path = out / self.split / (manifest_name or self.cfg.get("preprocess", {}).get("manifest_name", "manifest.jsonl"))
+        split_out = out / self.split
+        manifest_path = split_out / (manifest_name or self.cfg.get("preprocess", {}).get("manifest_name", "manifest.jsonl"))
+        provenance_path = split_out / "cache_provenance.json"
+        current_provenance = {
+            "schema": "bdse-cache-provenance-v1",
+            "split": str(self.split),
+            "cache_config_summary": _cfg_digest_summary(self.cfg),
+        }
+        require_config_match = bool((self.cfg.get("preprocess", {}) or {}).get("resume_require_config_match", False))
+        if resume and not overwrite and require_config_match:
+            if provenance_path.exists():
+                try:
+                    existing_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise RuntimeError(f"Unreadable cache provenance: {provenance_path}: {exc}") from exc
+                if existing_provenance != current_provenance:
+                    raise RuntimeError(
+                        "Refusing to resume a cache built with different feature/label parameters. "
+                        f"split={self.split} provenance={provenance_path}. Use a new --output-dir or --overwrite. "
+                        f"existing={existing_provenance} current={current_provenance}"
+                    )
+            elif split_out.exists() and any(split_out.rglob("*.npz")):
+                raise RuntimeError(
+                    "Refusing strict resume because existing samples have no cache_provenance.json. "
+                    f"split={self.split} path={split_out}. Use a new --output-dir or --overwrite."
+                )
+        split_out.mkdir(parents=True, exist_ok=True)
+        if overwrite or not provenance_path.exists():
+            tmp_provenance = provenance_path.with_suffix(".json.tmp")
+            tmp_provenance.write_text(json.dumps(current_provenance, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.replace(tmp_provenance, provenance_path)
 
         # Build the index once. cache_path_for_index() is pure after this and can be
         # used to decide skip/write before expensive sample construction.

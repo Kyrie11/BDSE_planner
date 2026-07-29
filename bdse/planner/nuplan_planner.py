@@ -154,6 +154,12 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
         "pair_delta_selector_sign_disagreement_rate": float(pred.get("pair_delta_selector_sign_disagreement_rate", 0.0)),
         "pair_delta_tournament_local_weight_mean": float(pred.get("pair_delta_tournament_local_weight_mean", 0.0)),
         "pair_delta_tournament_sign_disagreement_rate": float(pred.get("pair_delta_tournament_sign_disagreement_rate", 0.0)),
+        "pair_delta_selector_residual_trust_mean": float(pred.get("pair_delta_selector_residual_trust_mean", 0.0)),
+        "pair_delta_selector_residual_trust_p90": float(pred.get("pair_delta_selector_residual_trust_p90", 0.0)),
+        "pair_delta_selector_residual_sign_disagreement_rate": float(pred.get("pair_delta_selector_residual_sign_disagreement_rate", 0.0)),
+        "pair_delta_tournament_residual_trust_mean": float(pred.get("pair_delta_tournament_residual_trust_mean", 0.0)),
+        "pair_delta_tournament_residual_trust_p90": float(pred.get("pair_delta_tournament_residual_trust_p90", 0.0)),
+        "pair_delta_tournament_residual_sign_disagreement_rate": float(pred.get("pair_delta_tournament_residual_sign_disagreement_rate", 0.0)),
         "viability_pair_weight_mean": float(pred.get("viability_viability_pair_weight_mean", pred.get("viability_pair_weight_mean", 0.0))),
         "stage_predict_ms": float(pred.get("stage_predict_ms", 0.0)),
         "stage_selector_ms": float(pred.get("stage_selector_ms", 0.0)),
@@ -713,6 +719,12 @@ class BDSEPlannerCore:
                 adverse_certificate_max_target_rivals=int(sel_cfg.get("adverse_certificate_max_target_rivals", 0)),
                 adverse_certificate_target_action=adverse_target_action,
                 adverse_certificate_calibrated=adverse_calibrated,
+                adverse_certificate_fill_to_budget_after_certified=bool(
+                    sel_cfg.get("adverse_certificate_fill_to_budget_after_certified", False)
+                ),
+                adverse_certificate_max_interaction_prefix_fraction=float(
+                    sel_cfg.get("adverse_certificate_max_interaction_prefix_fraction", 1.0)
+                ),
                 margin_coreset_residual_weight=float(sel_cfg.get("margin_coreset_residual_weight", 1.0)),
                 margin_coreset_sign_weight=float(sel_cfg.get("margin_coreset_sign_weight", 0.8)),
                 margin_coreset_winner_weight=float(sel_cfg.get("margin_coreset_winner_weight", 1.5)),

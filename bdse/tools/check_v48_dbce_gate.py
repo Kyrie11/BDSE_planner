@@ -140,6 +140,8 @@ def main() -> int:
     parser.add_argument("--min-near-tie-gain", type=float, default=0.0)
     parser.add_argument("--min-frontier-retained-weight", type=float, default=0.45)
     parser.add_argument("--max-interaction-budget-fraction", type=float, default=0.85)
+    parser.add_argument("--min-budget-fill-fraction", type=float, default=0.95,
+                        help="Require the deployed selector to evaluate an actual fixed-budget prefix, not only an early certificate.")
     parser.add_argument("--max-fallback-rate", type=float, default=0.50)
     parser.add_argument("--require-independent-calibration", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--require-exact-aocc-target", action=argparse.BooleanOptionalAction, default=True)
@@ -187,6 +189,12 @@ def main() -> int:
         failures.append(
             f"interaction budget fraction={interaction_fraction:.6f} > {args.max_interaction_budget_fraction:.6f}"
         )
+    configured_budget = _finite(candidate, "configured_decision_budget_atom_count")
+    budget_fill_fraction = decision_atoms / max(configured_budget, 1e-9)
+    if (not math.isfinite(budget_fill_fraction)) or budget_fill_fraction < args.min_budget_fill_fraction:
+        failures.append(
+            f"fixed-budget fill fraction={budget_fill_fraction:.6f} < {args.min_budget_fill_fraction:.6f}"
+        )
     fallback_rate = _finite(candidate, "fallback_would_trigger_rate")
     if not math.isfinite(fallback_rate) or fallback_rate > args.max_fallback_rate:
         failures.append(f"fallback_would_trigger_rate={fallback_rate} > {args.max_fallback_rate:.6f}")
@@ -219,7 +227,7 @@ def main() -> int:
     print(f"  sufficiency: {cand_suff} vs {ctrl_suff} ({cand_suff-ctrl_suff:+.6f})")
     print(f"  pair-full interface match: {pair_full}")
     print(f"  certified pair fraction: {certified_fraction}; calibrated rate: {calibrated_rate}; exact target rate: {exact_target_rate}")
-    print(f"  frontier retained weight: {frontier_weight}; interaction budget fraction: {interaction_fraction}; fallback rate: {fallback_rate}")
+    print(f"  frontier retained weight: {frontier_weight}; interaction budget fraction: {interaction_fraction}; fixed-budget fill: {budget_fill_fraction}; fallback rate: {fallback_rate}")
     print(f"  latency p95: {latency} ms; matched regret rows: {matched}")
     print(f"  training rows: {train_stats['rows']}; unique epochs: {train_stats['unique_epochs']}; min exact fraction: {train_stats['min_exact_fraction']}")
     if cand_q is not None:

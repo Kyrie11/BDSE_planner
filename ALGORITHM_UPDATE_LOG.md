@@ -1,3 +1,145 @@
+# v49 DBAP — Deployment-Boundary Action Preservation
+
+## 日期
+
+2026-07-29
+
+## 基于 v48 实验的结论
+
+- v48 gate FAIL，closed-loop 被正确阻止；不是 CL20 调用缺失。
+- certificate/fallback 层有效：certified-pair 0.831，fallback 0.162。
+- pair interface 仍是主错误：dense near-tie 约 0.683，pair near-tie 0.460；pair-full match 0.272。
+- pair-full→budget harmful compression 仅 0.024，说明 compression 已不是主矛盾。
+- interaction budget fraction 0.948，跨 family 竞争失败。
+- 平均只选 7.403/16 atoms，v48 实际验证的是 anytime early certificate，不是 strict fixed-budget action preservation。
+- validation 未计算真实 pair-full/family collapse，best-checkpoint score 使用弱代理。
+
+## 算法修改
+
+### 1. Pure LOO deployment-boundary criticality
+
+文件：`bdse/model/losses.py`
+
+- `positive_support_floor` 默认改为 0；
+- 新增 `target_top_k_atoms`；
+- 新增 `min_relative_gain`；
+- v49 配置关闭旧 `critical_pair` / `critical_proposal` 与 interaction-only critical target；
+- 降低 general proposal 与 interaction boost，增强纯 CF pair/proposal listwise objective。
+
+目的：避免所有微小正 support atom 获得 target mass，使 pair head 只拟合真正会增加 boundary deficit 的单位成本 evidence。
+
+### 2. Bounded uncertainty-gated sparse residual
+
+文件：`bdse/model/bdse_model.py`
+
+新增 `_confidence_shrunk_residual_pair_delta_np`。部署 margin 为：
+
+`local + trust * residual`，其中 `trust <= 0.35`，并由以下项共同缩小：
+
+- residual variance；
+- local margin 是否接近边界；
+- residual 与 local 的原始符号冲突；
+- residual/local 幅值异常。
+
+修复 v48 先形成 `local+residual` 后再检测冲突、导致约 80% residual 仍保留的问题。
+
+### 3. Exact-budget nested AOCC
+
+文件：`bdse/planner/selector.py`
+
+新增配置：
+
+- `adverse_certificate_fill_to_budget_after_certified`；
+- `adverse_certificate_max_interaction_prefix_fraction`。
+
+行为：
+
+- 首次认证后记录 first-certified prefix；
+- 继续生成完整 nested order；
+- materialize 严格 fixed-B prefix；
+- 即使剩余 atom 的 certificate gain 为 0，也使用确定性成本顺序补齐；
+- 每个 prefix 限制 interaction family 比例。
+
+新增诊断：
+
+- `aocc_first_certified_prefix_length`；
+- `aocc_first_certified_cost`；
+- `aocc_fill_to_budget_after_certified`；
+- `aocc_max_interaction_prefix_fraction`。
+
+### 4. Exact validation and checkpoint selection
+
+文件：`bdse/experiments/train.py`
+
+Validation 新增：
+
+- exact pair-full tournament action；
+- budget-vs-pair-full；
+- dense→pair interface flip/harm；
+- pair→budget compression flip/harm；
+- selector diagnostics/family composition；
+- planner latency；
+- fixed-budget fill。
+
+`_validation_fixed_budget_critical_score` 不再在缺失 pair-full 时回退到 sparse-full；缺失 pair/family diagnostics 会被显式惩罚。
+
+### 5. Gate aligned with fixed-budget claim
+
+文件：`bdse/tools/check_v48_dbce_gate.py`
+
+新增：
+
+- `--min-budget-fill-fraction`，默认 0.95；
+- 输出 fixed-budget fill。
+
+### 6. Cache provenance
+
+文件：
+
+- `bdse/experiments/preprocess.py`
+- `bdse/data/nuplan_dataset.py`
+
+新增：
+
+- `--resume-require-config-match`；
+- split 级 `cache_provenance.json`；
+- config mismatch 或 legacy cache 无 provenance 时拒绝 strict resume。
+
+### 7. Config and execution
+
+新增：
+
+- `bdse/configs/v49_bdse_dbap_train_2gpu.yaml`；
+- `bdse/configs/v49_bdse_dbap_cl.yaml`；
+- `run_v49_dbap.sh`；
+- `V49_DBAP_NEXT_COMMANDS.sh`；
+- `BUILD_MATCHED_TEST_SET.sh`。
+
+两张 A30：训练 DDP；open-loop 与 closed-loop 按场景/token 分片并行。Control freshness 现在绑定 calibration provenance 与 val_tune manifest。
+
+## Test 构建参数修复
+
+相对上传的“快速生成”命令：
+
+- 使用全新 `bdse_test_v49_matched` 输出目录；
+- `--include-drivable-polygons`，与 train/val 诊断一致；
+- 移除 `--max-samples-per-log 512`，与 train/val 诊断中的 `None` 对齐；
+- 保留 stride=10、initial、teacher stride=1、candidate-aware、crosswalk=false；
+- 启用 resume validation 与 config provenance。
+
+## 验证
+
+- `python -m compileall -q bdse`：PASS；
+- 两个 v49 YAML 加载：PASS；
+- 三个 shell 脚本 `bash -n`：PASS；
+- `pytest -q`：161 passed，5 warnings。
+
+## 重要限制
+
+代码修复只保证目标、部署接口、验证指标和 fixed-budget claim 更一致。是否改善 teacher match、regret、latency 与 closed-loop，必须由 v49 实验确认；不得预先声称 PASS。
+
+---
+
 # BDSE Algorithm Update Log
 
 > 维护规则：后续每一轮算法修改都追加一条记录；不要覆盖旧记录。每条记录至少包含：版本、动机、修改文件、关键超参数、验证结果、失败样本结论、下一步，以及“禁止重复尝试”。

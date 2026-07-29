@@ -3714,6 +3714,10 @@ def _build_anytime_one_sided_adverse_certificate_state(
     max_target_rivals: int = 0,
     target_action_hint: int | None = None,
     explicitly_calibrated: bool = False,
+    family_ids: np.ndarray | None = None,
+    interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
+    max_interaction_prefix_fraction: float = 1.0,
+    fill_to_budget_after_certified: bool = False,
 ) -> dict[str, Any]:
     """Build the budget-independent AOCC greedy order once."""
     d = np.asarray(atom_delta, dtype=np.float32)
@@ -3731,6 +3735,16 @@ def _build_anytime_one_sided_adverse_certificate_state(
     costs = costs[:E]
     active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
     active &= np.isfinite(costs) & (costs > 0.0)
+    fam = np.full((E,), -999, dtype=np.int64)
+    if family_ids is not None:
+        raw_fam = np.asarray(family_ids, dtype=np.int64).reshape(-1)
+        fam[: min(E, raw_fam.shape[0])] = raw_fam[: min(E, raw_fam.shape[0])]
+    interaction_ids = set(int(x) for x in np.asarray(
+        interaction_family_ids if interaction_family_ids is not None else [],
+        dtype=np.int64,
+    ).reshape(-1).tolist())
+    interaction_atom = np.asarray([int(x) in interaction_ids for x in fam.tolist()], dtype=bool) & active
+    max_interaction_prefix_fraction = float(np.clip(float(max_interaction_prefix_fraction), 0.0, 1.0))
     if weights.shape[0] != pairs.shape[0]:
         weights = np.ones((pairs.shape[0],), dtype=np.float32)
     weights = np.maximum(weights[: pairs.shape[0]], 0.0)
@@ -3745,6 +3759,8 @@ def _build_anytime_one_sided_adverse_certificate_state(
         "valid": valid_arr,
         "flags": flags_arr,
         "var": var_input,
+        "family": fam,
+        "interaction_atom": interaction_atom,
         "params": (
             float(adverse_beta),
             float(adverse_epsilon),
@@ -3755,6 +3771,9 @@ def _build_anytime_one_sided_adverse_certificate_state(
             int(max_target_rivals),
             None if target_action_hint is None else int(target_action_hint),
             bool(explicitly_calibrated),
+            tuple(sorted(interaction_ids)),
+            float(max_interaction_prefix_fraction),
+            bool(fill_to_budget_after_certified),
         ),
     }
     if pairs.shape[0] == 0 or not bool(active.any()):
@@ -3893,23 +3912,48 @@ def _build_anytime_one_sided_adverse_certificate_state(
     full_order: list[int] = []
     full_order_gain: list[float] = []
     remaining = active.copy()
+    selected_interaction = 0
+    first_certified_prefix_length = 0
+    first_certified_cost = 0.0
     while bool(remaining.any()):
         ids = np.flatnonzero(remaining)
+        # Prefix family capacity keeps every nested prefix genuinely
+        # cross-family. It is relaxed only if no non-interaction atom remains.
+        if max_interaction_prefix_fraction < 1.0 and bool(interaction_atom[ids].any()):
+            next_len = len(full_order) + 1
+            max_interactions = int(np.ceil(max_interaction_prefix_fraction * next_len - 1e-12))
+            non_inter_ids = ids[~interaction_atom[ids]]
+            if selected_interaction >= max_interactions and non_inter_ids.size:
+                ids = non_inter_ids
         before = np.minimum(deficit0, order_gain_state)
         after = np.minimum(deficit0[None, :], order_gain_state[None, :] + improvement[ids])
         marginal = ((after - before[None, :]) * w[None, :]).sum(axis=1)
         ratio = marginal / np.maximum(costs[ids], 1e-6)
-        best_pos = int(np.lexsort((ids, costs[ids], -marginal, -ratio))[0])
+        # Once certified, tighten the same lower bound to form a genuine exact-B
+        # nested prefix. Added atoms cannot reduce the one-sided certificate.
+        secondary = (improvement[ids] * w[None, :]).sum(axis=1) / np.maximum(costs[ids], 1e-6)
+        primary_positive = bool(np.max(marginal, initial=0.0) > 1e-12)
+        ranking = ratio if primary_positive else secondary
+        # If the certificate is already complete and every remaining atom has
+        # zero lower-bound gain, keep a deterministic cost-efficient order so
+        # materialization can still expose the exact fixed-budget prefix.
+        if bool(fill_to_budget_after_certified) and not bool(np.max(ranking, initial=0.0) > 1e-12):
+            ranking = 1.0 / np.maximum(costs[ids], 1e-6)
+        best_pos = int(np.lexsort((ids, costs[ids], -marginal, -ranking))[0])
         best = int(ids[best_pos])
         best_gain = float(marginal[best_pos])
-        if best_gain <= 1e-12:
+        if best_gain <= 1e-12 and not bool(fill_to_budget_after_certified):
             break
         full_order.append(best)
         full_order_gain.append(best_gain)
+        selected_interaction += int(interaction_atom[best])
         order_gain_state = order_gain_state + improvement[best]
         remaining[best] = False
         order_deficit_vec = np.maximum(deficit0 - order_gain_state, 0.0)
-        if bool(stop_when_certified) and bool(np.all(order_deficit_vec <= 1e-8)):
+        if bool(np.all(order_deficit_vec <= 1e-8)) and first_certified_prefix_length == 0:
+            first_certified_prefix_length = int(len(full_order))
+            first_certified_cost = float(sum(float(costs[i]) for i in full_order))
+        if bool(stop_when_certified) and not bool(fill_to_budget_after_certified) and bool(np.all(order_deficit_vec <= 1e-8)):
             break
 
     full_oriented = oriented_base + oriented_delta[active_idx].sum(axis=0)
@@ -3936,6 +3980,10 @@ def _build_anytime_one_sided_adverse_certificate_state(
             "aocc_initial_certified_pair_fraction": float(np.mean(c0 >= gamma - 1e-8)),
             "aocc_nested_order_length": int(len(full_order)),
             "aocc_full_order_cost": float(sum(float(costs[i]) for i in full_order)),
+            "aocc_first_certified_prefix_length": int(first_certified_prefix_length),
+            "aocc_first_certified_cost": float(first_certified_cost),
+            "aocc_fill_to_budget_after_certified": bool(fill_to_budget_after_certified),
+            "aocc_max_interaction_prefix_fraction": float(max_interaction_prefix_fraction),
             "aocc_max_lower_bound_violation": float(np.max(lower_violation)) if lower_violation.size else 0.0,
             # Learned variance plus non-zero beta/epsilon is not evidence of an
             # independent calibration split.  Only an explicit provenance-backed
@@ -3973,6 +4021,10 @@ def _anytime_aocc_state_matches(
     max_target_rivals: int,
     target_action_hint: int | None,
     explicitly_calibrated: bool,
+    family_ids: np.ndarray | None,
+    interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None,
+    max_interaction_prefix_fraction: float,
+    fill_to_budget_after_certified: bool,
 ) -> bool:
     """Exact guard for reusing an AOCC order across budgets."""
     saved = state.get("cache_inputs")
@@ -3983,6 +4035,12 @@ def _anytime_aocc_state_matches(
         float(certificate_margin), float(boundary_tau), bool(stop_when_certified),
         int(max_target_rivals), None if target_action_hint is None else int(target_action_hint),
         bool(explicitly_calibrated),
+        tuple(sorted(int(x) for x in np.asarray(
+            interaction_family_ids if interaction_family_ids is not None else [],
+            dtype=np.int64,
+        ).reshape(-1).tolist())),
+        float(np.clip(float(max_interaction_prefix_fraction), 0.0, 1.0)),
+        bool(fill_to_budget_after_certified),
     )
     if saved.get("params") != params:
         return False
@@ -3999,6 +4057,15 @@ def _anytime_aocc_state_matches(
     costs = costs[:E]
     active = np.ones((E,), dtype=bool) if atom_active_mask is None else _as_bool_mask(atom_active_mask, E)
     active &= np.isfinite(costs) & (costs > 0.0)
+    fam = np.full((E,), -999, dtype=np.int64)
+    if family_ids is not None:
+        raw_fam = np.asarray(family_ids, dtype=np.int64).reshape(-1)
+        fam[: min(E, raw_fam.shape[0])] = raw_fam[: min(E, raw_fam.shape[0])]
+    interaction_ids = set(int(x) for x in np.asarray(
+        interaction_family_ids if interaction_family_ids is not None else [],
+        dtype=np.int64,
+    ).reshape(-1).tolist())
+    interaction_atom = np.asarray([int(x) in interaction_ids for x in fam.tolist()], dtype=bool) & active
     if weights.shape[0] != pairs.shape[0]:
         weights = np.ones((pairs.shape[0],), dtype=np.float32)
     weights = np.maximum(weights[: pairs.shape[0]], 0.0)
@@ -4012,6 +4079,8 @@ def _anytime_aocc_state_matches(
         np.array_equal(saved.get("active"), active),
         np.array_equal(saved.get("valid"), np.asarray(valid_mask, dtype=bool).reshape(-1)),
         np.array_equal(saved.get("flags"), np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)),
+        np.array_equal(saved.get("family"), fam),
+        np.array_equal(saved.get("interaction_atom"), interaction_atom),
         (saved.get("var") is None and var is None)
         or (saved.get("var") is not None and var is not None and np.array_equal(saved.get("var"), var)),
     )
@@ -4082,6 +4151,10 @@ def _anytime_one_sided_adverse_certificate_from_pair_delta(
     max_target_rivals: int = 0,
     target_action_hint: int | None = None,
     explicitly_calibrated: bool = False,
+    family_ids: np.ndarray | None = None,
+    interaction_family_ids: list[int] | tuple[int, ...] | np.ndarray | None = None,
+    max_interaction_prefix_fraction: float = 1.0,
+    fill_to_budget_after_certified: bool = False,
     state_cache: dict[str, Any] | None = None,
 ) -> tuple[list[int], float, float, dict[str, Any]]:
     """Nested one-sided adverse-bound certificate coreset.
@@ -4112,6 +4185,10 @@ def _anytime_one_sided_adverse_certificate_from_pair_delta(
         max_target_rivals=max_target_rivals,
         target_action_hint=target_action_hint,
         explicitly_calibrated=explicitly_calibrated,
+        family_ids=family_ids,
+        interaction_family_ids=interaction_family_ids,
+        max_interaction_prefix_fraction=max_interaction_prefix_fraction,
+        fill_to_budget_after_certified=fill_to_budget_after_certified,
     ):
         state = _build_anytime_one_sided_adverse_certificate_state(
             atom_delta,
@@ -4132,6 +4209,10 @@ def _anytime_one_sided_adverse_certificate_from_pair_delta(
             max_target_rivals=max_target_rivals,
             target_action_hint=target_action_hint,
             explicitly_calibrated=explicitly_calibrated,
+            family_ids=family_ids,
+            interaction_family_ids=interaction_family_ids,
+            max_interaction_prefix_fraction=max_interaction_prefix_fraction,
+            fill_to_budget_after_certified=fill_to_budget_after_certified,
         )
         if isinstance(state_cache, dict):
             state_cache["state"] = state
@@ -4247,6 +4328,8 @@ def runtime_greedy_selector_pair_conditioned(
     adverse_certificate_max_target_rivals: int = 0,
     adverse_certificate_target_action: int | None = None,
     adverse_certificate_calibrated: bool = False,
+    adverse_certificate_fill_to_budget_after_certified: bool = False,
+    adverse_certificate_max_interaction_prefix_fraction: float = 1.0,
     aocc_state_cache: dict[str, Any] | None = None,
 ) -> SelectionResult:
     """Runtime greedy selector over pair-conditioned atom deltas.
@@ -4425,6 +4508,10 @@ def runtime_greedy_selector_pair_conditioned(
                 max_target_rivals=adverse_certificate_max_target_rivals,
                 target_action_hint=adverse_certificate_target_action,
                 explicitly_calibrated=adverse_certificate_calibrated,
+                family_ids=family_ids,
+                interaction_family_ids=interaction_family_ids,
+                max_interaction_prefix_fraction=adverse_certificate_max_interaction_prefix_fraction,
+                fill_to_budget_after_certified=adverse_certificate_fill_to_budget_after_certified,
                 state_cache=aocc_state_cache,
             )
             mode = "runtime_pair_conditioned_anytime_adverse_certificate"
@@ -4593,7 +4680,7 @@ def runtime_greedy_selector_pair_conditioned(
         else:
             selected, current, spent = _greedy_cover_from_pair_delta(delta, base_delta, caps, weights, atom_budget_costs, budget, atom_active_mask)
             mode = "runtime_pair_conditioned_signed"
-        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), "deployment_coreset_budget_layer_width": int(deployment_coreset_budget_layer_width), "deployment_coreset_budget_layer_branch": int(deployment_coreset_budget_layer_branch), "deployment_coreset_budget_layer_iterations": int(deployment_coreset_budget_layer_iterations), "deployment_coreset_budget_layer_max_evaluations": int(deployment_coreset_budget_layer_max_evaluations), "deployment_coreset_budget_layer_exhaustive_first": bool(deployment_coreset_budget_layer_exhaustive_first), "deployment_coreset_budget_layer_seed_count": int(deployment_coreset_budget_layer_seed_count), "deployment_coreset_budget_layer_diversity_distance": int(deployment_coreset_budget_layer_diversity_distance), "adverse_certificate_beta": float(adverse_certificate_beta), "adverse_certificate_epsilon": float(adverse_certificate_epsilon), "adverse_certificate_prior_radius": float(adverse_certificate_prior_radius), "adverse_certificate_margin": float(adverse_certificate_margin), "adverse_certificate_stop_when_certified": bool(adverse_certificate_stop_when_certified), "adverse_certificate_max_target_rivals": int(adverse_certificate_max_target_rivals), "adverse_certificate_target_action": -1 if adverse_certificate_target_action is None else int(adverse_certificate_target_action), "adverse_certificate_calibrated": bool(adverse_certificate_calibrated), **hybrid_diag, **coreset_diag}
+        extra_diag = {"flip_bonus": float(flip_bonus), "flip_window": float(flip_window), "certify_margin": float(certify_margin), "flip_mode": str(flip_mode), "flip_temperature": float(flip_temperature), "action_rank_certificate_weight": float(action_rank_certificate_weight), "action_rank_score_weight": float(action_rank_score_weight), "action_rank_gap_weight": float(action_rank_gap_weight), "action_rank_flip_weight": float(action_rank_flip_weight), "action_rank_softmin_tau": float(action_rank_softmin_tau), "action_utility_weight": float(action_utility_weight), "action_pair_utility_weight": float(action_pair_utility_weight), "action_rank_fast_greedy": bool(action_rank_fast_greedy), "hybrid_lcb_budget_frac": float(hybrid_lcb_budget_frac), "hybrid_lcb_cap_mode": str(hybrid_lcb_cap_mode), "hybrid_protect_lcb_seed": bool(hybrid_protect_lcb_seed), "hybrid_min_action_budget_frac": float(hybrid_min_action_budget_frac), "hybrid_max_lcb_seed_atoms": int(hybrid_max_lcb_seed_atoms), "adaptive_hybrid_lcb_budget": bool(adaptive_hybrid_lcb_budget or cap_mode_l.startswith("adaptive_")), "adaptive_lcb_min_frac": float(adaptive_lcb_min_frac), "adaptive_lcb_max_frac": float(adaptive_lcb_max_frac), "decision_family_boost": float(decision_family_boost), "decision_family_quota": int(decision_family_quota), "interaction_family_quota": int(interaction_family_quota), "soft_interaction_quota": int(soft_interaction_quota), "direction_invariant_interaction_weight": float(direction_invariant_interaction_weight), "direction_invariant_boundary_tau": float(direction_invariant_boundary_tau), "direction_invariant_flip_bonus": float(direction_invariant_flip_bonus), "collapse_reciprocal_pairs": bool(collapse_reciprocal_pairs), "force_uncertainty_objective": bool(force_uncertainty_objective), "margin_coreset_residual_weight": float(margin_coreset_residual_weight), "margin_coreset_sign_weight": float(margin_coreset_sign_weight), "margin_coreset_winner_weight": float(margin_coreset_winner_weight), "margin_coreset_action_weight": float(margin_coreset_action_weight), "margin_coreset_boundary_tau": float(margin_coreset_boundary_tau), "margin_coreset_huber_delta": float(margin_coreset_huber_delta), "margin_coreset_target_clip": float(margin_coreset_target_clip), "margin_coreset_swap_passes": int(margin_coreset_swap_passes), "deployment_coreset_exact_candidates": int(deployment_coreset_exact_candidates), "deployment_coreset_swap_passes": int(deployment_coreset_swap_passes), "deployment_coreset_score_weight": float(deployment_coreset_score_weight), "deployment_coreset_action_weight": float(deployment_coreset_action_weight), "deployment_coreset_gap_weight": float(deployment_coreset_gap_weight), "deployment_coreset_margin_weight": float(deployment_coreset_margin_weight), "deployment_coreset_lexicographic_action_preservation": bool(deployment_coreset_lexicographic_action_preservation), "deployment_coreset_preservation_scan_candidates": int(deployment_coreset_preservation_scan_candidates), "deployment_coreset_repair_one_swap": bool(deployment_coreset_repair_one_swap), "deployment_coreset_repair_two_swap_candidates": int(deployment_coreset_repair_two_swap_candidates), "deployment_coreset_beam_width": int(deployment_coreset_beam_width), "deployment_coreset_beam_branch": int(deployment_coreset_beam_branch), "deployment_coreset_beam_max_evaluations": int(deployment_coreset_beam_max_evaluations), "deployment_coreset_beam_mismatch_fraction": float(deployment_coreset_beam_mismatch_fraction), "deployment_coreset_budget_layer_width": int(deployment_coreset_budget_layer_width), "deployment_coreset_budget_layer_branch": int(deployment_coreset_budget_layer_branch), "deployment_coreset_budget_layer_iterations": int(deployment_coreset_budget_layer_iterations), "deployment_coreset_budget_layer_max_evaluations": int(deployment_coreset_budget_layer_max_evaluations), "deployment_coreset_budget_layer_exhaustive_first": bool(deployment_coreset_budget_layer_exhaustive_first), "deployment_coreset_budget_layer_seed_count": int(deployment_coreset_budget_layer_seed_count), "deployment_coreset_budget_layer_diversity_distance": int(deployment_coreset_budget_layer_diversity_distance), "adverse_certificate_beta": float(adverse_certificate_beta), "adverse_certificate_epsilon": float(adverse_certificate_epsilon), "adverse_certificate_prior_radius": float(adverse_certificate_prior_radius), "adverse_certificate_margin": float(adverse_certificate_margin), "adverse_certificate_stop_when_certified": bool(adverse_certificate_stop_when_certified), "adverse_certificate_max_target_rivals": int(adverse_certificate_max_target_rivals), "adverse_certificate_target_action": -1 if adverse_certificate_target_action is None else int(adverse_certificate_target_action), "adverse_certificate_calibrated": bool(adverse_certificate_calibrated), "adverse_certificate_fill_to_budget_after_certified": bool(adverse_certificate_fill_to_budget_after_certified), "adverse_certificate_max_interaction_prefix_fraction": float(adverse_certificate_max_interaction_prefix_fraction), **hybrid_diag, **coreset_diag}
     # The ranking utility below is only consumed by the generic post-fill stage.
     # AOCC v46 disables every post-fill mechanism (no mandatory mask/quotas,
     # no minimum support, and no force-fill), so evaluating action-rank utility

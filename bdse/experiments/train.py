@@ -25,6 +25,8 @@ from bdse.metrics.bdse_metrics import compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import compute_bdse_losses
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
+from bdse.planner.fallback import runtime_safety_flags_from_runtime
+from bdse.planner.tournament import run_pair_conditioned_tournament
 
 
 class OnTheFlyDataset(Dataset):
@@ -464,61 +466,66 @@ def _validation_bdse_score(metrics: dict[str, float]) -> float:
 
 
 def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
-    """Checkpoint score aligned with deployment-boundary correctness.
+    """Checkpoint score for the exact deployed fixed-budget decision path.
 
-    Raw decisive/interaction recall can be maximized by selecting almost every
-    interaction atom and is therefore only a weak diagnostic.  V48 prioritizes
-    teacher correctness, the exact pair-full deployment interface, near-boundary
-    sign accuracy, and budget preservation, while retaining hard-safety hurdles.
+    Missing pair-full/family diagnostics are treated as failures rather than
+    silently replaced by sparse-full proxies.  This prevents a checkpoint from
+    winning while the true dense->pair interface or cross-family budget
+    competition is unmeasured.
     """
     def finite(name: str, default: float = 0.0) -> float:
         value = float(metrics.get(name, default))
         return value if np.isfinite(value) else default
 
+    pair_metric_present = "val_pair_full_interface_action_match" in metrics
+    interaction_metric_present = "val_selector_interaction_family_selected" in metrics
     teacher_match = finite("val_teacher_action_match", finite("val_decision_sufficiency", 0.0))
     full_match = finite("val_full_interface_action_match", 0.0)
-    pair_full = finite(
-        "val_pair_full_interface_action_match",
-        finite("val_sparse_full_interface_action_match", 0.0),
-    )
-    budget_pair = finite("val_budget_vs_pair_full_match", finite("val_budget_vs_full_match", 0.0))
+    pair_full = finite("val_pair_full_interface_action_match", 0.0)
+    budget_pair = finite("val_budget_vs_pair_full_match", 0.0)
     near_sign = finite("val_pair_sign_acc_near_tie", 0.0)
     winner_sign = finite("val_pair_sign_acc_winner_rival", 0.0)
     sufficiency = finite("val_evidence_sufficiency", 0.0)
-    hard_recall = finite(
-        "val_effective_hard_decisive_recall",
-        finite("val_selected_hard_decisive_recall", finite("val_hard_evidence_recall", 0.0)),
-    )
-    decisive_recall = finite(
-        "val_effective_selected_decisive_atom_recall",
-        finite("val_selected_decisive_atom_recall", 0.0),
-    )
+    hard_recall = finite("val_selected_hard_decisive_recall", finite("val_hard_evidence_recall", 0.0))
+    decisive_recall = finite("val_selected_decisive_atom_recall", 0.0)
     fallback = finite("val_fallback_would_trigger_rate", 0.0)
     regret = max(0.0, finite("val_teacher_regret", 1e6))
     latency_p95 = max(0.0, finite("val_planner_latency_ms_p95", 0.0))
+    interaction_selected = max(0.0, finite("val_selector_interaction_family_selected", 0.0))
+    decision_count = max(0.0, finite("val_decision_budget_atom_count", 0.0))
+    configured_budget = max(1.0, finite("val_configured_decision_budget_atom_count", 1.0))
+    interaction_fraction = interaction_selected / max(decision_count, 1.0)
+    exact_budget_fill = min(decision_count / configured_budget, 1.0)
 
     hard_shortfall = max(0.0, 0.60 - hard_recall)
-    pair_shortfall = max(0.0, 0.28 - pair_full)
+    pair_shortfall = max(0.0, 0.30 - pair_full)
     near_shortfall = max(0.0, 0.55 - near_sign)
     fallback_excess = max(0.0, fallback - 0.50)
     latency_excess = max(0.0, latency_p95 / 500.0 - 1.0) if latency_p95 > 0.0 else 0.0
+    interaction_excess = max(0.0, interaction_fraction - 0.85)
+    fill_shortfall = max(0.0, 0.95 - exact_budget_fill)
+    missing_diag_penalty = (0.0 if pair_metric_present else 180.0) + (0.0 if interaction_metric_present else 80.0)
 
     return float(
         220.0 * teacher_match
         + 100.0 * full_match
-        + 120.0 * pair_full
-        + 55.0 * budget_pair
-        + 45.0 * near_sign
-        + 20.0 * winner_sign
+        + 140.0 * pair_full
+        + 60.0 * budget_pair
+        + 55.0 * near_sign
+        + 15.0 * winner_sign
         + 20.0 * sufficiency
-        + 8.0 * hard_recall
-        + 3.0 * decisive_recall
+        + 5.0 * hard_recall
+        + 2.0 * decisive_recall
+        + 30.0 * exact_budget_fill
         - 9.0 * np.log1p(regret / 1000.0)
-        - 120.0 * hard_shortfall
-        - 150.0 * pair_shortfall
-        - 80.0 * near_shortfall
+        - 100.0 * hard_shortfall
+        - 180.0 * pair_shortfall
+        - 100.0 * near_shortfall
         - 50.0 * fallback_excess
-        - 4.0 * latency_excess
+        - 5.0 * latency_excess
+        - 240.0 * interaction_excess
+        - 120.0 * fill_shortfall
+        - missing_diag_penalty
     )
 
 
@@ -702,10 +709,60 @@ def _run_validation_open_loop(
     for idx in tqdm(indices, desc=f"val-open-loop {epoch}", disable=not is_main):
         try:
             sample = dataset[int(idx)]
-            pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            planner_start = time.perf_counter()
+            pred, sel, tour, stage_atom_active = core._run_certificate_stage(
+                sample.runtime, sample.candidates, sample.evidence_bank, cfg
+            )
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            planner_latency_ms = 1000.0 * (time.perf_counter() - planner_start)
             qdiag = runtime_query_diagnostics(pred, sel.selected)
+            qdiag["planner_latency_ms"] = float(planner_latency_ms)
+            qdiag["configured_decision_budget_atom_count"] = float(
+                max(1, int((cfg.get("evidence", {}) or {}).get("budget", 1)))
+            )
             qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
+            sel_diag = getattr(sel, "diagnostics", {}) or {}
+            mode = str(sel_diag.get("mode", ""))
+            qdiag["selector_anytime_adverse_certificate_active"] = float(
+                mode == "runtime_pair_conditioned_anytime_adverse_certificate"
+            )
+            for key, value in sel_diag.items():
+                if isinstance(value, (bool, np.bool_)):
+                    qdiag[f"selector_{key}"] = float(bool(value))
+                elif isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(float(value)):
+                    qdiag[f"selector_{key}"] = float(value)
             qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
+
+            pair_full_action = -1
+            if "pair_atom_delta" in pred and "pair_indices" in pred:
+                full_atoms = np.flatnonzero(np.asarray(stage_atom_active, dtype=bool)).astype(np.int64).tolist()
+                sel_cfg = cfg.get("selector", {})
+                if bool(sel_cfg.get("decision_budget_excludes_structural_safety", False)):
+                    structural = np.asarray(
+                        pred.get("mandatory_atom_mask", np.zeros_like(stage_atom_active)), dtype=bool
+                    ).reshape(-1)
+                    full_atoms = [i for i in full_atoms if i >= structural.shape[0] or not bool(structural[i])]
+                runtime_flags = runtime_safety_flags_from_runtime(sample.runtime, sample.candidates, cfg)
+                pair_full_tour = run_pair_conditioned_tournament(
+                    pred["J0"],
+                    pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
+                    pred.get("rival_pair_indices", pred["pair_indices"]),
+                    full_atoms,
+                    sample.candidates.valid_mask,
+                    runtime_flags,
+                    {**cfg, "runtime_pair_margin_scale": float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))},
+                    pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+                    candidate_trajectories=sample.candidates.trajectories,
+                    maneuver_ids=sample.candidates.maneuver_ids,
+                )
+                pair_full_tour = core._apply_all_flagged_structural_guard(
+                    pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
+                )
+                pair_full_action = int(pair_full_tour.action_index)
+
             dense = None
             if dense_diagnostic and hasattr(raw_model, "predict_dense_numpy"):
                 dense = raw_model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
@@ -725,6 +782,27 @@ def _run_validation_open_loop(
                 dense_predicted_atom_costs=None if dense is None else dense["g"],
                 certificate_margin_matrix=tour.margins,
             )
+            if pair_full_action >= 0:
+                teacher_action = int(sample.teacher.a_star)
+                budget_action = int(tour.action_index)
+                dense_action = int(diag.details.get("full_action", -1))
+                pair_full_correct = pair_full_action == teacher_action
+                budget_correct = budget_action == teacher_action
+                diag.values["pair_full_interface_action_match"] = float(pair_full_correct)
+                diag.values["budget_vs_pair_full_match"] = float(budget_action == pair_full_action)
+                diag.values["pair_full_to_budget_flip_rate"] = float(budget_action != pair_full_action)
+                diag.values["harmful_pair_compression_rate"] = float(pair_full_correct and not budget_correct)
+                diag.values["beneficial_pair_compression_rate"] = float((not pair_full_correct) and budget_correct)
+                if dense_action >= 0:
+                    dense_correct = dense_action == teacher_action
+                    diag.values["dense_to_pair_full_flip_rate"] = float(dense_action != pair_full_action)
+                    diag.values["harmful_pair_interface_rate"] = float(dense_correct and not pair_full_correct)
+                    diag.values["beneficial_pair_interface_rate"] = float((not dense_correct) and pair_full_correct)
+                cert_fraction = float(qdiag.get("selector_aocc_certified_pair_fraction", float("nan")))
+                fully_certified = bool(np.isfinite(cert_fraction) and cert_fraction >= 1.0 - 1e-8)
+                diag.values["aocc_fully_certified_scene_rate"] = float(fully_certified)
+                diag.values["teacher_action_match_fully_certified"] = float(budget_correct) if fully_certified else float("nan")
+                diag.values["teacher_action_match_not_fully_certified"] = float(budget_correct) if not fully_certified else float("nan")
             for k, v in diag.values.items():
                 meters.setdefault(k, []).append(float(v))
         except Exception:

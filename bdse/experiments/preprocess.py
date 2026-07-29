@@ -49,6 +49,9 @@ def main() -> None:
     parser.add_argument("--resume-validate-existing", action="store_true", default=None,
                         help="Open matching .npz files during resume and verify the minimal BDSE schema. Slower, useful after interrupted/corrupt runs.")
     parser.add_argument("--no-resume-validate-existing", action="store_false", dest="resume_validate_existing")
+    parser.add_argument("--resume-require-config-match", action="store_true", default=None,
+                        help="Reject resume when the split cache provenance differs from the current feature/label configuration.")
+    parser.add_argument("--no-resume-require-config-match", action="store_false", dest="resume_require_config_match")
     parser.add_argument("--resume-min-file-bytes", type=int, default=None,
                         help="Minimum .npz size accepted by the cheap resume skip check.")
     parser.add_argument("--overwrite", action="store_true")
@@ -142,6 +145,8 @@ def main() -> None:
         cfg["paths"]["preprocessed_cache"] = args.output_dir
     if args.resume_validate_existing is not None:
         cfg["preprocess"]["resume_validate_existing"] = bool(args.resume_validate_existing)
+    if args.resume_require_config_match is not None:
+        cfg["preprocess"]["resume_require_config_match"] = bool(args.resume_require_config_match)
     if args.resume_min_file_bytes is not None:
         cfg["preprocess"]["resume_min_file_bytes"] = max(1, int(args.resume_min_file_bytes))
     if args.scenario_stride is not None:
