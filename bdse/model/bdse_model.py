@@ -30,9 +30,10 @@ def _confidence_shrunk_residual_pair_delta_np(
     residual: np.ndarray,
     variance: np.ndarray,
     cfg: dict[str, Any],
+    base_margin: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Backward-compatible wrapper around the shared V50 residual gate."""
-    return confidence_shrunk_residual_pair_delta_numpy(local, residual, variance, cfg)
+    """Foundation-margin-aware wrapper around the shared FAR residual gate."""
+    return confidence_shrunk_residual_pair_delta_numpy(local, residual, variance, cfg, base_margin=base_margin)
 
 def _robust_rank_cost_np(cost: np.ndarray, valid_mask: np.ndarray, *, clip: float = 4.0) -> np.ndarray:
     """Return a robust dimensionless cost where lower remains better.
@@ -1449,21 +1450,27 @@ class BDSEModel(nn.Module):
             return blended.astype(np.float32)
 
         if bool(mcfg.get("pair_head_residual_over_local", False)):
-            # V49 DBAP: the pair head is a bounded sparse residual, not a second
-            # unconstrained interface.  V48 calibrated local+residual against
-            # local, so disagreement was measured after the signs had usually
-            # already become equal and roughly 80% of the residual survived.
-            # Measure uncertainty/conflict on the residual itself and gate it
-            # before addition to the integrable local margin.
+            # FAR-DBAP treats the pretrained local interface as the immutable
+            # anchor.  A runtime switch exposes an exact same-checkpoint local
+            # control for causal attribution; the candidate path authorizes
+            # residual flips against the full foundation margin (base + local).
             residual_cfg = (runtime_cfg.get("pair_residual_trust", {}) or {})
             selector_local = _local_pair_delta(selection_pairs, pair_margin_scale)
             rival_local = _local_pair_delta(rival_pairs, rival_pair_margin_scale)
-            selector_pair_delta, selector_residual_diag = _confidence_shrunk_residual_pair_delta_np(
-                selector_local, selector_pair_delta, selector_pair_var, residual_cfg
-            )
-            rival_pair_delta, rival_residual_diag = _confidence_shrunk_residual_pair_delta_np(
-                rival_local, rival_pair_delta, rival_pair_var, residual_cfg
-            )
+            if bool(runtime_cfg.get("disable_pair_residual_intervention", False)):
+                selector_pair_delta = selector_local
+                rival_pair_delta = rival_local
+                selector_residual_diag = {"residual_disabled_control": 1.0}
+                rival_residual_diag = {"residual_disabled_control": 1.0}
+            else:
+                selector_base = (J0[selection_pairs[:, 1]] - J0[selection_pairs[:, 0]]) / max(float(pair_margin_scale), 1e-6) if selection_pairs.size else np.zeros((0,), dtype=np.float32)
+                rival_base = (J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]]) / max(float(rival_pair_margin_scale), 1e-6) if rival_pairs.size else np.zeros((0,), dtype=np.float32)
+                selector_pair_delta, selector_residual_diag = _confidence_shrunk_residual_pair_delta_np(
+                    selector_local, selector_pair_delta, selector_pair_var, residual_cfg, base_margin=selector_base
+                )
+                rival_pair_delta, rival_residual_diag = _confidence_shrunk_residual_pair_delta_np(
+                    rival_local, rival_pair_delta, rival_pair_var, residual_cfg, base_margin=rival_base
+                )
             pair_delta_calibration_diag["pair_delta_calibration_enabled"] = True
             for key, value in selector_residual_diag.items():
                 pair_delta_calibration_diag[f"pair_delta_selector_{key}"] = float(value)

@@ -969,6 +969,43 @@ def _save_training_checkpoints(
         )
     return new_best_metric, new_best_epoch, new_trackers
 
+def _reinitialize_modules_after_warm_start(
+    model: torch.nn.Module,
+    cfg: dict[str, Any],
+    is_main: bool,
+) -> list[str]:
+    """Reset algorithm-specific heads after loading a foundation checkpoint.
+
+    A direct pair head from a foundation checkpoint is not a valid initialization
+    for a residual-over-local head even when the tensor shapes match.  Loading it
+    silently gives the residual branch a large, semantically wrong intervention at
+    step zero.  V51 makes this conversion explicit and reproducible.
+    """
+    raw = cfg.get("training", {}).get("reinitialize_modules_after_warm_start", []) if isinstance(cfg, dict) else []
+    prefixes = [str(x).strip() for x in raw if str(x).strip()]
+    if not prefixes:
+        return []
+    raw_model = model.module if isinstance(model, DDP) else model
+    modules = dict(raw_model.named_modules())
+    matched: list[str] = []
+    reset_ids: set[int] = set()
+    for prefix in prefixes:
+        module = modules.get(prefix)
+        if module is None:
+            raise ValueError(f"training.reinitialize_modules_after_warm_start matched no module: {prefix}")
+        matched.append(prefix)
+        for child in module.modules():
+            if id(child) in reset_ids:
+                continue
+            reset = getattr(child, "reset_parameters", None)
+            if callable(reset):
+                reset()
+                reset_ids.add(id(child))
+    if is_main:
+        print(f"[bdse] reinitialized warm-start modules={matched}", flush=True)
+    return matched
+
+
 def _configure_trainable_modules(model: torch.nn.Module, cfg: dict[str, Any], is_main: bool) -> list[str]:
     """Optionally freeze the pretrained planner and fine-tune only critical heads.
 
@@ -1393,9 +1430,20 @@ def main() -> None:
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     else:
         scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-    start_epoch, start_batch_index, best_metric, best_epoch, best_trackers, _ = _load_checkpoint_if_requested(
+    start_epoch, start_batch_index, best_metric, best_epoch, best_trackers, loaded_checkpoint = _load_checkpoint_if_requested(
         args=args, model=model, optimizer=opt, scaler=scaler, device=device, is_main=is_main
     )
+    if loaded_checkpoint is not None and bool(getattr(args, "warm_start_from", None)):
+        _reinitialize_modules_after_warm_start(model, cfg, is_main)
+        # DDP parameters are initialized deterministically on every rank, but an
+        # explicit broadcast makes the invariant robust to future rank-specific
+        # seeding changes.
+        if distributed and dist.is_initialized():
+            raw_model = model.module if isinstance(model, DDP) else model
+            for param in raw_model.parameters():
+                dist.broadcast(param.data, src=0)
+            for buffer in raw_model.buffers():
+                dist.broadcast(buffer.data, src=0)
     log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
     if is_main and start_epoch == 0:
         log_file.parent.mkdir(parents=True, exist_ok=True)

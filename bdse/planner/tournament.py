@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 from bdse.planner.pair_screen import build_rival_sets_from_base
-from bdse.planner.selector import budgeted_margin, full_interface_margin, margin_normalization_scale
+from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, full_interface_margin, margin_normalization_scale
 from bdse.utils import softmin_np
 
 
@@ -463,8 +463,13 @@ def _pair_delta_margin_matrix(
     0.5 * (M_hat[a,b] - M_hat[b,a]) rather than letting the later direction
     silently overwrite the earlier one.
     """
-    J0 = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    J0_raw = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
+    J0 = _finite_cost_for_margin(J0_raw)
     K = J0.shape[0]
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    if valid.shape[0] < K:
+        valid = np.pad(valid, (0, K - valid.shape[0]), constant_values=False)
+    valid = valid[:K]
     pair_arr = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
     scale = 1.0
     if bool(normalize_margins):
@@ -472,6 +477,8 @@ def _pair_delta_margin_matrix(
             scale = float(margin_scale)
         elif pair_arr.size:
             ok_pairs = pair_arr[(pair_arr[:, 0] >= 0) & (pair_arr[:, 0] < K) & (pair_arr[:, 1] >= 0) & (pair_arr[:, 1] < K)]
+            if ok_pairs.size:
+                ok_pairs = ok_pairs[valid[ok_pairs[:, 0]] & valid[ok_pairs[:, 1]]]
             scale = margin_normalization_scale(J0[ok_pairs[:, 1]] - J0[ok_pairs[:, 0]], min_scale=float(norm_min_scale), quantile=float(norm_quantile)) if ok_pairs.size else float(norm_min_scale)
         else:
             scale = float(norm_min_scale)
@@ -503,10 +510,6 @@ def _pair_delta_margin_matrix(
         M[b, a] = -m_ab
         done.add((a, b)); done.add((b, a))
 
-    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
-    if valid.shape[0] < K:
-        valid = np.pad(valid, (0, K - valid.shape[0]), constant_values=False)
-    valid = valid[:K]
     M[~valid, :] = -1e9
     M[:, ~valid] = -1e9
     M[np.diag_indices(K)] = 0.0

@@ -1954,3 +1954,153 @@ Later AOCC/D3CE/DBCE/DBAP checkpoints are rejected by default. They already cont
 ## Claim boundary
 
 A fresh rebuilt foundation does not recreate the deleted v30 weights bit-for-bit. It preserves causal attribution inside the new matched experiment because v50 and control share the same foundation. Historical absolute values remain diagnostic only. For a direct v49-versus-v50 component claim, both variants must be retrained from the same resolved foundation.
+
+---
+
+# v51 FAR-DBAP — Foundation-Anchored Residual Decision-Boundary Action Preservation
+
+Date: 2026-07-30
+
+## Trigger: v50 open-loop gate failed
+
+Fresh v50 output showed:
+
+- teacher action match: candidate `0.068`, matched foundation control `0.134`;
+- winner-rival sign accuracy: `0.506` vs `0.678`;
+- near-tie sign accuracy: `0.307` vs `0.494`;
+- evidence sufficiency: `0.0770` vs `0.0674` (`+0.00965`, not enough to recover decisions);
+- teacher regret mean: `13113.5` vs `10486.8`;
+- candidate paired regret median/p90/CVaR90 all regressed;
+- latency p95: `1161 ms`, with prediction stage, not exact selector, now the dominant cost.
+
+The best v50 epoch was epoch 1. Later validation degraded monotonically enough to identify full-model/interface drift rather than under-training. The rebuilt four-epoch foundation was itself weak and therefore unsuitable as an unquestioned residual anchor.
+
+## What v50 did validate
+
+The v50 best checkpoint still showed a useful residual signal:
+
+- local pair-full match `0.050` -> gated residual pair-full match `0.068`;
+- beneficial residual intervention `0.026` > harmful intervention `0.008`.
+
+AOCC execution was also healthy:
+
+- exact tournament target active `1.0`;
+- calibrated bound active `1.0`;
+- certified pair fraction `0.752`;
+- fixed-budget fill `16/16`;
+- frontier retained weight `0.804`.
+
+Therefore v51 preserves AOCC/certificate/budget logic and repairs the foundation/residual interface instead of replacing the selector.
+
+## Algorithm diagnosis
+
+1. The v50 foundation was too weak for causal residual attribution.
+2. Full-model fine-tuning changed the base/local interface and damaged pair ordering.
+3. A direct foundation `pair_head` was silently reused as a residual-over-local head because tensor shapes matched, despite incompatible semantics.
+4. Residual authorization used evidence-only local margin and ignored the base margin that participates in the final action decision.
+5. Near-boundary pairs received less trust, and full disagreement suppression prevented the residual from correcting anchor-wrong pairs.
+6. The v50 control used a different v43 runtime/selector configuration, confounding the comparison.
+7. Invalid candidate `inf - inf` subtraction produced runtime warnings and could contaminate margin statistics.
+
+## v51 algorithm changes
+
+### 1. Strong foundation gate
+
+Added `bdse/configs/v51_strong_foundation_anchor_2gpu.yaml` and `bdse.tools.check_v51_foundation_quality`.
+
+The foundation is rebuilt for 12 epochs with normalized base loss and is replayed before v51 training. Residual training is blocked unless the foundation meets minimum teacher-match, pair-interface, sign-accuracy, sufficiency, and latency thresholds.
+
+### 2. Immutable foundation interface
+
+The v51 main run freezes all parameters except:
+
+- `pair_head`;
+- `pair_var_head`;
+- `proposal_feature_proj`;
+- `family_embed`;
+- `family_activity_proj`;
+- `family_head`;
+- `proposal_head`.
+
+This prevents base/local representation drift and makes the residual stage causally interpretable.
+
+### 3. Semantic warm-start reset
+
+Added `training.reinitialize_modules_after_warm_start` and `_reinitialize_modules_after_warm_start`.
+
+V51 resets `pair_head` and `pair_var_head` after loading the foundation, because a direct pair predictor is not a valid residual predictor even if shapes match. Reset parameters are broadcast in DDP.
+
+### 4. Foundation-anchored losses
+
+Added:
+
+- `L_anchor_preserve`: do not reduce teacher-correct far-anchor signed margin below a configured ratio/minimum;
+- `L_anchor_correct`: correct foundation-wrong and near-tie pairs toward a capped teacher-directed margin.
+
+Both operate on the deployed gated margin and are configured through `training.foundation_anchor_objective` and loss weights `anchor_preservation` / `anchor_correction`.
+
+### 5. Full-margin certified residual gate
+
+`confidence_shrunk_residual_pair_delta_{numpy,torch}` now accepts the normalized base margin.
+
+The anchor is:
+
+```text
+full foundation margin = base pair margin + local evidence pair margin
+```
+
+Trust is highest near the full anchor boundary. Non-confident corrections are capped so they cannot flip a non-zero anchor. A flip is allowed only when the uncertainty-shrunk residual magnitude crosses the full anchor plus a positive flip margin.
+
+### 6. Three-way causal protocol
+
+Added matched configs for:
+
+- candidate: v51 FAR residual enabled;
+- local control: the same v51 checkpoint and runtime with residual intervention disabled;
+- foundation control: the foundation checkpoint with matched v51 runtime/selector.
+
+Each arm is independently calibrated and evaluated on identical deterministic replay keys. `check_v51_far_dbap_gate.py` checks residual-only gain, total gain, paired regret, exact selector coverage, certificate/fill/fallback/latency, and training health. CL20 runs only after PASS.
+
+### 7. Non-finite invalid-candidate fix
+
+Tournament pair-margin construction and BDSE metrics now sanitize invalid-candidate infinite costs using the shared finite-cost policy before subtraction. Scale estimation uses valid-valid margins only.
+
+## New files
+
+- `V51_FAR_DBAP_NEXT_COMMANDS.sh`
+- `run_v51_far_dbap.sh`
+- `NEXT_COMMANDS_V51_FAR_DBAP.txt`
+- `README_V51_FAR_DBAP.md`
+- `V51_FAR_DBAP_ANALYSIS_AND_NEXT_STEPS.md`
+- `V50_RESULT_DIAGNOSIS.json`
+- `bdse/configs/v51_strong_foundation_anchor_2gpu.yaml`
+- `bdse/configs/v51_far_dbap_train_2gpu.yaml`
+- `bdse/configs/v51_far_dbap_cl.yaml`
+- `bdse/configs/v51_far_dbap_local_control_cl.yaml`
+- `bdse/configs/v51_far_dbap_anchor_control_cl.yaml`
+- `bdse/tools/check_v51_foundation_quality.py`
+- `bdse/tools/check_v51_far_dbap_gate.py`
+- `bdse/tests/test_v51_far_dbap.py`
+
+## Validation
+
+- Python compile: passed;
+- all five v51 YAML files load and training schedule validation passes;
+- shell syntax: passed;
+- full unit suite: **173 passed, 6 warnings**;
+- far full-anchor no-unconfident-flip: passed;
+- near-boundary certified flip: passed;
+- warm-start reset and frozen-interface test: passed;
+- invalid-candidate non-finite margin test: passed.
+
+## Main-run command policy
+
+Use a new `OUT_ROOT`, `FOUNDATION_POLICY=rebuild`, `RECOVER_SAFE_FOUNDATION_COPIES=0`, and `ALLOW_ALGORITHM_CHECKPOINT_INIT=0`. Do not reuse the weak four-epoch v50 foundation. The foundation gate must pass before v51 training.
+
+## Claim boundary
+
+V51 supplies a cleaner novelty and theorem route: budgeted AOCC compression plus uncertainty-certified residual intervention on the complete decision boundary. It has not yet been trained or simulated in the current environment. No empirical SOTA or closed-loop improvement is claimed until fresh three-way open-loop and paired closed-loop results pass the gates.
+
+## v51.1 Engineering/algorithm gate separation
+
+The known prediction-stage latency is now reported separately from the causal algorithm-quality gate by default. `ENFORCE_LATENCY_BEFORE_CL=0` permits paired CL20 when action-quality/AOCC checks pass, while still marking the run as ineligible for a real-time claim. Set `ENFORCE_LATENCY_BEFORE_CL=1` to make the 500 ms target a hard prerequisite. This prevents an engineering bottleneck from hiding whether FAR-DBAP improves closed-loop decisions. The gate marker also depends on the gate source file, so changes to gate logic invalidate stale PASS markers.

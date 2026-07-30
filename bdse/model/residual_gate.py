@@ -33,6 +33,7 @@ def confidence_shrunk_residual_pair_delta_numpy(
     residual: np.ndarray,
     variance: np.ndarray,
     cfg: dict[str, Any] | None,
+    base_margin: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Combine an integrable local interface with a bounded sparse residual.
 
@@ -60,42 +61,50 @@ def confidence_shrunk_residual_pair_delta_numpy(
 
     std = np.sqrt(np.maximum(var, 0.0))
     variance_trust = 1.0 / (1.0 + std / float(p["variance_tau"]))
-    boundary_strength = np.tanh(np.abs(local) / float(p["boundary_tau"])).astype(np.float32)
-    boundary_trust = float(p["min_boundary_trust"]) + (1.0 - float(p["min_boundary_trust"])) * boundary_strength
+    local_sum = local.sum(axis=0)
+    base = np.zeros_like(local_sum, dtype=np.float32) if base_margin is None else np.asarray(base_margin, dtype=np.float32)
+    if base.shape != local_sum.shape:
+        base = np.zeros_like(local_sum, dtype=np.float32)
+    anchor_sum = base + local_sum
+    # FAR-DBAP authorizes intervention at the *full foundation margin*, not at
+    # the evidence-only margin.  Near-boundary anchors receive more trust;
+    # well-separated anchors receive only the configured minimum trust.
+    boundary_need = np.exp(-np.abs(anchor_sum) / float(p["boundary_tau"])).astype(np.float32)
+    boundary_trust_pair = float(p["min_boundary_trust"]) + (1.0 - float(p["min_boundary_trust"])) * boundary_need
     disagreement = (local * residual < 0.0).astype(np.float32)
     sign_trust = 1.0 - float(p["disagreement_penalty"]) * disagreement
     ratio = np.abs(residual) / (np.abs(local) + float(p["boundary_tau"]))
     magnitude_trust = 1.0 / (1.0 + np.maximum(ratio / float(p["magnitude_ratio_tau"]) - 1.0, 0.0))
 
-    trust = float(p["max_w"]) * variance_trust * boundary_trust * sign_trust * magnitude_trust
+    trust = float(p["max_w"]) * variance_trust * boundary_trust_pair[None, ...] * sign_trust * magnitude_trust
     trust = np.clip(trust, float(p["min_w"]), float(p["max_w"])).astype(np.float32)
     correction = trust * residual
 
     # Evidence is the first axis and pairs are the remaining axes in runtime.
-    local_sum = local.sum(axis=0)
     correction_sum = correction.sum(axis=0)
     correction_var = ((trust * trust) * np.maximum(var, 0.0)).sum(axis=0)
     correction_std = np.sqrt(np.maximum(correction_var, 0.0))
-    proposed_sum = local_sum + correction_sum
-    nonzero_local = np.abs(local_sum) > 1e-8
-    flip_proposed = nonzero_local & (local_sum * proposed_sum < 0.0)
+    proposed_anchor = anchor_sum + correction_sum
+    nonzero_anchor = np.abs(anchor_sum) > 1e-8
+    flip_proposed = nonzero_anchor & (anchor_sum * proposed_anchor < 0.0)
     lower_confidence = np.abs(correction_sum) - float(p["flip_confidence_beta"]) * correction_std
     confident_flip = (
         flip_proposed
         & bool(p["allow_confident_flips"])
-        & (lower_confidence >= np.abs(local_sum) + float(p["flip_margin"]))
+        & (lower_confidence >= np.abs(anchor_sum) + float(p["flip_margin"]))
     )
 
-    normal_cap = float(p["aggregate_abs_cap"]) + float(p["aggregate_max_correction_ratio"]) * np.abs(local_sum)
-    preserve_cap = float(p["aggregate_preserve_sign_ratio"]) * np.abs(local_sum)
-    flip_cap = float(p["aggregate_abs_cap"]) + float(p["confident_flip_cap_ratio"]) * np.abs(local_sum)
+    normal_cap = float(p["aggregate_abs_cap"]) + float(p["aggregate_max_correction_ratio"]) * np.abs(anchor_sum)
+    preserve_cap = float(p["aggregate_preserve_sign_ratio"]) * np.abs(anchor_sum)
+    flip_cap = float(p["aggregate_abs_cap"]) + float(p["confident_flip_cap_ratio"]) * np.abs(anchor_sum)
     cap = np.where(flip_proposed & ~confident_flip, preserve_cap, normal_cap)
     cap = np.where(confident_flip, np.maximum(cap, flip_cap), cap)
     aggregate_scale = np.minimum(1.0, cap / (np.abs(correction_sum) + 1e-8)).astype(np.float32)
     correction = correction * np.expand_dims(aggregate_scale, axis=0)
     combined = local + correction
     final_sum = combined.sum(axis=0)
-    flip_allowed = nonzero_local & (local_sum * final_sum < 0.0)
+    final_anchor = base + final_sum
+    flip_allowed = nonzero_anchor & (anchor_sum * final_anchor < 0.0)
 
     return combined.astype(np.float32), {
         "residual_trust_mean": float(np.mean(trust)),
@@ -113,6 +122,8 @@ def confidence_shrunk_residual_pair_delta_numpy(
         "residual_aggregate_scale_p10": float(np.quantile(aggregate_scale, 0.10)),
         "residual_aggregate_correction_abs_mean": float(np.mean(np.abs(correction.sum(axis=0)))),
         "residual_aggregate_local_abs_mean": float(np.mean(np.abs(local_sum))),
+        "residual_aggregate_anchor_abs_mean": float(np.mean(np.abs(anchor_sum))),
+        "residual_anchor_boundary_rate": float(np.mean(np.abs(anchor_sum) <= float(p["boundary_tau"]))),
     }
 
 
@@ -121,6 +132,7 @@ def confidence_shrunk_residual_pair_delta_torch(
     residual: torch.Tensor,
     variance: torch.Tensor | None,
     cfg: dict[str, Any] | None,
+    base_margin: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Differentiable training counterpart of the NumPy deployment gate.
 
@@ -134,33 +146,35 @@ def confidence_shrunk_residual_pair_delta_torch(
     var = torch.zeros_like(residual) if variance is None or variance.shape != residual.shape else variance.clamp_min(0.0)
     std = torch.sqrt(var + 1e-12)
     variance_trust = 1.0 / (1.0 + std / float(p["variance_tau"]))
-    boundary_strength = torch.tanh(local.abs() / float(p["boundary_tau"]))
-    boundary_trust = float(p["min_boundary_trust"]) + (1.0 - float(p["min_boundary_trust"])) * boundary_strength
+    local_sum = local.sum(dim=1)
+    base = torch.zeros_like(local_sum) if base_margin is None or base_margin.shape != local_sum.shape else base_margin.to(local)
+    anchor_sum = base + local_sum
+    boundary_need = torch.exp(-anchor_sum.abs() / float(p["boundary_tau"]))
+    boundary_trust_pair = float(p["min_boundary_trust"]) + (1.0 - float(p["min_boundary_trust"])) * boundary_need
     disagreement = (local.detach() * residual.detach() < 0.0).to(local.dtype)
     sign_trust = 1.0 - float(p["disagreement_penalty"]) * disagreement
     ratio = residual.abs() / (local.abs() + float(p["boundary_tau"]))
     magnitude_trust = 1.0 / (1.0 + torch.clamp(ratio / float(p["magnitude_ratio_tau"]) - 1.0, min=0.0))
-    trust = float(p["max_w"]) * variance_trust * boundary_trust * sign_trust * magnitude_trust
+    trust = float(p["max_w"]) * variance_trust * boundary_trust_pair[:, None, :] * sign_trust * magnitude_trust
     trust = trust.clamp(min=float(p["min_w"]), max=float(p["max_w"]))
     correction = trust * residual
 
-    local_sum = local.sum(dim=1)
     correction_sum = correction.sum(dim=1)
     correction_var = ((trust * trust) * var).sum(dim=1)
     correction_std = torch.sqrt(correction_var + 1e-12)
-    proposed_sum = local_sum + correction_sum
+    proposed_anchor = anchor_sum + correction_sum
     with torch.no_grad():
-        nonzero_local = local_sum.abs() > 1e-8
-        flip_proposed = nonzero_local & (local_sum * proposed_sum < 0.0)
+        nonzero_anchor = anchor_sum.abs() > 1e-8
+        flip_proposed = nonzero_anchor & (anchor_sum * proposed_anchor < 0.0)
         lower_confidence = correction_sum.abs() - float(p["flip_confidence_beta"]) * correction_std
         confident_flip = (
             flip_proposed
             & bool(p["allow_confident_flips"])
-            & (lower_confidence >= local_sum.abs() + float(p["flip_margin"]))
+            & (lower_confidence >= anchor_sum.abs() + float(p["flip_margin"]))
         )
-        normal_cap = float(p["aggregate_abs_cap"]) + float(p["aggregate_max_correction_ratio"]) * local_sum.abs()
-        preserve_cap = float(p["aggregate_preserve_sign_ratio"]) * local_sum.abs()
-        flip_cap = float(p["aggregate_abs_cap"]) + float(p["confident_flip_cap_ratio"]) * local_sum.abs()
+        normal_cap = float(p["aggregate_abs_cap"]) + float(p["aggregate_max_correction_ratio"]) * anchor_sum.abs()
+        preserve_cap = float(p["aggregate_preserve_sign_ratio"]) * anchor_sum.abs()
+        flip_cap = float(p["aggregate_abs_cap"]) + float(p["confident_flip_cap_ratio"]) * anchor_sum.abs()
         cap = torch.where(flip_proposed & ~confident_flip, preserve_cap, normal_cap)
         cap = torch.where(confident_flip, torch.maximum(cap, flip_cap), cap)
     aggregate_scale = torch.minimum(torch.ones_like(correction_sum), cap / (correction_sum.abs() + 1e-8))

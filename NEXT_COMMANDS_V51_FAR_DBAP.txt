@@ -1,0 +1,38 @@
+# V51 FAR-DBAP canonical main-run command
+# Use a fresh OUT_ROOT. Do not reuse the weak v50 four-epoch foundation.
+
+cd /path/to/bdse_v51_far_dbap
+
+unset V30_CKPT_IN
+unset FOUNDATION_CKPT
+unset CONTROL_CKPT
+
+export NUPLAN_ROOT=/data0/senzeyu2/dataset/nuplan
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE_ORIGINAL=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export OUT_ROOT=outputs_v51_far_dbap_2gpu_v1
+
+PIPELINE_DETACH=1 \
+FOUNDATION_POLICY=rebuild \
+REBUILD_FOUNDATION_IF_MISSING=1 \
+RECOVER_SAFE_FOUNDATION_COPIES=0 \
+ALLOW_ALGORITHM_CHECKPOINT_INIT=0 \
+RUN_CLOSED_LOOP_AFTER_GATE=1 \
+RUN_CL100_AFTER_CL20=0 \
+ENFORCE_LATENCY_BEFORE_CL=0 \
+EXACT_SELECTOR_CPU_BACKEND=process \
+EXACT_SELECTOR_WORKERS_PER_RANK=4 \
+GPUS=0,1 \
+bash V51_FAR_DBAP_NEXT_COMMANDS.sh
+
+# Monitor the ordered detached pipeline
+tail -f "$OUT_ROOT"/logs/pipeline_*.log
+
+# Foundation must pass before residual training starts
+cat "$OUT_ROOT"/logs/v51_foundation_quality_gate.out
+
+# V51 training
+tail -f "$OUT_ROOT"/logs/train_2gpu.out
+
+# Three-way causal gate; CL20 runs only after PASS
+cat "$OUT_ROOT"/logs/v51_far_dbap_gate.out

@@ -657,11 +657,13 @@ def _predicted_pair_certificate_masks(
             b_np = pair_arr[:, 1].clip(0, g_np.shape[2] - 1)
             local_delta_arr = (g_np[bidx][:, b_np] - g_np[bidx][:, a_np]) / max(float(mscale), 1e-6) if normalize_margins else (g_np[bidx][:, b_np] - g_np[bidx][:, a_np])
             if bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)):
+                normalized_base_deltas = base_deltas / max(float(mscale), 1e-6) if normalize_margins else base_deltas
                 delta_arr, _ = confidence_shrunk_residual_pair_delta_numpy(
                     local_delta_arr,
                     delta_arr,
                     np.zeros_like(delta_arr, dtype=np.float32) if var_arr is None else var_arr,
                     (cfg.get("runtime", {}).get("pair_residual_trust", {}) or {}),
+                    base_margin=normalized_base_deltas,
                 )
             else:
                 w_local = float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0))
@@ -2049,11 +2051,14 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     if "pair_atom_delta" in out:
         pair_head_delta = out["pair_atom_delta"]
         if pair_head_residual:
+            gate_J_a, gate_J_b = pair_gather(finite_J0, pairs)
+            gate_base_margin = (gate_J_b - gate_J_a) / pair_scale.clamp_min(1e-6) if normalize_pair_losses else (gate_J_b - gate_J_a)
             pred_atom_delta = confidence_shrunk_residual_pair_delta_torch(
                 local_atom_delta,
                 pair_head_delta,
                 pair_var_pred,
                 (cfg.get("runtime", {}).get("pair_residual_trust", {}) or {}),
+                base_margin=gate_base_margin,
             )
         else:
             pred_atom_delta = pair_head_delta
@@ -2119,6 +2124,54 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         reduction="none",
     )
     L_res = _weighted_mean(L_res_terms, residual_weight, pair_train_mask)
+
+    # V51 FAR-DBAP: foundation-anchored selective intervention.  The local
+    # interface is the immutable anchor during the main experiment.  The
+    # residual head may correct an anchor error or strengthen a fragile near-tie,
+    # but it is explicitly penalized for reducing a teacher-correct, well-separated
+    # anchor margin.  This is the loss-level counterpart of the deployment flip
+    # authorization rule in residual_gate.py.
+    anchor_cfg = train_cfg.get("foundation_anchor_objective", {}) or {}
+    if pair_head_residual and bool(anchor_cfg.get("enabled", False)):
+        anchor_J_a, anchor_J_b = pair_gather(finite_J0, pairs)
+        anchor_base = (anchor_J_b - anchor_J_a) / pair_scale.clamp_min(1e-6) if normalize_pair_losses else (anchor_J_b - anchor_J_a)
+        anchor_margin = anchor_base + local_atom_delta.detach().sum(dim=1)
+        deployed_margin = anchor_base + res_pred
+        teacher_margin_anchor = batch["pair_margins"].float() / pair_scale.clamp_min(1e-6) if normalize_pair_losses else batch["pair_margins"].float()
+        teacher_direction = torch.where(teacher_margin_anchor.detach() >= 0.0, torch.ones_like(teacher_margin_anchor), -torch.ones_like(teacher_margin_anchor))
+        anchor_signed = teacher_direction * anchor_margin.detach()
+        deployed_signed = teacher_direction * deployed_margin
+        teacher_abs = teacher_margin_anchor.detach().abs()
+        boundary_tau = max(float(anchor_cfg.get("boundary_tau", 0.35)), 1e-6)
+        anchor_correct = anchor_signed > 0.0
+        near_boundary = (anchor_signed.abs() <= boundary_tau) | (teacher_abs <= boundary_tau)
+        preserve_mask = pair_mask & anchor_correct & (~near_boundary)
+        correction_mask = pair_mask & ((~anchor_correct) | near_boundary)
+
+        preserve_ratio = float(anchor_cfg.get("preserve_ratio", 0.90))
+        preserve_min_margin = max(float(anchor_cfg.get("preserve_min_margin", 0.02)), 0.0)
+        preserve_target = torch.maximum(
+            preserve_ratio * anchor_signed.clamp_min(0.0),
+            torch.full_like(anchor_signed, preserve_min_margin),
+        )
+        preserve_terms = F.relu(preserve_target - deployed_signed)
+        preserve_weights = decision_w * float(anchor_cfg.get("far_preserve_weight", 1.0))
+        L_anchor_preserve = _weighted_mean(preserve_terms, preserve_weights, preserve_mask)
+
+        correction_margin = max(float(anchor_cfg.get("correction_margin", 0.05)), 0.0)
+        teacher_cap = max(float(anchor_cfg.get("teacher_margin_cap", 0.50)), correction_margin)
+        correction_target = torch.clamp(teacher_abs, min=correction_margin, max=teacher_cap)
+        correction_terms = F.relu(correction_target - deployed_signed)
+        wrong_weight = float(anchor_cfg.get("wrong_weight", 4.0))
+        near_weight = float(anchor_cfg.get("near_weight", 2.0))
+        correction_weights = decision_w * (
+            wrong_weight * (~anchor_correct).float()
+            + near_weight * near_boundary.float()
+        ).clamp_min(1.0)
+        L_anchor_correct = _weighted_mean(correction_terms, correction_weights, correction_mask)
+    else:
+        L_anchor_preserve = J0.new_tensor(0.0)
+        L_anchor_correct = J0.new_tensor(0.0)
 
     # Explicit action-conditioned local-cost supervision keeps the factorized
     # g_i(a) head usable for diagnostics/fallback.  For hard/safety atoms this
@@ -2682,6 +2735,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         float(lw.get("base", 1.0)) * L_base
         + float(lw.get("pair", 1.0)) * L_pair
         + float(lw.get("residual", 1.0)) * L_res
+        + float(lw.get("anchor_preservation", 0.0)) * L_anchor_preserve
+        + float(lw.get("anchor_correction", 0.0)) * L_anchor_correct
         + float(lw.get("atom_cost", 0.25)) * L_atom
         + float(lw.get("uncertainty", 0.1)) * L_unc
         + float(lw.get("full_interface_rank_aux", lw.get("rank", 0.1))) * L_rank
@@ -2708,6 +2763,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_base": L_base,
         "L_pair": L_pair,
         "L_res": L_res,
+        "L_anchor_preserve": L_anchor_preserve,
+        "L_anchor_correct": L_anchor_correct,
         "L_atom": L_atom,
         "L_unc": L_unc,
         "L_rank": L_rank,

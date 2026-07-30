@@ -251,7 +251,8 @@ def compute_bdse_diagnostics(
         full_action = full_interface_action(predicted_base, predicted_atom_costs, valid, cfg)
         dense_M = _cost_margin_matrix(predicted_base, predicted_atom_costs, valid)
         sparse_full_action = full_action
-    base_M = np.asarray(predicted_base, dtype=np.float32).reshape(-1)[None, :] - np.asarray(predicted_base, dtype=np.float32).reshape(-1)[:, None]
+    finite_base = _finite_cost_for_margin(np.asarray(predicted_base, dtype=np.float32).reshape(-1))
+    base_M = finite_base[None, :] - finite_base[:, None]
     budget_vs_full = int(action_index == full_action)
     teacher_regret = float(J[action_index] - J[a_star]) if valid[action_index] else float("inf")
     query_pairs = pairs.pairs[pairs.valid_mask] if inference_pairs is None else np.asarray(inference_pairs, dtype=np.int64).reshape(-1, 2)
