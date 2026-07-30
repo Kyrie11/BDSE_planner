@@ -1,6 +1,6 @@
-# v50 Full-Retrain Entry Point
+# v50.1 Checkpoint-Independent Entry Point
 
-The historical v30 checkpoint is no longer required. See `README_V50_FULLTRAIN_FAST.md` and run `V50_DBAP_RI_NEXT_COMMANDS.sh`; the pipeline rebuilds a matched v30-compatible foundation checkpoint before v50 training and uses exact-selector spawn-process acceleration without changing selected masks or loss logic.
+The historical `outputs_v30` directory is no longer required. See `README_V50_CHECKPOINT_INDEPENDENT.md` and run `V50_DBAP_RI_NEXT_COMMANDS.sh`. The launcher first inventories retained checkpoints, accepts only a conservatively verified v30-compatible copy, and otherwise rebuilds a matched foundation from scratch. v50 and the frozen control always share the resolved foundation. Exact-selector spawn-process acceleration is retained without changing selected masks or loss logic.
 
 ---
 

@@ -12,7 +12,8 @@ done
 : "${BDSE_TRAIN_CACHE:?Set BDSE_TRAIN_CACHE to the preprocessed training cache}"
 : "${BDSE_VAL_CACHE:?Set BDSE_VAL_CACHE to the preprocessed validation cache}"
 
-V30_CKPT_IN="${V30_CKPT_IN:-outputs_v30/train/bdse_v30_pmvrbsr.best.pt}"
+FOUNDATION_CKPT="${FOUNDATION_CKPT:-${V30_CKPT_IN:-}}"
+V30_CKPT_IN="$FOUNDATION_CKPT"  # backwards-compatible alias; no hard-coded outputs_v30 dependency
 INIT_MODE="${INIT_MODE:-warm_start}"  # warm_start | scratch
 FOUNDATION_CONFIG="${FOUNDATION_CONFIG:-bdse/configs/v50_rebuild_v30_from_scratch_2gpu.yaml}"
 FOUNDATION_OUT_ROOT="${FOUNDATION_OUT_ROOT:-outputs_v30_rebuilt_current_code}"
@@ -139,7 +140,11 @@ BEST_CKPT="$OUT_ROOT/train/bdse_v50_dbap_ri.best.pt"
 LATEST_CKPT="$OUT_ROOT/train/bdse_v50_dbap_ri.latest.pt"
 
 check_checkpoint() {
-  local checkpoint="$1"
+  local checkpoint="${1:-}"
+  if [[ -z "$checkpoint" ]]; then
+    echo "Missing checkpoint path: resolve FOUNDATION_CKPT before warm-start training" >&2
+    exit 2
+  fi
   [[ -f "$checkpoint" ]] || {
     echo "Missing checkpoint: $checkpoint" >&2
     exit 2
@@ -331,6 +336,10 @@ train_foundation_2gpu() {
       --log-file "$FOUNDATION_OUT_ROOT/train/bdse_v30_pmvrbsr_rebuilt.train_log.jsonl" \
       --output "$foundation_ckpt" \
     2>&1 | tee -a "$FOUNDATION_OUT_ROOT/logs/train_foundation_2gpu.out"
+  if [[ ! -s "$foundation_best" && -s "$foundation_ckpt" ]]; then
+    echo "[v50-foundation] warning: metric-specific best was not emitted; use the clean final checkpoint" >&2
+    cp -f "$foundation_ckpt" "$foundation_best"
+  fi
   check_checkpoint "$foundation_best"
   echo "[v50-foundation] rebuilt best checkpoint=$foundation_best"
 }

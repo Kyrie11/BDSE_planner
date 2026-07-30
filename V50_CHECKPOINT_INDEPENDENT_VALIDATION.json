@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "release": "v50.1-checkpoint-independent",
+  "hard_coded_outputs_v30_dependency_in_v50_launch_path": false,
+  "foundation_resolution_policies": ["auto", "rebuild", "recover", "explicit"],
+  "algorithm_checkpoint_auto_use_default": false,
+  "shell_syntax": "passed",
+  "python_compileall": "passed",
+  "yaml_load": "passed",
+  "unit_tests": {
+    "passed": 168,
+    "warnings": 5
+  },
+  "resolver_tests": {
+    "verified_v30_selection": "passed",
+    "algorithm_checkpoint_default_rejection": "passed",
+    "algorithm_transfer_ablation_opt_in": "passed"
+  }
+}

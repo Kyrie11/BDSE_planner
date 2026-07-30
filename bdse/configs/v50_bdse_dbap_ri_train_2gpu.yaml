@@ -495,5 +495,5 @@ experiment:
   algorithm: deployment-boundary action preservation with deployment-aligned residual
     intervention, pair-level flip control, local/residual interface decomposition,
     exact-budget nested AOCC, and cross-family prefix control
-  warm_start_recommended: outputs_v30/train/bdse_v30_pmvrbsr.best.pt
+  warm_start_recommended: resolved_by_V50_DBAP_RI_NEXT_COMMANDS.sh
   calibration_protocol: group-disjoint val_tune/val_calib; official test untouched

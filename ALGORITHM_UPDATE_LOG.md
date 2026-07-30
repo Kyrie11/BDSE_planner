@@ -1864,3 +1864,93 @@ The exact selector cadence, exact-scene coverage, budget schedule, losses, valid
 ## Claim boundary
 
 The rebuilt foundation preserves attribution only inside the new matched experiment family. It is not the deleted historical checkpoint and must not be used for direct absolute comparison with old v49/v50 numbers. Component-level v49-versus-v50 claims require variants initialized from the same rebuilt foundation and evaluated on identical rows with identical calibration provenance.
+
+---
+
+# v50.1 — Checkpoint-Independent Foundation Resolution
+
+## Trigger
+
+The server still reported:
+
+```text
+Missing checkpoint: outputs_v30/train/bdse_v30_pmvrbsr.best.pt
+```
+
+after the historical `outputs_v30` directory had been deleted. The root cause was an engineering dependency retained in both launchers: an unset `V30_CKPT_IN` was immediately repopulated with the deleted hard-coded path. A stale or detached launcher could therefore continue to fail before the intended rebuild protocol became visible.
+
+## Experimental-protocol decision
+
+The paper main run no longer depends on a directory named `outputs_v30`.
+
+The canonical initialization is now a **matched foundation checkpoint**, resolved in this order under `FOUNDATION_POLICY=auto`:
+
+1. an explicitly supplied existing `FOUNDATION_CKPT`;
+2. a current-run rebuilt foundation under `OUT_ROOT/foundation_v30_compatible`;
+3. a conservatively verified retained copy whose own filename/config/output metadata identifies it as v30-compatible;
+4. a fresh rebuild from random initialization using `v50_rebuild_v30_from_scratch_2gpu.yaml`.
+
+Later AOCC/D3CE/DBCE/DBAP checkpoints are rejected by default. They already contain algorithm-specific adaptation and would confound attribution of v50 gains. They may only be enabled with `ALLOW_ALGORITHM_CHECKPOINT_INIT=1`, which is explicitly classified as a transfer-initialization ablation rather than the paper main run.
+
+## Engineering changes
+
+1. Removed the default assignment:
+
+   ```bash
+   V30_CKPT_IN=outputs_v30/train/bdse_v30_pmvrbsr.best.pt
+   ```
+
+   from the v50 outer and inner launchers.
+
+2. Added canonical variables:
+
+   - `FOUNDATION_CKPT`;
+   - `FOUNDATION_POLICY=auto|rebuild|recover|explicit`;
+   - `FOUNDATION_SEARCH_ROOT`;
+   - `RECOVER_SAFE_FOUNDATION_COPIES`;
+   - `ALLOW_ALGORITHM_CHECKPOINT_INIT`.
+
+3. Added `bdse.tools.resolve_foundation_checkpoint`:
+
+   - inventories retained `.pt` files under `outputs_v40*` through `outputs_v50*`;
+   - loads each checkpoint safely on CPU;
+   - measures current-model key and parameter-shape compatibility;
+   - records checkpoint config/output/warm-start metadata;
+   - selects only checkpoints with strong v30 identity evidence by default;
+   - writes `OUT_ROOT/provenance/foundation_checkpoint_inventory.json`;
+   - reports but rejects algorithm-specific checkpoints.
+
+4. The resolved foundation is assigned to both:
+
+   - v50 warm-start;
+   - the frozen matched control.
+
+   Control, calibration, replay and gate outputs are therefore recomputed within one provenance family.
+
+5. Added a launcher version banner and changed relative-path resolution to the script directory. This exposes stale server copies immediately in logs.
+
+6. Replaced hard-coded `GPUS=0,1` in downstream stages with the caller-provided `GPUS` value.
+
+7. Added a foundation final-checkpoint fallback if a clean foundation run emits the final checkpoint but no metric-specific `.best.pt` file.
+
+8. Changed the v50 config's `warm_start_recommended` field from a deleted physical path to `resolved_by_V50_DBAP_RI_NEXT_COMMANDS.sh`.
+
+## Recommended interpretation of retained v40-v49 outputs
+
+- A checkpoint whose own metadata identifies it as `bdse_v30_pmvrbsr` may recover the deleted foundation without changing the historical initialization family.
+- Directories named `runtime_v30ckpt` often contain evaluation artifacts rather than a copied checkpoint; directory naming alone is not accepted as provenance.
+- `outputs_v47_control_val_tune` normally contains control replay outputs, not necessarily model weights.
+- v47/v48/v49 trained best checkpoints may be useful as transfer ablations, but not as the main v50 foundation.
+- If no verified v30 copy exists, rebuilding a matched foundation is the clean default.
+
+## Validation
+
+- launcher shell syntax: passed;
+- resolver unit tests: passed;
+- safe v30 identity selection: passed;
+- algorithm-specific checkpoint rejection: passed;
+- no hard-coded v30 dependency remains in the v50 launch path.
+
+## Claim boundary
+
+A fresh rebuilt foundation does not recreate the deleted v30 weights bit-for-bit. It preserves causal attribution inside the new matched experiment because v50 and control share the same foundation. Historical absolute values remain diagnostic only. For a direct v49-versus-v50 component claim, both variants must be retrained from the same resolved foundation.

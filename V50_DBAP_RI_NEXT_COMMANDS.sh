@@ -1,27 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run this script from the v50 code root, or copy commands selectively.
-# Mandatory paths.
+# v50.1 checkpoint-independent pipeline.  Resolve every relative path from the
+# checked-in script directory so a stale working directory cannot silently run a
+# different config or helper script.
+PIPELINE_VERSION="v50.1-checkpoint-independent"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+echo "[v50] pipeline_version=$PIPELINE_VERSION script=$SCRIPT_DIR/$(basename "$0")"
+
+# Mandatory data paths.
 export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
 export BDSE_VAL_CACHE_ORIGINAL="${BDSE_VAL_CACHE_ORIGINAL:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
 export BDSE_SPLIT_CACHE="${BDSE_SPLIT_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v50_split}"
 export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_v2}"
-export OUT_ROOT="${OUT_ROOT:-outputs_v50_dbap_ri_fulltrain_fast_2gpu_v1}"
-export FOUNDATION_ROOT="${FOUNDATION_ROOT:-$OUT_ROOT/foundation_v30}"
+export OUT_ROOT="${OUT_ROOT:-outputs_v50_dbap_ri_checkpoint_independent_2gpu_v1}"
+export FOUNDATION_ROOT="${FOUNDATION_ROOT:-$OUT_ROOT/foundation_v30_compatible}"
 export FOUNDATION_CONFIG="${FOUNDATION_CONFIG:-bdse/configs/v50_rebuild_v30_from_scratch_2gpu.yaml}"
-export V30_CKPT_IN="${V30_CKPT_IN:-outputs_v30/train/bdse_v30_pmvrbsr.best.pt}"
+
+# There is deliberately no hard-coded outputs_v30 dependency.  FOUNDATION_CKPT
+# is the canonical variable; V30_CKPT_IN remains only as a backwards-compatible
+# alias consumed by run_v50_dbap_ri.sh.
+export V30_CKPT_IN="${V30_CKPT_IN:-}"
+export FOUNDATION_CKPT="${FOUNDATION_CKPT:-$V30_CKPT_IN}"
+export FOUNDATION_POLICY="${FOUNDATION_POLICY:-auto}"  # auto | rebuild | recover | explicit
+export FOUNDATION_SEARCH_ROOT="${FOUNDATION_SEARCH_ROOT:-.}"
+export RECOVER_SAFE_FOUNDATION_COPIES="${RECOVER_SAFE_FOUNDATION_COPIES:-1}"
 export REBUILD_FOUNDATION_IF_MISSING="${REBUILD_FOUNDATION_IF_MISSING:-1}"
+export ALLOW_ALGORITHM_CHECKPOINT_INIT="${ALLOW_ALGORITHM_CHECKPOINT_INIT:-0}"
 export V50_INIT_MODE="${V50_INIT_MODE:-warm_start}"
 export EXACT_SELECTOR_WORKERS_PER_RANK="${EXACT_SELECTOR_WORKERS_PER_RANK:-4}"
 export EXACT_SELECTOR_CPU_BACKEND="${EXACT_SELECTOR_CPU_BACKEND:-process}"
+export GPUS="${GPUS:-0,1}"
 export CONTROL_CONFIG="${CONTROL_CONFIG:-bdse/configs/v43_bdse_mars_control_fast_cl.yaml}"
-export CONTROL_CKPT="${CONTROL_CKPT:-$V30_CKPT_IN}"
-export CONTROL_ROOT="${CONTROL_ROOT:-$OUT_ROOT/control_v30_matched}"
+export CONTROL_CKPT="${CONTROL_CKPT:-}"
+export CONTROL_ROOT="${CONTROL_ROOT:-$OUT_ROOT/control_foundation_matched}"
 export PIPELINE_DETACH="${PIPELINE_DETACH:-1}"
 export PIPELINE_FORCE="${PIPELINE_FORCE:-0}"
 export RUN_CLOSED_LOOP_AFTER_GATE="${RUN_CLOSED_LOOP_AFTER_GATE:-1}"
 export RUN_CL100_AFTER_CL20="${RUN_CL100_AFTER_CL20:-0}"
+
+case "$FOUNDATION_POLICY" in
+  auto|rebuild|recover|explicit) ;;
+  *) echo "FOUNDATION_POLICY must be auto, rebuild, recover, or explicit" >&2; exit 2 ;;
+esac
 
 mkdir -p "$OUT_ROOT/logs"
 
@@ -92,60 +114,122 @@ fi
 export BDSE_VAL_CACHE="$BDSE_SPLIT_CACHE"
 
 # ---------------------------------------------------------------------------
-# 0.5 Rebuild the deleted v30-compatible foundation checkpoint from scratch.
-#     The v50 paper run still warm-starts from a matched foundation, and the
-#     frozen control uses the same rebuilt checkpoint.  This preserves the
-#     attribution protocol; direct v50 scratch training remains an explicit
-#     ablation via V50_INIT_MODE=scratch.
+# 0.5 Resolve a matched foundation without depending on outputs_v30.
+#
+# Resolution order under FOUNDATION_POLICY=auto:
+#   1) explicit FOUNDATION_CKPT / V30_CKPT_IN, when the file exists;
+#   2) a foundation already rebuilt under this OUT_ROOT;
+#   3) a conservatively verified retained v30 copy from outputs_v40..v50;
+#   4) a fresh current-code v30-compatible foundation rebuild.
+#
+# Later D3CE/DBCE/DBAP/AOCC checkpoints are inventoried but rejected by default.
+# They are algorithm-specific initializations and would confound the v50 paper
+# comparison.  ALLOW_ALGORITHM_CHECKPOINT_INIT=1 is an explicit transfer-ablation
+# escape hatch, never the default main-run protocol.
 # ---------------------------------------------------------------------------
-FOUNDATION_SOURCE="historical_external"
-if [[ "$V50_INIT_MODE" == "warm_start" ]]; then
-  if [[ ! -s "$V30_CKPT_IN" ]]; then
-    if [[ "$REBUILD_FOUNDATION_IF_MISSING" != "1" ]]; then
-      echo "Missing foundation checkpoint and rebuilding is disabled: $V30_CKPT_IN" >&2
+FOUNDATION_SOURCE=""
+FOUNDATION_INVENTORY="$OUT_ROOT/provenance/foundation_checkpoint_inventory.json"
+mkdir -p "$OUT_ROOT/provenance"
+
+resolve_foundation_checkpoint() {
+  local rebuilt_best="$FOUNDATION_ROOT/train/bdse_v30_pmvrbsr_rebuilt.best.pt"
+  local selected=""
+
+  if [[ "$FOUNDATION_POLICY" == "explicit" ]]; then
+    [[ -n "$FOUNDATION_CKPT" && -s "$FOUNDATION_CKPT" ]] || {
+      echo "FOUNDATION_POLICY=explicit requires an existing FOUNDATION_CKPT" >&2
       exit 2
+    }
+    FOUNDATION_SOURCE="explicit_external"
+    return 0
+  fi
+
+  if [[ "$FOUNDATION_POLICY" == "auto" && -n "$FOUNDATION_CKPT" && -s "$FOUNDATION_CKPT" ]]; then
+    FOUNDATION_SOURCE="explicit_external"
+    return 0
+  fi
+
+  # Ignore inherited stale paths such as the deleted outputs_v30/... file.
+  if [[ -n "$FOUNDATION_CKPT" && ! -s "$FOUNDATION_CKPT" ]]; then
+    echo "[v50] ignore missing inherited foundation path: $FOUNDATION_CKPT"
+    FOUNDATION_CKPT=""
+  fi
+
+  if [[ -s "$rebuilt_best" ]]; then
+    FOUNDATION_CKPT="$rebuilt_best"
+    FOUNDATION_SOURCE="rebuilt_current_code_reused"
+    return 0
+  fi
+
+  if [[ "$FOUNDATION_POLICY" != "rebuild" && "$RECOVER_SAFE_FOUNDATION_COPIES" == "1" ]]; then
+    local allow_args=()
+    if [[ "$ALLOW_ALGORITHM_CHECKPOINT_INIT" == "1" ]]; then
+      allow_args+=(--allow-algorithm-checkpoints)
+      echo "[v50] WARNING: algorithm-specific checkpoint recovery enabled; use only as a transfer ablation" >&2
     fi
-    echo "[v50] missing historical v30 checkpoint; rebuilding with current code"
-    DETACH=0 \
-    GPUS=0,1 \
-    OUT_ROOT="$FOUNDATION_ROOT" \
-    FOUNDATION_OUT_ROOT="$FOUNDATION_ROOT" \
-    FOUNDATION_CONFIG="$FOUNDATION_CONFIG" \
-    RUN_MODE=foundation \
-    AUTO_RESUME=1 \
-    VAL_SPLIT=val_tune \
-    VAL_SCENARIOS=1000 \
-    BATCH_SIZE_PER_GPU=4 \
-    NUM_WORKERS_PER_GPU=4 \
-    PREFETCH_FACTOR=2 \
-    SAVE_EVERY_N_STEPS=2000 \
-    bash run_v50_dbap_ri.sh
-    V30_CKPT_IN="$FOUNDATION_ROOT/train/bdse_v30_pmvrbsr_rebuilt.best.pt"
-    FOUNDATION_SOURCE="rebuilt_current_code"
+    selected="$(python -m bdse.tools.resolve_foundation_checkpoint       --config bdse/configs/v50_bdse_dbap_ri_train_2gpu.yaml       --search-root "$FOUNDATION_SEARCH_ROOT"       --output-json "$FOUNDATION_INVENTORY"       --print-selected       "${allow_args[@]}")"
+    if [[ -n "$selected" && -s "$selected" ]]; then
+      FOUNDATION_CKPT="$selected"
+      if [[ "$ALLOW_ALGORITHM_CHECKPOINT_INIT" == "1" ]]; then
+        FOUNDATION_SOURCE="recovered_algorithm_transfer_ablation"
+      else
+        FOUNDATION_SOURCE="recovered_verified_v30_copy"
+      fi
+      echo "[v50] recovered foundation checkpoint=$FOUNDATION_CKPT source=$FOUNDATION_SOURCE"
+      return 0
+    fi
+  else
+    # Still write an inventory report when recovery is disabled, because it is
+    # useful for documenting why retained v40-v49 checkpoints were not used.
+    python -m bdse.tools.resolve_foundation_checkpoint       --config bdse/configs/v50_bdse_dbap_ri_train_2gpu.yaml       --search-root "$FOUNDATION_SEARCH_ROOT"       --output-json "$FOUNDATION_INVENTORY" >/dev/null || true
   fi
-  [[ -s "$V30_CKPT_IN" ]] || { echo "Foundation rebuild did not produce $V30_CKPT_IN" >&2; exit 2; }
-  if [[ "$V30_CKPT_IN" == "$FOUNDATION_ROOT"/* ]]; then
-    FOUNDATION_SOURCE="rebuilt_current_code"
-  fi
-  CONTROL_CKPT="$V30_CKPT_IN"
-else
-  echo "[v50] V50_INIT_MODE=scratch: v50 starts randomly; this is an ablation and is not directly comparable to warm-started v49."
-  if [[ ! -s "$CONTROL_CKPT" ]]; then
-    echo "A matched control checkpoint is still required for the paired gate: CONTROL_CKPT=$CONTROL_CKPT" >&2
+
+  if [[ "$FOUNDATION_POLICY" == "recover" ]]; then
+    echo "FOUNDATION_POLICY=recover found no conservatively safe v30 copy; see $FOUNDATION_INVENTORY" >&2
     exit 2
   fi
+  if [[ "$REBUILD_FOUNDATION_IF_MISSING" != "1" ]]; then
+    echo "No usable foundation checkpoint and rebuilding is disabled" >&2
+    exit 2
+  fi
+
+  echo "[v50] no safe historical foundation found; rebuilding from random initialization"
+  DETACH=0   GPUS="$GPUS"   INIT_MODE=scratch   V30_CKPT_IN=   OUT_ROOT="$FOUNDATION_ROOT"   FOUNDATION_OUT_ROOT="$FOUNDATION_ROOT"   FOUNDATION_CONFIG="$FOUNDATION_CONFIG"   RUN_MODE=foundation   AUTO_RESUME=1   VAL_SPLIT=val_tune   VAL_SCENARIOS=1000   BATCH_SIZE_PER_GPU=4   NUM_WORKERS_PER_GPU=4   PREFETCH_FACTOR=2   SAVE_EVERY_N_STEPS=2000   bash run_v50_dbap_ri.sh
+
+  [[ -s "$rebuilt_best" ]] || {
+    echo "Foundation rebuild did not produce $rebuilt_best" >&2
+    exit 2
+  }
+  FOUNDATION_CKPT="$rebuilt_best"
+  FOUNDATION_SOURCE="rebuilt_current_code"
+}
+
+if [[ "$V50_INIT_MODE" == "warm_start" ]]; then
+  resolve_foundation_checkpoint
+  [[ -s "$FOUNDATION_CKPT" ]] || { echo "Resolved foundation is missing: $FOUNDATION_CKPT" >&2; exit 2; }
+  V30_CKPT_IN="$FOUNDATION_CKPT"  # compatibility alias for the inner launcher
+  if [[ -z "$CONTROL_CKPT" ]]; then
+    CONTROL_CKPT="$FOUNDATION_CKPT"
+  fi
+else
+  echo "[v50] V50_INIT_MODE=scratch is an ablation, not the paper main run."
+  [[ -n "$CONTROL_CKPT" && -s "$CONTROL_CKPT" ]] || {
+    echo "Scratch v50 still needs an independently trained matched CONTROL_CKPT for a paired gate" >&2
+    exit 2
+  }
+  FOUNDATION_CKPT="$CONTROL_CKPT"
+  V30_CKPT_IN="$FOUNDATION_CKPT"
+  FOUNDATION_SOURCE="scratch_ablation_matched_control"
 fi
-export V30_CKPT_IN CONTROL_CKPT
+export FOUNDATION_CKPT V30_CKPT_IN CONTROL_CKPT
+
+echo "[v50] foundation_source=$FOUNDATION_SOURCE"
+echo "[v50] foundation_checkpoint=$FOUNDATION_CKPT"
+echo "[v50] control_checkpoint=$CONTROL_CKPT"
 
 FOUNDATION_PROVENANCE="$OUT_ROOT/provenance/foundation_checkpoint.json"
-if ! is_fresh "$FOUNDATION_PROVENANCE" "$V30_CKPT_IN" "$FOUNDATION_CONFIG"; then
-  python -m bdse.tools.write_checkpoint_provenance \
-    --checkpoint "$V30_CKPT_IN" \
-    --config "$FOUNDATION_CONFIG" \
-    --train-cache "$BDSE_TRAIN_CACHE" \
-    --val-cache "$BDSE_SPLIT_CACHE" \
-    --source "$FOUNDATION_SOURCE" \
-    --output "$FOUNDATION_PROVENANCE"
+if ! is_fresh "$FOUNDATION_PROVENANCE" "$FOUNDATION_CKPT" "$FOUNDATION_CONFIG"; then
+  python -m bdse.tools.write_checkpoint_provenance     --checkpoint "$FOUNDATION_CKPT"     --config "$FOUNDATION_CONFIG"     --train-cache "$BDSE_TRAIN_CACHE"     --val-cache "$BDSE_SPLIT_CACHE"     --source "$FOUNDATION_SOURCE"     --output "$FOUNDATION_PROVENANCE"
 fi
 
 # ---------------------------------------------------------------------------
@@ -156,7 +240,7 @@ if training_complete; then
   echo "[v50] stage 1 already complete: reuse final/best checkpoints"
 else
   DETACH=0 \
-  GPUS=0,1 \
+  GPUS="$GPUS" \
   V30_CKPT_IN="$V30_CKPT_IN" \
   INIT_MODE="$V50_INIT_MODE" \
   EXACT_SELECTOR_WORKERS_PER_RANK="$EXACT_SELECTOR_WORKERS_PER_RANK" \
@@ -227,7 +311,7 @@ if is_fresh "$OPEN_LOOP_JSON" "$BEST_CHECKPOINT" "$CALIBRATED_CONFIG" \
    && is_fresh "$OPEN_LOOP_JSONL" "$BEST_CHECKPOINT" "$CALIBRATED_CONFIG"; then
   echo "[v50] stage 3 already complete: reuse calibrated open-loop results"
 else
-  GPUS=0,1 \
+  GPUS="$GPUS" \
   OUT_ROOT="$OUT_ROOT" \
   RUN_MODE=open_loop \
   V50_CKPT="$BEST_CHECKPOINT" \
@@ -253,7 +337,7 @@ if is_fresh "$CONTROL_JSON" "$CONTROL_CONFIG" "$CONTROL_CKPT" \
       "$BDSE_SPLIT_CACHE/val_tune/manifest.jsonl"; then
   echo "[v50] stage 4 already complete: reuse frozen-control results"
 else
-  CUDA_VISIBLE_DEVICES=0 python -m bdse.experiments.evaluate_open_loop \
+  CUDA_VISIBLE_DEVICES="${GPUS%%,*}" python -m bdse.experiments.evaluate_open_loop \
     --config "$CONTROL_CONFIG" \
     --checkpoint "$CONTROL_CKPT" \
     --split val_tune \
@@ -303,7 +387,7 @@ if [[ "$RUN_CLOSED_LOOP_AFTER_GATE" == "1" ]]; then
   : "${NUPLAN_ROOT:?Set NUPLAN_ROOT before the gated closed-loop stage}"
   BDSE_VAL_CACHE="$BDSE_SPLIT_CACHE" \
   CL_TOKEN_SPLIT=val_tune \
-  GPUS=0,1 OUT_ROOT="$OUT_ROOT" RUN_MODE=cl20 \
+  GPUS="$GPUS" OUT_ROOT="$OUT_ROOT" RUN_MODE=cl20 \
   V50_CKPT="$OUT_ROOT/train/bdse_v50_dbap_ri.best.pt" \
   EVAL_CONFIG="$OUT_ROOT/calibration/v50_bdse_dbap_cl_calibrated.yaml" \
   bash run_v50_dbap_ri.sh
@@ -311,7 +395,7 @@ if [[ "$RUN_CLOSED_LOOP_AFTER_GATE" == "1" ]]; then
   if [[ "$RUN_CL100_AFTER_CL20" == "1" ]]; then
     BDSE_VAL_CACHE="$BDSE_SPLIT_CACHE" \
     CL_TOKEN_SPLIT=val_tune \
-    GPUS=0,1 OUT_ROOT="$OUT_ROOT" RUN_MODE=cl100 \
+    GPUS="$GPUS" OUT_ROOT="$OUT_ROOT" RUN_MODE=cl100 \
     V50_CKPT="$OUT_ROOT/train/bdse_v50_dbap_ri.best.pt" \
     EVAL_CONFIG="$OUT_ROOT/calibration/v50_bdse_dbap_cl_calibrated.yaml" \
     bash run_v50_dbap_ri.sh

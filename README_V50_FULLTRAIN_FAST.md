@@ -1,3 +1,5 @@
+> **v50.1 update:** use `README_V50_CHECKPOINT_INDEPENDENT.md` and the current `V50_DBAP_RI_NEXT_COMMANDS.sh`. The launcher no longer assigns the deleted `outputs_v30/...` path when variables are unset.
+
 # v50 DBAP-RI Full Retrain + Exact Training Acceleration
 
 Use this package when the historical v30 warm-start checkpoint is missing.
