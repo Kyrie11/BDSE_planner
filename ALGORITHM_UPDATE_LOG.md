@@ -2355,3 +2355,134 @@ Latency remains an independent deployment warning unless `ENFORCE_LATENCY_BEFORE
 ## 9. Claim boundary
 
 V53 fixes the gate semantics and the missing winner-gradient path. It has passed local code/unit validation, but has not been trained or simulated on nuPlan in this environment. No gate PASS, closed-loop gain, fixed-budget SOTA or real-time claim is made before a fresh v53 run.
+
+---
+
+# v54 AR-BFAR-DBAP — Anchor-Relative Boundary-Focused Residual Decision-Budget Action Preservation
+
+Date: 2026-07-31
+
+## Trigger: V53 selector succeeded at preserving the wrong pair winner
+
+V53 is the first run in this branch that completed fresh residual/selector training, independent three-way calibration, and three paired 1000-scene open-loop replays. Its immutable anchor gate passed, but both the minimum-completeness and competitive gates failed, and the launcher stopped before CL20.
+
+V53 candidate metrics:
+
+- teacher action match: `0.100`;
+- matched foundation teacher action match: `0.116`;
+- dense full-interface action match: `0.359`;
+- B=16 selected-local sparse action match: `0.141`;
+- local pair-full action match: `0.118`;
+- residual pair-full action match: `0.100`;
+- proposal/selected/effective decisive recall: `0.801/0.588/0.754`;
+- interaction-decisive recall: `0.555`;
+- AOCC certificate: `0.821`;
+- fallback: `0.157`;
+- budget-vs-pair-full action match: `0.987`;
+- beneficial/harmful residual intervention: `0.015/0.033`.
+
+The selector and certificate therefore reached the previous competitive coverage targets, but they preserved a weak pair-full action target. The primary bottleneck is the pair tournament interface, not exact coreset search.
+
+## 1. Engineering gate repair
+
+V53 computed frozen anchor drift by comparing different interfaces:
+
+- candidate `local_pair_full_interface_action_match`;
+- local-control `pair_full_interface_action_match`.
+
+V54 compares row-wise, same-interface actions instead:
+
+- candidate/local `local_pair_full_action`;
+- candidate/local `full_action`.
+
+Both corrected drifts are exactly zero on the uploaded V53 replay. The corrected protocol-integrity gate passes.
+
+## 2. Diagnostic closed-loop on minimum failure
+
+V53 stopped after the minimum gate and produced no CL20. V54 introduces three gate tiers:
+
+1. protocol-integrity: failure blocks all closed-loop evaluation;
+2. minimum-completeness: determines whether CL20 is a formal minimum-result PASS;
+3. competitive: controls CL100 and paper-result escalation.
+
+When protocol integrity passes but minimum performance fails, `RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL=1` runs fully paired candidate/local/foundation CL20 and writes `.diagnostic_cl20`. This prevents repeated open-loop-only iterations while keeping the result clearly separated from a publication PASS.
+
+## 3. Selected-local integrable tournament anchor
+
+V53 reconstructed the pair tournament from `J0` plus queried pair edges. Missing edges fell back to the base margin and discarded the selected evidence's local action costs. The resulting graph could be non-integrable and inconsistent even when dense/local pair signs were strong.
+
+V54 first constructs the selected-local action cost:
+
+`J_B^L(a) = J0(a) + sum_{i in S_B} g_i(a)`.
+
+The learned pair prediction is decomposed into its known local component and a residual:
+
+`r_B(a,b) = pair_delta(a,b) - local_delta(a,b)`.
+
+The tournament margin becomes:
+
+`m_B^AR(a,b) = J_B^L(a) - J_B^L(b) + r_B(a,b)`.
+
+At zero residual, the tournament exactly reproduces the selected-local B=16 planner. This is now enforced in both differentiable training and runtime inference.
+
+## 4. Full-margin action-anchor guard
+
+The runtime records the selected-local anchor action before applying residual pair corrections. A proposed residual action flip is accepted only if:
+
+- the uncertainty-shrunk proposed-vs-anchor pair margin exceeds the configured flip margin;
+- the proposed tournament score improves over the anchor winner;
+- validity and safety masks allow the action.
+
+Otherwise the final action is restored to the selected-local anchor. New diagnostics report the proposed/anchor actions, robust margin, score gain, and whether the flip was blocked or accepted.
+
+## 5. Anchor-relative winner objectives
+
+Full-evidence training starts from `J0 + sum_all g`; B=16 training starts from `J0 + sum_selected g`. The pair head only supplies a residual correction.
+
+New/updated objectives:
+
+- `pair_full_anchor_preserve`: keep the full-local winner when it is teacher-correct;
+- `budget_preserve_pair_full`: keep the selected-local winner when it is teacher-correct;
+- teacher-action and strongest-rival correction on anchor-wrong scenes;
+- `anchor_wrong_action_weight` upweights correctable anchor errors;
+- existing do-no-harm, counterfactual decisive evidence, certificate and proposal losses are retained.
+
+## 6. Further speed reduction
+
+V54 changes the residual/selector schedule:
+
+- epochs: `6 -> 4`;
+- ordinary boundary pairs: `64 -> 48`;
+- full graph cadence: every `4 -> 8` steps;
+- exact B=16 supervision cadence: every `4 -> 8` steps;
+- final full-exact tail: `64 -> 32` steps;
+- cycle/transitivity cadence: every `4 -> 8` steps;
+- maximum consistency triangles: `48 -> 32`.
+
+The deployed B=16 selector remains exact AOCC. No surrogate replaces deployment selection.
+
+## 7. V53 findings by core issue
+
+1. Pair sign to action: not solved. Strong dense signs did not survive the reconstructed pair graph.
+2. Decisive evidence selection: coverage/certification is largely solved, but the certified target winner is wrong.
+3. Training compute: substantially improved. V53 reduced epoch time to approximately 20–30 minutes from V51's roughly 42–79 minutes.
+
+## 8. New files
+
+- `V54_AR_BFAR_DBAP_NEXT_COMMANDS.sh`;
+- `run_v54_ar_bfar_dbap.sh`;
+- `NEXT_COMMANDS_V54_AR_BFAR.txt`;
+- `README_V54_AR_BFAR.md`;
+- `V54_AR_BFAR_ANALYSIS_AND_NEXT_STEPS.md`;
+- `V53_RESULT_DIAGNOSIS.json`;
+- `V54_GATE_ON_V53.json`;
+- `bdse/configs/v54_ar_bfar_dbap_train_2gpu.yaml`;
+- `bdse/configs/v54_ar_bfar_dbap_cl.yaml`;
+- `bdse/configs/v54_ar_bfar_dbap_local_control_cl.yaml`;
+- `bdse/configs/v54_ar_bfar_dbap_anchor_control_cl.yaml`;
+- `bdse/tools/check_v54_ar_bfar_dbap_gate.py`;
+- `bdse/tests/test_v54_ar_bfar.py`.
+
+## 9. Claim boundary
+
+V54 has been code-validated and the corrected gate has been replayed on V53 outputs. It has not been trained or simulated on nuPlan in this environment. No future gate PASS, closed-loop improvement, fixed-budget SOTA, or real-time claim is made before fresh V54 training and paired CL20.

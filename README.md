@@ -1,3 +1,9 @@
+# v54 AR-BFAR Entry Point
+
+The current main experiment is **V54 Anchor-Relative BFAR-DBAP**. See `README_V54_AR_BFAR.md`, run `V54_AR_BFAR_DBAP_NEXT_COMMANDS.sh`, and use a fresh `OUT_ROOT`. V54 anchors the fixed-budget pair tournament to the integrable selected-local action cost and lets the pair head learn only a certified residual correction. A valid protocol now produces paired diagnostic CL20 even when the minimum performance gate fails.
+
+---
+
 # v50.1 Checkpoint-Independent Entry Point
 
 The historical `outputs_v30` directory is no longer required. See `README_V50_CHECKPOINT_INDEPENDENT.md` and run `V50_DBAP_RI_NEXT_COMMANDS.sh`. The launcher first inventories retained checkpoints, accepts only a conservatively verified v30-compatible copy, and otherwise rebuilds a matched foundation from scratch. v50 and the frozen control always share the resolved foundation. Exact-selector spawn-process acceleration is retained without changing selected masks or loss logic.

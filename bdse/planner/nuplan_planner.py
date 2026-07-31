@@ -416,6 +416,7 @@ class BDSEPlannerCore:
                     pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
                     candidate_trajectories=candidates.trajectories,
                     maneuver_ids=candidates.maneuver_ids,
+                    predicted_atom_costs=np.asarray(pred.get("g", zero_g), dtype=np.float32),
                 )
                 result.diagnostics["baseline_pair_tournament"] = True
                 return result
@@ -634,6 +635,7 @@ class BDSEPlannerCore:
                         pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
                         candidate_trajectories=candidates.trajectories,
                         maneuver_ids=candidates.maneuver_ids,
+                        predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
                     )
                     trial = self._apply_all_flagged_structural_guard(
                         trial, runtime, candidates, runtime_flags, stage_cfg
@@ -821,6 +823,7 @@ class BDSEPlannerCore:
                 pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
                 candidate_trajectories=candidates.trajectories,
                 maneuver_ids=candidates.maneuver_ids,
+                predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
             )
         else:
             selector_started = time.perf_counter()

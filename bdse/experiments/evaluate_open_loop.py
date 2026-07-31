@@ -115,6 +115,7 @@ def main() -> None:
                 pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
                 candidate_trajectories=sample.candidates.trajectories,
                 maneuver_ids=sample.candidates.maneuver_ids,
+                predicted_atom_costs=pred["g"],
             )
             pair_full_tour = core._apply_all_flagged_structural_guard(
                 pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
@@ -137,6 +138,7 @@ def main() -> None:
                     pair_atom_variance=None,
                     candidate_trajectories=sample.candidates.trajectories,
                     maneuver_ids=sample.candidates.maneuver_ids,
+                    predicted_atom_costs=pred["g"],
                 )
                 local_pair_full_tour = core._apply_all_flagged_structural_guard(
                     local_pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg

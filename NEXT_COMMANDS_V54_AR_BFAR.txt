@@ -1,0 +1,43 @@
+cd /home/senzeyu2/code/BDSE_planner_v54_ar_bfar
+
+unset V30_CKPT_IN
+unset CONTROL_CKPT
+
+export NUPLAN_ROOT=/data0/senzeyu2/dataset/nuplan
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE_ORIGINAL=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_SPLIT_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split
+
+# Reuse the immutable foundation that already passed the corrected anchor gate.
+export FOUNDATION_CKPT=/home/senzeyu2/code/BDSE_planner/outputs_v51_far_dbap_2gpu_v1/foundation_anchor/train/bdse_v51_foundation_anchor.best.pt
+export FOUNDATION_SOURCE_CONFIG=bdse/configs/v51_strong_foundation_anchor_2gpu.yaml
+
+export OUT_ROOT=outputs_v54_ar_bfar_dbap_fast_2gpu_v1
+
+PIPELINE_DETACH=1 \
+FOUNDATION_POLICY=explicit \
+RECOVER_SAFE_FOUNDATION_COPIES=0 \
+REBUILD_FOUNDATION_IF_MISSING=0 \
+ALLOW_ALGORITHM_CHECKPOINT_INIT=0 \
+RUN_CLOSED_LOOP_AFTER_GATE=1 \
+RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL=1 \
+RUN_CL100_AFTER_CL20=0 \
+ENFORCE_LATENCY_BEFORE_CL=0 \
+TRAIN_BATCH_SIZE_PER_GPU=8 \
+TRAIN_NUM_WORKERS_PER_GPU=6 \
+FAST_SELECTOR_SCENES_PER_RANK=1 \
+FAST_SELECTOR_EVERY_N_STEPS=8 \
+EXACT_SELECTOR_CPU_BACKEND=process \
+EXACT_SELECTOR_WORKERS_PER_RANK=4 \
+GPUS=0,1 \
+bash V54_AR_BFAR_DBAP_NEXT_COMMANDS.sh
+
+# Monitor
+tail -f "$OUT_ROOT"/logs/pipeline_*.log
+cat "$OUT_ROOT"/logs/v54_anchor_quality_gate.out
+tail -f "$OUT_ROOT"/logs/train_2gpu.out
+cat "$OUT_ROOT"/logs/v54_ar_bfar_dbap_gate.out
+cat "$OUT_ROOT"/open_loop/v54_ar_bfar_gate_report.json
+
+# Diagnostic CL20 marker (present when protocol PASS but minimum gate FAIL)
+cat "$OUT_ROOT"/closed_loop/.diagnostic_cl20 2>/dev/null || true

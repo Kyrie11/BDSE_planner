@@ -1194,18 +1194,26 @@ def _pair_conditioned_tournament_scores(
     beta_uncertainty: float = 0.0,
     pair_scale: torch.Tensor | None = None,
     normalize_margins: bool = True,
+    anchor_cost: torch.Tensor | None = None,
+    local_pair_delta: torch.Tensor | None = None,
+    pair_delta_includes_local: bool = False,
 ) -> torch.Tensor:
-    """Differentiable soft tournament from selected pair-conditioned deltas.
+    """Differentiable anchor-relative pair tournament.
 
-    Missing queried pairs fall back to the base margin, while present pairs update
-    both directions to preserve antisymmetry: M(a,b)+=d and M(b,a)-=d.
+    V54 starts from an integrable action-cost anchor (J0 plus the selected local
+    evidence) and adds only the residual part of the queried pair head.  Hence a
+    zero residual exactly reproduces the selected-local planner; missing pair
+    edges no longer fall back to J0 and erase useful evidence.
     """
     B, K = J0.shape
-    M = J0[:, None, :] - J0[:, :, None]
+    anchor = J0 if anchor_cost is None else anchor_cost
+    M = anchor[:, None, :] - anchor[:, :, None]
     if normalize_margins:
         scale = J0.new_full((B, 1, 1), 100.0) if pair_scale is None else pair_scale.view(B, 1, 1).clamp_min(1e-6)
         M = M / scale
     support = (pair_delta * selected_mask[:, :, None].float()).sum(dim=1)
+    if pair_delta_includes_local and local_pair_delta is not None:
+        support = support - (local_pair_delta * selected_mask[:, :, None].float()).sum(dim=1)
     pvalid = pair_valid.bool()
     a = pairs[..., 0].long().clamp(0, K - 1)
     b = pairs[..., 1].long().clamp(0, K - 1)
@@ -2441,6 +2449,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     logits_action = None
     logits_pair = None
     logits_pair_full = None
+    logits_pair_anchor = None
+    logits_pair_full_anchor = None
     pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
     deployment_mask_entries: list[tuple[float, torch.Tensor, torch.Tensor]] = []
     selector_exact_fraction = J0.new_tensor(0.0)
@@ -2467,6 +2477,10 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         # ``full_action`` loss, this tournament depends on the trainable residual
         # pair head and therefore sends a real gradient to the modules being
         # optimized in the frozen-anchor experiment.
+        full_anchor_cost = finite_J0 + (g * pair_action_atom_mask[:, :, None].float()).sum(dim=1)
+        logits_pair_full_anchor = _budgeted_tournament_scores(
+            full_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
+        )
         logits_pair_full = _pair_conditioned_tournament_scores(
             finite_J0,
             pred_atom_delta,
@@ -2480,12 +2494,19 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             beta_uncertainty=beta_unc,
             pair_scale=pair_scale,
             normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+            anchor_cost=full_anchor_cost,
+            local_pair_delta=local_atom_delta,
+            pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
         )
         if cur_epoch < predicted_selector_start and target_sel is not None:
             # Oracle-to-predicted curriculum: early action supervision can either
             # exclude structural safety atoms (legacy behavior) or include clipped
             # hard/safety margins for metric-aligned deployment training.
             pair_selected_mask = target_sel.bool() & pair_action_atom_mask
+            selected_anchor_cost = finite_J0 + (g * pair_selected_mask[:, :, None].float()).sum(dim=1)
+            logits_pair_anchor = _budgeted_tournament_scores(
+                selected_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
+            )
             logits_pair = _pair_conditioned_tournament_scores(
                 finite_J0,
                 pred_atom_delta,
@@ -2499,6 +2520,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 beta_uncertainty=beta_unc,
                 pair_scale=pair_scale,
                 normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+                anchor_cost=selected_anchor_cost,
+                local_pair_delta=local_atom_delta,
+                pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
             )
             pair_logits_entries = [(float(cfg.get("evidence", {}).get("budget", 16)), 1.0, logits_pair)]
         else:
@@ -2616,6 +2640,10 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                         (max(float(budget_weight), 0.0), pair_selected_mask.detach(), exact_scene_mask)
                     )
 
+                budget_anchor_cost = finite_J0 + (g * pair_selected_mask[:, :, None].float()).sum(dim=1)
+                budget_anchor_logits = _budgeted_tournament_scores(
+                    budget_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
+                )
                 budget_logits = _pair_conditioned_tournament_scores(
                     finite_J0,
                     pred_atom_delta,
@@ -2629,11 +2657,15 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     beta_uncertainty=beta_unc,
                     pair_scale=pair_scale,
                     normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+                    anchor_cost=budget_anchor_cost,
+                    local_pair_delta=local_atom_delta,
+                    pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                 )
                 pair_logits_entries.append((budget_value, max(float(budget_weight), 0.0), budget_logits))
                 distance = abs(float(budget_value) - primary_budget)
                 if distance < primary_distance:
                     logits_pair = budget_logits
+                    logits_pair_anchor = budget_anchor_logits
                     primary_distance = distance
 
     # Stop-gradient deployment-selection distillation.  The CPU margin-coreset
@@ -2710,17 +2742,34 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_pair_full_action = J0.new_tensor(0.0)
         L_pair_full_winner_margin = J0.new_tensor(0.0)
 
-    if logits_pair is not None and logits_pair_full is not None:
+    # Anchor-relative do-no-harm: preserve the selected-local winner whenever it
+    # is already teacher-correct; on anchor-wrong scenes, directly train toward
+    # the teacher.  This target is action-level and has gradient only through the
+    # residual tournament, not through the frozen anchor.
+    if logits_pair is not None and logits_pair_anchor is not None:
         with torch.no_grad():
-            pair_full_winner = logits_pair_full.argmax(dim=1)
-            pair_full_correct = pair_full_winner.eq(target_action)
-        preserve_scene_weights = pair_full_correct.float()
-        preserve_terms = F.cross_entropy(logits_pair, pair_full_winner, reduction="none")
-        L_budget_preserve_pair_full = (
-            preserve_terms * preserve_scene_weights
-        ).sum() / preserve_scene_weights.sum().clamp_min(1.0)
+            anchor_winner = logits_pair_anchor.argmax(dim=1)
+            anchor_correct = anchor_winner.eq(target_action)
+            preserve_target = torch.where(anchor_correct, anchor_winner, target_action)
+            correction_weight = float(train_cfg.get("anchor_wrong_action_weight", 1.5))
+            preserve_scene_weights = torch.where(
+                anchor_correct, torch.ones_like(anchor_winner, dtype=J0.dtype),
+                torch.full_like(anchor_winner, correction_weight, dtype=J0.dtype),
+            )
+        preserve_terms = F.cross_entropy(logits_pair, preserve_target, reduction="none")
+        L_budget_preserve_pair_full = (preserve_terms * preserve_scene_weights).sum() / preserve_scene_weights.sum().clamp_min(1.0)
     else:
         L_budget_preserve_pair_full = J0.new_tensor(0.0)
+
+    if logits_pair_full is not None and logits_pair_full_anchor is not None:
+        with torch.no_grad():
+            full_anchor_winner = logits_pair_full_anchor.argmax(dim=1)
+            full_anchor_correct = full_anchor_winner.eq(target_action)
+        full_preserve_terms = F.cross_entropy(logits_pair_full, full_anchor_winner, reduction="none")
+        full_preserve_weights = full_anchor_correct.float()
+        L_pair_full_anchor_preserve = (full_preserve_terms * full_preserve_weights).sum() / full_preserve_weights.sum().clamp_min(1.0)
+    else:
+        L_pair_full_anchor_preserve = J0.new_tensor(0.0)
 
     need_frozen_full_objective = any(
         float(lw.get(name, 0.0)) > 0.0
@@ -2894,6 +2943,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("pair_full_action", 0.0)) * L_pair_full_action
         + float(lw.get("pair_full_winner_margin", 0.0)) * L_pair_full_winner_margin
         + float(lw.get("budget_preserve_pair_full", 0.0)) * L_budget_preserve_pair_full
+        + float(lw.get("pair_full_anchor_preserve", 0.0)) * L_pair_full_anchor_preserve
     )
     return {
         "loss": total,
@@ -2928,6 +2978,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_pair_full_action": L_pair_full_action,
         "L_pair_full_winner_margin": L_pair_full_winner_margin,
         "L_budget_preserve_pair_full": L_budget_preserve_pair_full,
+        "L_pair_full_anchor_preserve": L_pair_full_anchor_preserve,
         "selector_exact_fraction": selector_exact_fraction,
         "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,
         "selector_fast_wall_time_s": selector_fast_wall_time_s,

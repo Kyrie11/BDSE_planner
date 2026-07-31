@@ -451,6 +451,8 @@ def _pair_delta_margin_matrix(
     margin_scale: float | None = None,
     norm_min_scale: float = 100.0,
     norm_quantile: float = 0.75,
+    predicted_atom_costs: np.ndarray | None = None,
+    pair_delta_includes_local: bool = False,
 ) -> np.ndarray:
     """Build a valid-valid antisymmetric sparse pair-margin matrix.
 
@@ -482,11 +484,27 @@ def _pair_delta_margin_matrix(
             scale = margin_normalization_scale(J0[ok_pairs[:, 1]] - J0[ok_pairs[:, 0]], min_scale=float(norm_min_scale), quantile=float(norm_quantile)) if ok_pairs.size else float(norm_min_scale)
         else:
             scale = float(norm_min_scale)
-    M = (J0[None, :] - J0[:, None]) / max(scale, 1e-6)
-    np.fill_diagonal(M, 0.0)
     delta = np.asarray(pair_atom_delta, dtype=np.float32)
     selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
     selected = selected[(selected >= 0) & (selected < delta.shape[0])] if delta.ndim == 2 else np.zeros((0,), dtype=np.int64)
+
+    # V54 AR-BFAR: use the integrable selected-evidence cost as the tournament
+    # anchor, and let the pair head contribute only a residual correction.  The
+    # legacy path reconstructed the entire margin game from J0 plus a sparse pair
+    # graph; missing edges therefore fell back to J0 and destroyed the much
+    # stronger action-conditioned local interface.  With this anchor-relative
+    # construction, zero residual is exactly the selected-local planner.
+    atom_costs = None
+    anchor_cost = J0
+    if predicted_atom_costs is not None:
+        candidate = np.asarray(predicted_atom_costs, dtype=np.float32)
+        if candidate.ndim == 2 and candidate.shape[1] == K:
+            atom_costs = candidate
+            selected_anchor = selected[(selected >= 0) & (selected < candidate.shape[0])]
+            if selected_anchor.size:
+                anchor_cost = _finite_cost_for_margin(J0 + candidate[selected_anchor].sum(axis=0))
+    M = (anchor_cost[None, :] - anchor_cost[:, None]) / max(scale, 1e-6)
+    np.fill_diagonal(M, 0.0)
 
     directed: dict[tuple[int, int], float] = {}
     if pair_arr.size and delta.ndim == 2 and delta.shape[1] >= pair_arr.shape[0] and selected.size:
@@ -494,7 +512,13 @@ def _pair_delta_margin_matrix(
         for pidx, (a_raw, b_raw) in enumerate(pair_arr.tolist()):
             a, b = int(a_raw), int(b_raw)
             if 0 <= a < K and 0 <= b < K and a != b:
-                directed[(a, b)] = (J0[b] - J0[a]) / max(scale, 1e-6) + float(support[pidx])
+                correction = float(support[pidx])
+                if atom_costs is not None and pair_delta_includes_local:
+                    selected_local = selected[(selected >= 0) & (selected < atom_costs.shape[0])]
+                    if selected_local.size:
+                        local_raw = float((atom_costs[selected_local, b] - atom_costs[selected_local, a]).sum())
+                        correction -= local_raw / max(scale, 1e-6) if normalize_margins else local_raw
+                directed[(a, b)] = (anchor_cost[b] - anchor_cost[a]) / max(scale, 1e-6) + correction
 
     done: set[tuple[int, int]] = set()
     for (a, b), value_ab in directed.items():
@@ -553,6 +577,7 @@ def run_pair_conditioned_tournament(
     pair_atom_variance: np.ndarray | None = None,
     candidate_trajectories: np.ndarray | None = None,
     maneuver_ids: np.ndarray | None = None,
+    predicted_atom_costs: np.ndarray | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -580,6 +605,9 @@ def run_pair_conditioned_tournament(
         J0_scale = np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1)
         ok = pair_arr_scale[(pair_arr_scale[:, 0] >= 0) & (pair_arr_scale[:, 0] < J0_scale.shape[0]) & (pair_arr_scale[:, 1] >= 0) & (pair_arr_scale[:, 1] < J0_scale.shape[0])] if pair_arr_scale.size else np.zeros((0, 2), dtype=np.int64)
         pair_margin_scale = margin_normalization_scale(J0_scale[ok[:, 1]] - J0_scale[ok[:, 0]], min_scale=norm_min_scale, quantile=norm_quantile) if ok.size else norm_min_scale
+    runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
+    anchor_mode = str(runtime_cfg.get("pair_tournament_anchor_mode", "base_only")).strip().lower()
+    use_selected_local_anchor = anchor_mode in {"selected_local", "integrable_selected", "anchor_relative"} and predicted_atom_costs is not None
     M_B = _pair_delta_margin_matrix(
         predicted_base_cost,
         pair_indices,
@@ -590,6 +618,8 @@ def run_pair_conditioned_tournament(
         margin_scale=pair_margin_scale,
         norm_min_scale=norm_min_scale,
         norm_quantile=norm_quantile,
+        predicted_atom_costs=predicted_atom_costs if use_selected_local_anchor else None,
+        pair_delta_includes_local=bool(runtime_cfg.get("pair_tournament_pair_delta_includes_local", True)),
     )
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
     M_eval = M_B - epsilon_cal
@@ -613,6 +643,60 @@ def run_pair_conditioned_tournament(
         candidate_trajectories=candidate_trajectories,
         margins=M_eval,
     )
+    anchor_guard_diag: dict[str, Any] = {
+        "pair_action_anchor_guard_active": False,
+        "pair_action_anchor_guard_blocked_flip": False,
+        "pair_action_anchor_guard_allowed_flip": False,
+    }
+    guard_cfg = runtime_cfg.get("pair_action_anchor_guard", {}) if isinstance(runtime_cfg, dict) else {}
+    if use_selected_local_anchor and bool(guard_cfg.get("enabled", True)):
+        J_anchor = _finite_cost_for_margin(np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1))
+        atom_costs = np.asarray(predicted_atom_costs, dtype=np.float32)
+        selected_np = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+        selected_np = selected_np[(selected_np >= 0) & (selected_np < atom_costs.shape[0])]
+        if selected_np.size and atom_costs.ndim == 2 and atom_costs.shape[1] == J_anchor.shape[0]:
+            J_anchor = _finite_cost_for_margin(J_anchor + atom_costs[selected_np].sum(axis=0))
+        anchor_M = (J_anchor[None, :] - J_anchor[:, None]) / max(float(pair_margin_scale or 1.0), 1e-6) - epsilon_cal
+        anchor_scores = tournament_scores(
+            anchor_M,
+            np.asarray(valid_mask, dtype=bool),
+            rivals,
+            use_softmin=bool(tc.get("use_softmin", True)),
+            softmin_tau=float(tc.get("softmin_tau", 1.0)),
+            beta_uncertainty=0.0,
+            sigma=None,
+        )
+        anchor_scores, anchor_action, _ = _apply_safety_score_guard(
+            anchor_scores, valid_mask, runtime_safety_flags, cfg
+        )
+        anchor_action, _ = _apply_certificate_utility_refinement(
+            anchor_scores,
+            anchor_action,
+            valid_mask,
+            runtime_safety_flags,
+            cfg,
+            candidate_trajectories=candidate_trajectories,
+            margins=anchor_M,
+        )
+        proposed_action = int(action)
+        robust_margin = float(M_eval[proposed_action, anchor_action]) if proposed_action != anchor_action else float("inf")
+        if sigma is not None and proposed_action != anchor_action:
+            robust_margin -= float(tc.get("beta_uncertainty", 0.0)) * float(sigma[proposed_action, anchor_action])
+        score_gain = float(scores[proposed_action] - scores[anchor_action]) if proposed_action != anchor_action else float("inf")
+        flip_margin = float(guard_cfg.get("flip_margin", runtime_cfg.get("pair_residual_trust", {}).get("flip_margin", 0.05)))
+        score_margin = float(guard_cfg.get("score_margin", 0.0))
+        allow_flip = proposed_action == anchor_action or (robust_margin >= flip_margin and score_gain >= score_margin)
+        if not allow_flip:
+            action = int(anchor_action)
+        anchor_guard_diag = {
+            "pair_action_anchor_guard_active": True,
+            "pair_action_anchor_action": int(anchor_action),
+            "pair_action_anchor_proposed_action": int(proposed_action),
+            "pair_action_anchor_robust_margin": float(robust_margin),
+            "pair_action_anchor_score_gain": float(score_gain),
+            "pair_action_anchor_guard_blocked_flip": bool(proposed_action != anchor_action and not allow_flip),
+            "pair_action_anchor_guard_allowed_flip": bool(proposed_action != anchor_action and allow_flip),
+        }
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")
     safety_idx = np.flatnonzero(np.asarray(runtime_safety_flags, dtype=bool) & np.asarray(valid_mask, dtype=bool))
@@ -638,6 +722,7 @@ def run_pair_conditioned_tournament(
             "safety_lcb_min": safety_lcb_min,
             **safety_guard_diag,
             **utility_refinement_diag,
+            **anchor_guard_diag,
             "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             "avoidable_selected_action_safety_flag": bool(
                 (bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else True)
