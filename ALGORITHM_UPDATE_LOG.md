@@ -2236,3 +2236,122 @@ V52 BFAR-DBAP learns a fixed-budget evidence coreset over flip-critical action p
 ## Claim boundary
 
 V51 provides no residual or closed-loop result because the pipeline stopped before those stages. V52 has been code-validated locally but not trained on nuPlan in this environment. No closed-loop or SOTA claim is made before fresh three-way replay and paired CL evaluation.
+
+---
+
+# v53 WC-BFAR-DBAP — Winner-Consistent Boundary-Focused Anchor-Residual Decision-Budget Action Preservation
+
+Date: 2026-07-31
+
+## Trigger: v52 was blocked before the algorithm stage
+
+The uploaded v52 pipeline did not train BFAR-DBAP and did not execute three-way open-loop or closed-loop evaluation. It stopped at the reused-foundation gate. The only hard failure was:
+
+- `teacher_regret=12761.731177 > 12000`.
+
+This was a semantic gate error. `teacher_regret` is the final budgeted/runtime action regret, not the regret of the frozen base+dense-local anchor. Between v51 and v52, the same checkpoint and the same 1000 scenario keys produced identical teacher, dense full-interface and local pair-full actions, while the budgeted action changed in 833/1000 rows because the runtime configuration changed. The immutable anchor metrics remained unchanged:
+
+- full-interface action match `0.359`;
+- base winner-rival sign `0.671`;
+- dense winner-rival sign `0.803`;
+- dense near-tie sign `0.706`;
+- dense all-pair sign `0.718`.
+
+Consequently, v52 provides no empirical test of its boundary sampler, periodic exact selector distillation, residual learning, or fixed-budget closed-loop benefit.
+
+## 1. Correct immutable-anchor gate
+
+Added `bdse/tools/check_v53_anchor_quality.py`.
+
+The gate checks only the interface that is actually frozen during residual training:
+
+- base+dense-local action match;
+- base winner-rival sign;
+- dense winner-rival, near-tie and all-pair sign;
+- replay cardinality, unique scenario/timestamp keys and a SHA-256 key fingerprint.
+
+It explicitly excludes budgeted regret, direct pair-head quality, proposal recall, selector quality and AOCC certification. Full-interface regret and latency are diagnostics only. The uploaded v52 replay passes this corrected gate.
+
+## 2. Correct anchor-specific regret metrics
+
+Added explicit metrics so future gates cannot confuse runtime actions with immutable interfaces:
+
+- `base_interface_teacher_regret`;
+- `full_interface_teacher_regret`;
+- `sparse_full_interface_teacher_regret`;
+- `pair_full_teacher_regret`;
+- `local_pair_full_teacher_regret`.
+
+## 3. Removed zero-gradient action objectives
+
+V52 assigned high weights to `full_action` and `full_margin`, but both are computed from frozen base+local outputs in the residual stage. They therefore contributed no gradient to the trainable residual or selector heads and only inflated the logged total loss.
+
+V53 sets both weights to zero and skips their forward computation when all frozen full-interface objectives are disabled.
+
+## 4. Winner-consistent residual tournament learning
+
+Added three objectives that act on trainable residual-dependent logits:
+
+- `L_pair_full_action`: teacher-action cross entropy on the all-evidence residual tournament;
+- `L_pair_full_winner_margin`: teacher winner versus strongest valid rival margin;
+- `L_budget_preserve_pair_full`: B=16 action must preserve the pair-full winner whenever that winner is teacher-correct.
+
+These objectives connect residual margin learning and fixed-budget evidence selection directly to action ordering rather than average pair reconstruction.
+
+## 5. Safe no-op residual initialization
+
+After loading the reused foundation and resetting semantically incompatible heads:
+
+- the last residual pair-head layer is initialized to exactly zero;
+- the pair-variance head starts from a configurable constant uncertainty bias;
+- base/local parameters remain unchanged.
+
+The candidate therefore starts exactly at the frozen anchor rather than immediately introducing random action flips.
+
+## 6. Retained BFAR main line
+
+The following v52 mechanisms are retained because they were never tested and remain aligned with the paper idea:
+
+- winner-rival, hard-feasibility-crossing and near-tie pair quotas;
+- maximum 64 boundary-critical pairs on ordinary steps;
+- periodic full-pair-graph exact AOCC supervision;
+- B=16 as the primary exact deployment budget;
+- sparse B=8/B=24 robustness supervision;
+- full-margin uncertainty-certified residual intervention;
+- counterfactual decisive-evidence and do-no-harm losses;
+- independent calibration and three-way paired controls.
+
+## 7. Additional training-speed changes
+
+- cycle/transitivity topology mining runs every 4 steps instead of every step;
+- maximum sampled consistency triangles reduced from 64 to 48;
+- final full-graph/full-exact alignment tail reduced from 128 to 64 steps;
+- stale frozen full-interface objective computation is skipped;
+- exact CPU process backend and v52 boundary-pair sparsification are retained.
+
+No surrogate replaces the deployed exact B=16 selector.
+
+## 8. Two-tier evaluation gate
+
+Added `bdse/tools/check_v53_wc_bfar_dbap_gate.py`.
+
+### Minimum-completeness gate
+
+Controls whether paired CL20 runs. It rejects catastrophic action/regret regression, broken pairing, missing exact supervision, failed calibration, budget violations, severe harmful residual behavior and gross loss of decisive evidence. It does not require a paper-grade improvement before any closed-loop evidence can be collected.
+
+### Competitive gate
+
+Controls CL100/paper-result escalation. It retains strict requirements on:
+
+- candidate gain over foundation and same-checkpoint local control;
+- pair-full residual gain;
+- beneficial versus harmful interventions;
+- decisive and interaction-decisive recall;
+- AOCC certification/frontier/fallback;
+- paired median and p90 regret non-regression.
+
+Latency remains an independent deployment warning unless `ENFORCE_LATENCY_BEFORE_CL=1`.
+
+## 9. Claim boundary
+
+V53 fixes the gate semantics and the missing winner-gradient path. It has passed local code/unit validation, but has not been trained or simulated on nuPlan in this environment. No gate PASS, closed-loop gain, fixed-budget SOTA or real-time claim is made before a fresh v53 run.

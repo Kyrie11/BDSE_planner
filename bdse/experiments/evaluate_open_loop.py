@@ -169,6 +169,8 @@ def main() -> None:
             pair_full_correct = pair_full_action == teacher_action
             budget_correct = budget_action == teacher_action
             diag.values["pair_full_interface_action_match"] = float(pair_full_correct)
+            if 0 <= pair_full_action < len(sample.teacher.J_T):
+                diag.values["pair_full_teacher_regret"] = float(sample.teacher.J_T[pair_full_action] - sample.teacher.J_T[teacher_action])
             diag.values["budget_vs_pair_full_match"] = float(budget_action == pair_full_action)
             diag.values["pair_full_to_budget_flip_rate"] = float(budget_action != pair_full_action)
             diag.values["harmful_pair_compression_rate"] = float(pair_full_correct and not budget_correct)
@@ -181,6 +183,8 @@ def main() -> None:
             if local_pair_full_action >= 0:
                 local_correct = local_pair_full_action == teacher_action
                 diag.values["local_pair_full_interface_action_match"] = float(local_correct)
+                if 0 <= local_pair_full_action < len(sample.teacher.J_T):
+                    diag.values["local_pair_full_teacher_regret"] = float(sample.teacher.J_T[local_pair_full_action] - sample.teacher.J_T[teacher_action])
                 diag.values["local_pair_full_to_residual_flip_rate"] = float(local_pair_full_action != pair_full_action)
                 diag.values["harmful_residual_intervention_rate"] = float(local_correct and not pair_full_correct)
                 diag.values["beneficial_residual_intervention_rate"] = float((not local_correct) and pair_full_correct)

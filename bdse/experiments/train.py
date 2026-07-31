@@ -1024,6 +1024,10 @@ def _run_validation_open_loop(
                 pair_full_correct = pair_full_action == teacher_action
                 budget_correct = budget_action == teacher_action
                 diag.values["pair_full_interface_action_match"] = float(pair_full_correct)
+                if 0 <= pair_full_action < len(sample.teacher.J_T):
+                    diag.values["pair_full_teacher_regret"] = float(
+                        sample.teacher.J_T[pair_full_action] - sample.teacher.J_T[teacher_action]
+                    )
                 diag.values["budget_vs_pair_full_match"] = float(budget_action == pair_full_action)
                 diag.values["pair_full_to_budget_flip_rate"] = float(budget_action != pair_full_action)
                 diag.values["harmful_pair_compression_rate"] = float(pair_full_correct and not budget_correct)
@@ -1036,6 +1040,10 @@ def _run_validation_open_loop(
                 if local_pair_full_action >= 0:
                     local_correct = local_pair_full_action == teacher_action
                     diag.values["local_pair_full_interface_action_match"] = float(local_correct)
+                    if 0 <= local_pair_full_action < len(sample.teacher.J_T):
+                        diag.values["local_pair_full_teacher_regret"] = float(
+                            sample.teacher.J_T[local_pair_full_action] - sample.teacher.J_T[teacher_action]
+                        )
                     diag.values["local_pair_full_to_residual_flip_rate"] = float(local_pair_full_action != pair_full_action)
                     diag.values["harmful_residual_intervention_rate"] = float(local_correct and not pair_full_correct)
                     diag.values["beneficial_residual_intervention_rate"] = float((not local_correct) and pair_full_correct)
@@ -1197,8 +1205,38 @@ def _reinitialize_modules_after_warm_start(
             if callable(reset):
                 reset()
                 reset_ids.add(id(child))
+    # Residual-over-local heads must be a no-op at step zero.  A generic random
+    # reset can immediately flip a good foundation winner before any residual
+    # evidence has been learned.  Zeroing the final residual layer preserves the
+    # anchor exactly; the variance head starts from a conservative constant.
+    safe_cfg = cfg.get("training", {}).get("warm_start_safe_initialization", {}) or {}
+    if bool(safe_cfg.get("enabled", False)):
+        def _last_linear(module: torch.nn.Module) -> torch.nn.Linear | None:
+            found = None
+            for child in module.modules():
+                if isinstance(child, torch.nn.Linear):
+                    found = child
+            return found
+
+        if "pair_head" in matched:
+            layer = _last_linear(modules["pair_head"])
+            if layer is not None:
+                torch.nn.init.zeros_(layer.weight)
+                if layer.bias is not None:
+                    torch.nn.init.zeros_(layer.bias)
+        if "pair_var_head" in matched:
+            layer = _last_linear(modules["pair_var_head"])
+            if layer is not None:
+                torch.nn.init.zeros_(layer.weight)
+                initial_raw = float(safe_cfg.get("pair_variance_raw_bias", 0.0))
+                if layer.bias is not None:
+                    torch.nn.init.constant_(layer.bias, initial_raw)
     if is_main:
-        print(f"[bdse] reinitialized warm-start modules={matched}", flush=True)
+        print(
+            f"[bdse] reinitialized warm-start modules={matched} "
+            f"safe_noop={bool(safe_cfg.get('enabled', False))}",
+            flush=True,
+        )
     return matched
 
 

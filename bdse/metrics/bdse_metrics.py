@@ -253,8 +253,19 @@ def compute_bdse_diagnostics(
         sparse_full_action = full_action
     finite_base = _finite_cost_for_margin(np.asarray(predicted_base, dtype=np.float32).reshape(-1))
     base_M = finite_base[None, :] - finite_base[:, None]
+    valid_base = valid & np.isfinite(np.asarray(predicted_base, dtype=np.float32).reshape(-1))
+    base_action = int(np.argmin(np.where(valid_base, finite_base, np.inf))) if bool(valid_base.any()) else -1
+
+    def _teacher_regret_for(action: int) -> float:
+        if action < 0 or action >= len(J) or not bool(valid[action]) or not np.isfinite(J[action]) or not np.isfinite(J[a_star]):
+            return float("inf")
+        return float(J[action] - J[a_star])
+
     budget_vs_full = int(action_index == full_action)
-    teacher_regret = float(J[action_index] - J[a_star]) if valid[action_index] else float("inf")
+    teacher_regret = _teacher_regret_for(int(action_index))
+    full_interface_teacher_regret = _teacher_regret_for(int(full_action))
+    sparse_full_interface_teacher_regret = _teacher_regret_for(int(sparse_full_action))
+    base_interface_teacher_regret = _teacher_regret_for(int(base_action))
     query_pairs = pairs.pairs[pairs.valid_mask] if inference_pairs is None else np.asarray(inference_pairs, dtype=np.int64).reshape(-1, 2)
     if query_pairs.size:
         queried_actions = np.unique(query_pairs.reshape(-1))
@@ -339,6 +350,9 @@ def compute_bdse_diagnostics(
 
     values = {
         "teacher_regret": teacher_regret,
+        "full_interface_teacher_regret": full_interface_teacher_regret,
+        "sparse_full_interface_teacher_regret": sparse_full_interface_teacher_regret,
+        "base_interface_teacher_regret": base_interface_teacher_regret,
         "teacher_action_match": float(action_index == a_star),
         "full_interface_action_match": float(full_action == a_star),
         "budget_vs_full_match": float(budget_vs_full),
@@ -410,7 +424,7 @@ def compute_bdse_diagnostics(
         **{k: float(v) for k, v in qdiag.items() if str(k).startswith("selector_") and isinstance(v, (int, float, np.integer, np.floating, bool, np.bool_)) and np.isfinite(float(v))},
         **pair_metrics,
     }
-    return BDSEMetricResult(values=values, details={"full_action": full_action, "sparse_full_action": sparse_full_action, "a_star": a_star, "selected_atoms": selected_atoms, "query_action_count": query_action_count})
+    return BDSEMetricResult(values=values, details={"full_action": full_action, "sparse_full_action": sparse_full_action, "base_action": base_action, "a_star": a_star, "selected_atoms": selected_atoms, "query_action_count": query_action_count})
 
 
 def aggregate_metric_results(results: list[BDSEMetricResult]) -> dict[str, float]:

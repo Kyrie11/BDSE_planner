@@ -1744,6 +1744,24 @@ def _pair_cycle_consistency_loss(
     """
     train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
     ccfg = train_cfg.get("cycle_consistency", {}) or {}
+    # Triangle mining requires a CUDA->CPU topology snapshot.  It is valuable as
+    # a transitivity regularizer, but running it on every optimizer step wastes
+    # synchronization time and overweights easy graph cycles.  V53 evaluates it
+    # periodically and restores full cadence in the final alignment tail.
+    cadence = max(1, int(ccfg.get("every_n_steps", 1)))
+    step = int(train_cfg.get("global_step", 0))
+    epoch = int(train_cfg.get("current_epoch", 0))
+    steps_per_epoch = max(1, int(train_cfg.get("steps_per_epoch", 1)))
+    total_epochs = max(1, int(train_cfg.get("epochs", epoch + 1)))
+    full_last_steps = max(0, int(ccfg.get("full_last_n_steps", 0)))
+    step_in_epoch = step % steps_per_epoch
+    in_final_tail = (
+        epoch == total_epochs - 1
+        and full_last_steps > 0
+        and step_in_epoch >= max(0, steps_per_epoch - full_last_steps)
+    )
+    if step % cadence != 0 and not in_final_tail:
+        return predicted_margin.new_tensor(0.0)
     max_triangles = max(1, int(ccfg.get("max_triangles_per_scene", 64)))
     delta = max(float(ccfg.get("huber_delta", 0.15)), 1e-6)
     B, P = predicted_margin.shape
@@ -2422,6 +2440,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     enable_action_loss = (cur_epoch >= action_loss_start) and (float(lw.get("action", 1.0)) > 0.0)
     logits_action = None
     logits_pair = None
+    logits_pair_full = None
     pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
     deployment_mask_entries: list[tuple[float, torch.Tensor, torch.Tensor]] = []
     selector_exact_fraction = J0.new_tensor(0.0)
@@ -2444,6 +2463,24 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     if enable_action_loss and pair_act_weight_cfg > 0.0 and use_pair_act and "pair_atom_delta" in out:
         exclude_safety_from_pair_action = bool(train_cfg.get("exclude_safety_atoms_from_pair_action_loss", True))
         pair_action_atom_mask = e_mask & ((~safety_atom_mask) if exclude_safety_from_pair_action else torch.ones_like(safety_atom_mask, dtype=torch.bool))
+        # Winner-consistent residual supervision.  Unlike the legacy
+        # ``full_action`` loss, this tournament depends on the trainable residual
+        # pair head and therefore sends a real gradient to the modules being
+        # optimized in the frozen-anchor experiment.
+        logits_pair_full = _pair_conditioned_tournament_scores(
+            finite_J0,
+            pred_atom_delta,
+            pairs,
+            pair_valid,
+            pair_action_atom_mask,
+            valid,
+            tau_q,
+            eps_cal,
+            pair_var=out.get("pair_atom_var"),
+            beta_uncertainty=beta_unc,
+            pair_scale=pair_scale,
+            normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+        )
         if cur_epoch < predicted_selector_start and target_sel is not None:
             # Oracle-to-predicted curriculum: early action supervision can either
             # exclude structural safety atoms (legacy behavior) or include clipped
@@ -2626,19 +2663,84 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
 
     L_cert_gap, L_cert_safety, L_cert_frontier = _certificate_action_gap_loss(logits_pair, target_action, valid, hard_action, cfg)
 
-    full_pred_cost = finite_J0 + (g * e_mask[:, :, None].float()).sum(dim=1)
-    full_pred_cost = full_pred_cost.masked_fill(~valid, J0.new_tensor(1e6))
-    full_logits = _negative_cost_logits(full_pred_cost, valid, min_scale=float(train_cfg.get("full_action_min_scale", 1.0)))
     hard_action_targets = bool(train_cfg.get("hard_action_targets", True))
     soft_teacher_target = None
     if "teacher_J_T" in batch and not hard_action_targets:
         tau_T = float(train_cfg.get("teacher_soft_target_tau", 1.0))
         teacher_cost = batch["teacher_J_T"].float().masked_fill(~valid, J0.new_tensor(1e9))
-        teacher_logits = _negative_cost_logits(teacher_cost, valid, min_scale=float(train_cfg.get("teacher_action_min_scale", 1.0))) / max(tau_T, 1e-6)
+        teacher_logits = _negative_cost_logits(
+            teacher_cost,
+            valid,
+            min_scale=float(train_cfg.get("teacher_action_min_scale", 1.0)),
+        ) / max(tau_T, 1e-6)
         soft_teacher_target = torch.softmax(teacher_logits, dim=1)
-        L_full_action = -(soft_teacher_target * F.log_softmax(full_logits, dim=1)).sum(dim=1).mean()
+
+    # V53 WC-BFAR: action-level objectives that actually depend on the residual
+    # interface.  ``logits_pair_full`` asks whether all available evidence plus
+    # the residual produces the teacher winner; ``L_budget_preserve_pair_full``
+    # asks the B=16 selector to preserve a pair-full winner when that interface is
+    # already correct.  The latter is stop-gradient in its target only, not in the
+    # budgeted logits, and directly aligns evidence selection with action flips.
+    if logits_pair_full is not None:
+        pair_full_scene_weights = _teacher_regret_weights(
+            logits_pair_full,
+            target_action,
+            valid,
+            batch.get("teacher_J_T"),
+            strength=float(train_cfg.get("pair_full_regret_weight", train_cfg.get("deployment_regret_weight", 0.0))),
+            clip=float(train_cfg.get("deployment_regret_clip", 4.0)),
+            min_scale=float(train_cfg.get("deployment_regret_min_scale", train_cfg.get("teacher_action_min_scale", 1.0))),
+        )
+        L_pair_full_action = _weighted_action_target_loss(
+            logits_pair_full,
+            target_action,
+            soft_target=None,
+            scene_weights=pair_full_scene_weights,
+        )
+        K_pair_full = int(logits_pair_full.shape[1])
+        target_safe = target_action.long().clamp(0, K_pair_full - 1)
+        target_score = torch.gather(logits_pair_full, 1, target_safe[:, None]).squeeze(1)
+        rival_mask = valid.bool().clone()
+        rival_mask.scatter_(1, target_safe[:, None], False)
+        best_rival = logits_pair_full.masked_fill(~rival_mask, _neg_mask_value(logits_pair_full)).max(dim=1).values
+        pf_margin = float(train_cfg.get("pair_full_winner_margin", 0.08))
+        pf_tau = max(float(train_cfg.get("pair_full_winner_tau", 0.08)), 1e-6)
+        L_pair_full_winner_margin = F.softplus((best_rival - target_score + pf_margin) / pf_tau).mean()
     else:
-        L_full_action = F.cross_entropy(full_logits, target_action)
+        L_pair_full_action = J0.new_tensor(0.0)
+        L_pair_full_winner_margin = J0.new_tensor(0.0)
+
+    if logits_pair is not None and logits_pair_full is not None:
+        with torch.no_grad():
+            pair_full_winner = logits_pair_full.argmax(dim=1)
+            pair_full_correct = pair_full_winner.eq(target_action)
+        preserve_scene_weights = pair_full_correct.float()
+        preserve_terms = F.cross_entropy(logits_pair, pair_full_winner, reduction="none")
+        L_budget_preserve_pair_full = (
+            preserve_terms * preserve_scene_weights
+        ).sum() / preserve_scene_weights.sum().clamp_min(1.0)
+    else:
+        L_budget_preserve_pair_full = J0.new_tensor(0.0)
+
+    need_frozen_full_objective = any(
+        float(lw.get(name, 0.0)) > 0.0
+        for name in ("full_action", "full_margin", "hard_feasibility")
+    )
+    full_pred_cost = None
+    if need_frozen_full_objective:
+        full_pred_cost = finite_J0 + (g * e_mask[:, :, None].float()).sum(dim=1)
+        full_pred_cost = full_pred_cost.masked_fill(~valid, J0.new_tensor(1e6))
+        full_logits = _negative_cost_logits(
+            full_pred_cost,
+            valid,
+            min_scale=float(train_cfg.get("full_action_min_scale", 1.0)),
+        )
+        if soft_teacher_target is not None:
+            L_full_action = -(soft_teacher_target * F.log_softmax(full_logits, dim=1)).sum(dim=1).mean()
+        else:
+            L_full_action = F.cross_entropy(full_logits, target_action)
+    else:
+        L_full_action = J0.new_tensor(0.0)
 
     teacher_cost_for_weight = batch.get("teacher_J_T")
     regret_strength = float(train_cfg.get("deployment_regret_weight", 0.0)) if cur_epoch >= predicted_selector_start else 0.0
@@ -2695,31 +2797,53 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     else:
         L_act_pair = J0.new_tensor(0.0)
 
-    # Dense full-interface margin distillation.  Use a per-scene scale so this
-    # term optimizes ordering rather than absolute cost units.
-    Bsz, Ksz = full_pred_cost.shape
-    tgt = target_action.clamp_min(0).clamp_max(Ksz - 1)
-    c_star = torch.gather(full_pred_cost, 1, tgt[:, None]).expand(Bsz, Ksz)
-    margin_mask = valid.clone()
-    margin_mask.scatter_(1, tgt[:, None], False)
-    if "teacher_J_T" in batch:
-        full_scale = _valid_row_scale(batch["teacher_J_T"].float().masked_fill(~valid, 0.0), valid, min_scale=float(train_cfg.get("full_margin_min_scale", 100.0)))
-    else:
-        full_scale = _valid_row_scale(full_pred_cost, valid, min_scale=float(train_cfg.get("full_margin_min_scale", 100.0)))
-    L_full_margin_terms = F.softplus((c_star - full_pred_cost) / (full_scale * max(float(train_cfg.get("full_margin_tau", 1.0)), 1e-6)))
-    L_full_margin = _masked_mean(L_full_margin_terms, margin_mask)
+    # Legacy dense full-interface terms are skipped entirely in the frozen-anchor
+    # V53 run: their gradients cannot reach the trainable residual/selector heads.
+    if full_pred_cost is not None:
+        Bsz, Ksz = full_pred_cost.shape
+        tgt = target_action.clamp_min(0).clamp_max(Ksz - 1)
+        c_star = torch.gather(full_pred_cost, 1, tgt[:, None]).expand(Bsz, Ksz)
+        margin_mask = valid.clone()
+        margin_mask.scatter_(1, tgt[:, None], False)
+        if "teacher_J_T" in batch:
+            full_scale = _valid_row_scale(
+                batch["teacher_J_T"].float().masked_fill(~valid, 0.0),
+                valid,
+                min_scale=float(train_cfg.get("full_margin_min_scale", 100.0)),
+            )
+        else:
+            full_scale = _valid_row_scale(
+                full_pred_cost,
+                valid,
+                min_scale=float(train_cfg.get("full_margin_min_scale", 100.0)),
+            )
+        L_full_margin_terms = F.softplus(
+            (c_star - full_pred_cost)
+            / (full_scale * max(float(train_cfg.get("full_margin_tau", 1.0)), 1e-6))
+        )
+        L_full_margin = _masked_mean(L_full_margin_terms, margin_mask)
 
-    hard_mask = batch.get("teacher_hard_violation")
-    if hard_mask is not None:
-        hard_mask = hard_mask.bool() & valid
-        safe_mask = (~hard_mask) & valid
-        safe_cost = full_pred_cost.masked_fill(~safe_mask, J0.new_tensor(1e6)).min(dim=1, keepdim=True).values
-        hard_cost = full_pred_cost.masked_fill(~hard_mask, J0.new_tensor(1e6))
-        feasible_pair = safe_mask.any(dim=1, keepdim=True) & hard_mask
-        hard_scale = _valid_row_scale(batch["teacher_J_T"].float().masked_fill(~valid, 0.0), valid, min_scale=float(train_cfg.get("hard_feasibility_min_scale", 100.0))) if "teacher_J_T" in batch else _valid_row_scale(full_pred_cost, valid, min_scale=float(train_cfg.get("hard_feasibility_min_scale", 100.0)))
-        L_hard_feas = F.softplus((safe_cost - hard_cost + float(train_cfg.get("hard_feasibility_margin", 10.0))) / (hard_scale * max(float(train_cfg.get("hard_feasibility_tau", 1.0)), 1e-6)))
-        L_hard_feas = _masked_mean(L_hard_feas, feasible_pair)
+        hard_mask = batch.get("teacher_hard_violation")
+        if hard_mask is not None:
+            hard_mask = hard_mask.bool() & valid
+            safe_mask = (~hard_mask) & valid
+            safe_cost = full_pred_cost.masked_fill(~safe_mask, J0.new_tensor(1e6)).min(dim=1, keepdim=True).values
+            hard_cost = full_pred_cost.masked_fill(~hard_mask, J0.new_tensor(1e6))
+            feasible_pair = safe_mask.any(dim=1, keepdim=True) & hard_mask
+            hard_scale = _valid_row_scale(
+                batch["teacher_J_T"].float().masked_fill(~valid, 0.0) if "teacher_J_T" in batch else full_pred_cost,
+                valid,
+                min_scale=float(train_cfg.get("hard_feasibility_min_scale", 100.0)),
+            )
+            L_hard_feas = F.softplus(
+                (safe_cost - hard_cost + float(train_cfg.get("hard_feasibility_margin", 10.0)))
+                / (hard_scale * max(float(train_cfg.get("hard_feasibility_tau", 1.0)), 1e-6))
+            )
+            L_hard_feas = _masked_mean(L_hard_feas, feasible_pair)
+        else:
+            L_hard_feas = J0.new_tensor(0.0)
     else:
+        L_full_margin = J0.new_tensor(0.0)
         L_hard_feas = J0.new_tensor(0.0)
     pair_act_weight = pair_act_weight_cfg if logits_pair is not None else 0.0
     action_act_weight = action_act_weight_cfg if logits_action is not None else 0.0
@@ -2767,6 +2891,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("cycle_consistency", 0.0)) * L_cycle
         + float(lw.get("counterfactual_critical_pair", 0.0)) * L_cf_critical_pair
         + float(lw.get("counterfactual_critical_proposal", 0.0)) * L_cf_critical_proposal
+        + float(lw.get("pair_full_action", 0.0)) * L_pair_full_action
+        + float(lw.get("pair_full_winner_margin", 0.0)) * L_pair_full_winner_margin
+        + float(lw.get("budget_preserve_pair_full", 0.0)) * L_budget_preserve_pair_full
     )
     return {
         "loss": total,
@@ -2798,6 +2925,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_cycle": L_cycle,
         "L_cf_critical_pair": L_cf_critical_pair,
         "L_cf_critical_proposal": L_cf_critical_proposal,
+        "L_pair_full_action": L_pair_full_action,
+        "L_pair_full_winner_margin": L_pair_full_winner_margin,
+        "L_budget_preserve_pair_full": L_budget_preserve_pair_full,
         "selector_exact_fraction": selector_exact_fraction,
         "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,
         "selector_fast_wall_time_s": selector_fast_wall_time_s,
