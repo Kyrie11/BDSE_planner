@@ -2104,3 +2104,135 @@ V51 supplies a cleaner novelty and theorem route: budgeted AOCC compression plus
 ## v51.1 Engineering/algorithm gate separation
 
 The known prediction-stage latency is now reported separately from the causal algorithm-quality gate by default. `ENFORCE_LATENCY_BEFORE_CL=0` permits paired CL20 when action-quality/AOCC checks pass, while still marking the run as ineligible for a real-time claim. Set `ENFORCE_LATENCY_BEFORE_CL=1` to make the 500 ms target a hard prerequisite. This prevents an engineering bottleneck from hiding whether FAR-DBAP improves closed-loop decisions. The gate marker also depends on the gate source file, so changes to gate logic invalidate stale PASS markers.
+
+---
+
+# v52 BFAR-DBAP — Boundary-Focused Anchor-Residual Decision-Budget Action Preservation
+
+Date: 2026-07-31
+
+## Trigger: v51 stopped at an over-constrained foundation gate
+
+The uploaded v51 run did not train FAR-DBAP or execute closed loop. It stopped after the foundation replay because the old gate required direct pair-head and budget-selector quality from modules that would later be reset/trained.
+
+Observed immutable-interface quality:
+
+- full interface action match `0.359`;
+- base winner-rival sign `0.671`;
+- dense winner-rival sign `0.803`;
+- dense near-tie sign `0.706`;
+- dense all-pair sign `0.718`;
+- teacher regret `10808`.
+
+Observed downstream-head/selector quality:
+
+- direct pair-full action match `0.060`;
+- direct pair near-tie sign `0.342`;
+- certified pair fraction `0.210`;
+- fallback `0.791`.
+
+The first group is sufficient for an immutable anchor; the second group must be learned in the BFAR stage and is no longer part of the anchor gate.
+
+## Training-speed diagnosis
+
+- non-exact foundation epochs: `2509–2796 s`;
+- full-exact epoch: `4725 s`;
+- exact selector cost: `0.3146 s/step`;
+- data wait and H2D: approximately `1 ms/step` each.
+
+The dominant costs were dense pair/loss/backward and all-scene exact CPU selector work, not data loading.
+
+## V52 algorithm changes
+
+### 1. Immutable anchor-only gate
+
+Added `bdse.tools.check_v52_anchor_quality`. It gates only the base+dense-local interface that remains frozen. Direct pair head, proposal selection, evidence sufficiency and AOCC coverage are explicitly excluded.
+
+The uploaded v51 checkpoint passes this corrected gate. The recommended main run reuses that checkpoint instead of rebuilding another foundation.
+
+### 2. Factorized fast anchor fallback
+
+Added `bdse/configs/v52_factorized_anchor_fast_2gpu.yaml` for cases where no usable anchor exists:
+
+- direct pair-conditioned inference disabled;
+- exact deployment selector training disabled;
+- only scene/action/evidence/query/base/local modules train;
+- normalized base/local decision losses retained;
+- batch/chunk settings enlarged.
+
+### 3. Quota-constrained boundary pair curriculum
+
+Added `_boundary_focused_pair_subsample` in `bdse.experiments.train`.
+
+Most optimizer steps keep 64 pairs and reserve overlapping quotas for:
+
+- teacher-winner/rival pairs;
+- hard-feasibility crossings;
+- near-tie pairs.
+
+Remaining slots use a deterministic joint decision-weight score. This prevents abundant hard pairs from evicting all near-boundary pairs. Full pair graphs are restored on exact AOCC steps and in the final alignment tail.
+
+### 4. Periodic exact full-graph AOCC supervision
+
+The main run uses:
+
+- batch size 8 per GPU;
+- exact selector on 1 scene/rank every 4 steps;
+- full batch exact selector for the final 128 steps;
+- process backend with 4 workers/rank.
+
+Ordinary exact scene coverage is `1 / (8 * 4) = 3.125%`, with a short final full-alignment tail. The gate now requires sparse exact supervision rather than the impossible historical 99% average.
+
+### 5. Primary-budget exactness with sparse auxiliary budgets
+
+B=16 is evaluated at every exact event. B=8/B=24 are sampled only every fourth exact event as robustness regularizers. This preserves the fixed-budget paper objective while reducing expensive CPU selector calls.
+
+### 6. Core-idea evidence gate
+
+`check_v52_bfar_dbap_gate.py` now directly requires:
+
+- proposal decisive recall;
+- selected decisive recall;
+- effective decisive recall;
+- selected interaction-decisive recall;
+- AOCC certificate/frontier/fill;
+- residual-only and total action gains;
+- paired regret non-regression.
+
+This ties the empirical gate to the paper statement that retained evidence must preserve or correctly change action ordering under B=16.
+
+### 7. Training-health gate repair
+
+The gate checks finite critical loss/timing metrics and sparse exact coverage. Optional diagnostics with zero denominators may be NaN without invalidating training. The old requirement that every epoch have near-100% exact coverage was removed.
+
+### 8. Provenance and launcher fixes
+
+- added `FOUNDATION_SOURCE_CONFIG` so an explicitly reused v51 checkpoint is recorded with its actual training config;
+- fixed factorized-anchor checkpoint naming across launcher and pipeline;
+- exposed batch size, worker count and sparse selector cadence as environment variables;
+- retained algorithm/latency gate separation and three-way paired controls.
+
+## Main algorithm statement
+
+V52 BFAR-DBAP learns a fixed-budget evidence coreset over flip-critical action pairs, anchored to the complete base+local decision margin. A residual may change an action ordering only when its uncertainty-shrunk correction is certified against the full anchor margin. Far-correct pairs receive do-no-harm supervision; near-tie and anchor-wrong pairs receive correction supervision.
+
+## New files
+
+- `V52_BFAR_DBAP_NEXT_COMMANDS.sh`
+- `run_v52_bfar_dbap.sh`
+- `NEXT_COMMANDS_V52_BFAR_DBAP.txt`
+- `README_V52_BFAR_DBAP.md`
+- `V52_BFAR_DBAP_ANALYSIS_AND_NEXT_STEPS.md`
+- `V51_RESULT_DIAGNOSIS.json`
+- `bdse/configs/v52_factorized_anchor_fast_2gpu.yaml`
+- `bdse/configs/v52_bfar_dbap_train_2gpu.yaml`
+- `bdse/configs/v52_bfar_dbap_cl.yaml`
+- `bdse/configs/v52_bfar_dbap_local_control_cl.yaml`
+- `bdse/configs/v52_bfar_dbap_anchor_control_cl.yaml`
+- `bdse/tools/check_v52_anchor_quality.py`
+- `bdse/tools/check_v52_bfar_dbap_gate.py`
+- `bdse/tests/test_v52_bfar_dbap.py`
+
+## Claim boundary
+
+V51 provides no residual or closed-loop result because the pipeline stopped before those stages. V52 has been code-validated locally but not trained on nuPlan in this environment. No closed-loop or SOTA claim is made before fresh three-way replay and paired CL evaluation.

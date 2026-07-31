@@ -1366,7 +1366,17 @@ def _deployment_budget_entries_for_step(
         step = int(train_cfg.get("global_step", 0))
         rank = int(train_cfg.get("global_rank", 0))
         world = max(1, int(train_cfg.get("world_size", 1)))
-        slot = (step * world + rank) % max(len(schedule), 1)
+        # The paper claim is for the primary fixed budget. Auxiliary budgets are
+        # robustness regularizers, so they need not double every exact CPU call.
+        # Sample one auxiliary only every N exact-selector events; B=16 remains
+        # supervised at every exact event. The default N=1 preserves legacy
+        # behavior for older configs.
+        aux_every = max(1, int(train_cfg.get("deployment_aux_every_n_exact_steps", 1)))
+        selector_cadence = max(1, int(train_cfg.get("deployment_selector_every_n_steps", 1)))
+        exact_event = step // selector_cadence
+        if exact_event % aux_every != 0:
+            return [(float(primary[0]), float(primary[1]))]
+        slot = (exact_event * world + rank) % max(len(schedule), 1)
         return [(float(primary[0]), float(primary[1])), (float(schedule[slot]), float(aux_total))]
     if strategy not in {"weighted_round_robin", "sampled", "stratified"}:
         raise ValueError(
@@ -2792,4 +2802,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,
         "selector_fast_wall_time_s": selector_fast_wall_time_s,
         "selector_exact_wall_time_s": selector_exact_wall_time_s,
+        "training_pair_fraction": batch.get("training_pair_fraction", J0.new_ones((J0.shape[0],))).float().mean(),
+        "training_pair_selected_count": batch.get("training_pair_selected_count", pair_valid.float().sum(dim=1)).float().mean(),
+        "training_pair_original_count": batch.get("training_pair_original_count", pair_valid.float().sum(dim=1)).float().mean(),
+        "training_pair_full_graph_fraction": batch.get("training_pair_full_graph", J0.new_ones((J0.shape[0],))).float().mean(),
     }

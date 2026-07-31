@@ -1,0 +1,53 @@
+{
+  "gate_status": "V51 foundation quality gate FAIL; V51 residual/three-way/closed-loop stages not executed",
+  "foundation_quality": {
+    "teacher_action_match": 0.08,
+    "full_interface_action_match": 0.359,
+    "pair_full_interface_action_match": 0.06,
+    "local_pair_full_interface_action_match": 0.118,
+    "base_pair_sign_acc_winner_rival": 0.6711315417118144,
+    "base_pair_sign_acc_near_tie": 0.5462852141124763,
+    "dense_pair_sign_acc_winner_rival": 0.802921637806943,
+    "dense_pair_sign_acc_near_tie": 0.7057018631380749,
+    "dense_pair_sign_acc_all": 0.7184714125098158,
+    "pair_sign_acc_winner_rival": 0.5791394337454704,
+    "pair_sign_acc_near_tie": 0.3422717104845378,
+    "teacher_regret": 10808.19540350329,
+    "proposal_decisive_atom_recall": 0.7663194110973041,
+    "selected_decisive_atom_recall": 0.5018063002922876,
+    "selector_aocc_certified_pair_fraction": 0.21,
+    "selector_aocc_frontier_retained_weight_fraction": 0.9097771421708657,
+    "fallback_would_trigger_rate": 0.791,
+    "decision_budget_atom_count": 16.0,
+    "planner_latency_ms_p95": 1214.2640318721533,
+    "stage_predict_ms": 653.9940983243287,
+    "stage_selector_ms": 83.62562054488808,
+    "stage_total_internal_ms": 811.4680595118552
+  },
+  "training_speed": {
+    "epochs_run": 5,
+    "best_epoch": 0,
+    "epoch_wall_time_s": [
+      2795.876640368253,
+      2759.8165861507878,
+      2509.3532765982673,
+      2723.0337351188064,
+      4724.7993546798825
+    ],
+    "non_exact_epoch_mean_s": 2697.0190595595286,
+    "exact_epoch_s": 4724.7993546798825,
+    "exact_selector_wall_s_per_step": 0.3145615625,
+    "data_wait_ms_per_step_approx": 0.95,
+    "h2d_ms_per_step_approx": 0.68
+  },
+  "v52_expected_exact_scene_fraction": {
+    "normal_epochs": 0.03125,
+    "last_epoch_with_128_step_full_tail_approx": 0.071,
+    "average_over_6_epochs_approx": 0.0379
+  },
+  "closed_loop": {
+    "executed": false,
+    "scenario_count": 0,
+    "reason": "foundation gate stopped pipeline"
+  }
+}

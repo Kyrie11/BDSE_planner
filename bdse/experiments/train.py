@@ -104,6 +104,202 @@ def collate(samples: list[Sample], cfg: dict[str, Any]) -> dict[str, torch.Tenso
     return {k: torch.stack([it[k] for it in items], dim=0) for k in items[0]}
 
 
+_PAIR_ALIGNED_BATCH_KEYS = (
+    "pair_indices",
+    "pair_valid",
+    "pair_margins",
+    "pair_weights",
+    "pair_residuals",
+)
+
+
+def _boundary_pair_sampler_uses_full_graph(train_cfg: dict[str, Any]) -> bool:
+    """Return whether the current step must keep the complete cached pair graph.
+
+    V52 uses a boundary-focused pair curriculum on most optimizer steps, but the
+    exact AOCC supervision steps and the final alignment tail always see the full
+    graph.  This keeps deployment supervision exact where it is applied while
+    avoiding dense E x P pair-head work on every other step.
+    """
+    sampler_cfg = train_cfg.get("boundary_pair_sampler", {}) or {}
+    if not bool(sampler_cfg.get("enabled", False)):
+        return True
+    step = int(train_cfg.get("global_step", 0))
+    cadence = max(1, int(sampler_cfg.get("full_every_n_steps", 1)))
+    if step % cadence == 0:
+        return True
+    full_last_steps = max(0, int(sampler_cfg.get("full_last_n_steps", 0)))
+    if full_last_steps <= 0:
+        return False
+    epoch = int(train_cfg.get("current_epoch", 0))
+    total_epochs = max(1, int(train_cfg.get("epochs", epoch + 1)))
+    if epoch != total_epochs - 1:
+        return False
+    steps_per_epoch = max(1, int(train_cfg.get("steps_per_epoch", 1)))
+    step_in_epoch = step % steps_per_epoch
+    return step_in_epoch >= max(0, steps_per_epoch - full_last_steps)
+
+
+def _boundary_focused_pair_subsample(
+    batch: dict[str, torch.Tensor], cfg: dict[str, Any]
+) -> dict[str, torch.Tensor]:
+    """Keep the decision-critical pair subset used by BFAR-DBAP training.
+
+    Priority is assigned to teacher-winner rivals, hard-feasibility crossings,
+    near-tie margins, and high pair weights.  The sampler is deterministic and
+    only changes training compute; cached labels and deployment-time pair graph
+    construction remain untouched.  Full-graph steps are synchronized with the
+    exact selector cadence through ``full_every_n_steps``.
+    """
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    sampler_cfg = train_cfg.get("boundary_pair_sampler", {}) or {}
+    if not bool(sampler_cfg.get("enabled", False)) or _boundary_pair_sampler_uses_full_graph(train_cfg):
+        if "pair_valid" in batch:
+            valid_count = batch["pair_valid"].bool().sum(dim=1).float()
+            batch["training_pair_original_count"] = valid_count
+            batch["training_pair_selected_count"] = valid_count
+            batch["training_pair_fraction"] = torch.ones_like(valid_count)
+            batch["training_pair_full_graph"] = torch.ones_like(valid_count)
+        return batch
+    if "pair_indices" not in batch or "pair_valid" not in batch:
+        return batch
+
+    pairs = batch["pair_indices"].long()
+    pair_valid = batch["pair_valid"].bool()
+    if pairs.ndim != 3 or pairs.shape[-1] != 2:
+        return batch
+    B, P, _ = pairs.shape
+    max_pairs = max(1, int(sampler_cfg.get("max_pairs", P)))
+    if max_pairs >= P:
+        valid_count = pair_valid.sum(dim=1).float()
+        batch["training_pair_original_count"] = valid_count
+        batch["training_pair_selected_count"] = valid_count
+        batch["training_pair_fraction"] = torch.ones_like(valid_count)
+        batch["training_pair_full_graph"] = torch.ones_like(valid_count)
+        return batch
+
+    a = pairs[..., 0]
+    b = pairs[..., 1]
+    target = batch.get("teacher_a_star")
+    if target is None:
+        winner_pair = torch.zeros_like(pair_valid)
+    else:
+        target = target.long().reshape(B, 1)
+        winner_pair = (a == target) | (b == target)
+
+    hard = batch.get("teacher_hard_violation")
+    if hard is None:
+        hard_cross = torch.zeros_like(pair_valid)
+    else:
+        hard = hard.bool()
+        K = hard.shape[1]
+        hard_a = torch.gather(hard, 1, a.clamp(0, K - 1))
+        hard_b = torch.gather(hard, 1, b.clamp(0, K - 1))
+        hard_cross = hard_a ^ hard_b
+
+    margins = batch.get("pair_margins")
+    if margins is None:
+        abs_margin = torch.zeros_like(pair_valid, dtype=torch.float32)
+    else:
+        abs_margin = margins.float().abs()
+    inf = torch.full_like(abs_margin, float("inf"))
+    valid_abs = torch.where(pair_valid, abs_margin, inf)
+    sorted_abs = torch.sort(valid_abs, dim=1).values
+    valid_count_int = pair_valid.sum(dim=1).clamp_min(1)
+    median_index = ((valid_count_int - 1) // 2).reshape(B, 1)
+    margin_scale = torch.gather(sorted_abs, 1, median_index).clamp_min(
+        float(sampler_cfg.get("min_margin_scale", 1.0))
+    )
+    normalized_abs = abs_margin / margin_scale
+    near_tau = max(float(sampler_cfg.get("near_tie_tau", 0.5)), 1e-6)
+    near_score = 1.0 / (1.0 + normalized_abs / near_tau)
+
+    weights = batch.get("pair_weights")
+    if weights is None:
+        weight_score = torch.zeros_like(abs_margin)
+    else:
+        w = weights.float().clamp_min(0.0)
+        wmax = torch.where(pair_valid, w, torch.zeros_like(w)).max(dim=1, keepdim=True).values.clamp_min(1e-6)
+        weight_score = w / wmax
+
+    score = (
+        float(sampler_cfg.get("winner_bonus", 16.0)) * winner_pair.float()
+        + float(sampler_cfg.get("hard_cross_bonus", 10.0)) * hard_cross.float()
+        + float(sampler_cfg.get("near_tie_bonus", 6.0)) * near_score
+        + float(sampler_cfg.get("pair_weight_bonus", 3.0)) * weight_score
+    )
+    # Weighted top-k alone can let one abundant category (typically hard-crossing
+    # pairs) evict all near-boundary pairs.  BFAR instead reserves small,
+    # overlapping quotas for the three decision-critical categories, then fills
+    # the remaining slots by the joint score.  The loop is over the small local
+    # batch only and is negligible compared with pair-head/selector compute.
+    index_preference = (P - torch.arange(P, device=score.device, dtype=score.dtype)) * 1e-7
+    chosen_rows: list[torch.Tensor] = []
+    category_specs = (
+        (winner_pair, int(sampler_cfg.get("winner_quota", max_pairs // 4))),
+        (hard_cross, int(sampler_cfg.get("hard_cross_quota", max_pairs // 4))),
+        (near_score, int(sampler_cfg.get("near_tie_quota", max_pairs // 3))),
+    )
+    for row in range(B):
+        selected = torch.zeros(P, dtype=torch.bool, device=score.device)
+        valid_row = pair_valid[row]
+        for category, raw_quota in category_specs:
+            quota = min(max(0, raw_quota), max_pairs - int(selected.sum().item()))
+            if quota <= 0:
+                continue
+            if category.dtype == torch.bool:
+                category_mask = category[row] & valid_row & ~selected
+                category_rank = score[row]
+            else:
+                # For the near-tie quota, rank directly by boundary proximity
+                # while using the joint score as a small semantic tie-breaker.
+                category_mask = valid_row & ~selected
+                category_rank = category[row] + 1e-3 * score[row]
+            candidate_ids = torch.nonzero(category_mask, as_tuple=False).flatten()
+            if candidate_ids.numel() == 0:
+                continue
+            rank_values = category_rank[candidate_ids] + index_preference[candidate_ids]
+            take = min(quota, int(candidate_ids.numel()))
+            ids = candidate_ids[torch.topk(rank_values, k=take, largest=True, sorted=False).indices]
+            selected[ids] = True
+
+        remaining = max_pairs - int(selected.sum().item())
+        if remaining > 0:
+            candidate_mask = valid_row & ~selected
+            candidate_ids = torch.nonzero(candidate_mask, as_tuple=False).flatten()
+            if candidate_ids.numel() > 0:
+                rank_values = score[row, candidate_ids] + index_preference[candidate_ids]
+                take = min(remaining, int(candidate_ids.numel()))
+                ids = candidate_ids[torch.topk(rank_values, k=take, largest=True, sorted=False).indices]
+                selected[ids] = True
+                remaining -= take
+        # Keep a fixed tensor shape even for rare caches with fewer valid pairs.
+        # Invalid padded slots remain invalid after gathering and contribute zero.
+        if remaining > 0:
+            pad_ids = torch.nonzero(~selected, as_tuple=False).flatten()[:remaining]
+            selected[pad_ids] = True
+        chosen_rows.append(torch.nonzero(selected, as_tuple=False).flatten()[:max_pairs])
+    chosen = torch.stack(chosen_rows, dim=0)
+    # Restore source order so repeated full/subsampled steps see a stable pair layout.
+    chosen = torch.sort(chosen, dim=1).values
+
+    for key in _PAIR_ALIGNED_BATCH_KEYS:
+        value = batch.get(key)
+        if value is None or value.ndim < 2 or value.shape[0] != B or value.shape[1] != P:
+            continue
+        gather_shape = [B, max_pairs] + [1] * (value.ndim - 2)
+        gather_index = chosen.reshape(gather_shape).expand(B, max_pairs, *value.shape[2:])
+        batch[key] = torch.gather(value, 1, gather_index)
+
+    original_count = pair_valid.sum(dim=1).float()
+    selected_count = batch["pair_valid"].bool().sum(dim=1).float()
+    batch["training_pair_original_count"] = original_count
+    batch["training_pair_selected_count"] = selected_count
+    batch["training_pair_fraction"] = selected_count / original_count.clamp_min(1.0)
+    batch["training_pair_full_graph"] = torch.zeros_like(selected_count)
+    return batch
+
+
 
 def _json_loads_npz_scalar(z: Any, key: str, default: Any) -> Any:
     if key not in z.files:
@@ -1478,7 +1674,7 @@ def main() -> None:
                     flush=True,
                 )
         processed_steps = 0
-        stage_wall = {"data_wait": 0.0, "h2d": 0.0, "forward": 0.0, "loss": 0.0, "backward_step": 0.0}
+        stage_wall = {"data_wait": 0.0, "h2d": 0.0, "pair_sample": 0.0, "forward": 0.0, "loss": 0.0, "backward_step": 0.0}
         previous_step_end = time.perf_counter()
         for loader_batch_index, batch in enumerate(tqdm(loader, desc=f"epoch {epoch}", disable=not is_main)):
             batch_index = loader_batch_index + (resume_at if resumable_batch_sampler is not None else 0)
@@ -1490,6 +1686,9 @@ def main() -> None:
             _stage_started = time.perf_counter()
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             stage_wall["h2d"] += time.perf_counter() - _stage_started
+            _stage_started = time.perf_counter()
+            batch = _boundary_focused_pair_subsample(batch, cfg)
+            stage_wall["pair_sample"] += time.perf_counter() - _stage_started
             opt.zero_grad(set_to_none=True)
             if hasattr(torch, "amp") and hasattr(torch.amp, "autocast"):
                 autocast_ctx = torch.amp.autocast(device_type="cuda", enabled=use_amp)
