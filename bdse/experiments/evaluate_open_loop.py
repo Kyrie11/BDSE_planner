@@ -74,7 +74,14 @@ def main() -> None:
         qdiag["configured_decision_budget_atom_count"] = float(
             max(1, int((cfg.get("evidence", {}) or {}).get("budget", 1)))
         )
-        qdiag.update({k: v for k, v in getattr(tour, "diagnostics", {}).items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "avoidable_selected_action_safety_flag", "all_actions_safety_flagged", "all_flagged_risk_guard_applied", "all_flagged_hard_risk_regret", "hard_filter_applied", "safe_action_available"}})
+        tour_diag = getattr(tour, "diagnostics", {}) or {}
+        qdiag.update({k: v for k, v in tour_diag.items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "avoidable_selected_action_safety_flag", "all_actions_safety_flagged", "all_flagged_risk_guard_applied", "all_flagged_hard_risk_regret", "hard_filter_applied", "safe_action_available"}})
+        for key, value in tour_diag.items():
+            if key.startswith("pair_potential_") or key.startswith("pair_action_anchor_"):
+                if isinstance(value, (bool, np.bool_)):
+                    qdiag[key] = float(bool(value))
+                elif isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(float(value)):
+                    qdiag[key] = float(value)
         qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
         sel_diag = getattr(sel, "diagnostics", {}) or {}
         mode = str(sel_diag.get("mode", ""))
@@ -164,6 +171,22 @@ def main() -> None:
             dense_predicted_atom_costs=None if dense is None else dense["g"],
             certificate_margin_matrix=tour.margins,
         )
+        selected_local_anchor_action = int(tour_diag.get("pair_action_anchor_action", diag.details.get("sparse_full_action", -1)))
+        teacher_action_for_anchor = int(sample.teacher.a_star)
+        if selected_local_anchor_action >= 0:
+            anchor_correct = selected_local_anchor_action == teacher_action_for_anchor
+            deployed_correct = int(tour.action_index) == teacher_action_for_anchor
+            diag.values["selected_local_anchor_action_match"] = float(anchor_correct)
+            if 0 <= selected_local_anchor_action < len(sample.teacher.J_T):
+                diag.values["selected_local_anchor_teacher_regret"] = float(
+                    sample.teacher.J_T[selected_local_anchor_action] - sample.teacher.J_T[teacher_action_for_anchor]
+                )
+            diag.values["deployed_vs_selected_local_anchor_match"] = float(int(tour.action_index) == selected_local_anchor_action)
+            diag.values["pair_potential_deployed_flip_rate"] = float(int(tour.action_index) != selected_local_anchor_action)
+            diag.values["beneficial_pair_potential_intervention_rate"] = float((not anchor_correct) and deployed_correct)
+            diag.values["harmful_pair_potential_intervention_rate"] = float(anchor_correct and not deployed_correct)
+            diag.details["selected_local_anchor_action"] = int(selected_local_anchor_action)
+
         if pair_full_action >= 0:
             teacher_action = int(sample.teacher.a_star)
             budget_action = int(tour.action_index)
@@ -208,6 +231,8 @@ def main() -> None:
                 "teacher_action": int(getattr(sample.teacher, "a_star", -1)),
                 "bdse_action": int(tour.action_index),
                 "full_action": int(diag.details.get("full_action", -1)),
+                "sparse_full_action": int(diag.details.get("sparse_full_action", -1)),
+                "selected_local_anchor_action": int(diag.details.get("selected_local_anchor_action", -1)),
                 "pair_full_action": int(diag.details.get("pair_full_action", -1)),
                 "local_pair_full_action": int(diag.details.get("local_pair_full_action", -1)),
                 "fallback_would_trigger": bool(qdiag.get("fallback_would_trigger", False)),

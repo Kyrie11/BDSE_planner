@@ -2486,3 +2486,163 @@ The deployed B=16 selector remains exact AOCC. No surrogate replaces deployment 
 ## 9. Claim boundary
 
 V54 has been code-validated and the corrected gate has been replayed on V53 outputs. It has not been trained or simulated on nuPlan in this environment. No future gate PASS, closed-loop improvement, fixed-budget SOTA, or real-time claim is made before fresh V54 training and paired CL20.
+
+---
+
+# V55 PC-BFAR-DBAP update — 2026-07-31
+
+Version: **Potential-Consistent Boundary-Focused Anchor-Residual Decision-Budget Action Preservation**.
+
+## 1. V54 experimental diagnosis
+
+The uploaded V54 run completed fresh residual/selector training, three independent calibrations, and three paired 1000-scene open-loop replays. It did not run CL20 or CL100.
+
+V54 gate status:
+
+- immutable anchor gate: PASS;
+- protocol gate: FAIL only because `selector_exact_fraction=0.02572` was compared against a hard-coded `0.03`;
+- configured train floor: `0.015`;
+- minimum failure list: empty;
+- competitive gate: FAIL.
+
+Replaying the same results with a config-derived exact-fraction floor gives protocol PASS and minimum PASS, while competitive remains FAIL. Therefore the missing CL20 was caused by an engineering gate mismatch, but the lack of competitive action gain is algorithmic.
+
+Key V54 observations:
+
+- candidate/local/foundation final teacher match: `0.118/0.118/0.118`;
+- local pair-full match: `0.118`;
+- sparse all-local-evidence match: `0.141`;
+- dense full-interface match: `0.359`;
+- candidate-local deployed action differences: `0/1000`;
+- beneficial/harmful causal residual interventions: `0/0`;
+- pair-full match: `0.118`;
+- budget-vs-pair-full match: `0.992`;
+- proposal/selected/effective decisive recall: approximately `0.800/0.577/0.743`;
+- fallback: `0.156`;
+- frontier retained: `0.759`;
+- epoch time: approximately `17–20` minutes.
+
+The selector and sparse training schedule remain useful. The action aggregation path is the primary bottleneck.
+
+## 2. Engineering gate fix
+
+`check_v55_pc_bfar_dbap_gate.py` now reads `training.min_deployment_exact_fraction` from the actual train config. A command-line value can raise the floor, but the gate no longer silently imposes an unrelated hard-coded threshold.
+
+The V54 replay passes V55 protocol and minimum gates and correctly fails only the competitive gate.
+
+## 3. Pure same-checkpoint local control
+
+V54 disabled residual mean but left residual variance active. Variance still affected AOCC and tournament uncertainty and produced five internal `local_pair_full -> pair_full` action changes in 1000 scenes.
+
+V55 makes `disable_pair_residual_intervention=true` disable both:
+
+- selector/tournament residual mean;
+- selector/tournament residual variance.
+
+The local control is therefore causally isolated from the residual head.
+
+## 4. Direct selected-local action anchor
+
+V54 inserted selected-local margins into a restricted-rival tournament, but still selected the action through tournament traversal. Zero residual was not guaranteed to equal the direct B=16 selected-local argmin.
+
+V55 constructs:
+
+`J_B^L(a) = J0(a) + sum_{i in S_B} g_i(a)`
+
+and uses its direct global argmin/scores as the action anchor. At zero residual the deployed action exactly equals the selected-local planner, independently of pair variance and rival graph coverage.
+
+## 5. Potential-consistent residual aggregation
+
+Independent pair residuals can contain cycles and violate global action transitivity. V55 projects the selected residual edge field onto an integrable action potential:
+
+`phi* = argmin_phi sum_(a,b) w_ab ((phi_b-phi_a)-r_ab)^2 + lambda ||phi||^2`.
+
+Boundary pairs receive larger weights. Only the conservative potential component can change action costs:
+
+`J_B^PC(a) = J_B^L(a) + scale * phi(a)`.
+
+The non-conservative component is reported through reconstruction and cycle diagnostics and is penalized during training rather than being allowed to alter the winner through an arbitrary tournament path.
+
+## 6. Global certified residual flip
+
+A potential-corrected action may replace the selected-local winner only when:
+
+- its direct corrected cost is better;
+- the uncertainty-shrunk proposed-vs-anchor global margin exceeds the flip threshold;
+- validity and safety guards permit the action.
+
+Pair variance no longer changes anchor scores directly; it is used only for certification.
+
+## 7. Action-potential distillation
+
+V55 adds a direct global target for the residual potential based on the teacher-versus-selected-local cost correction. The target is centered per scene and robustly scaled. It upweights:
+
+- the teacher winner;
+- the selected-local strongest rival;
+- actions near the teacher decision boundary;
+- scenes where the selected-local anchor is wrong.
+
+This provides a real gradient from preserved evidence to the final global winner, instead of relying only on average independent pair signs.
+
+## 8. Deployment target alignment
+
+Periodic exact AOCC training can target the full Top-M integrable-potential action. Thus the exact B=16 selector is trained to preserve the same downstream action definition used at deployment.
+
+Deployment still uses exact AOCC. No surrogate selector replaces the B=16 method.
+
+## 9. Gate and diagnostics
+
+V55 records:
+
+- direct selected-local anchor action and regret;
+- deployed-vs-selected-local match;
+- potential proposed/allowed/deployed flip rates;
+- causal paired candidate-vs-local beneficial/harmful rates;
+- projection reconstruction RMSE;
+- cycle fraction;
+- potential correction magnitude.
+
+If protocol integrity passes, paired diagnostic CL20 is run even when the minimum or competitive gate fails. CL100 remains blocked unless the competitive gate passes.
+
+## 10. Preserved designs
+
+The following V52–V54 designs are retained:
+
+- winner/hard/near-tie boundary-pair curriculum;
+- ordinary 48-pair training graph;
+- periodic full graph and exact B=16 supervision;
+- final short full-exact alignment tail;
+- exact AOCC and counterfactual decisive-evidence targets;
+- B=16 fixed evidence budget;
+- same-checkpoint local and matched-foundation controls;
+- independent calibration and paired replay;
+- algorithm and latency gates remain separated.
+
+## 11. New files
+
+- `V55_PC_BFAR_DBAP_NEXT_COMMANDS.sh`;
+- `run_v55_pc_bfar_dbap.sh`;
+- `NEXT_COMMANDS_V55_PC_BFAR.txt`;
+- `README_V55_PC_BFAR.md`;
+- `V55_PC_BFAR_ANALYSIS_AND_NEXT_STEPS.md`;
+- `V54_RESULT_DIAGNOSIS.json`;
+- `V55_GATE_ON_V54.json`;
+- `bdse/model/potential_projection.py`;
+- `bdse/configs/v55_pc_bfar_dbap_train_2gpu.yaml`;
+- `bdse/configs/v55_pc_bfar_dbap_cl.yaml`;
+- `bdse/configs/v55_pc_bfar_dbap_local_control_cl.yaml`;
+- `bdse/configs/v55_pc_bfar_dbap_anchor_control_cl.yaml`;
+- `bdse/tools/check_v55_pc_bfar_dbap_gate.py`;
+- `bdse/tests/test_v55_pc_bfar.py`.
+
+## 12. Validation and claim boundary
+
+Validation completed:
+
+- Python compile: PASS;
+- four V55 YAML files: PASS;
+- shell syntax: PASS;
+- unit tests: `194 passed, 7 warnings`;
+- V54 replay with corrected gate: protocol PASS, minimum PASS, competitive FAIL.
+
+No fresh V55 nuPlan training or closed-loop simulation was run in this environment. No future gate PASS, closed-loop gain, fixed-budget CCF-A result, SOTA, or real-time claim is made in advance.

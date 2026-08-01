@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from bdse.planner.pair_screen import build_rival_sets_from_base
+from bdse.model.potential_projection import project_pair_residual_to_action_potential_numpy
 from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, full_interface_margin, margin_normalization_scale
 from bdse.utils import softmin_np
 
@@ -566,6 +567,100 @@ def _pair_sigma_matrix(
     return sigma
 
 
+
+
+def _selected_local_anchor_cost(
+    predicted_base_cost: np.ndarray,
+    predicted_atom_costs: np.ndarray | None,
+    selected_atoms: list[int] | np.ndarray,
+) -> np.ndarray:
+    anchor = _finite_cost_for_margin(np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1))
+    if predicted_atom_costs is None:
+        return anchor
+    atom_costs = np.asarray(predicted_atom_costs, dtype=np.float32)
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    if atom_costs.ndim != 2 or atom_costs.shape[1] != anchor.shape[0]:
+        return anchor
+    selected = selected[(selected >= 0) & (selected < atom_costs.shape[0])]
+    if selected.size:
+        anchor = _finite_cost_for_margin(anchor + atom_costs[selected].sum(axis=0))
+    return anchor
+
+
+def _direct_action_scores_from_cost(cost: np.ndarray, valid_mask: np.ndarray, scale: float) -> np.ndarray:
+    cost = _finite_cost_for_margin(np.asarray(cost, dtype=np.float32).reshape(-1))
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    if valid.shape[0] < cost.shape[0]:
+        valid = np.pad(valid, (0, cost.shape[0] - valid.shape[0]), constant_values=False)
+    valid = valid[: cost.shape[0]]
+    finite = valid & np.isfinite(cost)
+    scores = np.full_like(cost, -1e9, dtype=np.float32)
+    if bool(finite.any()):
+        center = float(np.median(cost[finite]))
+        scores[finite] = -((cost[finite] - center) / max(float(scale), 1e-6)).astype(np.float32)
+    return scores
+
+
+def _integrable_potential_cost(
+    predicted_base_cost: np.ndarray,
+    pair_indices: np.ndarray,
+    pair_atom_delta: np.ndarray,
+    selected_atoms: list[int] | np.ndarray,
+    valid_mask: np.ndarray,
+    *,
+    predicted_atom_costs: np.ndarray | None,
+    pair_delta_includes_local: bool,
+    normalize_margins: bool,
+    margin_scale: float,
+    cfg: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Selected-local anchor plus Hodge-projected pair residual potential."""
+    anchor = _selected_local_anchor_cost(predicted_base_cost, predicted_atom_costs, selected_atoms)
+    pairs = np.asarray(pair_indices, dtype=np.int64).reshape(-1, 2)
+    delta = np.asarray(pair_atom_delta, dtype=np.float32)
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    selected = selected[(selected >= 0) & (selected < delta.shape[0])] if delta.ndim == 2 else np.zeros((0,), dtype=np.int64)
+    pair_count = min(int(pairs.shape[0]), int(delta.shape[1]) if delta.ndim == 2 else 0)
+    pairs = pairs[:pair_count]
+    if pair_count and selected.size:
+        residual = delta[selected, :pair_count].sum(axis=0).astype(np.float32)
+    else:
+        residual = np.zeros((pair_count,), dtype=np.float32)
+    if pair_delta_includes_local and predicted_atom_costs is not None and pair_count and selected.size:
+        atom_costs = np.asarray(predicted_atom_costs, dtype=np.float32)
+        if atom_costs.ndim == 2 and atom_costs.shape[1] == anchor.shape[0]:
+            a = pairs[:, 0].clip(0, atom_costs.shape[1] - 1)
+            b = pairs[:, 1].clip(0, atom_costs.shape[1] - 1)
+            local = (atom_costs[selected][:, b] - atom_costs[selected][:, a]).sum(axis=0)
+            residual = residual - (local / max(float(margin_scale), 1e-6) if normalize_margins else local)
+    anchor_margin = np.zeros((pair_count,), dtype=np.float32)
+    if pair_count:
+        a = pairs[:, 0].clip(0, anchor.shape[0] - 1)
+        b = pairs[:, 1].clip(0, anchor.shape[0] - 1)
+        anchor_margin = anchor[b] - anchor[a]
+        if normalize_margins:
+            anchor_margin = anchor_margin / max(float(margin_scale), 1e-6)
+    pcfg = ((cfg.get("runtime", {}) or {}).get("pair_potential_projection", {}) or {})
+    potential, diag = project_pair_residual_to_action_potential_numpy(
+        pairs,
+        residual,
+        valid_mask,
+        pair_weights=None,
+        anchor_margin=anchor_margin,
+        ridge=float(pcfg.get("ridge", 0.02)),
+        boundary_tau=float(pcfg.get("boundary_tau", 0.35)),
+        boundary_gain=float(pcfg.get("boundary_gain", 2.0)),
+        weight_floor=float(pcfg.get("weight_floor", 0.05)),
+    )
+    cost_scale = max(float(margin_scale), 1e-6) if normalize_margins else 1.0
+    corrected = _finite_cost_for_margin(anchor + potential * cost_scale)
+    diag.update({
+        "pair_potential_active": 1.0,
+        "pair_potential_cost_correction_abs_mean": float(np.mean(np.abs(potential * cost_scale))) if potential.size else 0.0,
+        "pair_potential_residual_edge_abs_mean": float(np.mean(np.abs(residual))) if residual.size else 0.0,
+    })
+    return anchor, corrected, diag
+
 def run_pair_conditioned_tournament(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -608,31 +703,59 @@ def run_pair_conditioned_tournament(
     runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
     anchor_mode = str(runtime_cfg.get("pair_tournament_anchor_mode", "base_only")).strip().lower()
     use_selected_local_anchor = anchor_mode in {"selected_local", "integrable_selected", "anchor_relative"} and predicted_atom_costs is not None
-    M_B = _pair_delta_margin_matrix(
-        predicted_base_cost,
-        pair_indices,
-        pair_atom_delta,
-        selected_atoms,
-        valid_mask,
-        normalize_margins=normalize_margins,
-        margin_scale=pair_margin_scale,
-        norm_min_scale=norm_min_scale,
-        norm_quantile=norm_quantile,
-        predicted_atom_costs=predicted_atom_costs if use_selected_local_anchor else None,
-        pair_delta_includes_local=bool(runtime_cfg.get("pair_tournament_pair_delta_includes_local", True)),
-    )
+    aggregation_mode = str(runtime_cfg.get("pair_tournament_aggregation_mode", "legacy_tournament")).strip().lower()
+    use_integrable_potential = aggregation_mode in {"integrable_potential", "potential", "hodge_potential"} and use_selected_local_anchor
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
-    M_eval = M_B - epsilon_cal
-    sigma = _pair_sigma_matrix(pair_indices, pair_atom_variance, selected_atoms, M_B.shape[0])
-    scores = tournament_scores(
-        M_eval,
-        np.asarray(valid_mask, dtype=bool),
-        rivals,
-        use_softmin=bool(tc.get("use_softmin", True)),
-        softmin_tau=float(tc.get("softmin_tau", 1.0)),
-        beta_uncertainty=float(tc.get("beta_uncertainty", 0.0)),
-        sigma=sigma,
+    sigma = _pair_sigma_matrix(
+        pair_indices,
+        pair_atom_variance,
+        selected_atoms,
+        int(np.asarray(predicted_base_cost).reshape(-1).shape[0]),
     )
+    potential_diag: dict[str, Any] = {"pair_potential_active": 0.0}
+    if use_integrable_potential:
+        J_anchor, J_corrected, potential_diag = _integrable_potential_cost(
+            predicted_base_cost,
+            pair_indices,
+            pair_atom_delta,
+            selected_atoms,
+            valid_mask,
+            predicted_atom_costs=predicted_atom_costs,
+            pair_delta_includes_local=bool(runtime_cfg.get("pair_tournament_pair_delta_includes_local", True)),
+            normalize_margins=normalize_margins,
+            margin_scale=float(pair_margin_scale or 1.0),
+            cfg=cfg,
+        )
+        scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
+        M_B = (J_corrected[None, :] - J_corrected[:, None]) / scale
+        M_eval = M_B - epsilon_cal
+        # Pair uncertainty must not perturb the selected-local action anchor.  It
+        # is used only by the certified flip guard below.
+        scores = _direct_action_scores_from_cost(J_corrected, valid_mask, scale)
+    else:
+        M_B = _pair_delta_margin_matrix(
+            predicted_base_cost,
+            pair_indices,
+            pair_atom_delta,
+            selected_atoms,
+            valid_mask,
+            normalize_margins=normalize_margins,
+            margin_scale=pair_margin_scale,
+            norm_min_scale=norm_min_scale,
+            norm_quantile=norm_quantile,
+            predicted_atom_costs=predicted_atom_costs if use_selected_local_anchor else None,
+            pair_delta_includes_local=bool(runtime_cfg.get("pair_tournament_pair_delta_includes_local", True)),
+        )
+        M_eval = M_B - epsilon_cal
+        scores = tournament_scores(
+            M_eval,
+            np.asarray(valid_mask, dtype=bool),
+            rivals,
+            use_softmin=bool(tc.get("use_softmin", True)),
+            softmin_tau=float(tc.get("softmin_tau", 1.0)),
+            beta_uncertainty=float(tc.get("beta_uncertainty", 0.0)),
+            sigma=sigma,
+        )
     scores, action, safety_guard_diag = _apply_safety_score_guard(scores, valid_mask, runtime_safety_flags, cfg)
     action, utility_refinement_diag = _apply_certificate_utility_refinement(
         scores,
@@ -650,22 +773,24 @@ def run_pair_conditioned_tournament(
     }
     guard_cfg = runtime_cfg.get("pair_action_anchor_guard", {}) if isinstance(runtime_cfg, dict) else {}
     if use_selected_local_anchor and bool(guard_cfg.get("enabled", True)):
-        J_anchor = _finite_cost_for_margin(np.asarray(predicted_base_cost, dtype=np.float32).reshape(-1))
-        atom_costs = np.asarray(predicted_atom_costs, dtype=np.float32)
-        selected_np = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
-        selected_np = selected_np[(selected_np >= 0) & (selected_np < atom_costs.shape[0])]
-        if selected_np.size and atom_costs.ndim == 2 and atom_costs.shape[1] == J_anchor.shape[0]:
-            J_anchor = _finite_cost_for_margin(J_anchor + atom_costs[selected_np].sum(axis=0))
-        anchor_M = (J_anchor[None, :] - J_anchor[:, None]) / max(float(pair_margin_scale or 1.0), 1e-6) - epsilon_cal
-        anchor_scores = tournament_scores(
-            anchor_M,
-            np.asarray(valid_mask, dtype=bool),
-            rivals,
-            use_softmin=bool(tc.get("use_softmin", True)),
-            softmin_tau=float(tc.get("softmin_tau", 1.0)),
-            beta_uncertainty=0.0,
-            sigma=None,
-        )
+        if use_integrable_potential:
+            J_anchor = _selected_local_anchor_cost(predicted_base_cost, predicted_atom_costs, selected_atoms)
+            scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
+            anchor_M = (J_anchor[None, :] - J_anchor[:, None]) / scale - epsilon_cal
+            anchor_scores = _direct_action_scores_from_cost(J_anchor, valid_mask, scale)
+        else:
+            J_anchor = _selected_local_anchor_cost(predicted_base_cost, predicted_atom_costs, selected_atoms)
+            scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
+            anchor_M = (J_anchor[None, :] - J_anchor[:, None]) / scale - epsilon_cal
+            anchor_scores = tournament_scores(
+                anchor_M,
+                np.asarray(valid_mask, dtype=bool),
+                rivals,
+                use_softmin=bool(tc.get("use_softmin", True)),
+                softmin_tau=float(tc.get("softmin_tau", 1.0)),
+                beta_uncertainty=0.0,
+                sigma=None,
+            )
         anchor_scores, anchor_action, _ = _apply_safety_score_guard(
             anchor_scores, valid_mask, runtime_safety_flags, cfg
         )
@@ -696,6 +821,7 @@ def run_pair_conditioned_tournament(
             "pair_action_anchor_score_gain": float(score_gain),
             "pair_action_anchor_guard_blocked_flip": bool(proposed_action != anchor_action and not allow_flip),
             "pair_action_anchor_guard_allowed_flip": bool(proposed_action != anchor_action and allow_flip),
+            "pair_action_anchor_deployed_flip": bool(int(action) != int(anchor_action)),
         }
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")
@@ -723,6 +849,8 @@ def run_pair_conditioned_tournament(
             **safety_guard_diag,
             **utility_refinement_diag,
             **anchor_guard_diag,
+            **potential_diag,
+            "pair_tournament_aggregation_mode": aggregation_mode,
             "selected_action_safety_flag": bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else False,
             "avoidable_selected_action_safety_flag": bool(
                 (bool(np.asarray(runtime_safety_flags, dtype=bool)[action]) if 0 <= action < len(runtime_safety_flags) else True)

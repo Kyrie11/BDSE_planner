@@ -1460,8 +1460,20 @@ class BDSEModel(nn.Module):
             if bool(runtime_cfg.get("disable_pair_residual_intervention", False)):
                 selector_pair_delta = selector_local
                 rival_pair_delta = rival_local
-                selector_residual_diag = {"residual_disabled_control": 1.0}
-                rival_residual_diag = {"residual_disabled_control": 1.0}
+                # A same-checkpoint local control must remove the complete
+                # residual intervention, not only its mean.  Leaving pair-head
+                # variance active changes AOCC selection and uncertainty guards,
+                # which contaminated the V54 causal comparison.
+                selector_pair_var = np.zeros_like(selector_pair_delta, dtype=np.float32)
+                rival_pair_var = np.zeros_like(rival_pair_delta, dtype=np.float32)
+                selector_residual_diag = {
+                    "residual_disabled_control": 1.0,
+                    "residual_uncertainty_disabled_control": 1.0,
+                }
+                rival_residual_diag = {
+                    "residual_disabled_control": 1.0,
+                    "residual_uncertainty_disabled_control": 1.0,
+                }
             else:
                 selector_base = (J0[selection_pairs[:, 1]] - J0[selection_pairs[:, 0]]) / max(float(pair_margin_scale), 1e-6) if selection_pairs.size else np.zeros((0,), dtype=np.float32)
                 rival_base = (J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]]) / max(float(rival_pair_margin_scale), 1e-6) if rival_pairs.size else np.zeros((0,), dtype=np.float32)

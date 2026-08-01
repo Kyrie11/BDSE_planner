@@ -680,9 +680,18 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     teacher_match = finite("val_teacher_action_match", finite("val_decision_sufficiency", 0.0))
     full_match = finite("val_full_interface_action_match", 0.0)
     pair_full = finite("val_pair_full_interface_action_match", 0.0)
-    local_pair_full = finite("val_local_pair_full_interface_action_match", 0.0)
-    harmful_residual = finite("val_harmful_residual_intervention_rate", 1.0)
-    beneficial_residual = finite("val_beneficial_residual_intervention_rate", 0.0)
+    local_pair_full = finite(
+        "val_selected_local_anchor_action_match",
+        finite("val_local_pair_full_interface_action_match", 0.0),
+    )
+    harmful_residual = finite(
+        "val_harmful_pair_potential_intervention_rate",
+        finite("val_harmful_residual_intervention_rate", 1.0),
+    )
+    beneficial_residual = finite(
+        "val_beneficial_pair_potential_intervention_rate",
+        finite("val_beneficial_residual_intervention_rate", 0.0),
+    )
     residual_interface_drop = max(0.0, local_pair_full - pair_full)
     budget_pair = finite("val_budget_vs_pair_full_match", 0.0)
     near_sign = finite("val_pair_sign_acc_near_tie", 0.0)
@@ -933,6 +942,13 @@ def _run_validation_open_loop(
             qdiag["configured_decision_budget_atom_count"] = float(
                 max(1, int((cfg.get("evidence", {}) or {}).get("budget", 1)))
             )
+            tour_diag = getattr(tour, "diagnostics", {}) or {}
+            for key, value in tour_diag.items():
+                if key.startswith("pair_potential_") or key.startswith("pair_action_anchor_"):
+                    if isinstance(value, (bool, np.bool_)):
+                        qdiag[key] = float(bool(value))
+                    elif isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(float(value)):
+                        qdiag[key] = float(value)
             qdiag["fallback_would_trigger"] = bool(core._needs_fallback(tour, sample.candidates, cfg))
             sel_diag = getattr(sel, "diagnostics", {}) or {}
             mode = str(sel_diag.get("mode", ""))
@@ -1019,6 +1035,21 @@ def _run_validation_open_loop(
                 dense_predicted_atom_costs=None if dense is None else dense["g"],
                 certificate_margin_matrix=tour.margins,
             )
+            selected_local_anchor_action = int(tour_diag.get("pair_action_anchor_action", diag.details.get("sparse_full_action", -1)))
+            teacher_action_for_anchor = int(sample.teacher.a_star)
+            if selected_local_anchor_action >= 0:
+                anchor_correct = selected_local_anchor_action == teacher_action_for_anchor
+                deployed_correct = int(tour.action_index) == teacher_action_for_anchor
+                diag.values["selected_local_anchor_action_match"] = float(anchor_correct)
+                if 0 <= selected_local_anchor_action < len(sample.teacher.J_T):
+                    diag.values["selected_local_anchor_teacher_regret"] = float(
+                        sample.teacher.J_T[selected_local_anchor_action] - sample.teacher.J_T[teacher_action_for_anchor]
+                    )
+                diag.values["deployed_vs_selected_local_anchor_match"] = float(int(tour.action_index) == selected_local_anchor_action)
+                diag.values["pair_potential_deployed_flip_rate"] = float(int(tour.action_index) != selected_local_anchor_action)
+                diag.values["beneficial_pair_potential_intervention_rate"] = float((not anchor_correct) and deployed_correct)
+                diag.values["harmful_pair_potential_intervention_rate"] = float(anchor_correct and not deployed_correct)
+
             if pair_full_action >= 0:
                 teacher_action = int(sample.teacher.a_star)
                 budget_action = int(tour.action_index)

@@ -1,0 +1,243 @@
+{
+  "causal_controls": {
+    "candidate_foundation_deployed_differences": 16,
+    "candidate_local_anchor_differences": 0,
+    "candidate_local_deployed_differences": 0,
+    "candidate_local_pair_full_differences": 0,
+    "interpretation": "The local control still used pair variance in the tournament/selector, so residual-disabled was not a pure selected-local control.",
+    "local_internal_pair_full_flips_with_residual_mean_disabled": 5
+  },
+  "five_observations": {
+    "beneficial_vs_harmful": {
+      "beneficial": 0.0,
+      "harmful": 0.0,
+      "reason": "candidate and same-checkpoint local control selected identical deployed actions in all paired scenes.",
+      "status": "no positive signal"
+    },
+    "candidate_local_certified_flip": {
+      "candidate_vs_local_deployed_action_differences": 0,
+      "candidate_vs_local_deployed_flip_rate": 0.0,
+      "selector_pair_flip_allowed_rate": 0.0012142857142857144,
+      "selector_pair_flip_proposal_rate": 0.008357142857142858,
+      "status": "negative",
+      "tournament_pair_flip_allowed_rate": 0.001625,
+      "tournament_pair_flip_proposal_rate": 0.010197916666666668
+    },
+    "diagnostic_cl20": {
+      "collision_ttc_drivable_conclusion": "unsupported by uploaded results",
+      "ran": false,
+      "reason": "V54 protocol gate failed on a hard-coded exact-fraction threshold, so diagnostic CL20 was blocked.",
+      "status": "missing"
+    },
+    "pair_full_winner": {
+      "budget_vs_pair_full_match": 0.992,
+      "budget_vs_sparse_full_match": 0.749,
+      "candidate_pair_full_match": 0.118,
+      "interpretation": "The exact selector preserves the weak pair-full target; it does not improve the target winner.",
+      "local_pair_full_match": 0.118,
+      "status": "negative"
+    },
+    "selected_local_control": {
+      "final_local_control_teacher_match": 0.118,
+      "local_pair_full_teacher_match": 0.118,
+      "note": "V54 did not expose the actual B=16 selected-local argmin; sparse_full=0.141 is all sparse g evidence, while deployed local remained 0.118.",
+      "sparse_all_evidence_teacher_match": 0.141,
+      "status": "negative"
+    }
+  },
+  "gate_failures": {
+    "classification": {
+      "competitive": "algorithmic: zero causal deployed residual flips and no teacher-match gain",
+      "protocol_exact_fraction": "engineering gate/config mismatch: observed 0.02572, train config floor 0.015"
+    },
+    "v54_competitive": [
+      "total teacher-match gain=+0.000000 < +0.015",
+      "residual teacher-match gain=+0.000000 < +0.005",
+      "pair-full residual gain=+0.000000 < +0.005",
+      "residual not net beneficial=0.0/0.0",
+      "proposal decisive recall=0.7998828428034168 < 0.80",
+      "paired regret regressed vs foundation: {'median': 229.42462173104286, 'p90': 40466.01696899507, 'cvar90': 58589.71017616407} / {'median': 232.62716296315193, 'p90': 40443.81553473917, 'cvar90': 58611.91501000999}"
+    ],
+    "v54_minimum": [],
+    "v54_protocol": [
+      "last selector_exact_fraction=0.02572 < 0.03"
+    ]
+  },
+  "latency": {
+    "p95_ms": 1113.6437986046076,
+    "stage_predict_ms_mean": 570.9500224040821,
+    "stage_selector_ms_mean": 75.64571758080274,
+    "stage_tournament_ms_mean": 7.079052988439798
+  },
+  "pipeline": {
+    "anchor_gate": "PASS",
+    "cl100_ran": false,
+    "cl20_ran": false,
+    "closed_loop_files": [],
+    "competitive_gate": "FAIL",
+    "fresh_residual_selector_training": true,
+    "independent_calibrations": 3,
+    "minimum_gate": "reported FAIL only because protocol was false; corrected V55 replay PASS",
+    "paired_open_loop_scenes": 1000,
+    "protocol_gate": "FAIL in V54; PASS under corrected config-derived exact-fraction rule"
+  },
+  "selector_and_compute": {
+    "aocc_fully_certified_scene_rate": 0.715,
+    "effective_interaction_decisive_recall": 0.7028505700645638,
+    "effective_selected_decisive_recall": 0.7428195912969936,
+    "frontier_retained_weight_fraction": 0.7588379945873588,
+    "mean_epoch_minutes": 18.072296357438123,
+    "proposal_decisive_recall": 0.7998828428034168,
+    "selected_decisive_recall": 0.5771554069304177,
+    "selector_fallback_rate": 0.156,
+    "train_epochs": [
+      {
+        "epoch": 0,
+        "selector_exact_fraction": 0.01564,
+        "selector_exact_wall_time_s": 0.03309952270507813,
+        "train_epoch_wall_time_s": 1037.7285010721534,
+        "train_loss_ms_per_step": 228.35551851004362,
+        "train_pair_sample_ms_per_step": 36.3915895190835,
+        "train_samples_per_second": 48.18215934933013,
+        "training_pair_fraction": 0.588313671875,
+        "training_pair_full_graph_fraction": 0.12512
+      },
+      {
+        "epoch": 1,
+        "selector_exact_fraction": 0.01564,
+        "selector_exact_wall_time_s": 0.0332348876953125,
+        "train_epoch_wall_time_s": 1039.0431339982897,
+        "train_loss_ms_per_step": 229.03967232376337,
+        "train_pair_sample_ms_per_step": 36.46885808885097,
+        "train_samples_per_second": 48.12119763266951,
+        "training_pair_fraction": 0.58796013671875,
+        "training_pair_full_graph_fraction": 0.12512
+      },
+      {
+        "epoch": 2,
+        "selector_exact_fraction": 0.0156,
+        "selector_exact_wall_time_s": 0.0341676220703125,
+        "train_epoch_wall_time_s": 1086.3479610746726,
+        "train_loss_ms_per_step": 238.54024358510972,
+        "train_pair_sample_ms_per_step": 41.676752165853976,
+        "train_samples_per_second": 46.02576871459985,
+        "training_pair_fraction": 0.58720837890625,
+        "training_pair_full_graph_fraction": 0.1248
+      },
+      {
+        "epoch": 3,
+        "selector_exact_fraction": 0.02572,
+        "selector_exact_wall_time_s": 0.04150041259765625,
+        "train_epoch_wall_time_s": 1174.2315296400338,
+        "train_loss_ms_per_step": 254.58954264760018,
+        "train_pair_sample_ms_per_step": 49.31565863996744,
+        "train_samples_per_second": 42.58104022749903,
+        "training_pair_fraction": 0.5917814453125,
+        "training_pair_full_graph_fraction": 0.13408
+      }
+    ]
+  },
+  "v55_replay_gate": {
+    "competitive_failures": [
+      "total teacher-match gain=+0.000000 < +0.015",
+      "residual teacher-match gain=+0.000000 < +0.005",
+      "pair-full residual gain=+0.000000 < +0.005",
+      "residual not net beneficial=0.0/0.0",
+      "proposal decisive recall=0.7998828428034168 < 0.80",
+      "paired regret regressed vs foundation: {'median': 229.42462173104286, 'p90': 40466.01696899507, 'cvar90': 58589.71017616407} / {'median': 232.62716296315193, 'p90': 40443.81553473917, 'cvar90': 58611.91501000999}"
+    ],
+    "competitive_pass": false,
+    "gate": "v55_pc_bfar",
+    "metrics": {
+      "beneficial_residual_rate": 0.0,
+      "budget_fill": 1.0,
+      "certified_fraction": 0.8217666666666666,
+      "dense_anchor_row_drift": 0.0,
+      "deployed_residual_flip_rate": 0.0,
+      "effective_decisive_recall": 0.7428195912969936,
+      "fallback_rate": 0.156,
+      "frontier_retained": 0.7588379945873588,
+      "harmful_residual_rate": 0.0,
+      "interaction_decisive_recall": 0.5369327486599522,
+      "internal_beneficial_pair_potential_rate": 0.0,
+      "internal_harmful_pair_potential_rate": 0.0,
+      "latency_p95_ms": 1113.6437986046076,
+      "local_anchor_row_drift": 0.0,
+      "local_control_local_pair_full_match": 0.118,
+      "local_pair_full_match": 0.118,
+      "pair_full_match": 0.118,
+      "pair_residual_gain_vs_local_pair": 0.0,
+      "paired_deployed_flip_stats": {
+        "beneficial_given_flip": 0.0,
+        "beneficial_rate": 0.0,
+        "flip_rate": 0.0,
+        "harmful_given_flip": 0.0,
+        "harmful_rate": 0.0,
+        "n": 1000.0,
+        "unchanged_rate": 1.0
+      },
+      "proposal_decisive_recall": 0.7998828428034168,
+      "residual_gain_vs_local": 0.0,
+      "selected_decisive_recall": 0.5771554069304177,
+      "selector_gain_vs_foundation": 0.0,
+      "teacher_match_candidate": 0.118,
+      "teacher_match_foundation": 0.118,
+      "teacher_match_local": 0.118
+    },
+    "minimum_failures": [],
+    "minimum_pass": true,
+    "paired_regret": {
+      "foundation": {
+        "candidate": {
+          "cvar90": 58589.71017616407,
+          "median": 229.42462173104286,
+          "p90": 40466.01696899507
+        },
+        "control": {
+          "cvar90": 58611.91501000999,
+          "median": 232.62716296315193,
+          "p90": 40443.81553473917
+        },
+        "delta": {
+          "cvar90": 64.49236476845388,
+          "median": 0.0,
+          "p90": 0.0
+        },
+        "n": 1000
+      },
+      "local": {
+        "candidate": {
+          "cvar90": 58589.71017616407,
+          "median": 229.42462173104286,
+          "p90": 40466.01696899507
+        },
+        "control": {
+          "cvar90": 58589.71017616407,
+          "median": 229.42462173104286,
+          "p90": 40466.01696899507
+        },
+        "delta": {
+          "cvar90": 0.0,
+          "median": 0.0,
+          "p90": 0.0
+        },
+        "n": 1000
+      }
+    },
+    "protocol_failures": [],
+    "protocol_pass": true,
+    "training": {
+      "configured_min_exact_fraction": 0.015,
+      "gate_min_exact_fraction": 0.015,
+      "last_exact_fraction": 0.02572,
+      "max_exact_fraction": 0.02572,
+      "mean_training_pair_fraction": 0.588815908203125,
+      "rows": 4.0,
+      "unique_epochs": 4.0
+    },
+    "warnings": [
+      "latency p95=1113.6437986046076 ms > 500.0 ms; CL20 remains allowed, no real-time claim"
+    ]
+  },
+  "version": "v54_ar_bfar"
+}
