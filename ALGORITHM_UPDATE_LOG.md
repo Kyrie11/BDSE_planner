@@ -2646,3 +2646,171 @@ Validation completed:
 - V54 replay with corrected gate: protocol PASS, minimum PASS, competitive FAIL.
 
 No fresh V55 nuPlan training or closed-loop simulation was run in this environment. No future gate PASS, closed-loop gain, fixed-budget CCF-A result, SOTA, or real-time claim is made in advance.
+
+---
+
+# V56 DCIP-BFAR-DBAP update — 2026-08-01
+
+Version: **Dual-Certificate Integrable-Potential Boundary-Focused Anchor-Residual Decision-Budget Action Preservation**.
+
+## 1. V55 experimental diagnosis
+
+The uploaded V55 run completed fresh residual/selector training, independent three-way calibration, paired 1000-scene open-loop replay, and paired diagnostic CL20.
+
+Gate status:
+
+- protocol: PASS;
+- minimum: FAIL;
+- competitive: FAIL.
+
+Minimum failures were `certificate=0.204 < 0.40` and `fallback=0.801 > 0.60`. The same-checkpoint residual-disabled local control had certificate `0.888`, fully-certified scenes `0.805`, and fallback `0.11`, while candidate and local deployed actions were identical on all 1000 rows. The minimum failure was therefore primarily caused by residual uncertainty contaminating the evidence certificate.
+
+Competitive failure was real:
+
+- candidate/local/foundation teacher match: `0.141/0.141/0.141`;
+- pair-full/local-pair-full match: `0.141/0.141`;
+- candidate-local deployed flips: `0/1000`;
+- beneficial/harmful residual interventions: `0/0`;
+- paired regret delta: `0`.
+
+## 2. Closed-loop runtime diagnosis
+
+Three paired diagnostic CL20 branches completed:
+
+- candidate wall time: `22,858 s`;
+- local control: `15,924 s`;
+- foundation control: `14,914 s`;
+- sequential three-way total: `53,696 s` (`14.92 h`).
+
+Each 10-scenario GPU shard constructed and loaded ten independent CUDA planner/model instances. Prediction dominated one open-loop planner call at approximately `685 ms`, compared with selector `89 ms` and tournament `6 ms`. Duplicate CUDA model loading and device contention were the primary avoidable engineering bottlenecks.
+
+The combined closed-loop summary also reported `num_scenarios=10` despite an actual `scenario_count=20` because the combiner weighted the count field like a metric.
+
+## 3. Shared-model closed-loop execution
+
+V56 adds one process-global model cache keyed by checkpoint, model architecture, and device. All planners in one nuPlan worker process reuse the same read-only eval model.
+
+- model construction remains under a cache lock, preventing concurrent duplicate CUDA allocation;
+- a per-device reentrant inference lock serializes GPU forward passes while allowing CPU simulation workers to overlap;
+- default `CL_WORKERS_PER_GPU` is increased to four;
+- OpenMP/MKL/BLAS threads are limited to one per worker;
+- summary PDF/histogram rendering is disabled by default;
+- per-stage closed-loop timing is aggregated to JSON;
+- combined summaries use the true scenario count;
+- candidate/local/foundation CL20 scenario-token hashes are checked before accepting the paired result.
+
+No fixed speedup is claimed before a server run.
+
+## 4. Dual evidence/residual certificates
+
+V55 used one certificate for both evidence sufficiency and residual uncertainty. Residual variance could therefore collapse AOCC certification even when the residual did not change the action.
+
+V56 separates:
+
+- **evidence certificate**: exact AOCC over selected-local evidence margins only;
+- **residual flip certificate**: a global uncertainty-shrunk guard applied only when the residual action potential proposes a winner change.
+
+The gate consumes `evidence_certificate_fraction` when available and records residual-flip certification separately.
+
+## 5. Direct evidence-attributable integrable potential
+
+V55 learned an arbitrary residual pair field and projected it through Hodge decomposition. The field could be cyclic before projection, and a scene-level potential target did not identify which evidence should correct which action.
+
+V56 predicts one signed residual action potential per evidence/action query:
+
+`h_i(a) = residual_action_head(scene, action, evidence_i, query_i(a))`.
+
+For selected evidence set `S_B`:
+
+`J_B^DCIP(a) = J0(a) + sum_{i in S_B} g_i(a) + scale * sum_{i in S_B} h_i(a)`.
+
+Every pair correction is a difference of one global action cost, so antisymmetry and cycle consistency hold exactly. The legacy pair MLP is skipped in training and deployment.
+
+All V56 train/closed-loop configurations explicitly set `model.evidence_action_residual=true`; this is required to execute the new head rather than returning a zero potential.
+
+## 6. Atomwise causal-potential distillation
+
+The cache provides teacher per-evidence action costs. V56 adds:
+
+`h_i^T(a) = [g_i^teacher(a) - g_i^local(a)] / scene_scale`.
+
+Target and prediction are gauge-centered over valid actions. The loss upweights:
+
+- the teacher winner;
+- the selected-local anchor action when it is wrong;
+- interaction evidence;
+- anchor-wrong scenes;
+- atoms/actions with larger teacher-minus-local correction.
+
+This resolves the identifiability problem of scene-level-only potential distillation. The global potential target remains with a lower weight as a consistency loss.
+
+## 7. Exact selected-local no-op and pure controls
+
+With zero residual potential, the deployed action is exactly the direct B=16 selected-local argmin, independent of pair graph coverage and pair variance.
+
+When `disable_pair_residual_intervention=true`, both residual potential and residual variance are removed. Candidate-local differences can therefore be attributed to the residual-potential module.
+
+## 8. Preserved effective designs
+
+V56 retains:
+
+- factorized base+dense-local foundation anchor;
+- winner/hard/near-tie boundary-pair curriculum;
+- ordinary 48-pair training graph;
+- periodic full graph and sparse exact B=16 supervision;
+- final short full-exact alignment tail;
+- exact AOCC and counterfactual decisive-evidence targets;
+- fixed B=16 decision budget;
+- same-checkpoint local and matched-foundation controls;
+- independent calibration and paired replay;
+- diagnostic CL20 whenever protocol integrity passes;
+- algorithm and latency gates remain separate.
+
+## 9. Partial test-set policy
+
+The uploaded partial test diagnostics contain `67,042` unique identities with no internal duplicates and the same candidate/evidence/teacher/preprocess configuration as validation. It is harder than validation, but it has no split manifest or train/val overlap audit and represents only about 28% of the intended cache.
+
+V56 adds `RUN_V56_PRELIMINARY_TEST.sh`. It requires `V56_TEST_FROZEN_ACK=YES`, records checkpoint/config hashes, and is intended only for one-shot evaluation after all training and thresholds are frozen. It must not be used for tuning or called a final paper test set.
+
+## 10. New files
+
+- `V56_DCIP_BFAR_DBAP_NEXT_COMMANDS.sh`;
+- `run_v56_dcip_bfar_dbap.sh`;
+- `NEXT_COMMANDS_V56_DCIP_BFAR.txt`;
+- `README_V56_DCIP_BFAR.md`;
+- `V56_DCIP_BFAR_ANALYSIS_AND_NEXT_STEPS.md`;
+- `V55_RESULT_DIAGNOSIS.json`;
+- `V55_PARTIAL_TEST_READINESS.json`;
+- `RUN_V56_PRELIMINARY_TEST.sh`;
+- `bdse/configs/v56_dcip_bfar_dbap_train_2gpu.yaml`;
+- `bdse/configs/v56_dcip_bfar_dbap_cl.yaml`;
+- `bdse/configs/v56_dcip_bfar_dbap_local_control_cl.yaml`;
+- `bdse/configs/v56_dcip_bfar_dbap_anchor_control_cl.yaml`;
+- `bdse/tools/check_v56_dcip_bfar_dbap_gate.py`;
+- `bdse/tests/test_v56_dcip_bfar.py`.
+
+## 11. Validation and claim boundary
+
+Validation completed:
+
+- Python compile: PASS;
+- four V56 YAML files: PASS;
+- shell syntax: PASS;
+- unit tests: `201 passed, 8 warnings`;
+- direct action-potential integrability/no-op/certified-correction tests: PASS;
+- shared model cache-key control test: PASS;
+- partial test readiness audit: preliminary PASS with manifest warnings.
+
+No fresh V56 nuPlan training or closed-loop simulation was run in this environment. No future minimum/competitive gate PASS, closed-loop speedup, fixed-budget CCF-A result, SOTA, or real-time claim is made in advance.
+
+### V56 post-validation protocol clarification: explicit NR/R closed-loop mode
+
+The uploaded V55 `CL20` command used `closed_loop_nonreactive_agents`; it was not a reactive closed-loop benchmark.  V56 now makes the challenge explicit through `CL_CHALLENGE` and derives the matching metric aggregator.  The default remains non-reactive for fast diagnostic iteration, while a frozen checkpoint can be evaluated with `CL_CHALLENGE=closed_loop_reactive_agents` under a separate `OUT_ROOT`.  Unsupported challenge names fail before nuPlan starts, preventing NR and R summaries from being silently mixed.
+
+### V56 pre-release exact-selector alignment fix
+
+A final end-to-end code audit found that `skip_pair_head_forward=true` removed `pair_atom_delta`, while the exact-selector training mask still required that legacy tensor.  Without the fix, periodic exact AOCC supervision would silently return an empty mask (or the NumPy cache would raise on the first exact step), so the new direct evidence-potential head could train without the intended deployment-selector supervision.  V56 now derives each evidence atom's certificate delta directly from the selected-local action field, `g_i(b)-g_i(a)`, when the dual-certificate/direct-potential route is active.  The full-TopM exact target is the selected-local anchor action, matching runtime AOCC; the residual action potential is excluded from the evidence certificate and is handled only by the downstream residual-flip certificate.  A regression test verifies exact selection without a legacy pair head.
+
+### V56 frozen reactive CL20 runner
+
+Added `RUN_V56_REACTIVE_CL20.sh`.  The uploaded V55 CL20 was non-reactive; the new runner reuses the already frozen V56 checkpoint and three calibrated configs, runs candidate/local/foundation under `closed_loop_reactive_agents`, writes to a separate output root, and verifies the three scenario-token hashes.  It never retrains and prevents non-reactive and reactive summaries from being mixed.

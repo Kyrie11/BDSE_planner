@@ -1,6 +1,6 @@
-# v54 AR-BFAR Entry Point
+# V56 DCIP-BFAR Entry Point
 
-The current main experiment is **V54 Anchor-Relative BFAR-DBAP**. See `README_V54_AR_BFAR.md`, run `V54_AR_BFAR_DBAP_NEXT_COMMANDS.sh`, and use a fresh `OUT_ROOT`. V54 anchors the fixed-budget pair tournament to the integrable selected-local action cost and lets the pair head learn only a certified residual correction. A valid protocol now produces paired diagnostic CL20 even when the minimum performance gate fails.
+The current main experiment is **V56 Dual-Certificate Integrable-Potential BFAR-DBAP**. See `README_V56_DCIP_BFAR.md`, run `V56_DCIP_BFAR_DBAP_NEXT_COMMANDS.sh`, and use a fresh `OUT_ROOT`. V56 separates the evidence certificate from the residual-flip certificate, learns evidence-attributable global action potentials directly, and shares one CUDA model across closed-loop planner instances to remove the V55 model-contention bottleneck.
 
 ---
 

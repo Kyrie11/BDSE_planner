@@ -985,6 +985,8 @@ def _run_validation_open_loop(
                     candidate_trajectories=sample.candidates.trajectories,
                     maneuver_ids=sample.candidates.maneuver_ids,
                     predicted_atom_costs=pred["g"],
+                    residual_action_potential=pred.get("residual_action_potential", None),
+                    residual_action_variance=pred.get("residual_action_var", None),
                 )
                 pair_full_tour = core._apply_all_flagged_structural_guard(
                     pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
@@ -1262,6 +1264,19 @@ def _reinitialize_modules_after_warm_start(
             if layer is not None:
                 torch.nn.init.zeros_(layer.weight)
                 initial_raw = float(safe_cfg.get("pair_variance_raw_bias", 0.0))
+                if layer.bias is not None:
+                    torch.nn.init.constant_(layer.bias, initial_raw)
+        if "residual_action_head" in matched:
+            layer = _last_linear(modules["residual_action_head"])
+            if layer is not None:
+                torch.nn.init.zeros_(layer.weight)
+                if layer.bias is not None:
+                    torch.nn.init.zeros_(layer.bias)
+        if "residual_action_var_head" in matched:
+            layer = _last_linear(modules["residual_action_var_head"])
+            if layer is not None:
+                torch.nn.init.zeros_(layer.weight)
+                initial_raw = float(safe_cfg.get("residual_action_variance_raw_bias", -2.0))
                 if layer.bias is not None:
                     torch.nn.init.constant_(layer.bias, initial_raw)
     if is_main:

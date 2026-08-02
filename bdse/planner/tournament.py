@@ -661,6 +661,43 @@ def _integrable_potential_cost(
     })
     return anchor, corrected, diag
 
+def _evidence_action_potential_cost(
+    predicted_base_cost: np.ndarray,
+    predicted_atom_costs: np.ndarray | None,
+    residual_action_potential: np.ndarray | None,
+    selected_atoms: list[int] | np.ndarray,
+    valid_mask: np.ndarray,
+    *,
+    residual_action_variance: np.ndarray | None,
+    normalize_margins: bool,
+    margin_scale: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, dict[str, float]]:
+    """Selected-local anchor plus direct evidence-attributable action potential."""
+    anchor = _selected_local_anchor_cost(predicted_base_cost, predicted_atom_costs, selected_atoms)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    K = anchor.shape[0]
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    pot = np.asarray(residual_action_potential, dtype=np.float32) if residual_action_potential is not None else np.zeros((0, K), dtype=np.float32)
+    selected = selected[(selected >= 0) & (selected < pot.shape[0])] if pot.ndim == 2 else np.zeros((0,), dtype=np.int64)
+    action_potential = pot[selected].sum(axis=0).astype(np.float32) if selected.size else np.zeros((K,), dtype=np.float32)
+    finite_valid = valid[:K] & np.isfinite(anchor)
+    if bool(finite_valid.any()):
+        action_potential = action_potential - float(np.mean(action_potential[finite_valid]))
+    action_potential[~finite_valid] = 0.0
+    scale = max(float(margin_scale), 1e-6) if normalize_margins else 1.0
+    corrected = _finite_cost_for_margin(anchor + action_potential * scale)
+    sigma = selected_pair_sigma_from_action_variance(residual_action_variance, selected, valid_mask)
+    diag = {
+        "pair_potential_active": 1.0,
+        "direct_evidence_action_potential_active": 1.0,
+        "pair_potential_cost_correction_abs_mean": float(np.mean(np.abs(action_potential * scale))) if action_potential.size else 0.0,
+        "pair_potential_residual_edge_abs_mean": 0.0,
+        "residual_action_potential_abs_mean": float(np.mean(np.abs(action_potential))) if action_potential.size else 0.0,
+        "residual_action_potential_selected_atom_count": float(len(selected)),
+    }
+    return anchor, corrected, sigma, diag
+
+
 def run_pair_conditioned_tournament(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -673,6 +710,8 @@ def run_pair_conditioned_tournament(
     candidate_trajectories: np.ndarray | None = None,
     maneuver_ids: np.ndarray | None = None,
     predicted_atom_costs: np.ndarray | None = None,
+    residual_action_potential: np.ndarray | None = None,
+    residual_action_variance: np.ndarray | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -705,6 +744,7 @@ def run_pair_conditioned_tournament(
     use_selected_local_anchor = anchor_mode in {"selected_local", "integrable_selected", "anchor_relative"} and predicted_atom_costs is not None
     aggregation_mode = str(runtime_cfg.get("pair_tournament_aggregation_mode", "legacy_tournament")).strip().lower()
     use_integrable_potential = aggregation_mode in {"integrable_potential", "potential", "hodge_potential"} and use_selected_local_anchor
+    use_evidence_action_potential = aggregation_mode in {"evidence_action_potential", "direct_evidence_potential", "dcip"} and use_selected_local_anchor
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
     sigma = _pair_sigma_matrix(
         pair_indices,
@@ -712,8 +752,24 @@ def run_pair_conditioned_tournament(
         selected_atoms,
         int(np.asarray(predicted_base_cost).reshape(-1).shape[0]),
     )
-    potential_diag: dict[str, Any] = {"pair_potential_active": 0.0}
-    if use_integrable_potential:
+    potential_diag: dict[str, Any] = {"pair_potential_active": 0.0, "direct_evidence_action_potential_active": 0.0}
+    if use_evidence_action_potential:
+        J_anchor, J_corrected, residual_sigma, potential_diag = _evidence_action_potential_cost(
+            predicted_base_cost,
+            predicted_atom_costs,
+            residual_action_potential,
+            selected_atoms,
+            valid_mask,
+            residual_action_variance=residual_action_variance,
+            normalize_margins=normalize_margins,
+            margin_scale=float(pair_margin_scale or 1.0),
+        )
+        scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
+        M_B = (J_corrected[None, :] - J_corrected[:, None]) / scale
+        M_eval = M_B - epsilon_cal
+        scores = _direct_action_scores_from_cost(J_corrected, valid_mask, scale)
+        sigma = residual_sigma
+    elif use_integrable_potential:
         J_anchor, J_corrected, potential_diag = _integrable_potential_cost(
             predicted_base_cost,
             pair_indices,
@@ -773,7 +829,7 @@ def run_pair_conditioned_tournament(
     }
     guard_cfg = runtime_cfg.get("pair_action_anchor_guard", {}) if isinstance(runtime_cfg, dict) else {}
     if use_selected_local_anchor and bool(guard_cfg.get("enabled", True)):
-        if use_integrable_potential:
+        if use_integrable_potential or use_evidence_action_potential:
             J_anchor = _selected_local_anchor_cost(predicted_base_cost, predicted_atom_costs, selected_atoms)
             scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
             anchor_M = (J_anchor[None, :] - J_anchor[:, None]) / scale - epsilon_cal
@@ -822,6 +878,12 @@ def run_pair_conditioned_tournament(
             "pair_action_anchor_guard_blocked_flip": bool(proposed_action != anchor_action and not allow_flip),
             "pair_action_anchor_guard_allowed_flip": bool(proposed_action != anchor_action and allow_flip),
             "pair_action_anchor_deployed_flip": bool(int(action) != int(anchor_action)),
+            # Private arrays are consumed by BDSEPlannerCore after the final
+            # all-flagged structural guard so residual flip metrics compare two
+            # paths with identical post-processing.
+            "_pair_action_anchor_scores": np.asarray(anchor_scores, dtype=np.float32),
+            "_pair_action_anchor_margins": np.asarray(anchor_M, dtype=np.float32),
+            "_pair_action_anchor_pre_structural_action": int(anchor_action),
         }
     sorted_scores = np.sort(scores[np.asarray(valid_mask, dtype=bool)])
     delta = float(sorted_scores[-1] - sorted_scores[-2]) if len(sorted_scores) >= 2 else float("inf")

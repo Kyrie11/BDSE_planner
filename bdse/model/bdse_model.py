@@ -317,6 +317,25 @@ class BDSEModel(nn.Module):
         self.pair_feature_blocks = 10
         self.pair_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
         self.pair_var_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
+
+        # V56 DCIP: evidence-attributable, globally integrable residual action
+        # potential.  Each queried atom contributes a signed correction h_i(a)
+        # to an action cost; pair corrections are derived as h_i(b)-h_i(a), so
+        # cycle consistency is exact by construction rather than repaired after
+        # an arbitrary pair field has already been learned.
+        self.residual_action_head = nn.Sequential(
+            nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1)
+        )
+        self.residual_action_var_head = nn.Sequential(
+            nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1)
+        )
+        if bool(mcfg.get("zero_init_residual_action_head", True)):
+            nn.init.zeros_(self.residual_action_head[-1].weight)
+            nn.init.zeros_(self.residual_action_head[-1].bias)
+            # Start from a moderate, finite uncertainty.  softplus(-2) ~= 0.127.
+            nn.init.zeros_(self.residual_action_var_head[-1].weight)
+            nn.init.constant_(self.residual_action_var_head[-1].bias, -2.0)
+
         if bool(cfg.get("training", {}).get("freeze_unused_pair_variance_head", False)):
             for param in self.pair_var_head.parameters():
                 param.requires_grad_(False)
@@ -614,14 +633,21 @@ class BDSEModel(nn.Module):
         action_indices: torch.Tensor,
         query_features: torch.Tensor,
         return_uncertainty: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        return_residual_action: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         # atom/action indices: [B,Q], query_features: [B,Q,Dq]
         z = self._sparse_query_features(context, atom_indices, action_indices, query_features)
         mean = self.local_head(z).squeeze(-1)
-        if not return_uncertainty:
+        if not return_uncertainty and not return_residual_action:
             return mean
         var = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
-        return mean, var
+        if not return_residual_action:
+            return mean, var
+        residual = self.residual_action_head(z).squeeze(-1)
+        residual_var = self._positive_variance(
+            self.residual_action_var_head(z).squeeze(-1), self.var_floor
+        )
+        return mean, var, residual, residual_var
 
     def propose_atoms(self, context: dict[str, torch.Tensor], M: int) -> torch.Tensor:
         logits = context["proposal_logits"]
@@ -686,7 +712,7 @@ class BDSEModel(nn.Module):
         batch: dict[str, torch.Tensor],
         q_h_all: torch.Tensor | None = None,
         compute_variance: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         action_h = context["action_h"]
         evid_h = context["evidence_h"]
         scene = context["scene"]
@@ -699,6 +725,9 @@ class BDSEModel(nn.Module):
         chunk_e = min(E, self._training_chunk_size("local_forward_atom_chunk", 32))
         local_parts: list[torch.Tensor] = []
         local_var_parts: list[torch.Tensor] = []
+        residual_parts: list[torch.Tensor] = []
+        residual_var_parts: list[torch.Tensor] = []
+        use_residual_action = bool((self.cfg.get("model", {}) or {}).get("evidence_action_residual", False))
         for e0 in range(0, E, chunk_e):
             e1 = min(E, e0 + chunk_e)
             Ce = e1 - e0
@@ -714,15 +743,26 @@ class BDSEModel(nn.Module):
                 local_var_chunk = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
                 local_var_chunk = local_var_chunk.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, e0:e1, None], 0.0)
                 local_var_parts.append(local_var_chunk)
+            if use_residual_action:
+                residual_chunk = self.residual_action_head(z).squeeze(-1)
+                residual_chunk = residual_chunk.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, e0:e1, None], 0.0)
+                residual_var_chunk = self._positive_variance(
+                    self.residual_action_var_head(z).squeeze(-1), self.var_floor
+                )
+                residual_var_chunk = residual_var_chunk.masked_fill(~valid[:, None, :], 0.0).masked_fill(~e_valid[:, e0:e1, None], 0.0)
+                residual_parts.append(residual_chunk)
+                residual_var_parts.append(residual_var_chunk)
         if not local_parts:
             zeros = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
-            return zeros, zeros
+            return zeros, zeros, zeros, zeros
         local = torch.cat(local_parts, dim=1)
         if compute_variance and local_var_parts:
             local_var = torch.cat(local_var_parts, dim=1)
         else:
             local_var = torch.zeros((B, E, K), dtype=local.dtype, device=local.device)
-        return local, local_var
+        residual = torch.cat(residual_parts, dim=1) if residual_parts else torch.zeros_like(local)
+        residual_var = torch.cat(residual_var_parts, dim=1) if residual_var_parts else torch.zeros_like(local)
+        return local, local_var, residual, residual_var
 
     def _dense_pair_delta_from_batch(
         self,
@@ -814,26 +854,37 @@ class BDSEModel(nn.Module):
         if "evidence_query_features" in batch:
             share_q = bool(self.cfg.get("training", {}).get("shared_dense_query_projection", True))
             q_h_all = self._dense_query_projection(batch) if (share_q and self.pair_conditioned) else None
-            local, local_var = self._dense_local_from_batch(
+            local, local_var, residual_action, residual_action_var = self._dense_local_from_batch(
                 ctx,
                 batch,
                 q_h_all=q_h_all,
                 compute_variance=self._need_dense_local_variance(),
             )
-            pair_out = self._dense_pair_delta_from_batch(
-                ctx,
-                batch,
-                q_h_all=q_h_all,
-                return_uncertainty=self._need_pair_uncertainty(),
-            )
+            if bool((self.cfg.get("training", {}) or {}).get("skip_pair_head_forward", False)):
+                # DCIP trains a per-evidence action potential and derives every
+                # pair correction from potential differences.  The legacy pair
+                # MLP is therefore outside the deployed computation graph and
+                # can be skipped entirely during training.
+                pair_out = None
+            else:
+                pair_out = self._dense_pair_delta_from_batch(
+                    ctx,
+                    batch,
+                    q_h_all=q_h_all,
+                    return_uncertainty=self._need_pair_uncertainty(),
+                )
         else:
             local = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
             local_var = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
+            residual_action = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
+            residual_action_var = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
             pair_out = None
         out = {
             "J0": J0,
             "g": local,
             "g_var": local_var,
+            "residual_action_potential": residual_action,
+            "residual_action_var": residual_action_var,
             "proposal_logits": ctx["proposal_logits"],
             "selector_logits": ctx["proposal_logits"],
             "family_logits": ctx["family_logits"],
@@ -1293,6 +1344,8 @@ class BDSEModel(nn.Module):
         )
         g_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         g_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
+        residual_action_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
+        residual_action_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         if need_action_sparse:
             t_sparse = time.perf_counter()
             atom_ids, action_ids_rep, q = compute_query_features_for_pairs(evidence_bank.atoms, candidates, runtime, topm, action_ids, cfg)
@@ -1301,11 +1354,19 @@ class BDSEModel(nn.Module):
                 act_t = torch.from_numpy(action_ids_rep[None].astype(np.int64)).to(next(self.parameters()).device)
                 q_t = torch.from_numpy(q[None].astype(np.float32)).to(next(self.parameters()).device)
                 with torch.inference_mode():
-                    vals, var = self.score_sparse_queries(ctx, atom_t, act_t, q_t, return_uncertainty=True)
+                    vals, var, residual_vals, residual_var = self.score_sparse_queries(
+                        ctx, atom_t, act_t, q_t,
+                        return_uncertainty=True,
+                        return_residual_action=True,
+                    )
                     vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
                     var_np = var[0].detach().cpu().numpy().astype(np.float32)
+                    residual_np = residual_vals[0].detach().cpu().numpy().astype(np.float32)
+                    residual_var_np = residual_var[0].detach().cpu().numpy().astype(np.float32)
                 g_sparse[atom_ids, action_ids_rep] = vals_np
                 g_var_sparse[atom_ids, action_ids_rep] = var_np
+                residual_action_sparse[atom_ids, action_ids_rep] = residual_np
+                residual_action_var_sparse[atom_ids, action_ids_rep] = residual_var_np
             if profile_enabled:
                 model_timing["model_action_sparse_s"] = float(time.perf_counter() - t_sparse)
         else:
@@ -1371,16 +1432,35 @@ class BDSEModel(nn.Module):
                     "pair_residual_local_winner": int(local_winner),
                 })
 
-            scored_pairs = unique_pairs[refine_ids]
-            scored_delta, scored_var = self._score_pair_indices_numpy(
-                ctx, runtime, candidates, evidence_bank, topm, scored_pairs, cfg
-            )
+            skip_pair_head_scoring = bool(runtime_cfg.get("skip_pair_head_scoring", False))
+            if skip_pair_head_scoring:
+                # V56 deployment derives all action corrections from the
+                # evidence-attributable action-potential head.  The legacy pair
+                # MLP is not consumed by either the evidence certificate or the
+                # final action rule, so scoring it wastes a large E x P forward
+                # and can only contaminate diagnostics.
+                scored_pairs = np.zeros((0, 2), dtype=np.int64)
+                scored_delta = np.zeros((evidence_bank.E, 0), dtype=np.float32)
+                scored_var = np.zeros((evidence_bank.E, 0), dtype=np.float32)
+                refine_ids = np.zeros((0,), dtype=np.int64)
+                pair_residual_refinement_diag.update({
+                    "pair_head_scoring_skipped": True,
+                    "pair_residual_refined_pair_count": 0,
+                    "pair_residual_total_pair_count": int(len(unique_pairs)),
+                    "pair_residual_refined_fraction": 0.0,
+                })
+            else:
+                scored_pairs = unique_pairs[refine_ids]
+                scored_delta, scored_var = self._score_pair_indices_numpy(
+                    ctx, runtime, candidates, evidence_bank, topm, scored_pairs, cfg
+                )
             scored_unique_pair_count = int(len(scored_pairs))
             all_pair_delta = np.zeros((evidence_bank.E, len(unique_pairs)), dtype=np.float32)
             all_pair_var = np.zeros((evidence_bank.E, len(unique_pairs)), dtype=np.float32)
-            all_pair_delta[:, refine_ids] = scored_delta
-            all_pair_var[:, refine_ids] = scored_var
-            if not pair_residual_refinement_diag["pair_residual_refinement_enabled"]:
+            if len(refine_ids):
+                all_pair_delta[:, refine_ids] = scored_delta
+                all_pair_var[:, refine_ids] = scored_var
+            if (not skip_pair_head_scoring) and (not pair_residual_refinement_diag["pair_residual_refinement_enabled"]):
                 pair_residual_refinement_diag.update({
                     "pair_residual_refined_pair_count": int(len(unique_pairs)),
                     "pair_residual_total_pair_count": int(len(unique_pairs)),
@@ -1412,6 +1492,17 @@ class BDSEModel(nn.Module):
             b = np.clip(pair_arr[:, 1], 0, candidates.K - 1)
             local = g_sparse[:, b] - g_sparse[:, a]
             return (local / max(float(scale), 1e-6)).astype(np.float32) if normalize_pairs else local.astype(np.float32)
+
+        def _local_pair_variance(pair_arr: np.ndarray, scale: float) -> np.ndarray:
+            pair_arr = np.asarray(pair_arr, dtype=np.int64).reshape(-1, 2) if np.asarray(pair_arr).size else np.zeros((0, 2), dtype=np.int64)
+            if pair_arr.size == 0:
+                return np.zeros((evidence_bank.E, 0), dtype=np.float32)
+            a = np.clip(pair_arr[:, 0], 0, candidates.K - 1)
+            b = np.clip(pair_arr[:, 1], 0, candidates.K - 1)
+            var = np.maximum(g_var_sparse[:, a], 0.0) + np.maximum(g_var_sparse[:, b], 0.0)
+            if normalize_pairs:
+                var = var / max(float(scale) ** 2, 1e-12)
+            return var.astype(np.float32)
 
         pair_delta_calibration_diag: dict[str, Any] = {"pair_delta_calibration_enabled": bool(pair_cal_enabled)}
 
@@ -1457,7 +1548,7 @@ class BDSEModel(nn.Module):
             residual_cfg = (runtime_cfg.get("pair_residual_trust", {}) or {})
             selector_local = _local_pair_delta(selection_pairs, pair_margin_scale)
             rival_local = _local_pair_delta(rival_pairs, rival_pair_margin_scale)
-            if bool(runtime_cfg.get("disable_pair_residual_intervention", False)):
+            if bool(runtime_cfg.get("disable_pair_residual_intervention", False)) or bool(runtime_cfg.get("skip_pair_head_scoring", False)):
                 selector_pair_delta = selector_local
                 rival_pair_delta = rival_local
                 # A same-checkpoint local control must remove the complete
@@ -1467,13 +1558,11 @@ class BDSEModel(nn.Module):
                 selector_pair_var = np.zeros_like(selector_pair_delta, dtype=np.float32)
                 rival_pair_var = np.zeros_like(rival_pair_delta, dtype=np.float32)
                 selector_residual_diag = {
-                    "residual_disabled_control": 1.0,
+                    "residual_disabled_control": float(bool(runtime_cfg.get("disable_pair_residual_intervention", False))),
+                    "legacy_pair_head_skipped": float(bool(runtime_cfg.get("skip_pair_head_scoring", False))),
                     "residual_uncertainty_disabled_control": 1.0,
                 }
-                rival_residual_diag = {
-                    "residual_disabled_control": 1.0,
-                    "residual_uncertainty_disabled_control": 1.0,
-                }
+                rival_residual_diag = dict(selector_residual_diag)
             else:
                 selector_base = (J0[selection_pairs[:, 1]] - J0[selection_pairs[:, 0]]) / max(float(pair_margin_scale), 1e-6) if selection_pairs.size else np.zeros((0,), dtype=np.float32)
                 rival_base = (J0[rival_pairs[:, 1]] - J0[rival_pairs[:, 0]]) / max(float(rival_pair_margin_scale), 1e-6) if rival_pairs.size else np.zeros((0,), dtype=np.float32)
@@ -1498,12 +1587,39 @@ class BDSEModel(nn.Module):
                 selector_pair_delta = (1.0 - w_local) * selector_pair_delta + w_local * _local_pair_delta(selection_pairs, pair_margin_scale)
                 rival_pair_delta = (1.0 - w_local) * rival_pair_delta + w_local * _local_pair_delta(rival_pairs, rival_pair_margin_scale)
         valid_mask = np.asarray(candidates.valid_mask, dtype=bool)
+        if bool(runtime_cfg.get("disable_pair_residual_intervention", False)):
+            residual_action_sparse.fill(0.0)
+            residual_action_var_sparse.fill(0.0)
         g_sparse[:, ~valid_mask] = 0.0
         g_var_sparse[:, ~valid_mask] = 0.0
+        residual_action_sparse[:, ~valid_mask] = 0.0
+        residual_action_var_sparse[:, ~valid_mask] = 0.0
+
+        # Dual certificate: evidence selection is certified against the
+        # selected-local anchor only.  Residual uncertainty is deliberately not
+        # injected into AOCC; a separate global residual-flip guard certifies any
+        # action change after the evidence certificate has been established.
+        certificate_selector_delta = _local_pair_delta(selection_pairs, pair_margin_scale)
+        certificate_rival_delta = _local_pair_delta(rival_pairs, rival_pair_margin_scale)
+        dual_cfg = (runtime_cfg.get("dual_certificate", {}) or {})
+        if str(dual_cfg.get("evidence_uncertainty_source", "none")).lower() == "local":
+            certificate_selector_var = _local_pair_variance(selection_pairs, pair_margin_scale)
+            certificate_rival_var = _local_pair_variance(rival_pairs, rival_pair_margin_scale)
+        else:
+            certificate_selector_var = np.zeros_like(certificate_selector_delta, dtype=np.float32)
+            certificate_rival_var = np.zeros_like(certificate_rival_delta, dtype=np.float32)
+
         result = {
             "J0": J0,
             "g": g_sparse,
             "g_var": g_var_sparse,
+            "residual_action_potential": residual_action_sparse,
+            "residual_action_var": residual_action_var_sparse,
+            "certificate_pair_atom_delta": certificate_selector_delta,
+            "certificate_pair_atom_var": certificate_selector_var,
+            "certificate_rival_pair_atom_delta": certificate_rival_delta,
+            "certificate_rival_pair_atom_var": certificate_rival_var,
+            "dual_certificate_active": bool(dual_cfg.get("enabled", False)),
             "proposal_logits": proposal_logits,
             "family_logits": family_logits,
             "family_pi": family_pi,

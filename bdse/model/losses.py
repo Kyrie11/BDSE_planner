@@ -395,17 +395,52 @@ def _build_predicted_pair_numpy_cache(
     """
     s_cfg = cfg.get("selector", {})
     t_cfg = cfg.get("tournament", {})
-    pair_head_needs_local = bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)) or float(cfg.get("runtime", {}).get("pair_delta_hybrid_local_weight", 0.0)) > 0.0
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    model_cfg = cfg.get("model", {}) or {}
+    dual_cfg = runtime_cfg.get("dual_certificate", {}) or {}
+    direct_integrable = bool(model_cfg.get("evidence_action_residual", False)) and "g" in outputs
+    use_local_certificate = bool(dual_cfg.get("enabled", False)) and direct_integrable
+    pair_head_needs_local = (
+        bool(model_cfg.get("pair_head_residual_over_local", False))
+        or float(runtime_cfg.get("pair_delta_hybrid_local_weight", 0.0)) > 0.0
+        or use_local_certificate
+    )
     selector_needs_pair_var = (
         float(t_cfg.get("beta_uncertainty", 0.0)) > 0.0
         or float(s_cfg.get("lambda_info", 0.0)) > 0.0
         or bool(s_cfg.get("force_uncertainty_objective", False))
     )
+
+    # DCIP skips the legacy pair head.  Exact selector supervision must still
+    # execute and must use the same selected-local evidence field that AOCC
+    # certifies at deployment.  Derive each atom's pair delta from its global
+    # action contribution g_i(b)-g_i(a), rather than silently returning an empty
+    # mask when pair_atom_delta is absent.
+    pair_indices_t = batch["pair_indices"].long()
+    pair_delta_t = outputs.get("pair_atom_delta")
+    pair_var_t = outputs.get("pair_atom_var")
+    if use_local_certificate or pair_delta_t is None:
+        if "g" not in outputs:
+            raise KeyError("Exact selector needs pair_atom_delta or dense local evidence costs g")
+        action_atom = outputs["g"]
+        Bp, Ep, Kp = action_atom.shape
+        a_idx = pair_indices_t[..., 0].clamp(0, Kp - 1)
+        b_idx = pair_indices_t[..., 1].clamp(0, Kp - 1)
+        gather_shape = (Bp, Ep, pair_indices_t.shape[1])
+        a_val = torch.gather(action_atom, 2, a_idx[:, None, :].expand(gather_shape))
+        b_val = torch.gather(action_atom, 2, b_idx[:, None, :].expand(gather_shape))
+        pair_delta_t = b_val - a_val
+        if str(dual_cfg.get("evidence_uncertainty_source", "none")).lower() == "local" and "g_var" in outputs:
+            action_var = outputs["g_var"]
+            a_var = torch.gather(action_var, 2, a_idx[:, None, :].expand(gather_shape))
+            b_var = torch.gather(action_var, 2, b_idx[:, None, :].expand(gather_shape))
+            pair_var_t = a_var + b_var
+        elif use_local_certificate:
+            pair_var_t = None
     family_logits = outputs.get("family_logits")
     fam_ids_t = batch.get("evidence_family_ids")
     group_ids_t = batch.get("evidence_agent_group_ids")
     flags = batch.get("runtime_safety_flags")
-    pair_var_t = outputs.get("pair_atom_var")
     active_t = batch.get("evidence_active")
     costs_t = batch.get("evidence_budget_costs")
     pair_weights_t = batch.get("pair_weights")
@@ -420,7 +455,7 @@ def _build_predicted_pair_numpy_cache(
                 outputs.get("g") if pair_head_needs_local and "g" in outputs else None,
                 torch.float32,
             ),
-            "delta": (outputs["pair_atom_delta"], torch.float32),
+            "delta": (pair_delta_t, torch.float32),
             "pair_var": (
                 pair_var_t if pair_var_t is not None and selector_needs_pair_var else None,
                 torch.float32,
@@ -514,7 +549,7 @@ def _predicted_pair_certificate_masks(
         scene_indices = scene_indices.to(device=outputs["J0"].device, dtype=torch.long)
         outputs = _slice_scene_batch(outputs, scene_indices, full_batch_size)
         batch = _slice_scene_batch(batch, scene_indices, full_batch_size)
-    if "pair_atom_delta" not in outputs or "pair_indices" not in batch:
+    if "pair_indices" not in batch or ("pair_atom_delta" not in outputs and "g" not in outputs):
         return outputs["J0"].new_zeros(outputs["proposal_logits"].shape, dtype=torch.bool)
     e_cfg = cfg.get("evidence", {})
     s_cfg = cfg.get("selector", {})
@@ -681,32 +716,40 @@ def _predicted_pair_certificate_masks(
             anchor_cost = np.asarray(J0[bidx], dtype=np.float32).copy()
             if g_np is not None and topm_active.size:
                 anchor_cost = anchor_cost + np.asarray(g_np[bidx][topm_active].sum(axis=0), dtype=np.float32)
-            if topm_active.size:
-                residual_edge = np.asarray(delta_arr[topm_active].sum(axis=0), dtype=np.float32)
-                if bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)) and g_np is not None:
-                    residual_edge = residual_edge - np.asarray(local_delta_arr[topm_active].sum(axis=0), dtype=np.float32)
+            direct_dual_target = bool(((cfg.get("runtime", {}) or {}).get("dual_certificate", {}) or {}).get("enabled", False)) and bool((cfg.get("model", {}) or {}).get("evidence_action_residual", False))
+            if direct_dual_target:
+                # Match deployment exactly: the evidence certificate preserves
+                # the full-TopM selected-local anchor.  Residual action potential
+                # is certified in a separate downstream guard and must not define
+                # or contaminate the exact AOCC evidence target.
+                corrected_cost = anchor_cost
             else:
-                residual_edge = np.zeros((pair_arr.shape[0],), dtype=np.float32)
-            a_edge = pair_arr[:, 0].clip(0, anchor_cost.shape[0] - 1)
-            b_edge = pair_arr[:, 1].clip(0, anchor_cost.shape[0] - 1)
-            anchor_margin = anchor_cost[b_edge] - anchor_cost[a_edge]
-            if normalize_margins:
-                anchor_margin = anchor_margin / max(float(mscale), 1e-6)
-            pcfg = ((train_cfg.get("pair_potential_projection", {}) or {})
-                    or ((cfg.get("runtime", {}) or {}).get("pair_potential_projection", {}) or {}))
-            potential, _ = project_pair_residual_to_action_potential_numpy(
-                pair_arr,
-                residual_edge,
-                valid[bidx],
-                pair_weights=weight_arr,
-                anchor_margin=anchor_margin,
-                ridge=float(pcfg.get("ridge", 0.02)),
-                boundary_tau=float(pcfg.get("boundary_tau", 0.35)),
-                boundary_gain=float(pcfg.get("boundary_gain", 2.0)),
-                weight_floor=float(pcfg.get("weight_floor", 0.05)),
-            )
-            cost_scale = max(float(mscale), 1e-6) if normalize_margins else 1.0
-            corrected_cost = anchor_cost + potential * cost_scale
+                if topm_active.size:
+                    residual_edge = np.asarray(delta_arr[topm_active].sum(axis=0), dtype=np.float32)
+                    if bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)) and g_np is not None:
+                        residual_edge = residual_edge - np.asarray(local_delta_arr[topm_active].sum(axis=0), dtype=np.float32)
+                else:
+                    residual_edge = np.zeros((pair_arr.shape[0],), dtype=np.float32)
+                a_edge = pair_arr[:, 0].clip(0, anchor_cost.shape[0] - 1)
+                b_edge = pair_arr[:, 1].clip(0, anchor_cost.shape[0] - 1)
+                anchor_margin = anchor_cost[b_edge] - anchor_cost[a_edge]
+                if normalize_margins:
+                    anchor_margin = anchor_margin / max(float(mscale), 1e-6)
+                pcfg = ((train_cfg.get("pair_potential_projection", {}) or {})
+                        or ((cfg.get("runtime", {}) or {}).get("pair_potential_projection", {}) or {}))
+                potential, _ = project_pair_residual_to_action_potential_numpy(
+                    pair_arr,
+                    residual_edge,
+                    valid[bidx],
+                    pair_weights=weight_arr,
+                    anchor_margin=anchor_margin,
+                    ridge=float(pcfg.get("ridge", 0.02)),
+                    boundary_tau=float(pcfg.get("boundary_tau", 0.35)),
+                    boundary_gain=float(pcfg.get("boundary_gain", 2.0)),
+                    weight_floor=float(pcfg.get("weight_floor", 0.05)),
+                )
+                cost_scale = max(float(mscale), 1e-6) if normalize_margins else 1.0
+                corrected_cost = anchor_cost + potential * cost_scale
             eligible = np.asarray(valid[bidx], dtype=bool).copy()
             safe = eligible & ~np.asarray(flags_np[bidx], dtype=bool)
             if bool(safe.any()):
@@ -1341,6 +1384,89 @@ def _pair_potential_action_logits(
     min_scale = float((local_cfg.get("training", {}) or {}).get("potential_action_min_scale", 1.0))
     logits = _negative_cost_logits(corrected_cost, valid, min_scale=min_scale)
     return logits, reconstruction_loss, cycle_fraction, corrected_cost
+
+
+def _evidence_action_potential_logits(
+    anchor_cost: torch.Tensor,
+    residual_action_potential: torch.Tensor | None,
+    selected_mask: torch.Tensor,
+    valid: torch.Tensor,
+    *,
+    pair_scale: torch.Tensor | None = None,
+    normalize_margins: bool = True,
+    cfg: dict[str, Any] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Aggregate per-evidence action potentials into an integrable cost.
+
+    ``residual_action_potential[b, i, a]`` is a signed, normalized correction
+    attributable to evidence atom ``i``.  Summing over a selected evidence set
+    yields one global action potential; every induced pair margin is therefore
+    antisymmetric and cycle-consistent by construction.
+    """
+    B, K = anchor_cost.shape
+    if residual_action_potential is None or residual_action_potential.shape[:2] != selected_mask.shape:
+        potential = torch.zeros_like(anchor_cost)
+    else:
+        potential = (residual_action_potential * selected_mask[:, :, None].float()).sum(dim=1)
+    valid_f = valid.float()
+    center = (potential * valid_f).sum(dim=1, keepdim=True) / valid_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+    potential = (potential - center).masked_fill(~valid, 0.0)
+    if normalize_margins:
+        scale = anchor_cost.new_full((B, 1), 100.0) if pair_scale is None else pair_scale.reshape(B, 1).clamp_min(1e-6)
+    else:
+        scale = anchor_cost.new_ones((B, 1))
+    corrected_cost = anchor_cost + potential * scale
+    min_scale = float(((cfg or {}).get("training", {}) or {}).get("potential_action_min_scale", 1.0))
+    logits = _negative_cost_logits(corrected_cost, valid, min_scale=min_scale)
+    zero = anchor_cost.new_zeros(())
+    # There is no Hodge reconstruction/cycle term: integrability is exact.
+    return logits, zero, zero, corrected_cost
+
+
+def _action_potential_logits_dispatch(
+    anchor_cost: torch.Tensor,
+    pair_delta: torch.Tensor,
+    pairs: torch.Tensor,
+    pair_valid: torch.Tensor,
+    selected_mask: torch.Tensor,
+    valid: torch.Tensor,
+    *,
+    residual_action_potential: torch.Tensor | None = None,
+    local_pair_delta: torch.Tensor | None = None,
+    pair_delta_includes_local: bool = False,
+    pair_scale: torch.Tensor | None = None,
+    normalize_margins: bool = True,
+    pair_weights: torch.Tensor | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    mode = str((((cfg or {}).get("training", {}) or {}).get(
+        "pair_action_aggregation_mode",
+        (((cfg or {}).get("runtime", {}) or {}).get("pair_tournament_aggregation_mode", "legacy_tournament")),
+    ))).strip().lower()
+    if mode in {"evidence_action_potential", "direct_evidence_potential", "dcip"}:
+        return _evidence_action_potential_logits(
+            anchor_cost,
+            residual_action_potential,
+            selected_mask,
+            valid,
+            pair_scale=pair_scale,
+            normalize_margins=normalize_margins,
+            cfg=cfg,
+        )
+    return _pair_potential_action_logits(
+        anchor_cost,
+        pair_delta,
+        pairs,
+        pair_valid,
+        selected_mask,
+        valid,
+        local_pair_delta=local_pair_delta,
+        pair_delta_includes_local=pair_delta_includes_local,
+        pair_scale=pair_scale,
+        normalize_margins=normalize_margins,
+        pair_weights=pair_weights,
+        cfg=cfg,
+    )
 
 
 def _action_potential_teacher_loss(
@@ -2398,6 +2524,92 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     else:
         L_atom = J0.new_tensor(0.0)
 
+    # V56 DCIP atomwise causal-potential distillation.  A global action-cost
+    # target alone is underdetermined: many arbitrary per-evidence potentials
+    # sum to the same scene correction, so the model can ignore which queried
+    # evidence actually causes a winner flip.  Here each active evidence atom
+    # is supervised against its exact teacher-minus-local action contribution.
+    # The target and prediction are gauge-centred over valid actions, and the
+    # same per-scene scale used by deployment converts the dimensionless model
+    # potential back to cost units.
+    residual_action_pred = out.get("residual_action_potential")
+    if (
+        teacher_g is not None
+        and residual_action_pred is not None
+        and residual_action_pred.shape == teacher_g.shape
+    ):
+        teacher_g_f = teacher_g.float()
+        residual_atom_mask = (
+            e_mask[:, :, None]
+            & valid[:, None, :]
+            & torch.isfinite(teacher_g_f)
+            & torch.isfinite(g.detach())
+            & torch.isfinite(residual_action_pred)
+        )
+        safe_teacher_g = torch.where(residual_atom_mask, teacher_g_f, torch.zeros_like(teacher_g_f))
+        safe_local_g = torch.where(residual_atom_mask, g.detach(), torch.zeros_like(g.detach()))
+        atom_target = (safe_teacher_g - safe_local_g) / pair_scale[:, None, :].clamp_min(1e-6)
+        atom_pred = torch.where(residual_atom_mask, residual_action_pred, torch.zeros_like(residual_action_pred))
+
+        residual_valid_f = residual_atom_mask.to(atom_pred.dtype)
+        residual_denom = residual_valid_f.sum(dim=2, keepdim=True).clamp_min(1.0)
+        atom_target = atom_target - (atom_target * residual_valid_f).sum(dim=2, keepdim=True) / residual_denom
+        atom_pred = atom_pred - (atom_pred * residual_valid_f).sum(dim=2, keepdim=True) / residual_denom
+
+        atom_distill_cfg = train_cfg.get("residual_action_atom_distillation", {}) or {}
+        atom_target_clip = float(atom_distill_cfg.get("target_clip", 4.0))
+        if atom_target_clip > 0.0:
+            atom_target = atom_target.clamp(-atom_target_clip, atom_target_clip)
+
+        B_atom, E_atom, K_atom = atom_target.shape
+        winner_idx = target_action.long().clamp(0, K_atom - 1)
+        winner_mask = F.one_hot(winner_idx, num_classes=K_atom).bool()[:, None, :]
+        with torch.no_grad():
+            anchor_cost_atom = finite_J0 + (g.detach() * e_mask[:, :, None].float()).sum(dim=1)
+            anchor_cost_atom = anchor_cost_atom.masked_fill(~valid, float("inf"))
+            anchor_idx = anchor_cost_atom.argmin(dim=1)
+            anchor_mask = F.one_hot(anchor_idx, num_classes=K_atom).bool()[:, None, :]
+            anchor_wrong = anchor_idx.ne(winner_idx)
+
+        atom_distill_w = torch.ones_like(atom_target)
+        magnitude_gain = float(atom_distill_cfg.get("magnitude_weight", 1.0))
+        if magnitude_gain != 0.0:
+            magnitude_norm = atom_target.detach().abs()
+            if atom_target_clip > 0.0:
+                magnitude_norm = (magnitude_norm / atom_target_clip).clamp(0.0, 1.0)
+            atom_distill_w = atom_distill_w + magnitude_gain * magnitude_norm
+        atom_distill_w = atom_distill_w + float(atom_distill_cfg.get("winner_weight", 8.0)) * winner_mask.float()
+        atom_distill_w = atom_distill_w + (
+            float(atom_distill_cfg.get("anchor_action_weight", 4.0))
+            * anchor_mask.float()
+            * anchor_wrong[:, None, None].float()
+        )
+        interaction_gain = float(atom_distill_cfg.get("interaction_weight", 2.0))
+        if interaction_gain != 1.0:
+            atom_distill_w = torch.where(
+                interaction_atom_mask[:, :, None],
+                atom_distill_w * interaction_gain,
+                atom_distill_w,
+            )
+        correction_scene_gain = torch.where(
+            anchor_wrong,
+            torch.full(
+                (B_atom,),
+                float(atom_distill_cfg.get("anchor_wrong_scene_weight", 2.0)),
+                dtype=atom_distill_w.dtype,
+                device=atom_distill_w.device,
+            ),
+            torch.ones((B_atom,), dtype=atom_distill_w.dtype, device=atom_distill_w.device),
+        )
+        atom_distill_w = atom_distill_w * correction_scene_gain[:, None, None]
+        atom_beta = max(float(atom_distill_cfg.get("huber_delta", 0.15)), 1e-6)
+        atom_distill_terms = F.smooth_l1_loss(atom_pred, atom_target, reduction="none", beta=atom_beta)
+        L_residual_action_atom = _weighted_mean(
+            atom_distill_terms, atom_distill_w, residual_atom_mask
+        )
+    else:
+        L_residual_action_atom = J0.new_tensor(0.0)
+
     if teacher_g is not None:
         tg_a, tg_b = pair_gather(teacher_g.float(), pairs)
         true_atom_delta_raw = tg_b - tg_a
@@ -2627,7 +2839,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     use_potential_action = str(train_cfg.get(
         "pair_action_aggregation_mode",
         (cfg.get("runtime", {}) or {}).get("pair_tournament_aggregation_mode", "legacy_tournament"),
-    )).strip().lower() in {"integrable_potential", "potential", "hodge_potential"}
+    )).strip().lower() in {"integrable_potential", "potential", "hodge_potential", "evidence_action_potential", "direct_evidence_potential", "dcip"}
     potential_projection_terms: list[torch.Tensor] = []
     potential_cycle_terms: list[torch.Tensor] = []
     potential_teacher_terms: list[torch.Tensor] = []
@@ -2658,13 +2870,14 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             full_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
         )
         if use_potential_action:
-            logits_pair_full, projection_loss, cycle_fraction, full_corrected_cost = _pair_potential_action_logits(
+            logits_pair_full, projection_loss, cycle_fraction, full_corrected_cost = _action_potential_logits_dispatch(
                 full_anchor_cost,
                 pred_atom_delta,
                 pairs,
                 pair_valid,
                 pair_action_atom_mask,
                 valid,
+                residual_action_potential=out.get("residual_action_potential"),
                 local_pair_delta=local_atom_delta,
                 pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                 pair_scale=pair_scale,
@@ -2707,13 +2920,14 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 selected_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
             )
             if use_potential_action:
-                logits_pair, projection_loss, cycle_fraction, selected_corrected_cost = _pair_potential_action_logits(
+                logits_pair, projection_loss, cycle_fraction, selected_corrected_cost = _action_potential_logits_dispatch(
                     selected_anchor_cost,
                     pred_atom_delta,
                     pairs,
                     pair_valid,
                     pair_selected_mask,
                     valid,
+                    residual_action_potential=out.get("residual_action_potential"),
                     local_pair_delta=local_atom_delta,
                     pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                     pair_scale=pair_scale,
@@ -2867,7 +3081,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     budget_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
                 )
                 if use_potential_action:
-                    budget_logits, projection_loss, cycle_fraction, budget_corrected_cost = _pair_potential_action_logits(
+                    budget_logits, projection_loss, cycle_fraction, budget_corrected_cost = _action_potential_logits_dispatch(
                         budget_anchor_cost,
                         pred_atom_delta,
                         pairs,
@@ -3200,6 +3414,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("pair_full_anchor_preserve", 0.0)) * L_pair_full_anchor_preserve
         + float(lw.get("pair_potential_projection", 0.0)) * L_pair_potential_projection
         + float(lw.get("action_potential_teacher", 0.0)) * L_action_potential_teacher
+        + float(lw.get("residual_action_atom", 0.0)) * L_residual_action_atom
     )
     return {
         "loss": total,
@@ -3237,6 +3452,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_pair_full_anchor_preserve": L_pair_full_anchor_preserve,
         "L_pair_potential_projection": L_pair_potential_projection,
         "L_action_potential_teacher": L_action_potential_teacher,
+        "L_residual_action_atom": L_residual_action_atom,
         "pair_potential_cycle_fraction": pair_potential_cycle_fraction,
         "selector_exact_fraction": selector_exact_fraction,
         "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,

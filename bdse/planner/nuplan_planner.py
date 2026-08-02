@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import atexit
 import itertools
 import json
 import os
@@ -53,6 +54,7 @@ from bdse.planner.tournament import (
     run_tournament,
     run_pair_conditioned_tournament,
     selected_pair_sigma_from_action_variance,
+    TournamentResult,
     _trajectory_utility_cost_np,
 )
 
@@ -60,6 +62,92 @@ from bdse.planner.tournament import (
 _PLANNER_DEVICE_LOCK = threading.Lock()
 _PLANNER_DEVICE_COUNTER = itertools.count()
 _NUPLAN_IMPORT_CACHE: dict[str, Any] = {}
+_SHARED_MODEL_CACHE_LOCK = threading.Lock()
+_SHARED_MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
+_DEVICE_INFERENCE_LOCKS: dict[str, threading.RLock] = {}
+_CLOSED_LOOP_PROFILE_LOCK = threading.Lock()
+_CLOSED_LOOP_PROFILE: dict[str, dict[str, float]] = {}
+_CLOSED_LOOP_PROFILE_REGISTERED = False
+
+
+def _env_true(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _device_inference_lock(device: Any) -> threading.RLock:
+    key = str(device)
+    with _SHARED_MODEL_CACHE_LOCK:
+        lock = _DEVICE_INFERENCE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _DEVICE_INFERENCE_LOCKS[key] = lock
+        return lock
+
+
+def _shared_model_cache_key(checkpoint: str | None, cfg: dict[str, Any], device: Any) -> tuple[str, str, str]:
+    ckpt = str(Path(checkpoint).expanduser().resolve()) if checkpoint else "<external-or-none>"
+    # The model block defines architecture.  Runtime differences belong to the
+    # planner/core config and do not require duplicate CUDA model copies.
+    model_sig = json.dumps({
+        "model": cfg.get("model", {}),
+        "external_baseline": cfg.get("external_baseline", {}),
+    }, sort_keys=True, default=str)
+    return ckpt, str(device), model_sig
+
+
+def _record_closed_loop_profile(planner_name: str, diagnostics: dict[str, Any]) -> None:
+    path = os.environ.get("BDSE_CLOSED_LOOP_PROFILE_JSON", "").strip()
+    if not path:
+        return
+    flat: dict[str, float] = {}
+    for group in ("timing", "timing_core"):
+        values = diagnostics.get(group, {}) if isinstance(diagnostics, dict) else {}
+        if isinstance(values, dict):
+            for key, value in values.items():
+                if isinstance(value, (int, float)) and np.isfinite(float(value)):
+                    flat[f"{group}.{key}"] = float(value)
+    flat["cached_plan"] = float(bool(diagnostics.get("cached_plan", False)))
+    with _CLOSED_LOOP_PROFILE_LOCK:
+        state = _CLOSED_LOOP_PROFILE.setdefault(planner_name, {"calls": 0.0})
+        state["calls"] = state.get("calls", 0.0) + 1.0
+        for key, value in flat.items():
+            state[f"sum.{key}"] = state.get(f"sum.{key}", 0.0) + value
+            state[f"max.{key}"] = max(state.get(f"max.{key}", float("-inf")), value)
+
+
+def _flush_closed_loop_profile() -> None:
+    path = os.environ.get("BDSE_CLOSED_LOOP_PROFILE_JSON", "").strip()
+    if not path:
+        return
+    try:
+        out: dict[str, Any] = {}
+        with _CLOSED_LOOP_PROFILE_LOCK:
+            snapshot = {k: dict(v) for k, v in _CLOSED_LOOP_PROFILE.items()}
+        for planner, state in snapshot.items():
+            calls = max(float(state.get("calls", 0.0)), 1.0)
+            row: dict[str, float] = {"calls": float(state.get("calls", 0.0))}
+            for key, value in state.items():
+                if key.startswith("sum."):
+                    row[f"mean.{key[4:]}"] = float(value) / calls
+                elif key.startswith("max."):
+                    row[key] = float(value)
+            out[planner] = row
+        dest = Path(path).expanduser()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _register_closed_loop_profile_flush() -> None:
+    global _CLOSED_LOOP_PROFILE_REGISTERED
+    if _CLOSED_LOOP_PROFILE_REGISTERED:
+        return
+    _CLOSED_LOOP_PROFILE_REGISTERED = True
+    atexit.register(_flush_closed_loop_profile)
 
 
 def _cached_import(module: str, name: str) -> Any:
@@ -185,9 +273,10 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
 
 
 class BDSEPlannerCore:
-    def __init__(self, model: Any | None = None, cfg: dict[str, Any] | None = None):
+    def __init__(self, model: Any | None = None, cfg: dict[str, Any] | None = None, inference_lock: threading.RLock | None = None):
         self.cfg = cfg or load_config()
         self.model = model
+        self.inference_lock = inference_lock
 
     def _rule_score_sparse(self, runtime: RuntimeFeatures, candidates, evidence_bank, atom_indices: np.ndarray, action_indices: np.ndarray, cfg: dict[str, Any] | None = None) -> np.ndarray:
         cfg = cfg or self.cfg
@@ -210,7 +299,10 @@ class BDSEPlannerCore:
     def _predict_runtime_certificate(self, runtime: RuntimeFeatures, candidates, evidence_bank, stage_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = stage_cfg or self.cfg
         if self.model is not None and hasattr(self.model, "predict_certificate_numpy"):
-            return self.model.predict_certificate_numpy(runtime, candidates, evidence_bank, cfg)
+            if self.inference_lock is None:
+                return self.model.predict_certificate_numpy(runtime, candidates, evidence_bank, cfg)
+            with self.inference_lock:
+                return self.model.predict_certificate_numpy(runtime, candidates, evidence_bank, cfg)
 
         K = candidates.K
         J0 = np.square(candidates.trajectories[:, :, 1]).mean(axis=1).astype(np.float32)
@@ -473,7 +565,11 @@ class BDSEPlannerCore:
 
         if mode in {"dense_full", "full_evidence", "dense_full_evidence"}:
             if self.model is not None and hasattr(self.model, "predict_dense_numpy"):
-                dense = self.model.predict_dense_numpy(runtime, candidates, evidence_bank, stage_cfg)
+                if self.inference_lock is None:
+                    dense = self.model.predict_dense_numpy(runtime, candidates, evidence_bank, stage_cfg)
+                else:
+                    with self.inference_lock:
+                        dense = self.model.predict_dense_numpy(runtime, candidates, evidence_bank, stage_cfg)
                 g_dense = np.asarray(dense["g"], dtype=np.float32)
                 J_dense = np.asarray(dense["J0"], dtype=np.float32)
             else:
@@ -594,29 +690,38 @@ class BDSEPlannerCore:
             # graph, so beam branching could discard the useful deletion before
             # exact evaluation.  The rival deltas have already been queried; this
             # changes no neural-query count.
-            search_pair_delta = pred["pair_atom_delta"]
+            # Dual certificate: AOCC searches and certifies the selected-local
+            # evidence anchor.  Residual action uncertainty is handled only by
+            # the downstream robust flip guard and cannot collapse the evidence
+            # certificate when no residual action change is proposed.
+            search_pair_delta = pred.get("certificate_pair_atom_delta", pred["pair_atom_delta"])
             search_pair_indices = pred["pair_indices"]
             search_pair_weights = pred.get(
                 "runtime_pair_weights",
                 np.ones((np.asarray(search_pair_indices).reshape(-1, 2).shape[0],), dtype=np.float32),
             )
-            search_pair_variance = pred.get("pair_atom_var", None)
+            search_pair_variance = pred.get("certificate_pair_atom_var", pred.get("pair_atom_var", None))
             search_pair_margin_scale = float(pred.get("pair_margin_scale", 100.0))
             deployment_search_uses_rival_graph = False
             if cap_mode in deployment_modes and bool(sel_cfg.get("deployment_coreset_use_deployment_pair_graph", False)):
                 rival_indices = np.asarray(pred.get("rival_pair_indices", []), dtype=np.int64)
                 rival_indices = rival_indices.reshape(-1, 2) if rival_indices.size else np.zeros((0, 2), dtype=np.int64)
-                rival_delta = np.asarray(pred.get("rival_pair_atom_delta", []), dtype=np.float32)
+                rival_delta = np.asarray(pred.get("certificate_rival_pair_atom_delta", pred.get("rival_pair_atom_delta", [])), dtype=np.float32)
                 if rival_indices.size and rival_delta.ndim == 2 and rival_delta.shape[1] == rival_indices.shape[0]:
                     search_pair_delta = rival_delta
                     search_pair_indices = rival_indices
                     # The final tournament is unweighted over its rival sets.
                     search_pair_weights = np.ones((rival_indices.shape[0],), dtype=np.float32)
-                    search_pair_variance = pred.get("rival_pair_atom_var", None)
+                    search_pair_variance = pred.get("certificate_rival_pair_atom_var", pred.get("rival_pair_atom_var", None))
                     search_pair_margin_scale = float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0)))
                     deployment_search_uses_rival_graph = True
 
             deployment_evaluator = None
+            anchor_tournament_cfg = dict(tournament_cfg)
+            anchor_runtime_cfg = dict(anchor_tournament_cfg.get("runtime", {}) or {})
+            anchor_runtime_cfg["disable_pair_residual_intervention"] = True
+            anchor_runtime_cfg["pair_tournament_aggregation_mode"] = "evidence_action_potential"
+            anchor_tournament_cfg["runtime"] = anchor_runtime_cfg
             if cap_mode in (deployment_modes | adverse_modes):
                 def deployment_evaluator(selected_atoms: list[int]):
                     # Evaluate the exact downstream decision rule used after
@@ -626,16 +731,18 @@ class BDSEPlannerCore:
                     # over already queried Top-M deltas and adds no model query.
                     trial = run_pair_conditioned_tournament(
                         J0,
-                        pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
+                        pred.get("certificate_rival_pair_atom_delta", pred.get("rival_pair_atom_delta", pred["pair_atom_delta"])),
                         pred.get("rival_pair_indices", pred["pair_indices"]),
                         selected_atoms,
                         candidates.valid_mask,
                         runtime_flags,
-                        tournament_cfg,
-                        pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+                        anchor_tournament_cfg,
+                        pair_atom_variance=pred.get("certificate_rival_pair_atom_var", None),
                         candidate_trajectories=candidates.trajectories,
                         maneuver_ids=candidates.maneuver_ids,
                         predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
+                        residual_action_potential=None,
+                        residual_action_variance=None,
                     )
                     trial = self._apply_all_flagged_structural_guard(
                         trial, runtime, candidates, runtime_flags, stage_cfg
@@ -824,6 +931,8 @@ class BDSEPlannerCore:
                 candidate_trajectories=candidates.trajectories,
                 maneuver_ids=candidates.maneuver_ids,
                 predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
+                residual_action_potential=pred.get("residual_action_potential", None),
+                residual_action_variance=pred.get("residual_action_var", None),
             )
         else:
             selector_started = time.perf_counter()
@@ -875,6 +984,16 @@ class BDSEPlannerCore:
         tournament = self._apply_all_flagged_structural_guard(
             tournament, runtime, candidates, runtime_flags, stage_cfg
         )
+        tournament = self._finalize_pair_anchor_after_structural_guard(
+            tournament, runtime, candidates, runtime_flags, stage_cfg
+        )
+        evidence_cert = float(tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0))
+        residual_cert = not bool(tournament.diagnostics.get("pair_action_anchor_guard_blocked_flip", False))
+        tournament.diagnostics.update({
+            "evidence_certificate_fraction": evidence_cert,
+            "residual_flip_certificate_pass": bool(residual_cert),
+            "dual_certificate_deployment_certified": bool(evidence_cert >= 1.0 - 1e-9 and residual_cert),
+        })
         tournament_finished = time.perf_counter()
         pred = dict(pred)
         pred.update({
@@ -890,6 +1009,40 @@ class BDSEPlannerCore:
             "decision_topm_atom_count": int(decision_atom_active.sum()),
         })
         return pred, selection, tournament, decision_atom_active
+
+    def _finalize_pair_anchor_after_structural_guard(
+        self,
+        tournament: TournamentResult,
+        runtime: RuntimeFeatures,
+        candidates,
+        runtime_flags: np.ndarray,
+        cfg: dict[str, Any],
+    ) -> TournamentResult:
+        """Compare candidate and anchor after identical structural post-processing."""
+        diag = tournament.diagnostics
+        scores = diag.pop("_pair_action_anchor_scores", None)
+        margins = diag.pop("_pair_action_anchor_margins", None)
+        pre_action = diag.pop("_pair_action_anchor_pre_structural_action", None)
+        if scores is None or margins is None or pre_action is None:
+            return tournament
+        anchor = TournamentResult(
+            action_index=int(pre_action),
+            scores=np.asarray(scores, dtype=np.float32),
+            margins=np.asarray(margins, dtype=np.float32),
+            rival_sets=tournament.rival_sets,
+            diagnostics={},
+        )
+        anchor = self._apply_all_flagged_structural_guard(anchor, runtime, candidates, runtime_flags, cfg)
+        post_anchor = int(anchor.action_index)
+        diag.update({
+            "pair_action_anchor_pre_structural_action": int(pre_action),
+            "pair_action_anchor_action": post_anchor,
+            "pair_action_anchor_post_structural_action": post_anchor,
+            "pair_action_anchor_structural_guard_changed": bool(post_anchor != int(pre_action)),
+            "pair_action_anchor_deployed_flip": bool(int(tournament.action_index) != post_anchor),
+        })
+        return tournament
+
 
     def _apply_all_flagged_structural_guard(
         self,
@@ -1222,19 +1375,38 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         self.device = resolve_torch_device(device, context="BDSEnuPlanPlanner")
         configure_torch_for_device(self.device)
         external_enabled = bool((cfg.get("external_baseline", {}) or {}).get("enabled", False))
+        share_model = _env_true("BDSE_SHARE_MODEL_PER_PROCESS", default=False)
+        inference_lock = _device_inference_lock(self.device) if _env_true("BDSE_SERIALIZE_GPU_INFERENCE", default=share_model) else None
+        reused_model = False
         if model is None and (checkpoint or external_enabled):
-            # Load checkpoint tensors on CPU first to avoid accidentally putting
-            # optimizer/RNG payloads from full training checkpoints on GPU.  Then
-            # move only the model module to the resolved planner device.
+            # nuPlan constructs one planner per simulation.  In a threaded shard,
+            # loading ten identical CUDA models wastes memory and makes kernels
+            # contend.  V56 can share one read-only eval model per process/device.
             from bdse.external_baselines.model_factory import load_model_for_config
 
-            model = load_model_for_config(checkpoint, cfg, self.device)
+            if share_model:
+                key = _shared_model_cache_key(checkpoint, cfg, self.device)
+                # Keep construction under the cache lock. nuPlan may initialize
+                # many planner instances concurrently; releasing the lock before
+                # load_model_for_config lets every worker allocate an identical
+                # CUDA model and defeats the cache (or OOMs) before setdefault.
+                with _SHARED_MODEL_CACHE_LOCK:
+                    model = _SHARED_MODEL_CACHE.get(key)
+                    if model is None:
+                        model = load_model_for_config(checkpoint, cfg, self.device)
+                        _SHARED_MODEL_CACHE[key] = model
+                        reused_model = False
+                    else:
+                        reused_model = True
+            else:
+                model = load_model_for_config(checkpoint, cfg, self.device)
         elif model is not None and hasattr(model, "to"):
             model.to(self.device)
             if hasattr(model, "eval"):
                 model.eval()
-        print(f"BDSEnuPlanPlanner device: {self.device}")
-        self.core = BDSEPlannerCore(model=model, cfg=cfg)
+        print(f"BDSEnuPlanPlanner device: {self.device} shared_model={share_model} reused={reused_model}")
+        self.core = BDSEPlannerCore(model=model, cfg=cfg, inference_lock=inference_lock)
+        _register_closed_loop_profile_flush()
         self._name = "BDSEPlanner"
         self._cached_local_trajectory = None
         self._cached_action_index = 0
@@ -1411,6 +1583,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
                     "compute_planner_trajectory_total_s": float(t2 - t0),
                 }
                 diagnostics["timing_core"] = {"cached_plan_s": float(t2 - t0)}
+            _record_closed_loop_profile(self._name, diagnostics)
             self._write_closed_loop_diag(current_input, action, diagnostics)
             return out_traj
 
@@ -1439,6 +1612,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
             diagnostics["timing"] = timing
             diagnostics["cached_plan"] = False
             diagnostics["replan_interval_ticks"] = self._planner_replan_interval_ticks()
+        _record_closed_loop_profile(self._name, diagnostics)
         self._write_closed_loop_diag(current_input, int(action), diagnostics)
         return out_traj
 

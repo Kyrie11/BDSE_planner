@@ -1,0 +1,314 @@
+{
+  "attribution": {
+    "closed_loop_status": "completed diagnostic paired CL20 for candidate/local/foundation",
+    "competitive_gate_primary_cause": "residual potential produced zero candidate-vs-local deployed action gain",
+    "minimum_gate_primary_cause": "candidate residual variance contaminated AOCC/evidence certificate despite zero causal deployed action difference",
+    "protocol_integrity": "pass"
+  },
+  "certificate_counterfactual": {
+    "candidate_certified_fraction": 0.20403333333333332,
+    "candidate_fallback": 0.801,
+    "candidate_local_deployed_action_gain": 0.0,
+    "interpretation": "The local-only certificate is healthy while candidate residual uncertainty collapses the mixed certificate; evidence and residual certificates must be separated.",
+    "local_certified_fraction": 0.8880333333333333,
+    "local_fallback": 0.11
+  },
+  "closed_loop": {
+    "candidate": {
+      "drivable_area_compliance": 0.85,
+      "driving_direction_compliance": 1.0,
+      "ego_is_comfortable": 0.95,
+      "ego_is_making_progress": 0.45,
+      "ego_progress_along_expert_route": 0.3446431250667164,
+      "no_ego_at_fault_collisions": 0.35,
+      "num_scenarios": 10.0,
+      "parallel_closed_loop_wall_time_s": 22858.0,
+      "scenario_count": 20,
+      "score": 0.09166185723652494,
+      "shard": "combined_weighted",
+      "speed_limit_compliance": 0.9997651012470412,
+      "time_to_collision_within_bound": 0.3
+    },
+    "candidate_minus_local": {
+      "drivable_area_compliance": 0.04999999999999993,
+      "ego_is_making_progress": -0.04999999999999999,
+      "ego_progress_along_expert_route": 0.0038845116132899538,
+      "no_ego_at_fault_collisions": 0.04999999999999999,
+      "score": 0.045697993302732456,
+      "time_to_collision_within_bound": 0.04999999999999999
+    },
+    "combined_summary_num_scenarios_bug": {
+      "actual_scenario_count": 20,
+      "reported_num_scenarios": 10.0
+    },
+    "foundation_control": {
+      "drivable_area_compliance": 0.8,
+      "driving_direction_compliance": 1.0,
+      "ego_is_comfortable": 0.95,
+      "ego_is_making_progress": 0.5,
+      "ego_progress_along_expert_route": 0.34075861345342645,
+      "no_ego_at_fault_collisions": 0.3,
+      "num_scenarios": 10.0,
+      "parallel_closed_loop_wall_time_s": 14914.0,
+      "scenario_count": 20,
+      "score": 0.04596386393379248,
+      "shard": "combined_weighted",
+      "speed_limit_compliance": 0.9997651012470412,
+      "time_to_collision_within_bound": 0.25
+    },
+    "interpretation": "Candidate is weakly better on 20 diagnostic scenarios but N=20 and absolute score are insufficient; no causal residual difference exists in open-loop.",
+    "local_control": {
+      "drivable_area_compliance": 0.8,
+      "driving_direction_compliance": 1.0,
+      "ego_is_comfortable": 0.95,
+      "ego_is_making_progress": 0.5,
+      "ego_progress_along_expert_route": 0.34075861345342645,
+      "no_ego_at_fault_collisions": 0.3,
+      "num_scenarios": 10.0,
+      "parallel_closed_loop_wall_time_s": 15924.0,
+      "scenario_count": 20,
+      "score": 0.04596386393379248,
+      "shard": "combined_weighted",
+      "speed_limit_compliance": 0.9997651012470412,
+      "time_to_collision_within_bound": 0.25
+    },
+    "planner_instances_loaded_per_log": {
+      "control_foundation_matched/logs/closed_loop_20_gpu0.out": 10,
+      "control_foundation_matched/logs/closed_loop_20_gpu1.out": 10,
+      "control_local_same_checkpoint/logs/closed_loop_20_gpu0.out": 10,
+      "control_local_same_checkpoint/logs/closed_loop_20_gpu1.out": 10,
+      "logs/closed_loop_20_gpu0.out": 10,
+      "logs/closed_loop_20_gpu1.out": 10
+    },
+    "sequential_three_way_wall_time_s": 53696.0
+  },
+  "gate": {
+    "competitive_failures": [
+      "total teacher-match gain=+0.000000 < +0.015",
+      "residual teacher-match gain=+0.000000 < +0.005",
+      "pair-full residual gain=+0.000000 < +0.005",
+      "residual not net beneficial=0.0/0.0",
+      "certified fraction=0.20403333333333332 < 0.55",
+      "proposal decisive recall=0.7982895200679605 < 0.80",
+      "selected decisive recall=0.5378493158469078 < 0.55",
+      "interaction decisive recall=0.49085680982133323 < 0.50",
+      "fallback rate=0.801 > 0.40"
+    ],
+    "competitive_pass": false,
+    "gate": "v55_pc_bfar",
+    "metrics": {
+      "beneficial_residual_rate": 0.0,
+      "budget_fill": 1.0,
+      "certified_fraction": 0.20403333333333332,
+      "dense_anchor_row_drift": 0.0,
+      "deployed_residual_flip_rate": 0.0,
+      "effective_decisive_recall": 0.7035135002134836,
+      "fallback_rate": 0.801,
+      "frontier_retained": 0.7814220440859662,
+      "harmful_residual_rate": 0.0,
+      "interaction_decisive_recall": 0.49085680982133323,
+      "internal_beneficial_pair_potential_rate": 0.0,
+      "internal_harmful_pair_potential_rate": 0.0,
+      "latency_p95_ms": 1252.587302913889,
+      "local_anchor_row_drift": 0.0,
+      "local_control_local_pair_full_match": 0.141,
+      "local_pair_full_match": 0.141,
+      "pair_full_match": 0.141,
+      "pair_residual_gain_vs_local_pair": 0.0,
+      "paired_deployed_flip_stats": {
+        "beneficial_given_flip": 0.0,
+        "beneficial_rate": 0.0,
+        "flip_rate": 0.0,
+        "harmful_given_flip": 0.0,
+        "harmful_rate": 0.0,
+        "n": 1000.0,
+        "unchanged_rate": 1.0
+      },
+      "proposal_decisive_recall": 0.7982895200679605,
+      "residual_gain_vs_local": 0.0,
+      "selected_decisive_recall": 0.5378493158469078,
+      "selector_gain_vs_foundation": 0.0,
+      "teacher_match_candidate": 0.141,
+      "teacher_match_foundation": 0.141,
+      "teacher_match_local": 0.141
+    },
+    "minimum_failures": [
+      "certified fraction=0.20403333333333332 < 0.40",
+      "fallback rate=0.801 > 0.60"
+    ],
+    "minimum_pass": false,
+    "paired_regret": {
+      "foundation": {
+        "candidate": {
+          "cvar90": 54120.63311170676,
+          "median": 150.32489530928433,
+          "p90": 36367.80527861966
+        },
+        "control": {
+          "cvar90": 54120.63311170676,
+          "median": 150.32489530928433,
+          "p90": 36367.80527861966
+        },
+        "delta": {
+          "cvar90": 0.0,
+          "median": 0.0,
+          "p90": 0.0
+        },
+        "n": 1000
+      },
+      "local": {
+        "candidate": {
+          "cvar90": 54120.63311170676,
+          "median": 150.32489530928433,
+          "p90": 36367.80527861966
+        },
+        "control": {
+          "cvar90": 54120.63311170676,
+          "median": 150.32489530928433,
+          "p90": 36367.80527861966
+        },
+        "delta": {
+          "cvar90": 0.0,
+          "median": 0.0,
+          "p90": 0.0
+        },
+        "n": 1000
+      }
+    },
+    "protocol_failures": [],
+    "protocol_pass": true,
+    "training": {
+      "configured_min_exact_fraction": 0.015,
+      "gate_min_exact_fraction": 0.015,
+      "last_exact_fraction": 0.02572,
+      "max_exact_fraction": 0.02572,
+      "mean_training_pair_fraction": 0.588815908203125,
+      "rows": 4.0,
+      "unique_epochs": 4.0
+    },
+    "warnings": [
+      "latency p95=1252.587302913889 ms > 500.0 ms; CL20 remains allowed, no real-time claim"
+    ]
+  },
+  "open_loop": {
+    "candidate": {
+      "aocc_fully_certified_scene_rate": 0.14,
+      "beneficial_residual_intervention_rate": 0.0,
+      "deployed_vs_selected_local_anchor_match": 0.987,
+      "effective_selected_decisive_atom_recall": 0.7035135002134836,
+      "fallback_would_trigger_rate": 0.801,
+      "harmful_residual_intervention_rate": 0.0,
+      "local_pair_full_interface_action_match": 0.141,
+      "pair_full_interface_action_match": 0.141,
+      "planner_latency_ms_mean": 851.1904904888943,
+      "planner_latency_ms_p95": 1252.587302913889,
+      "proposal_decisive_atom_recall": 0.7982895200679605,
+      "selected_decisive_atom_recall": 0.5378493158469078,
+      "selected_interaction_decisive_recall": 0.49085680982133323,
+      "selected_local_anchor_action_match": 0.141,
+      "selector_aocc_certified_pair_fraction": 0.20403333333333332,
+      "selector_aocc_full_target_certified_pair_fraction": 0.9836096718480137,
+      "stage_predict_ms": 684.995848512277,
+      "stage_selector_ms": 89.13875182252377,
+      "stage_tournament_ms": 5.917837885208428,
+      "teacher_action_match": 0.141
+    },
+    "foundation_control": {
+      "aocc_fully_certified_scene_rate": 0.805,
+      "beneficial_residual_intervention_rate": 0.0,
+      "deployed_vs_selected_local_anchor_match": 0.987,
+      "effective_selected_decisive_atom_recall": 0.7475520786350159,
+      "fallback_would_trigger_rate": 0.11,
+      "harmful_residual_intervention_rate": 0.0,
+      "local_pair_full_interface_action_match": 0.141,
+      "pair_full_interface_action_match": 0.141,
+      "planner_latency_ms_mean": 818.3423954416066,
+      "planner_latency_ms_p95": 1256.4359479583793,
+      "proposal_decisive_atom_recall": 0.7663194110973041,
+      "selected_decisive_atom_recall": 0.5818878942684401,
+      "selected_interaction_decisive_recall": 0.5619639215341461,
+      "selected_local_anchor_action_match": 0.141,
+      "selector_aocc_certified_pair_fraction": 0.8880333333333333,
+      "selector_aocc_full_target_certified_pair_fraction": 0.9836096718480137,
+      "stage_predict_ms": 650.3040888346732,
+      "stage_selector_ms": 87.09695516712964,
+      "stage_tournament_ms": 7.858780344948173,
+      "teacher_action_match": 0.141
+    },
+    "local_control": {
+      "aocc_fully_certified_scene_rate": 0.805,
+      "beneficial_residual_intervention_rate": 0.0,
+      "deployed_vs_selected_local_anchor_match": 0.987,
+      "effective_selected_decisive_atom_recall": 0.7729601368640858,
+      "fallback_would_trigger_rate": 0.11,
+      "harmful_residual_intervention_rate": 0.0,
+      "local_pair_full_interface_action_match": 0.141,
+      "pair_full_interface_action_match": 0.141,
+      "planner_latency_ms_mean": 907.6098760087043,
+      "planner_latency_ms_p95": 1423.5406610649077,
+      "proposal_decisive_atom_recall": 0.7982895200679605,
+      "selected_decisive_atom_recall": 0.6072959524975099,
+      "selected_interaction_decisive_recall": 0.5772893268806557,
+      "selected_local_anchor_action_match": 0.141,
+      "selector_aocc_certified_pair_fraction": 0.8880333333333333,
+      "selector_aocc_full_target_certified_pair_fraction": 0.9836096718480137,
+      "stage_predict_ms": 707.0159884644672,
+      "stage_selector_ms": 99.11230025906116,
+      "stage_tournament_ms": 15.0582120642066,
+      "teacher_action_match": 0.141
+    }
+  },
+  "training": {
+    "epochs": [
+      {
+        "L_action_potential_teacher": 0.3453749609375,
+        "L_pair_full_action": 2.972670625,
+        "L_pair_full_winner_margin": 7.786175,
+        "epoch": 0,
+        "loss_ms_per_step": 269.61511000692843,
+        "samples_per_s": 38.47869853217371,
+        "selector_exact_fraction": 0.01564,
+        "training_pair_fraction": 0.588313671875,
+        "wall_time_s": 1299.4202482756227
+      },
+      {
+        "L_action_potential_teacher": 0.3452166796875,
+        "L_pair_full_action": 2.96334453125,
+        "L_pair_full_winner_margin": 6.733215625,
+        "epoch": 1,
+        "loss_ms_per_step": 260.6641374891996,
+        "samples_per_s": 41.939144649584975,
+        "selector_exact_fraction": 0.01564,
+        "training_pair_fraction": 0.58796013671875,
+        "wall_time_s": 1192.2036183085293
+      },
+      {
+        "L_action_potential_teacher": 0.346562109375,
+        "L_pair_full_action": 2.952063125,
+        "L_pair_full_winner_margin": 6.5013228125,
+        "epoch": 2,
+        "loss_ms_per_step": 254.89785778075458,
+        "samples_per_s": 42.58002531147353,
+        "selector_exact_fraction": 0.0156,
+        "training_pair_fraction": 0.58720837890625,
+        "wall_time_s": 1174.259518031031
+      },
+      {
+        "L_action_potential_teacher": 0.34544708984375,
+        "L_pair_full_action": 2.9389609375,
+        "L_pair_full_winner_margin": 6.499746875,
+        "epoch": 3,
+        "loss_ms_per_step": 255.88642529040575,
+        "samples_per_s": 44.0654398688165,
+        "selector_exact_fraction": 0.02572,
+        "training_pair_fraction": 0.5917814453125,
+        "wall_time_s": 1134.6760669779032
+      }
+    ],
+    "global_action_potential_loss_start_end": [
+      0.3453749609375,
+      0.34544708984375
+    ]
+  },
+  "version": "v55_pc_bfar"
+}
