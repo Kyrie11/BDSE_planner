@@ -933,6 +933,9 @@ class BDSEPlannerCore:
                 predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
                 residual_action_potential=pred.get("residual_action_potential", None),
                 residual_action_variance=pred.get("residual_action_var", None),
+                evidence_certificate_fraction=selection.diagnostics.get(
+                    "aocc_certified_pair_fraction", None
+                ),
             )
         else:
             selector_started = time.perf_counter()
@@ -988,11 +991,23 @@ class BDSEPlannerCore:
             tournament, runtime, candidates, runtime_flags, stage_cfg
         )
         evidence_cert = float(tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0))
+        residual_flip_proposed = bool(
+            tournament.diagnostics.get("pair_action_anchor_proposed_action", tournament.action_index)
+            != tournament.diagnostics.get("pair_action_anchor_action", tournament.action_index)
+        )
         residual_cert = not bool(tournament.diagnostics.get("pair_action_anchor_guard_blocked_flip", False))
+        dual_cfg = ((stage_cfg.get("runtime", {}) or {}).get("dual_certificate", {}) or {})
+        evidence_flip_floor = float(
+            dual_cfg.get("min_evidence_certificate_fraction_for_residual_flip", 1.0)
+        )
         tournament.diagnostics.update({
             "evidence_certificate_fraction": evidence_cert,
+            "residual_flip_proposed": bool(residual_flip_proposed),
+            "residual_flip_deployed": bool(tournament.diagnostics.get("pair_action_anchor_deployed_flip", False)),
             "residual_flip_certificate_pass": bool(residual_cert),
-            "dual_certificate_deployment_certified": bool(evidence_cert >= 1.0 - 1e-9 and residual_cert),
+            "dual_certificate_deployment_certified": bool(
+                evidence_cert + 1.0e-9 >= evidence_flip_floor and residual_cert
+            ),
         })
         tournament_finished = time.perf_counter()
         pred = dict(pred)
@@ -1034,11 +1049,23 @@ class BDSEPlannerCore:
         )
         anchor = self._apply_all_flagged_structural_guard(anchor, runtime, candidates, runtime_flags, cfg)
         post_anchor = int(anchor.action_index)
+        post_structural_reverted = False
+        # Candidate and anchor pass through the same structural guard, but their
+        # score arrays differ.  If the residual flip certificate rejected the
+        # intervention, the structural tie-break must not reintroduce that flip.
+        if (
+            bool(diag.get("pair_action_anchor_guard_active", False))
+            and not bool(diag.get("pair_action_anchor_guard_allowed_flip", False))
+            and int(tournament.action_index) != post_anchor
+        ):
+            tournament.action_index = post_anchor
+            post_structural_reverted = True
         diag.update({
             "pair_action_anchor_pre_structural_action": int(pre_action),
             "pair_action_anchor_action": post_anchor,
             "pair_action_anchor_post_structural_action": post_anchor,
             "pair_action_anchor_structural_guard_changed": bool(post_anchor != int(pre_action)),
+            "pair_action_anchor_post_structural_reverted": bool(post_structural_reverted),
             "pair_action_anchor_deployed_flip": bool(int(tournament.action_index) != post_anchor),
         })
         return tournament

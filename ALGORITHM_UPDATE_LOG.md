@@ -2814,3 +2814,218 @@ A final end-to-end code audit found that `skip_pair_head_forward=true` removed `
 ### V56 frozen reactive CL20 runner
 
 Added `RUN_V56_REACTIVE_CL20.sh`.  The uploaded V55 CL20 was non-reactive; the new runner reuses the already frozen V56 checkpoint and three calibrated configs, runs candidate/local/foundation under `closed_loop_reactive_agents`, writes to a separate output root, and verifies the three scenario-token hashes.  It never retrains and prevents non-reactive and reactive summaries from being mixed.
+
+---
+
+# V57 WC-DCIP-BFAR-DBAP update — 2026-08-02
+
+Version: **Winner-Correction Dual-Certificate Integrable-Potential Boundary-Focused Anchor-Residual Decision-Budget Action Preservation**.
+
+## 1. V56 result diagnosis
+
+The uploaded V56 run completed training, three independent calibrations, and paired 1000-scene open-loop evaluation. The archive contains no closed-loop output; the claimed paired reactive CL20 is therefore not part of the evidence analyzed in this update.
+
+V56 gate state:
+
+- protocol: FAIL;
+- formal minimum: FAIL, with `minimum_failures=[]`;
+- competitive: FAIL.
+
+Open-loop state:
+
+- candidate/local/foundation teacher match: `0.140/0.141/0.141`;
+- pair-full/local-pair-full match: `0.141/0.141`;
+- evidence certificate: `0.888033`;
+- fallback: `0.111`;
+- proposal/selected/effective decisive recall: `0.798152/0.606437/0.772101`;
+- interaction decisive recall: `0.575137`;
+- deployed residual flip rate: `0.005`;
+- beneficial/harmful deployed residual rate: `0.000/0.001`.
+
+Paired row analysis found five candidate-local deployed flips: zero exact teacher-winner corrections, one harmful correction, and four teacher-match-neutral changes. Internal pair-full residual changed 17 winners, with one beneficial and one harmful change. V56 therefore learned non-zero perturbations but not a net useful final-winner correction.
+
+## 2. Root cause of the protocol failure
+
+V56 set the legacy aggregate `training.loss_weights.action` to zero while assigning non-zero weights to deployment selection, pair-full winner, budget preservation, certificate, and action-potential objectives.
+
+The loss implementation incorrectly used `loss_weights.action > 0` as the master switch for the entire action/winner/deployment family. This silently disabled:
+
+- exact deployment selector supervision;
+- deployment-mask distillation;
+- selected-budget action loss;
+- pair-full action and winner-margin losses;
+- budget-to-pair-full preservation;
+- pair-full anchor preservation;
+- global action-potential teacher loss.
+
+All five V56 epochs consequently reported `selector_exact_fraction=0` and zero for every winner-level objective. Only atomwise residual distillation remained active and stayed nearly flat around `0.0117`.
+
+A second audit found that the multi-budget selected-B branch did not pass `residual_action_potential` into the direct-potential logits. Even after enabling the family, the deployed-budget winner objective could therefore remain disconnected from the residual head.
+
+## 3. Minimum-gate interpretation
+
+V56 solved the V55 evidence/residual certificate mixing at the evidence-gate level:
+
+- certificate recovered from `0.204` to `0.888`;
+- fallback recovered from `0.801` to `0.111`.
+
+The formal minimum label was false only because the gate defined `minimum_pass = protocol_pass and minimum_metrics_pass`. V57 reports `minimum_metrics_pass` separately.
+
+The dual-certificate implementation was still incomplete:
+
+- residual and dual-certificate aggregate metrics were NaN;
+- the tournament did not consume the evidence certificate before authorizing a residual flip;
+- a harmful flip was deployed at evidence-certificate fraction `0.2`.
+
+## 4. Winner/deployment action-family activation
+
+V57 replaces the legacy aggregate master switch with a family-level predicate. The winner/deployment branch activates when any relevant sub-objective has non-zero weight, including:
+
+- deployment selection;
+- certificate gap/safety/frontier;
+- pair-full action and winner margin;
+- budget preservation;
+- pair-full anchor preservation;
+- action-potential teacher distillation;
+- residual winner correction.
+
+The V57 main configuration deliberately retains `loss_weights.action=0` as a regression guard: child objectives must execute independently.
+
+Training now reports `action_family_enabled`.
+
+## 5. Direct selected-budget potential gradient repair
+
+All direct-potential action paths now receive `residual_action_potential`:
+
+- full-support action potential;
+- early oracle-selected action potential;
+- predicted multi-budget/B=16 action potential.
+
+A regression test verifies that a selected evidence potential changes the budgeted winner and backpropagates a non-zero gradient into the residual potential.
+
+## 6. Winner-directed residual correction
+
+V57 adds `L_residual_winner_correction`.
+
+For an anchor-wrong scene, the corrected teacher winner must outrank the exact selected-local anchor winner by a configured correction margin. For an anchor-correct scene, the corrected teacher winner must retain a preservation margin over the strongest valid rival.
+
+This objective directly optimizes the deployed intervention role instead of assuming that atomwise residual reconstruction will automatically improve the final winner.
+
+The term is intentionally named winner correction, not counterfactual or causal intervention: the current cache provides comparative teacher/local labels, not a separate intervention dataset.
+
+## 7. Independent residual uncertainty training
+
+V57 trains `residual_action_var_head` against detached atomwise residual error in log-variance space.
+
+- the variance target cannot absorb or alter the residual mean target;
+- residual uncertainty never enters the evidence certificate;
+- it is used only by the residual-flip certificate;
+- `residual_action_var_head` is explicitly included in the trainable-module set.
+
+## 8. Enforced dual-certificate deployment
+
+The residual winner may change only when both certificates pass:
+
+1. evidence certificate fraction meets the configured threshold;
+2. residual robust margin and score gain meet the flip guard.
+
+The main V57 configuration requires a fully certified evidence frontier before a residual flip:
+
+`min_evidence_certificate_fraction_for_residual_flip = 1.0`.
+
+The structural post-processing path is also prevented from reintroducing a residual flip that the certificate rejected.
+
+Full-support pair diagnostics pass evidence-certificate fraction `1.0` and use the same post-structural finalization as deployment.
+
+## 9. Metric and gate observability
+
+Open-loop evaluation now propagates:
+
+- evidence certificate fraction;
+- residual flip proposed/deployed;
+- residual flip certificate pass;
+- dual-certificate deployment status;
+- evidence-certificate guard diagnostics.
+
+The V57 protocol gate fails when any configured winner/deployment supervision is silently inactive:
+
+- no exact selector supervision;
+- action family never active;
+- all winner-level losses zero;
+- deployment-selection distillation zero.
+
+The gate separately reports:
+
+- `minimum_metrics_pass`;
+- formal `minimum_pass` including the protocol prerequisite;
+- `competitive_metrics_pass`;
+- formal `competitive_pass`.
+
+## 10. Preserved designs
+
+V57 retains the designs that V56 evidence supports:
+
+- immutable base+dense-local foundation anchor;
+- winner/hard/near-tie boundary-pair curriculum;
+- sparse periodic exact AOCC and final exact tail;
+- fixed B=16 evidence budget;
+- direct per-evidence integrable action potential;
+- dual evidence/residual certificate definition;
+- same-checkpoint local and matched-foundation controls;
+- independent calibration and paired replay;
+- shared-model closed-loop execution;
+- separate non-reactive and reactive closed-loop protocols.
+
+V57 does not restore arbitrary pair fields, Hodge projection, scene-level-only potential supervision, or full-pair/full-scene exact training on every optimizer step.
+
+## 11. Required experiment order
+
+1. Run `RUN_V57_TRAINING_SMOKE.sh` on 1024 train / 256 validation scenes for one epoch.
+2. Continue only if action-family, exact selector, deployment-selection, pair-full action, winner-correction, and residual-uncertainty signals are all non-zero.
+3. Run the complete six-epoch pipeline, independent calibration, and paired 1000-scene open loop.
+4. Require protocol PASS before interpreting any algorithm gate or closed-loop result.
+5. Run paired NR-CL20 and frozen paired R-CL20.
+6. Run CL100 only after competitive PASS and beneficial residual interventions exceed harmful interventions.
+7. Run the partial test once only after checkpoint, calibration, and thresholds are frozen.
+
+## 12. New and changed files
+
+- `V56_RESULT_ANALYSIS_AND_V57_OPTIMIZATION.md`;
+- `V56_RESULT_DIAGNOSIS_FOR_V57.json`;
+- `NEXT_COMMANDS_V57_WC_DCIP_BFAR.txt`;
+- `RUN_V57_TRAINING_SMOKE.sh`;
+- `V57_WCD_CIP_BFAR_DBAP_NEXT_COMMANDS.sh`;
+- `run_v57_wcdcip_bfar_dbap.sh`;
+- `RUN_V57_REACTIVE_CL20.sh`;
+- `RUN_V57_PRELIMINARY_TEST.sh`;
+- `bdse/configs/v57_wcdcip_bfar_dbap_train_2gpu.yaml`;
+- `bdse/configs/v57_wcdcip_bfar_dbap_cl.yaml`;
+- `bdse/configs/v57_wcdcip_bfar_dbap_local_control_cl.yaml`;
+- `bdse/configs/v57_wcdcip_bfar_dbap_anchor_control_cl.yaml`;
+- `bdse/tools/check_v57_wcdcip_bfar_dbap_gate.py`;
+- `bdse/tests/test_v57_wcdcip_bfar.py`.
+
+Core modified modules:
+
+- `bdse/model/losses.py`;
+- `bdse/planner/tournament.py`;
+- `bdse/planner/nuplan_planner.py`;
+- `bdse/metrics/bdse_metrics.py`;
+- `bdse/experiments/evaluate_open_loop.py`.
+
+Historical V56 gate and unit-test files are left unchanged so the V56 record remains reproducible.
+
+## 13. Validation and claim boundary
+
+Validation completed:
+
+- Python compile: PASS;
+- four V57 YAML files: PASS;
+- five V57 shell runners: PASS;
+- unit tests: `208 passed, 8 warnings`;
+- action-family master-switch regression: PASS;
+- direct selected-budget potential gradient: PASS;
+- evidence-certificate flip blocking/allowing: PASS;
+- protocol/minimum-metrics separation: PASS.
+
+No fresh V57 nuPlan training, open-loop evaluation, non-reactive closed loop, reactive closed loop, or CL100 was run in this environment. No future gate PASS, closed-loop gain, real-time performance, SOTA, or CCF-A-level empirical result is claimed in advance.

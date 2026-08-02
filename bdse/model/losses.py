@@ -29,6 +29,27 @@ from bdse.planner.selector import (
 )
 
 
+_ACTION_FAMILY_LOSS_NAMES = (
+    "action",
+    "deployment_selection",
+    "certificate_gap",
+    "certificate_safety",
+    "certificate_safe_frontier",
+    "pair_full_action",
+    "pair_full_winner_margin",
+    "budget_preserve_pair_full",
+    "pair_full_anchor_preserve",
+    "pair_potential_projection",
+    "action_potential_teacher",
+    "residual_winner_correction",
+)
+
+
+def _action_family_supervision_requested(loss_weights: dict[str, Any]) -> bool:
+    """Return whether any winner/deployment action objective is configured."""
+    return any(float(loss_weights.get(name, 0.0)) > 0.0 for name in _ACTION_FAMILY_LOSS_NAMES)
+
+
 def _to_numpy(t: torch.Tensor | None, dtype: Any | None = None) -> np.ndarray | None:
     """Detach once and convert to NumPy without an extra dtype copy when possible."""
     if t is None:
@@ -2607,8 +2628,30 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_residual_action_atom = _weighted_mean(
             atom_distill_terms, atom_distill_w, residual_atom_mask
         )
+
+        # The residual-flip certificate owns a separate uncertainty estimate.
+        # Train it against the detached atomwise residual error so uncertainty
+        # cannot contaminate the evidence certificate or absorb the mean target.
+        residual_action_var_pred = out.get("residual_action_var")
+        if residual_action_var_pred is not None and residual_action_var_pred.shape == atom_pred.shape:
+            unc_cfg = train_cfg.get("residual_action_uncertainty", {}) or {}
+            unc_floor = max(float(unc_cfg.get("variance_floor", 1.0e-5)), 1.0e-8)
+            unc_cap = max(float(unc_cfg.get("variance_cap", 25.0)), unc_floor)
+            pred_var = residual_action_var_pred.clamp(min=unc_floor, max=unc_cap)
+            detached_sq_error = (atom_pred.detach() - atom_target.detach()).square()
+            target_var = detached_sq_error.add(unc_floor).clamp(max=unc_cap)
+            unc_beta = max(float(unc_cfg.get("log_variance_huber_delta", 0.25)), 1.0e-6)
+            unc_terms = F.smooth_l1_loss(
+                pred_var.log(), target_var.log(), reduction="none", beta=unc_beta
+            )
+            L_residual_action_uncertainty = _weighted_mean(
+                unc_terms, atom_distill_w.detach(), residual_atom_mask
+            )
+        else:
+            L_residual_action_uncertainty = J0.new_tensor(0.0)
     else:
         L_residual_action_atom = J0.new_tensor(0.0)
+        L_residual_action_uncertainty = J0.new_tensor(0.0)
 
     if teacher_g is not None:
         tg_a, tg_b = pair_gather(teacher_g.float(), pairs)
@@ -2824,7 +2867,13 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     predicted_selector_start = int(train_cfg.get("predicted_selector_start_epoch", 8))
     pair_act_weight_cfg = float(train_cfg.get("pair_action_loss_weight", 1.0))
     action_act_weight_cfg = float(train_cfg.get("action_conditioned_action_loss_weight", 0.0))
-    enable_action_loss = (cur_epoch >= action_loss_start) and (float(lw.get("action", 1.0)) > 0.0)
+    # Winner/deployment supervision is a family of losses, not a child of the
+    # legacy aggregate ``loss_weights.action`` term.  V56 set ``action=0`` while
+    # assigning non-zero weights to direct-potential winner, certificate, and
+    # exact-selector losses; treating ``action`` as the family master switch
+    # silently disabled every one of those objectives.
+    action_family_requested = _action_family_supervision_requested(lw)
+    enable_action_loss = (cur_epoch >= action_loss_start) and action_family_requested
     logits_action = None
     logits_pair = None
     logits_pair_full = None
@@ -2856,7 +2905,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         logits_action = _budgeted_tournament_scores(budgeted_cost, valid, tau_q, eps_cal, sigma=sigma, beta_uncertainty=beta_unc)
 
     use_pair_act = bool(cfg.get("runtime", {}).get("use_pair_conditioned_margins", cfg.get("model", {}).get("pair_conditioned", True)))
-    if enable_action_loss and pair_act_weight_cfg > 0.0 and use_pair_act and "pair_atom_delta" in out:
+    direct_potential_available = use_potential_action and out.get("residual_action_potential") is not None
+    pair_action_source_available = ("pair_atom_delta" in out) or direct_potential_available
+    if enable_action_loss and pair_act_weight_cfg > 0.0 and use_pair_act and pair_action_source_available:
         exclude_safety_from_pair_action = bool(train_cfg.get("exclude_safety_atoms_from_pair_action_loss", True))
         pair_action_atom_mask = e_mask & ((~safety_atom_mask) if exclude_safety_from_pair_action else torch.ones_like(safety_atom_mask, dtype=torch.bool))
         # Winner-consistent residual supervision.  Unlike the legacy
@@ -3088,6 +3139,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                         pair_valid,
                         pair_selected_mask,
                         valid,
+                        residual_action_potential=out.get("residual_action_potential"),
                         local_pair_delta=local_atom_delta,
                         pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                         pair_scale=pair_scale,
@@ -3219,6 +3271,46 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_budget_preserve_pair_full = (preserve_terms * preserve_scene_weights).sum() / preserve_scene_weights.sum().clamp_min(1.0)
     else:
         L_budget_preserve_pair_full = J0.new_tensor(0.0)
+
+    # Winner-directed residual correction margin.  On an anchor-wrong scene,
+    # the selected-B residual must put the teacher winner above the exact
+    # selected-local anchor winner.  On an anchor-correct scene, it must retain
+    # a margin over the strongest valid rival.  This directly optimizes the
+    # only intervention that matters to the deployed planner: changing (or
+    # preserving) the final action winner.
+    if logits_pair is not None and logits_pair_anchor is not None:
+        K_wc = int(logits_pair.shape[1])
+        teacher_wc = target_action.long().clamp(0, K_wc - 1)
+        with torch.no_grad():
+            anchor_wc = logits_pair_anchor.argmax(dim=1)
+            anchor_wrong_wc = anchor_wc.ne(teacher_wc)
+        teacher_score_wc = torch.gather(logits_pair, 1, teacher_wc[:, None]).squeeze(1)
+        anchor_score_wc = torch.gather(logits_pair, 1, anchor_wc[:, None]).squeeze(1)
+        rival_mask_wc = valid.bool().clone()
+        rival_mask_wc.scatter_(1, teacher_wc[:, None], False)
+        strongest_rival_wc = logits_pair.masked_fill(
+            ~rival_mask_wc, _neg_mask_value(logits_pair)
+        ).max(dim=1).values
+        wc_cfg = train_cfg.get("residual_winner_correction", {}) or {}
+        correction_margin_wc = float(wc_cfg.get("correction_margin", 0.06))
+        preserve_margin_wc = float(wc_cfg.get("preserve_margin", 0.04))
+        tau_wc = max(float(wc_cfg.get("tau", 0.06)), 1.0e-6)
+        wrong_terms_wc = F.softplus(
+            (anchor_score_wc - teacher_score_wc + correction_margin_wc) / tau_wc
+        )
+        preserve_terms_wc = F.softplus(
+            (strongest_rival_wc - teacher_score_wc + preserve_margin_wc) / tau_wc
+        )
+        winner_correction_terms = torch.where(anchor_wrong_wc, wrong_terms_wc, preserve_terms_wc)
+        wrong_scene_weight_wc = float(wc_cfg.get("anchor_wrong_scene_weight", 3.0))
+        winner_correction_weights = torch.where(
+            anchor_wrong_wc,
+            torch.full_like(winner_correction_terms, wrong_scene_weight_wc),
+            torch.ones_like(winner_correction_terms),
+        )
+        L_residual_winner_correction = (winner_correction_terms * winner_correction_weights).sum() / winner_correction_weights.sum().clamp_min(1.0)
+    else:
+        L_residual_winner_correction = J0.new_tensor(0.0)
 
     if logits_pair_full is not None and logits_pair_full_anchor is not None:
         with torch.no_grad():
@@ -3415,6 +3507,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("pair_potential_projection", 0.0)) * L_pair_potential_projection
         + float(lw.get("action_potential_teacher", 0.0)) * L_action_potential_teacher
         + float(lw.get("residual_action_atom", 0.0)) * L_residual_action_atom
+        + float(lw.get("residual_action_uncertainty", 0.0)) * L_residual_action_uncertainty
+        + float(lw.get("residual_winner_correction", 0.0)) * L_residual_winner_correction
     )
     return {
         "loss": total,
@@ -3453,6 +3547,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_pair_potential_projection": L_pair_potential_projection,
         "L_action_potential_teacher": L_action_potential_teacher,
         "L_residual_action_atom": L_residual_action_atom,
+        "L_residual_action_uncertainty": L_residual_action_uncertainty,
+        "L_residual_winner_correction": L_residual_winner_correction,
+        "action_family_enabled": J0.new_tensor(float(enable_action_loss)),
         "pair_potential_cycle_fraction": pair_potential_cycle_fraction,
         "selector_exact_fraction": selector_exact_fraction,
         "selector_surrogate_exact_agreement": selector_surrogate_exact_agreement,

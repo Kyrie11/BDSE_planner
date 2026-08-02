@@ -77,7 +77,13 @@ def main() -> None:
         tour_diag = getattr(tour, "diagnostics", {}) or {}
         qdiag.update({k: v for k, v in tour_diag.items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "avoidable_selected_action_safety_flag", "all_actions_safety_flagged", "all_flagged_risk_guard_applied", "all_flagged_hard_risk_regret", "hard_filter_applied", "safe_action_available"}})
         for key, value in tour_diag.items():
-            if key.startswith("pair_potential_") or key.startswith("pair_action_anchor_") or key.startswith("evidence_certificate_") or key.startswith("residual_flip_certificate_") or key.startswith("dual_certificate_"):
+            if (
+                key.startswith("pair_potential_")
+                or key.startswith("pair_action_anchor_")
+                or key.startswith("evidence_certificate_")
+                or key.startswith("residual_flip_")
+                or key.startswith("dual_certificate_")
+            ):
                 if isinstance(value, (bool, np.bool_)):
                     qdiag[key] = float(bool(value))
                 elif isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(float(value)):
@@ -125,8 +131,12 @@ def main() -> None:
                 predicted_atom_costs=pred["g"],
                 residual_action_potential=pred.get("residual_action_potential", None),
                 residual_action_variance=pred.get("residual_action_var", None),
+                evidence_certificate_fraction=1.0,
             )
             pair_full_tour = core._apply_all_flagged_structural_guard(
+                pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
+            )
+            pair_full_tour = core._finalize_pair_anchor_after_structural_guard(
                 pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
             )
             pair_full_action = int(pair_full_tour.action_index)

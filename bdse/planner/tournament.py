@@ -712,6 +712,7 @@ def run_pair_conditioned_tournament(
     predicted_atom_costs: np.ndarray | None = None,
     residual_action_potential: np.ndarray | None = None,
     residual_action_variance: np.ndarray | None = None,
+    evidence_certificate_fraction: float | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -866,7 +867,25 @@ def run_pair_conditioned_tournament(
         score_gain = float(scores[proposed_action] - scores[anchor_action]) if proposed_action != anchor_action else float("inf")
         flip_margin = float(guard_cfg.get("flip_margin", runtime_cfg.get("pair_residual_trust", {}).get("flip_margin", 0.05)))
         score_margin = float(guard_cfg.get("score_margin", 0.0))
-        allow_flip = proposed_action == anchor_action or (robust_margin >= flip_margin and score_gain >= score_margin)
+        dual_cfg = runtime_cfg.get("dual_certificate", {}) or {}
+        require_evidence_certificate = bool(
+            dual_cfg.get("enabled", False)
+            and dual_cfg.get("require_evidence_certificate_before_residual_flip", False)
+        )
+        min_evidence_certificate = float(
+            dual_cfg.get("min_evidence_certificate_fraction_for_residual_flip", 1.0)
+        )
+        evidence_certificate_value = (
+            float(evidence_certificate_fraction)
+            if evidence_certificate_fraction is not None and np.isfinite(float(evidence_certificate_fraction))
+            else float("nan")
+        )
+        evidence_certificate_pass = (
+            (not require_evidence_certificate)
+            or (np.isfinite(evidence_certificate_value) and evidence_certificate_value + 1.0e-9 >= min_evidence_certificate)
+        )
+        margin_certificate_pass = robust_margin >= flip_margin and score_gain >= score_margin
+        allow_flip = proposed_action == anchor_action or (margin_certificate_pass and evidence_certificate_pass)
         if not allow_flip:
             action = int(anchor_action)
         anchor_guard_diag = {
@@ -877,6 +896,14 @@ def run_pair_conditioned_tournament(
             "pair_action_anchor_score_gain": float(score_gain),
             "pair_action_anchor_guard_blocked_flip": bool(proposed_action != anchor_action and not allow_flip),
             "pair_action_anchor_guard_allowed_flip": bool(proposed_action != anchor_action and allow_flip),
+            "pair_action_anchor_guard_margin_certificate_pass": bool(margin_certificate_pass),
+            "pair_action_anchor_guard_evidence_certificate_required": bool(require_evidence_certificate),
+            "pair_action_anchor_guard_evidence_certificate_fraction": float(evidence_certificate_value),
+            "pair_action_anchor_guard_min_evidence_certificate_fraction": float(min_evidence_certificate),
+            "pair_action_anchor_guard_evidence_certificate_pass": bool(evidence_certificate_pass),
+            "pair_action_anchor_guard_blocked_by_evidence_certificate": bool(
+                proposed_action != anchor_action and margin_certificate_pass and not evidence_certificate_pass
+            ),
             "pair_action_anchor_deployed_flip": bool(int(action) != int(anchor_action)),
             # Private arrays are consumed by BDSEPlannerCore after the final
             # all-flagged structural guard so residual flip metrics compare two

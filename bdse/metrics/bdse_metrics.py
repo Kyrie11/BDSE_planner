@@ -422,6 +422,18 @@ def compute_bdse_diagnostics(
         "selector_flip_rank_active": float(qdiag.get("selector_flip_rank_active", 0.0)),
         "selector_lcb_active": float(qdiag.get("selector_lcb_active", 0.0)),
         **{k: float(v) for k, v in qdiag.items() if str(k).startswith("selector_") and isinstance(v, (int, float, np.integer, np.floating, bool, np.bool_)) and np.isfinite(float(v))},
+        **{
+            k: float(v)
+            for k, v in qdiag.items()
+            if (
+                str(k).startswith("evidence_certificate_")
+                or str(k).startswith("residual_flip_")
+                or str(k).startswith("dual_certificate_")
+                or str(k).startswith("pair_action_anchor_guard_evidence_certificate_")
+            )
+            and isinstance(v, (int, float, np.integer, np.floating, bool, np.bool_))
+            and np.isfinite(float(v))
+        },
         **pair_metrics,
     }
     return BDSEMetricResult(values=values, details={"full_action": full_action, "sparse_full_action": sparse_full_action, "base_action": base_action, "a_star": a_star, "selected_atoms": selected_atoms, "query_action_count": query_action_count})
