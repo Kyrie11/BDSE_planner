@@ -3029,3 +3029,232 @@ Validation completed:
 - protocol/minimum-metrics separation: PASS.
 
 No fresh V57 nuPlan training, open-loop evaluation, non-reactive closed loop, reactive closed loop, or CL100 was run in this environment. No future gate PASS, closed-loop gain, real-time performance, SOTA, or CCF-A-level empirical result is claimed in advance.
+
+---
+
+# V58 CSIP-BFAR-DBAP update — 2026-08-02
+
+Version: **Certified Set-Aligned Integrable-Potential Boundary-Focused Anchor-Residual Decision-Budget Action Preservation**.
+
+## 1. V57 result and gate audit
+
+The uploaded V57 gate report recorded:
+
+- protocol: PASS;
+- minimum metrics: PASS;
+- formal minimum: PASS;
+- competitive: FAIL.
+
+The strict engineering interpretation is narrower. V57's training/pairing subprotocol did pass and the V56 winner-family shutdown was repaired, but the complete dual-certificate protocol was not established because:
+
+- the direct residual action-potential uncertainty used at deployment was never calibrated;
+- residual proposal/certificate metrics were contaminated by later structural safety changes;
+- paired CL20 crashed before any scenario was simulated;
+- the protocol gate did not audit those conditions.
+
+Accordingly, V57 minimum *metrics* remain a genuine PASS, but formal minimum is incomplete when full protocol validity is a prerequisite. Competitive remains a true algorithmic FAIL.
+
+V57 open-loop state:
+
+- candidate/local/foundation teacher match: `0.141/0.141/0.141`;
+- candidate/local pair-full match: `0.141/0.141`;
+- residual gain: `0.000`;
+- pair-full residual gain: `0.000`;
+- beneficial/harmful deployed residual: `0/0`;
+- evidence certificate: `0.888033`;
+- fallback: `0.110`;
+- proposal/selected/effective decisive recall: `0.799339/0.607881/0.773545`;
+- selected interaction decisive recall: `0.577697`.
+
+Training evidence showed real gradients but no discrete winner learning:
+
+- pair-full winner-margin loss: `10.0749 -> 8.1748`;
+- residual winner-correction loss: `7.2338 -> 5.3785`;
+- residual uncertainty loss: `3.9812 -> 2.3770`;
+- atomwise residual loss remained near `0.012`;
+- global action-potential teacher loss remained near `0.363`;
+- B16 and pair-full action match remained `0.141`.
+
+## 2. Runtime attribution bug
+
+V57 froze neither the raw anchor nor the raw proposed residual action before `_finalize_pair_anchor_after_structural_guard`. The structural all-flagged guard could overwrite `pair_action_anchor_action`, after which the evaluation layer compared the proposed action with the overwritten anchor.
+
+Of 99 reported residual proposals in 1000 scenes:
+
+- 86 were genuine raw residual proposals rejected by the margin/uncertainty certificate;
+- 13 were structural-guard action changes misreported as residual proposals;
+- deployed residual flips were zero.
+
+V58 stores immutable raw anchor/proposed actions, raw residual margin, residual sigma, and residual conformal epsilon before structural post-processing. Proposal-conditional pass rates, no-proposal abstention, structural changes, and deployed flips are now distinct metrics.
+
+## 3. Closed-loop callback failure
+
+V57 set:
+
+`main_callback.metric_summary_callback=null`
+
+nuPlan dereferenced the callback config and raised:
+
+`AttributeError: 'NoneType' object has no attribute '_target_'`
+
+Both CL20 shards failed before simulation. V58 keeps a valid callback, optionally removes PDFs only after success, and writes `.closed_loop_complete.json` only when all shard and merge steps complete. Three-way CL20 also requires identical scenario-token hashes and counts.
+
+## 4. Calibration redesign
+
+V57 ran candidate, local, and foundation calibration sequentially, consuming about 116 minutes. The three passes calibrated the legacy pair-atom adverse bound, not the direct residual action-potential margin uncertainty used by V57's flip guard. Candidate and local calibration outputs were nearly identical.
+
+V58 replaces them with one dual-certificate collection:
+
+- `val_calib` is sharded across both GPUs;
+- shared evidence adverse scores are collected once;
+- candidate proposal-conditional residual margin nonconformity is collected once;
+- evidence and residual split-conformal epsilons are merged into one artifact;
+- controls reuse only the evidence epsilon and have residual mean, variance, certificate, and residual epsilon disabled;
+- train/calibration/runtime uncertainty beta is fixed to `1.0`.
+
+Evidence calibration is applied only to AOCC/adverse certificate fields. It no longer mutates the tournament action rule or its independent epsilon.
+
+## 5. Concurrent open-loop suite
+
+V57 ran candidate, local, and foundation formal open-loop sequentially. V58 adds `bdse.tools.run_parallel_open_loop_suite`:
+
+- all systems enter one bounded CPU/GPU worker pool;
+- the same modulo shards are used for every system;
+- default concurrency is two workers per GPU;
+- scenario/timestamp keys must be nonempty and unique;
+- all compared systems must have identical count and SHA-256 before the suite is accepted;
+- per-task and suite wall times are persisted.
+
+`BENCHMARK_V58_OPEN_LOOP_CONCURRENCY.sh` compares one, two, and three workers per GPU on a short paired run so machine-specific GPU contention can be measured instead of guessed.
+
+Prediction remains the main V57 open-loop cost (~441 ms of ~586 ms mean latency). V58 does not yet reuse candidate/local prediction in one process; that is a future high-value refactor after the corrected protocol is validated.
+
+## 6. Certified set-aligned winner objective
+
+V57 optimized ordinary winner margins but not the robust margin actually required by deployment. It could therefore reduce soft losses while every proposed correction remained below the certificate threshold.
+
+V58 adds `L_certified_residual_winner`, defined on the primary selected evidence set and aligned with deployment:
+
+`robust_margin = corrected_margin - beta * residual_sigma - residual_epsilon`.
+
+For an anchor-wrong scene, a correction is trained only when the frozen teacher establishes a minimum true winner margin. For an anchor-correct scene, the teacher winner must preserve a robust margin over the strongest valid rival. This creates an explicit do-no-harm term.
+
+A configurable `residual_epsilon_reserve` is included during training because the frozen split-conformal residual epsilon is installed only after checkpoint selection.
+
+## 7. Residual learning-rate groups
+
+The selector and anchor-related heads already have useful behavior, while the zero-initialized residual mean remained sub-threshold. V58 introduces named optimizer groups:
+
+- residual action mean head: `5x` base LR;
+- residual action variance head: `2x` base LR;
+- proposal/family/selector-related heads: `1x` base LR.
+
+Gradient clipping still receives the complete flat parameter list. A smoke test verifies both LR groups are present and all configured winner/certificate losses execute.
+
+## 8. Competitive checkpoint selection
+
+V57 selected epoch 3 using a score dominated by fixed-budget evidence quality, even though residual and pair-full gains were zero for all checkpoints and proposal recall exceeded 0.80 only at epoch 5.
+
+V58 adds `val_competitive_score`, which explicitly rewards:
+
+- candidate teacher match;
+- candidate minus selected-local gain;
+- pair-full minus local pair-full gain;
+- beneficial minus harmful interventions;
+- selected and interaction decisive recall;
+- low fallback.
+
+The V58 training config uses this score as the primary checkpoint metric. This does not guarantee a positive residual checkpoint; it prevents a selector-only checkpoint from being preferred without accounting for the paper's winner-correction claim.
+
+## 9. Stricter protocol and gate health checks
+
+The V58 gate audits:
+
+- action-family activation;
+- nonzero exact-selector fraction;
+- every configured winner/deployment loss individually, including certified winner loss;
+- residual uncertainty supervision;
+- independent evidence calibration;
+- shared evidence epsilon across candidate/local/foundation;
+- candidate-only residual calibration and residual-enabled deployment;
+- residual-disabled controls with zero residual epsilon;
+- train/deploy uncertainty beta agreement;
+- exact paired scenario hashes and counts.
+
+It reports protocol, minimum metrics, formal minimum, competitive metrics, and formal competitive separately. A protocol failure blocks closed-loop interpretation.
+
+## 10. Preserved algorithmic components
+
+V58 preserves components supported by V57 evidence:
+
+- immutable base+dense-local foundation anchor;
+- boundary-focused winner/hard/near-tie pair curriculum;
+- sparse periodic exact AOCC and exact tail;
+- fixed B=16 evidence budget;
+- direct per-evidence integrable action potential;
+- separate evidence and residual certificates;
+- same-checkpoint local and matched-foundation controls;
+- group-disjoint tune/calibration split;
+- paired replay and token hashing;
+- shared-model closed-loop execution.
+
+V58 does not restore arbitrary pair fields, Hodge projection, scene-level-only potential supervision, or per-step full exact training.
+
+## 11. Required V58 experiment order
+
+1. Run `RUN_V58_TRAINING_SMOKE.sh` on 1024 train / 256 validation scenes.
+2. Require nonzero action-family, exact-selector, deployment-selection, pair-full action, winner correction, certified winner, residual uncertainty, and correctable-scene metrics, plus `5x/2x` LR groups.
+3. Run eight-epoch training.
+4. Run the two-GPU shared dual-certificate calibration.
+5. Run simultaneous candidate/local/foundation 1000-scene open-loop with bounded concurrency.
+6. Require strict protocol PASS before interpreting minimum, competitive, or closed-loop results.
+7. Run paired NR-CL20, then frozen paired R-CL20.
+8. Run CL100 only after open-loop residual gain is positive, beneficial exceeds harmful, and CL20 has no safety regression.
+
+If V58 still has zero pair-full residual gain while certified supervision is active, the next algorithmic branch should be a zero-initialized set-conditioned interaction potential head. Threshold relaxation or unconditional residual scale inflation should not be the next action.
+
+## 12. New and changed files
+
+New:
+
+- `V57_RESULT_ANALYSIS_AND_V58_OPTIMIZATION.md`;
+- `V57_RESULT_DIAGNOSIS_FOR_V58.json`;
+- `NEXT_COMMANDS_V58_CSIP_BFAR.txt`;
+- `RUN_V58_TRAINING_SMOKE.sh`;
+- `BENCHMARK_V58_OPEN_LOOP_CONCURRENCY.sh`;
+- `V58_CSIP_BFAR_DBAP_NEXT_COMMANDS.sh`;
+- `run_v58_csip_bfar_dbap.sh`;
+- `RUN_V58_REACTIVE_CL20.sh`;
+- `bdse/configs/v58_csip_bfar_dbap_train_2gpu.yaml`;
+- `bdse/configs/v58_csip_bfar_dbap_cl.yaml`;
+- `bdse/configs/v58_csip_bfar_dbap_local_control_cl.yaml`;
+- `bdse/configs/v58_csip_bfar_dbap_anchor_control_cl.yaml`;
+- `bdse/tools/calibrate_v58_dual_certificates.py`;
+- `bdse/tools/apply_v58_dual_calibration.py`;
+- `bdse/tools/run_parallel_open_loop_suite.py`;
+- `bdse/tools/check_v58_csip_bfar_dbap_gate.py`;
+- `bdse/tests/test_v58_csip_bfar.py`.
+
+Core modified:
+
+- `bdse/model/losses.py`;
+- `bdse/experiments/train.py`;
+- `bdse/planner/tournament.py`;
+- `bdse/planner/nuplan_planner.py`;
+- `bdse/metrics/bdse_metrics.py`.
+
+## 13. Validation and claim boundary
+
+Completed in the analysis environment:
+
+- Python compile: PASS;
+- four V58 YAML files: PASS;
+- shell syntax: PASS;
+- unit tests: `215 passed, 8 warnings`;
+- raw residual attribution regression: PASS;
+- certified robust-winner loss regression: PASS;
+- dual-calibration application regression: PASS;
+- LR parameter-group regression: PASS;
+- strict gate audit regression: PASS.
+
+No fresh V58 nuPlan training, calibration, open-loop, non-reactive closed loop, reactive closed loop, or CL100 was executed here. No future gate PASS, closed-loop improvement, real-time claim, SOTA claim, or CCF-A-level empirical result is asserted in advance.

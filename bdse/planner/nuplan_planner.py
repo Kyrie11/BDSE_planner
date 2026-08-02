@@ -991,23 +991,49 @@ class BDSEPlannerCore:
             tournament, runtime, candidates, runtime_flags, stage_cfg
         )
         evidence_cert = float(tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0))
-        residual_flip_proposed = bool(
-            tournament.diagnostics.get("pair_action_anchor_proposed_action", tournament.action_index)
-            != tournament.diagnostics.get("pair_action_anchor_action", tournament.action_index)
+        raw_anchor_action = int(
+            tournament.diagnostics.get(
+                "pair_action_anchor_raw_anchor_action",
+                tournament.diagnostics.get("pair_action_anchor_pre_structural_action", tournament.action_index),
+            )
         )
-        residual_cert = not bool(tournament.diagnostics.get("pair_action_anchor_guard_blocked_flip", False))
+        raw_proposed_action = int(
+            tournament.diagnostics.get(
+                "pair_action_anchor_raw_proposed_action",
+                tournament.diagnostics.get("pair_action_anchor_proposed_action", tournament.action_index),
+            )
+        )
+        residual_flip_proposed = bool(raw_proposed_action != raw_anchor_action)
+        margin_cert = bool(
+            tournament.diagnostics.get("pair_action_anchor_guard_margin_certificate_pass", True)
+        )
+        evidence_guard_cert = bool(
+            tournament.diagnostics.get("pair_action_anchor_guard_evidence_certificate_pass", True)
+        )
         dual_cfg = ((stage_cfg.get("runtime", {}) or {}).get("dual_certificate", {}) or {})
         evidence_flip_floor = float(
             dual_cfg.get("min_evidence_certificate_fraction_for_residual_flip", 1.0)
         )
+        evidence_cert_pass = bool(
+            evidence_guard_cert and evidence_cert + 1.0e-9 >= evidence_flip_floor
+        )
+        # Conditional certificate fields describe the learned residual proposal,
+        # not a later structural guard.  No-proposal scenes are safe abstentions
+        # and are reported separately from proposal-conditional pass rates.
+        residual_cert = bool((not residual_flip_proposed) or margin_cert)
+        dual_cert = bool((not residual_flip_proposed) or (margin_cert and evidence_cert_pass))
         tournament.diagnostics.update({
             "evidence_certificate_fraction": evidence_cert,
-            "residual_flip_proposed": bool(residual_flip_proposed),
+            "evidence_certificate_pass_for_residual_flip": evidence_cert_pass,
+            "residual_flip_raw_anchor_action": raw_anchor_action,
+            "residual_flip_raw_proposed_action": raw_proposed_action,
+            "residual_flip_proposed": residual_flip_proposed,
             "residual_flip_deployed": bool(tournament.diagnostics.get("pair_action_anchor_deployed_flip", False)),
-            "residual_flip_certificate_pass": bool(residual_cert),
-            "dual_certificate_deployment_certified": bool(
-                evidence_cert + 1.0e-9 >= evidence_flip_floor and residual_cert
-            ),
+            "residual_flip_margin_certificate_pass": margin_cert,
+            "residual_flip_certificate_pass": residual_cert,
+            "residual_flip_certificate_pass_conditional": bool(margin_cert) if residual_flip_proposed else float("nan"),
+            "dual_certificate_pass_conditional": bool(margin_cert and evidence_cert_pass) if residual_flip_proposed else float("nan"),
+            "dual_certificate_deployment_certified": dual_cert,
         })
         tournament_finished = time.perf_counter()
         pred = dict(pred)

@@ -661,6 +661,51 @@ def _validation_bdse_score(metrics: dict[str, float]) -> float:
     )
 
 
+def _validation_competitive_score(metrics: dict[str, float]) -> float:
+    """Checkpoint score that cannot ignore whether the residual improves winners.
+
+    The V57 primary score was dominated by evidence recall/certificate quality and
+    selected epoch 3 even though every checkpoint had zero residual action gain.
+    This score preserves fixed-budget quality but explicitly rewards candidate over
+    selected-local teacher match and beneficial-minus-harmful interventions.
+    """
+    def finite(name: str, default: float = 0.0) -> float:
+        value = float(metrics.get(name, default))
+        return value if np.isfinite(value) else default
+
+    candidate = finite("val_teacher_action_match", 0.0)
+    local = finite(
+        "val_selected_local_anchor_action_match",
+        finite("val_local_pair_full_interface_action_match", 0.0),
+    )
+    pair_full = finite("val_pair_full_interface_action_match", candidate)
+    beneficial = finite(
+        "val_beneficial_pair_potential_intervention_rate",
+        finite("val_beneficial_residual_intervention_rate", 0.0),
+    )
+    harmful = finite(
+        "val_harmful_pair_potential_intervention_rate",
+        finite("val_harmful_residual_intervention_rate", 0.0),
+    )
+    selected_recall = finite("val_selected_decisive_atom_recall", 0.0)
+    interaction_recall = finite(
+        "val_selected_interaction_decisive_recall",
+        finite("val_interaction_decisive_recall", 0.0),
+    )
+    fallback = finite("val_fallback_would_trigger_rate", 1.0)
+    residual_gain = candidate - local
+    pair_gain = pair_full - local
+    return float(
+        250.0 * candidate
+        + 500.0 * residual_gain
+        + 350.0 * pair_gain
+        + 500.0 * (beneficial - harmful)
+        + 20.0 * selected_recall
+        + 15.0 * interaction_recall
+        - 15.0 * fallback
+    )
+
+
 def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     """Checkpoint score for the exact deployed fixed-budget decision path.
 
@@ -1104,6 +1149,7 @@ def _run_validation_open_loop(
     metrics["val_open_loop_count"] = float(fail_t[1].item())
     metrics["val_bdse_score"] = _validation_bdse_score(metrics)
     metrics["val_fixed_budget_critical_score"] = _validation_fixed_budget_critical_score(metrics)
+    metrics["val_competitive_score"] = _validation_competitive_score(metrics)
     if was_training:
         model.train()
     return metrics
@@ -1422,8 +1468,57 @@ def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
             )
 
 
+def _optimizer_parameter_groups(
+    model: torch.nn.Module,
+    cfg: dict[str, Any],
+    *,
+    base_lr: float,
+    is_main: bool,
+) -> tuple[list[torch.nn.Parameter], list[dict[str, Any]]]:
+    """Build named LR groups while preserving a flat list for gradient clipping.
+
+    V57 fine-tuned the zero-initialized residual mean head with the same very low
+    learning rate used to protect the selector.  Its winner losses decreased, but
+    the action potential remained below every deployment certificate.  V58 allows
+    a higher residual-head LR without destabilizing the already effective proposal
+    and family heads.  Prefix matching is performed after stripping DDP's ``module.``.
+    """
+    train_cfg = cfg.get("training", {}) if isinstance(cfg, dict) else {}
+    multipliers_cfg = train_cfg.get("lr_multipliers", {}) or {}
+    prefix_mult = [(str(k), float(v)) for k, v in multipliers_cfg.items()]
+    buckets: dict[float, list[torch.nn.Parameter]] = {}
+    flat: list[torch.nn.Parameter] = []
+    counts: dict[float, int] = {}
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        clean = name[7:] if name.startswith("module.") else name
+        multiplier = 1.0
+        best_len = -1
+        for prefix, value in prefix_mult:
+            if clean == prefix or clean.startswith(prefix + "."):
+                if len(prefix) > best_len:
+                    multiplier = value
+                    best_len = len(prefix)
+        multiplier = max(float(multiplier), 1.0e-4)
+        buckets.setdefault(multiplier, []).append(param)
+        counts[multiplier] = counts.get(multiplier, 0) + int(param.numel())
+        flat.append(param)
+    groups = [
+        {"params": params, "lr": float(base_lr) * mult, "lr_multiplier": mult}
+        for mult, params in sorted(buckets.items())
+    ]
+    if is_main:
+        text = ", ".join(
+            f"x{mult:g}:{counts[mult]} params@{base_lr * mult:.3g}"
+            for mult in sorted(counts)
+        )
+        print(f"[bdse] optimizer LR groups: {text}", flush=True)
+    return flat, groups
+
+
 def _build_adamw_optimizer(
-    parameters: list[torch.nn.Parameter],
+    parameters: list[torch.nn.Parameter] | list[dict[str, Any]],
     *,
     lr: float,
     weight_decay: float,
@@ -1696,11 +1791,13 @@ def main() -> None:
         if bool(cfg.get("training", {}).get("ddp_static_graph", False)):
             ddp_kwargs["static_graph"] = True
         model = DDP(model, **ddp_kwargs)
-    trainable_parameters = [p for p in model.parameters() if p.requires_grad]
+    trainable_parameters, optimizer_parameter_groups = _optimizer_parameter_groups(
+        model, cfg, base_lr=float(cfg["training"]["lr"]), is_main=is_main
+    )
     if not trainable_parameters:
         raise RuntimeError("no trainable parameters after applying training.trainable_modules")
     opt = _build_adamw_optimizer(
-        trainable_parameters,
+        optimizer_parameter_groups,
         lr=float(cfg["training"]["lr"]),
         weight_decay=float(cfg["training"]["weight_decay"]),
         device=device,

@@ -429,7 +429,7 @@ def compute_bdse_diagnostics(
                 str(k).startswith("evidence_certificate_")
                 or str(k).startswith("residual_flip_")
                 or str(k).startswith("dual_certificate_")
-                or str(k).startswith("pair_action_anchor_guard_evidence_certificate_")
+                or str(k).startswith("pair_action_anchor_")
             )
             and isinstance(v, (int, float, np.integer, np.floating, bool, np.bool_))
             and np.isfinite(float(v))

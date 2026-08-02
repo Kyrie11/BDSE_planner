@@ -861,13 +861,26 @@ def run_pair_conditioned_tournament(
             margins=anchor_M,
         )
         proposed_action = int(action)
-        robust_margin = float(M_eval[proposed_action, anchor_action]) if proposed_action != anchor_action else float("inf")
-        if sigma is not None and proposed_action != anchor_action:
-            robust_margin -= float(tc.get("beta_uncertainty", 0.0)) * float(sigma[proposed_action, anchor_action])
+        raw_margin = float(M_B[proposed_action, anchor_action]) if proposed_action != anchor_action else float("inf")
+        residual_sigma = (
+            float(sigma[proposed_action, anchor_action])
+            if sigma is not None and proposed_action != anchor_action
+            else 0.0
+        )
+        dual_cfg = runtime_cfg.get("dual_certificate", {}) or {}
+        residual_epsilon = float(
+            dual_cfg.get(
+                "residual_epsilon_cal",
+                dual_cfg.get("residual_epsilon", 0.0),
+            )
+        )
+        robust_margin = raw_margin
+        if proposed_action != anchor_action:
+            robust_margin -= float(tc.get("beta_uncertainty", 0.0)) * residual_sigma
+            robust_margin -= residual_epsilon
         score_gain = float(scores[proposed_action] - scores[anchor_action]) if proposed_action != anchor_action else float("inf")
         flip_margin = float(guard_cfg.get("flip_margin", runtime_cfg.get("pair_residual_trust", {}).get("flip_margin", 0.05)))
         score_margin = float(guard_cfg.get("score_margin", 0.0))
-        dual_cfg = runtime_cfg.get("dual_certificate", {}) or {}
         require_evidence_certificate = bool(
             dual_cfg.get("enabled", False)
             and dual_cfg.get("require_evidence_certificate_before_residual_flip", False)
@@ -891,7 +904,15 @@ def run_pair_conditioned_tournament(
         anchor_guard_diag = {
             "pair_action_anchor_guard_active": True,
             "pair_action_anchor_action": int(anchor_action),
+            # Raw residual proposal is captured before the all-flagged structural
+            # guard.  Keeping it immutable prevents structural tie-breaking from
+            # being misreported as a learned residual intervention.
+            "pair_action_anchor_raw_anchor_action": int(anchor_action),
+            "pair_action_anchor_raw_proposed_action": int(proposed_action),
             "pair_action_anchor_proposed_action": int(proposed_action),
+            "pair_action_anchor_raw_margin": float(raw_margin),
+            "pair_action_anchor_residual_sigma": float(residual_sigma),
+            "pair_action_anchor_residual_epsilon_cal": float(residual_epsilon),
             "pair_action_anchor_robust_margin": float(robust_margin),
             "pair_action_anchor_score_gain": float(score_gain),
             "pair_action_anchor_guard_blocked_flip": bool(proposed_action != anchor_action and not allow_flip),

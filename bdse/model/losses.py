@@ -42,6 +42,7 @@ _ACTION_FAMILY_LOSS_NAMES = (
     "pair_potential_projection",
     "action_potential_teacher",
     "residual_winner_correction",
+    "certified_residual_winner",
 )
 
 
@@ -2879,6 +2880,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     logits_pair_full = None
     logits_pair_anchor = None
     logits_pair_full_anchor = None
+    primary_selected_mask: torch.Tensor | None = None
+    primary_anchor_cost: torch.Tensor | None = None
+    primary_corrected_cost: torch.Tensor | None = None
     pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
     deployment_mask_entries: list[tuple[float, torch.Tensor, torch.Tensor]] = []
     selector_exact_fraction = J0.new_tensor(0.0)
@@ -3010,6 +3014,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                 )
             pair_logits_entries = [(float(cfg.get("evidence", {}).get("budget", 16)), 1.0, logits_pair)]
+            primary_selected_mask = pair_selected_mask
+            primary_anchor_cost = selected_anchor_cost
+            primary_corrected_cost = selected_corrected_cost if use_potential_action else None
         else:
             configured_budgets = train_cfg.get("deployment_budgets", None)
             if configured_budgets is None:
@@ -3177,6 +3184,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 if distance < primary_distance:
                     logits_pair = budget_logits
                     logits_pair_anchor = budget_anchor_logits
+                    primary_selected_mask = pair_selected_mask
+                    primary_anchor_cost = budget_anchor_cost
+                    primary_corrected_cost = budget_corrected_cost if use_potential_action else None
                     primary_distance = distance
 
     # Stop-gradient deployment-selection distillation.  The CPU margin-coreset
@@ -3311,6 +3321,121 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_residual_winner_correction = (winner_correction_terms * winner_correction_weights).sum() / winner_correction_weights.sum().clamp_min(1.0)
     else:
         L_residual_winner_correction = J0.new_tensor(0.0)
+
+    # V58 certified winner correction.  The deployed residual guard accepts a
+    # flip only when the teacher-directed margin remains positive after subtracting
+    # uncertainty and the conformal residual epsilon.  Training the mean and
+    # variance independently does not enforce that condition, so V57 learned
+    # sub-threshold perturbations that were always rejected.  This loss optimizes
+    # the exact robust margin used at deployment and only asks for a flip on scenes
+    # where the frozen teacher itself establishes a meaningful winner advantage.
+    if (
+        primary_anchor_cost is not None
+        and primary_corrected_cost is not None
+        and primary_selected_mask is not None
+        and batch.get("teacher_J_T") is not None
+        and out.get("residual_action_var") is not None
+    ):
+        cert_cfg = train_cfg.get("certified_residual_winner", {}) or {}
+        K_cert = int(primary_anchor_cost.shape[1])
+        teacher_cert = target_action.long().clamp(0, K_cert - 1)
+        with torch.no_grad():
+            anchor_logits_cert = _negative_cost_logits(primary_anchor_cost, valid, min_scale=1.0)
+            anchor_cert = anchor_logits_cert.argmax(dim=1)
+            anchor_wrong_cert = anchor_cert.ne(teacher_cert)
+            teacher_cost_cert = batch["teacher_J_T"].float()
+            safe_teacher_cert = torch.where(valid & torch.isfinite(teacher_cost_cert), teacher_cost_cert, primary_anchor_cost.detach())
+            true_margin_cert = (
+                safe_teacher_cert.gather(1, anchor_cert[:, None])
+                - safe_teacher_cert.gather(1, teacher_cert[:, None])
+            ).squeeze(1) / pair_scale.reshape(-1).clamp_min(1e-6)
+            min_true_margin = float(cert_cfg.get("min_teacher_margin", 0.01))
+            correctable_cert = anchor_wrong_cert & (true_margin_cert >= min_true_margin)
+
+        pred_margin_cert = (
+            primary_corrected_cost.gather(1, anchor_cert[:, None])
+            - primary_corrected_cost.gather(1, teacher_cert[:, None])
+        ).squeeze(1) / pair_scale.reshape(-1).clamp_min(1e-6)
+        selected_var_cert = (
+            out["residual_action_var"].clamp_min(0.0)
+            * primary_selected_mask[:, :, None].float()
+        ).sum(dim=1)
+        pair_var_cert = (
+            selected_var_cert.gather(1, anchor_cert[:, None])
+            + selected_var_cert.gather(1, teacher_cert[:, None])
+        ).squeeze(1)
+        sigma_cert = torch.sqrt(pair_var_cert.clamp_min(0.0) + 1.0e-12)
+        beta_cert = float(cert_cfg.get("beta_uncertainty", cfg.get("tournament", {}).get("beta_uncertainty", 0.0)))
+        runtime_residual_eps_cert = float(
+            ((cfg.get("runtime", {}) or {}).get("dual_certificate", {}) or {}).get(
+                "residual_epsilon_cal", 0.0
+            )
+        )
+        # Calibration is applied only after checkpoint selection.  Reserve a
+        # configurable one-sided error budget during training so a correction is
+        # not optimized to sit immediately above the uncalibrated flip threshold
+        # and then rejected once the frozen split-conformal epsilon is installed.
+        residual_eps_cert = max(
+            runtime_residual_eps_cert,
+            float(cert_cfg.get("residual_epsilon_reserve", 0.0)),
+        )
+        required_margin_cert = float(cert_cfg.get("flip_margin", ((cfg.get("runtime", {}) or {}).get("pair_action_anchor_guard", {}) or {}).get("flip_margin", 0.02)))
+        tau_cert = max(float(cert_cfg.get("tau", 0.04)), 1.0e-6)
+        robust_margin_cert = pred_margin_cert - beta_cert * sigma_cert - residual_eps_cert
+        correct_terms_cert = F.softplus(
+            (required_margin_cert - robust_margin_cert) / tau_cert
+        )
+
+        # Correct anchors receive a symmetric do-no-harm certificate against the
+        # strongest valid rival.  This prevents the higher residual learning rate
+        # from manufacturing harmful flips merely to satisfy anchor-wrong scenes.
+        corrected_logits_cert = _negative_cost_logits(primary_corrected_cost, valid, min_scale=1.0)
+        rival_mask_cert = valid.bool().clone()
+        rival_mask_cert.scatter_(1, teacher_cert[:, None], False)
+        strongest_rival_cert = corrected_logits_cert.masked_fill(
+            ~rival_mask_cert, _neg_mask_value(corrected_logits_cert)
+        ).argmax(dim=1)
+        preserve_margin_cert = (
+            primary_corrected_cost.gather(1, strongest_rival_cert[:, None])
+            - primary_corrected_cost.gather(1, teacher_cert[:, None])
+        ).squeeze(1) / pair_scale.reshape(-1).clamp_min(1e-6)
+        preserve_var_cert = (
+            selected_var_cert.gather(1, strongest_rival_cert[:, None])
+            + selected_var_cert.gather(1, teacher_cert[:, None])
+        ).squeeze(1)
+        preserve_robust_cert = preserve_margin_cert - beta_cert * torch.sqrt(
+            preserve_var_cert.clamp_min(0.0) + 1.0e-12
+        ) - residual_eps_cert
+        preserve_required_cert = float(cert_cfg.get("preserve_margin", 0.01))
+        preserve_terms_cert = F.softplus(
+            (preserve_required_cert - preserve_robust_cert) / tau_cert
+        )
+        certified_terms = torch.where(anchor_wrong_cert, correct_terms_cert, preserve_terms_cert)
+        wrong_weight_cert = float(cert_cfg.get("anchor_wrong_weight", 4.0))
+        correctable_bonus = float(cert_cfg.get("correctable_bonus", 2.0))
+        certified_weights = torch.where(
+            anchor_wrong_cert,
+            torch.full_like(certified_terms, wrong_weight_cert),
+            torch.ones_like(certified_terms),
+        )
+        certified_weights = certified_weights * torch.where(
+            correctable_cert,
+            torch.full_like(certified_terms, correctable_bonus),
+            torch.ones_like(certified_terms),
+        )
+        train_uncorrectable = bool(cert_cfg.get("train_uncorrectable_anchor_wrong", False))
+        certified_mask = (~anchor_wrong_cert) | correctable_cert | train_uncorrectable
+        L_certified_residual_winner = (
+            certified_terms * certified_weights * certified_mask.float()
+        ).sum() / (certified_weights * certified_mask.float()).sum().clamp_min(1.0)
+        certified_correctable_fraction = correctable_cert.float().mean()
+        certified_robust_margin_mean = torch.where(
+            correctable_cert, robust_margin_cert, torch.zeros_like(robust_margin_cert)
+        ).sum() / correctable_cert.float().sum().clamp_min(1.0)
+    else:
+        L_certified_residual_winner = J0.new_tensor(0.0)
+        certified_correctable_fraction = J0.new_tensor(0.0)
+        certified_robust_margin_mean = J0.new_tensor(0.0)
 
     if logits_pair_full is not None and logits_pair_full_anchor is not None:
         with torch.no_grad():
@@ -3509,6 +3634,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("residual_action_atom", 0.0)) * L_residual_action_atom
         + float(lw.get("residual_action_uncertainty", 0.0)) * L_residual_action_uncertainty
         + float(lw.get("residual_winner_correction", 0.0)) * L_residual_winner_correction
+        + float(lw.get("certified_residual_winner", 0.0)) * L_certified_residual_winner
     )
     return {
         "loss": total,
@@ -3549,6 +3675,9 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_residual_action_atom": L_residual_action_atom,
         "L_residual_action_uncertainty": L_residual_action_uncertainty,
         "L_residual_winner_correction": L_residual_winner_correction,
+        "L_certified_residual_winner": L_certified_residual_winner,
+        "certified_correctable_fraction": certified_correctable_fraction,
+        "certified_robust_margin_mean": certified_robust_margin_mean,
         "action_family_enabled": J0.new_tensor(float(enable_action_loss)),
         "pair_potential_cycle_fraction": pair_potential_cycle_fraction,
         "selector_exact_fraction": selector_exact_fraction,
