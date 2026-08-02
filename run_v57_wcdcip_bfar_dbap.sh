@@ -30,7 +30,7 @@ EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v57_wcdcip_bfar_dbap_cl.yaml}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v57_wcdcip_bfar_dbap_train_2gpu.yaml}"
 # Paper-grade protocol: checkpoint/hyperparameter selection uses val_tune only;
 # one-sided residual calibration uses the log-disjoint val_calib manifest only.
-VAL_SPLIT="${VAL_SPLIT:-val_tune}"
+VAL_SPLIT="${VAL_SPLIT:-val}"
 OPEN_LOOP_SPLIT="${OPEN_LOOP_SPLIT:-$VAL_SPLIT}"
 CL_TOKEN_SPLIT="${CL_TOKEN_SPLIT:-$OPEN_LOOP_SPLIT}"
 
