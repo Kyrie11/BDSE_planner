@@ -23,6 +23,53 @@ SUPPORTED_EXTERNAL_BASELINES = {
     "ppad",
 }
 
+# These entries deliberately distinguish the original method from this repository's
+# budget-compatible adapter.  The adapters share BDSE candidate/evidence inputs and
+# are therefore suitable for controlled fixed-budget comparisons, but they are not
+# drop-in reproductions of the authors' complete systems.
+EXTERNAL_BASELINE_REFERENCES: dict[str, dict[str, str]] = {
+    "gameformer": {
+        "paper": "GameFormer: Game-theoretic Modeling and Learning of Transformer-based Interactive Prediction and Planning for Autonomous Driving (ICCV 2023)",
+        "source": "https://github.com/MCZhi/GameFormer and https://github.com/MCZhi/GameFormer-Planner",
+        "implementation_label": "GameFormer-inspired budget adapter",
+        "fidelity": "partial: hierarchical level-k refinement retained; joint multi-agent prediction/decoder omitted",
+    },
+    "dtpp": {
+        "paper": "DTPP: Differentiable Joint Conditional Prediction and Cost Evaluation for Tree Policy Planning in Autonomous Driving (2023)",
+        "source": "https://research.nvidia.com/labs/avg/publication/huang.karkus.etal.arxiv2023/",
+        "implementation_label": "DTPP-inspired budget adapter",
+        "fidelity": "partial: maneuver/tree branch scoring retained; ego-conditioned prediction and scenario tree omitted",
+    },
+    "plantf": {
+        "paper": "Rethinking Imitation-based Planner for Autonomous Driving / PlanTF (ICRA 2024)",
+        "source": "https://github.com/jchengai/planTF",
+        "implementation_label": "PlanTF-inspired budget adapter",
+        "fidelity": "partial: Transformer imitation planner and state dropout retained; official object-token pipeline/augmentations omitted",
+    },
+    "pluto": {
+        "paper": "PLUTO: Pushing the Limit of Imitation Learning-based Planning for Autonomous Driving (2024)",
+        "source": "https://github.com/jchengai/pluto",
+        "implementation_label": "PLUTO-inspired budget adapter",
+        "fidelity": "partial: longitudinal/lateral cost decomposition retained; auxiliary/CIL/augmentation framework omitted",
+    },
+    "pdm_closed": {
+        "paper": "Parting with Misconceptions about Learning-based Vehicle Motion Planning (CoRL 2023)",
+        "source": "https://github.com/autonomousvision/tuplan_garage",
+        "implementation_label": "PDM-Closed-style budget scorer",
+        "fidelity": "low: centerline/progress/comfort/safety prior retained; official proposal generation, IDM rollout and scoring stack omitted",
+    },
+    "ppad": {
+        "paper": "PPAD-style iterative policy refinement adapter",
+        "source": "repository-local adapter",
+        "implementation_label": "PPAD-inspired budget adapter",
+        "fidelity": "partial",
+    },
+}
+
+
+def external_reference(variant: str) -> dict[str, str]:
+    return dict(EXTERNAL_BASELINE_REFERENCES.get(str(variant), {}))
+
 
 def external_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
     ecfg = dict(cfg.get("external_baseline", {}) or {})
@@ -223,8 +270,12 @@ class ExternalBaselineModel(nn.Module):
         self.num_families = int(max(cfg.get("model", {}).get("num_families", 6), 8))
         self.dropout_p = float(self.ecfg.get("dropout", cfg.get("model", {}).get("dropout", 0.1)))
         self.state_dropout = float(self.ecfg.get("state_dropout", 0.0))
+        self.reasoning_levels = int(self.ecfg.get("reasoning_levels", 3))
+        self.tree_depth = int(self.ecfg.get("tree_depth", 2))
         self.step_s = float(cfg.get("candidate", {}).get("step_s", 0.1))
         self.budget = int(self.ecfg.get("budget", cfg.get("evidence", {}).get("budget", 16)))
+        self.unit_cost = bool(cfg.get("evidence", {}).get("unit_cost", True))
+        self.reference = external_reference(self.variant)
 
         self.ego_mlp = nn.Sequential(nn.Linear(8, h), nn.ReLU(), nn.LayerNorm(h), nn.Linear(h, h))
         self.agent_mlp = nn.Sequential(nn.Linear(16, h), nn.ReLU(), nn.LayerNorm(h), nn.Linear(h, h))
@@ -249,6 +300,10 @@ class ExternalBaselineModel(nn.Module):
         self.scene_token = nn.Parameter(torch.zeros(1, 1, h))
         self.cost_head = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h), nn.ReLU(), nn.Linear(h, 1))
         self.maneuver_head = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h), nn.ReLU(), nn.Linear(h, int(self.ecfg.get("num_maneuvers", 32))))
+        self.dtpp_branch_heads = nn.ModuleList([
+            nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h), nn.ReLU(), nn.Linear(h, int(self.ecfg.get("num_maneuvers", 32))))
+            for _ in range(max(1, self.tree_depth))
+        ])
         if self.variant == "pluto":
             self.long_head = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h // 2), nn.ReLU(), nn.Linear(h // 2, 1))
             self.lat_head = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h // 2), nn.ReLU(), nn.Linear(h // 2, 1))
@@ -339,22 +394,48 @@ class ExternalBaselineModel(nn.Module):
         logits = logits.masked_fill(~active, logits.new_tensor(-1e9))
         return token, logits, active
 
-    def _top_budget_mask(self, logits: torch.Tensor, active: torch.Tensor, budget_costs: torch.Tensor) -> torch.Tensor:
+    def _top_budget_selection(
+        self, logits: torch.Tensor, active: torch.Tensor, budget_costs: torch.Tensor, budget_override: float | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return mask, ranked selected indices and valid-slot mask without GPU/CPU sync.
+
+        BDSE caches use unit evidence cost by default.  That path is an exact, fully
+        vectorized top-k.  The variable-cost fallback keeps the greedy semantics but
+        loops only over evidence rank while updating the whole batch on-device.
+        """
         B, E = logits.shape
-        out = torch.zeros((B, E), dtype=torch.bool, device=logits.device)
-        budget = float(self.budget)
-        for b in range(B):
-            order = torch.argsort(logits[b], descending=True)
-            spent = 0.0
-            for idx in order.tolist():
-                if not bool(active[b, idx]):
-                    continue
-                c = float(budget_costs[b, idx].detach().clamp_min(0.0).cpu())
-                c = c if np.isfinite(c) and c > 0.0 else 1.0
-                if spent + c <= budget + 1e-6:
-                    out[b, idx] = True
-                    spent += c
-        return out
+        active = active.bool()
+        effective_budget = float(self.budget if budget_override is None else budget_override)
+        masked = logits.float().masked_fill(~active, -torch.inf)
+        if E == 0:
+            empty_i = torch.zeros((B, 1), dtype=torch.long, device=logits.device)
+            empty_v = torch.zeros((B, 1), dtype=torch.bool, device=logits.device)
+            return active.clone(), empty_i, empty_v
+
+        if self.unit_cost:
+            slots = max(1, min(E, int(effective_budget)))
+            values, indices = torch.topk(masked, k=slots, dim=1, largest=True, sorted=True)
+            slot_valid = torch.isfinite(values)
+            selected = torch.zeros((B, E), dtype=torch.bool, device=logits.device)
+            selected.scatter_(1, indices, slot_valid)
+            return selected, indices, slot_valid
+
+        order = torch.argsort(masked, dim=1, descending=True)
+        ordered_cost = torch.gather(torch.nan_to_num(budget_costs.float(), nan=1.0, posinf=1.0, neginf=1.0).clamp_min(1e-6), 1, order)
+        ordered_active = torch.gather(active, 1, order)
+        accepted = torch.zeros((B, E), dtype=torch.bool, device=logits.device)
+        spent = torch.zeros((B,), dtype=ordered_cost.dtype, device=logits.device)
+        budget = ordered_cost.new_full((B,), effective_budget)
+        for rank in range(E):
+            take = ordered_active[:, rank] & torch.isfinite(masked.gather(1, order[:, rank : rank + 1]).squeeze(1))
+            take = take & (spent + ordered_cost[:, rank] <= budget + 1e-6)
+            accepted[:, rank] = take
+            spent = spent + torch.where(take, ordered_cost[:, rank], torch.zeros_like(spent))
+        selected = torch.zeros((B, E), dtype=torch.bool, device=logits.device)
+        selected.scatter_(1, order, accepted)
+        # Keeping ranked E slots avoids a data-dependent CPU synchronization.  Padding
+        # masks ensure unselected slots do not affect attention.
+        return selected, order, accepted
 
     def _candidate_tokens(self, batch: dict[str, torch.Tensor], scene: torch.Tensor) -> torch.Tensor:
         traj = batch["candidate_trajectories"].float()
@@ -364,27 +445,26 @@ class ExternalBaselineModel(nn.Module):
         tok = self.cand_mlp(cfeat) + self.maneuver_embed(mid) + scene[:, None, :]
         return tok
 
-    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def forward(self, batch: dict[str, torch.Tensor], budget_override: float | None = None) -> dict[str, Any]:
         valid = batch["candidate_valid"].bool()
         scene = self._scene_embedding(batch)
         cand = self._candidate_tokens(batch, scene)
         ev_tokens, prop_logits, ev_active = self._evidence_tokens(batch, scene)
         costs = batch.get("evidence_budget_costs", torch.ones_like(prop_logits)).float().clamp_min(1e-6)
-        selected_mask = self._top_budget_mask(prop_logits, ev_active, costs)
-        # Provide at least one padding-safe context token per scene.
-        selected_tokens = []
-        max_sel = max(1, int(selected_mask.sum(dim=1).max().detach().cpu().item()) if selected_mask.numel() else 1)
-        for b in range(cand.shape[0]):
-            idx = torch.nonzero(selected_mask[b], as_tuple=False).reshape(-1)[:max_sel]
-            if idx.numel() == 0:
-                selected_tokens.append(torch.zeros(max_sel, self.hidden_dim, device=cand.device, dtype=cand.dtype))
-            else:
-                tok = ev_tokens[b, idx]
-                if tok.shape[0] < max_sel:
-                    tok = torch.cat([tok, torch.zeros(max_sel - tok.shape[0], self.hidden_dim, device=cand.device, dtype=cand.dtype)], dim=0)
-                selected_tokens.append(tok)
-        ev_sel = torch.stack(selected_tokens, dim=0)
+        selected_mask, selected_indices, selected_valid = self._top_budget_selection(prop_logits, ev_active, costs, budget_override=budget_override)
+        gather_index = selected_indices.unsqueeze(-1).expand(-1, -1, self.hidden_dim)
+        ev_sel = torch.gather(ev_tokens, 1, gather_index)
+        ev_sel = torch.where(selected_valid.unsqueeze(-1), ev_sel, torch.zeros_like(ev_sel))
+        # MultiheadAttention cannot consume a row with every key masked.  Reserve one
+        # zero context token only for genuinely empty scenes.
+        empty = ~selected_valid.any(dim=1)
+        first_slot = torch.zeros_like(selected_valid)
+        first_slot[:, 0] = True
+        selected_valid = selected_valid | (empty[:, None] & first_slot)
+        selected_padding = ~selected_valid
+        candidate_padding = ~valid
         scene_tok = self.scene_token.expand(cand.shape[0], -1, -1) + scene[:, None, :]
+        auxiliary_costs: list[torch.Tensor] = []
 
         if self.variant == "pdm_closed":
             # Neural forward is not used for PDM.  Keep a simple differentiable
@@ -392,7 +472,8 @@ class ExternalBaselineModel(nn.Module):
             j = -batch["candidate_trajectories"][:, :, -1, 0].float() * 0.05 + batch["candidate_trajectories"][:, :, :, 1].float().abs().mean(dim=-1)
         elif self.variant in {"plantf", "pluto"}:
             tokens = torch.cat([scene_tok, cand, ev_sel], dim=1)
-            enc = self.scene_transformer(tokens)
+            padding = torch.cat([torch.zeros((valid.shape[0], 1), dtype=torch.bool, device=valid.device), candidate_padding, selected_padding], dim=1)
+            enc = self.scene_transformer(tokens, src_key_padding_mask=padding)
             cand_enc = enc[:, 1 : 1 + cand.shape[1]]
             j = self.cost_head(cand_enc).squeeze(-1)
             if self.variant == "pluto" and self.long_head is not None and self.lat_head is not None:
@@ -400,27 +481,34 @@ class ExternalBaselineModel(nn.Module):
                 # good longitudinally but fail laterally near route/corridor.
                 j = j + self.long_head(cand_enc).squeeze(-1) + self.lat_head(cand_enc).squeeze(-1)
         elif self.variant == "gameformer":
-            levels = int(self.ecfg.get("reasoning_levels", 3))
             cand_ctx = cand
-            for _ in range(max(1, levels)):
-                attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, need_weights=False)
+            cand_padding = torch.cat([torch.zeros((valid.shape[0], 1), dtype=torch.bool, device=valid.device), candidate_padding], dim=1)
+            for _ in range(max(1, self.reasoning_levels)):
+                attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
                 cand_ctx = cand_ctx + attn
-                cand_ctx = self.scene_transformer(torch.cat([scene_tok, cand_ctx], dim=1))[:, 1:]
-            j = self.cost_head(cand_ctx).squeeze(-1)
+                cand_ctx = self.scene_transformer(torch.cat([scene_tok, cand_ctx], dim=1), src_key_padding_mask=cand_padding)[:, 1:]
+                auxiliary_costs.append(self.cost_head(cand_ctx).squeeze(-1))
+            j = auxiliary_costs[-1]
         elif self.variant == "dtpp":
-            tokens = torch.cat([scene_tok, cand, ev_sel], dim=1)
-            enc = self.scene_transformer(tokens)
-            cand_enc = enc[:, 1 : 1 + cand.shape[1]]
             mid = batch.get("candidate_maneuver_ids", torch.zeros(valid.shape, dtype=torch.long, device=valid.device)).long().clamp_min(0).clamp_max(self.maneuver_head[-1].out_features - 1)
-            maneuver_cost = torch.gather(self.maneuver_head(enc[:, 0]), 1, mid)
-            # Tree policy analogue: maneuver-level branch cost plus trajectory
-            # refinement cost over the candidate bank.
-            j = maneuver_cost + self.cost_head(cand_enc).squeeze(-1)
+            cand_ctx = cand
+            scene_ctx = scene_tok[:, 0]
+            cand_padding = torch.cat([torch.zeros((valid.shape[0], 1), dtype=torch.bool, device=valid.device), candidate_padding], dim=1)
+            for depth, branch_head in enumerate(self.dtpp_branch_heads):
+                # A budget-compatible tree-policy analogue: each stage updates the
+                # candidate branch state from selected interaction evidence, then
+                # adds a maneuver-level branch cost and trajectory refinement cost.
+                attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
+                enc = self.scene_transformer(torch.cat([scene_ctx[:, None, :], cand_ctx + attn], dim=1), src_key_padding_mask=cand_padding)
+                scene_ctx, cand_ctx = enc[:, 0], enc[:, 1:]
+                maneuver_cost = torch.gather(branch_head(scene_ctx), 1, mid)
+                auxiliary_costs.append(maneuver_cost + self.cost_head(cand_ctx).squeeze(-1))
+            j = auxiliary_costs[-1]
         elif self.variant == "ppad":
             iters = int(self.ecfg.get("iterations", 4))
             cand_ctx = cand
             for _ in range(max(1, iters)):
-                attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, need_weights=False)
+                attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
                 flat = cand_ctx.reshape(-1, self.hidden_dim)
                 upd = self.update_gru(attn.reshape(-1, self.hidden_dim), flat).reshape_as(cand_ctx)
                 cand_ctx = 0.5 * cand_ctx + 0.5 * upd
@@ -433,12 +521,19 @@ class ExternalBaselineModel(nn.Module):
         j = j.float()
         j = torch.nan_to_num(j, nan=0.0, posinf=1e6, neginf=-1e6)
         j = j.masked_fill(~valid, j.new_tensor(1e6))
-        return {
+        result: dict[str, torch.Tensor | str] = {
             "J0": j,
             "proposal_logits": prop_logits,
             "external_selected_mask": selected_mask,
+            "external_selected_indices": selected_indices,
+            "external_selected_valid": selected_valid,
             "external_variant": self.variant,
+            "external_implementation_label": self.reference.get("implementation_label", self.variant),
+            "external_fidelity": self.reference.get("fidelity", "unspecified"),
         }
+        if auxiliary_costs:
+            result["external_aux_costs"] = torch.stack([x.float().masked_fill(~valid, 1e6) for x in auxiliary_costs], dim=1)
+        return result
 
     def _numpy_pred_common(self, runtime: RuntimeFeatures, candidates: Any, evidence_bank: Any, cfg: dict[str, Any], J0: np.ndarray, proposal_logits: np.ndarray) -> dict[str, Any]:
         E = int(getattr(evidence_bank, "E", len(getattr(evidence_bank, "atoms", []))))
@@ -522,6 +617,8 @@ class ExternalBaselineModel(nn.Module):
             "external_selected_atoms": selected.astype(np.int64),
             "external_spent_budget": float(spent),
             "external_variant": self.variant,
+            "external_implementation_label": self.reference.get("implementation_label", self.variant),
+            "external_fidelity": self.reference.get("fidelity", "unspecified"),
         }
 
     @torch.no_grad()
@@ -543,7 +640,8 @@ class ExternalBaselineModel(nn.Module):
             else:
                 t = torch.from_numpy(arr.astype(np.float32)).to(device)
             batch[k] = t.unsqueeze(0)
-        out = self.forward(batch)
+        runtime_budget = float(external_cfg(cfg).get("budget", cfg.get("evidence", {}).get("budget", self.budget)))
+        out = self.forward(batch, budget_override=runtime_budget)
         J0 = out["J0"][0].detach().cpu().numpy().astype(np.float32)
         proposal = out["proposal_logits"][0].detach().cpu().numpy().astype(np.float32)
         return self._numpy_pred_common(runtime, candidates, evidence_bank, cfg, J0, proposal)

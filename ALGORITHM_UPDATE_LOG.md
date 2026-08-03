@@ -3442,3 +3442,20 @@ V59 protocol gate 新增：
 - 不重新启用 arbitrary pair field/Hodge projection。
 - 不继续单独堆高 B=16 selector loss而忽略 Top-M proposal bottleneck。
 - 不用不同 loss 权重下的 external adapter val loss直接做模型排名。
+
+## V60-EXT1 — Matched external baseline audit, acceleration and paired evaluation
+
+Scope: external baseline adapters and comparison infrastructure only; no change to the V60 DWAPC-BFAR-DBAP algorithm.
+
+- Reclassified GameFormer, DTPP, PlanTF and PLUTO implementations as `-inspired budget adapters`; reclassified the rule baseline as `PDM-Closed-style budget scorer`.
+- Added explicit paper/source/fidelity metadata to code and YAML.
+- Replaced per-batch/per-evidence GPU-to-CPU budget selection with vectorized unit-cost top-k and an on-device variable-cost fallback.
+- Vectorized selected evidence gathering and added correct Transformer/MultiheadAttention padding masks.
+- Fixed runtime fallback budget propagation: stage-specific B now changes the evidence tokens consumed by the external model instead of only changing query accounting.
+- Made DTPP `tree_depth` operational and added intermediate-stage deep supervision; added GameFormer level deep supervision.
+- Added deterministic matched-data manifests, common seed/protocol metadata and exact train/validation path hashes to checkpoints.
+- Added strict external checkpoint loading; wrong variants, missing tensors or shape mismatches now fail instead of silently evaluating random parameters.
+- Reduced per-step training synchronization; added fused AdamW, TF32, AMP, prefetching, warmup/cosine scheduling and early stopping.
+- Standardized output names to `outputs/external/{gameformer,dtpp,plantf,pluto}_budgeted.best.pt`, matching the V60 SWEEP loader.
+- Added two-GPU paired training, paired open-loop comparison, all-metric budget sweep, deterministic CL20/CL50 comparison, CL concurrency benchmark and integrity-checked completion markers.
+- Closed-loop now runs two systems concurrently on two GPUs, one worker per process, with optional multiple process copies per model after benchmarking.

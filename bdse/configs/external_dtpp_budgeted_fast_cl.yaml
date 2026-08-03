@@ -1,6 +1,7 @@
 evidence:
   budget: 16
   max_atoms: 128
+  unit_cost: true
 fallback:
   budget_stages:
   - 16
@@ -50,3 +51,9 @@ external_baseline:
     cost: 0.75
     pair: 1.0
     proposal: 0.25
+    deep_supervision: 0.25
+  implementation_label: DTPP-inspired budget adapter
+  reference_paper: 'DTPP: Differentiable Joint Conditional Prediction and Cost Evaluation
+    for Tree Policy Planning in Autonomous Driving'
+  reference_source: https://research.nvidia.com/labs/avg/publication/huang.karkus.etal.arxiv2023/
+  implementation_fidelity: partial

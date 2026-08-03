@@ -82,3 +82,24 @@ SOURCE_OUT_ROOT="$OUT_ROOT" \
 REACTIVE_OUT_ROOT=outputs_v60_dwapc_bfar_dbap_reactive_cl20_2gpu_v1 \
 GPUS="$GPUS" \
 bash RUN_V60_REACTIVE_CL20.sh
+
+# 6. Matched external baseline training and comparison (V60-EXT1)
+# The external output names are fixed and match RUN_V60_BUDGET_BASELINE_SWEEP.sh.
+export EXTERNAL_OUT_ROOT=outputs/external
+export EXTERNAL_CKPT_ROOT="$EXTERNAL_OUT_ROOT"
+export BDSE_SPLIT_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split
+
+# First clean run only; use 0 to resume checkpoints created by V60-EXT1.
+RESET_EXTERNAL_CHECKPOINTS=1 \
+GPUS="$GPUS" \
+bash RUN_V60_EXTERNAL_BASELINES_MATCHED_TRAIN_2GPU.sh
+
+python -m bdse.tools.validate_external_checkpoint_suite \
+  --checkpoint-root "$EXTERNAL_CKPT_ROOT" \
+  --expected-train-count 50000 --expected-val-count 500
+
+export SWEEP_OUT=outputs/v60_external_compare/budget_sweep_val_tune_1000
+SWEEP_OUT="$SWEEP_OUT" BUDGETS="8 16 24 32" \
+  GPUS="$GPUS" bash RUN_V60_BUDGET_BASELINE_SWEEP.sh
+
+# See NEXT_COMMANDS_V60_EXTERNAL_BASELINES.txt for paired open-loop and CL20/CL50.

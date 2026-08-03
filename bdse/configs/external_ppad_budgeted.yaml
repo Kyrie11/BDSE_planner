@@ -1,6 +1,7 @@
 evidence:
   budget: 16
   max_atoms: 128
+  unit_cost: true
 fallback:
   budget_stages:
   - 16
@@ -49,3 +50,7 @@ external_baseline:
     cost: 0.5
     pair: 0.75
     proposal: 0.25
+  implementation_label: PPAD-inspired budget adapter
+  reference_paper: PPAD-style iterative policy refinement
+  reference_source: repository-local adapter
+  implementation_fidelity: partial

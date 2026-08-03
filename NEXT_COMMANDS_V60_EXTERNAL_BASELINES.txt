@@ -1,0 +1,122 @@
+# V60 + matched external baseline commands
+
+cd /home/senzeyu2/code/BDSE_planner_v60_dwapc
+
+export NUPLAN_ROOT=/data0/senzeyu2/dataset/nuplan
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_SPLIT_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split
+export GPUS=0,1
+
+# Frozen V60 model. Use the actual best checkpoint produced by your V60 run.
+export V60_OUT_ROOT=outputs_v60_dwapc_bfar_dbap_fast_2gpu_v1
+export V60_CKPT="$V60_OUT_ROOT/train/bdse_v60_dwapc_bfar_dbap.best.pt"
+
+# Use the exact frozen/calibrated candidate evaluation config that generated the
+# V60 gate result when available. Otherwise use the repository CL config.
+export V60_EVAL_CONFIG=bdse/configs/v60_dwapc_bfar_dbap_cl.yaml
+
+# Exact location and names expected by all comparison scripts.
+export EXTERNAL_OUT_ROOT=outputs/external
+export EXTERNAL_CKPT_ROOT="$EXTERNAL_OUT_ROOT"
+
+# 0. Remove old, potentially unmatched checkpoints on the first clean run.
+# Set to 0 when resuming a run created by this optimized code.
+export RESET_EXTERNAL_CHECKPOINTS=1
+
+# 1. Train two models concurrently on the two GPUs, then the next pair.
+# All four use the same train/val manifests and common optimization protocol.
+MAX_TRAIN_SCENARIOS=50000 \
+MAX_TRAIN_PER_SPLIT=12500 \
+VAL_SPLIT=val_tune \
+VAL_SCENARIOS=500 \
+EXTERNAL_BATCH_SIZE=32 \
+EXTERNAL_NUM_WORKERS=10 \
+EXTERNAL_PREFETCH_FACTOR=2 \
+EXTERNAL_EPOCHS=30 \
+EXTERNAL_LR=0.0003 \
+EXTERNAL_WEIGHT_DECAY=0.0001 \
+EXTERNAL_WARMUP_EPOCHS=3 \
+EXTERNAL_VAL_EVERY=3 \
+EXTERNAL_EARLY_STOP_PATIENCE=3 \
+EXTERNAL_MIN_EPOCHS=12 \
+EXTERNAL_SEED=2026 \
+RESET_EXTERNAL_CHECKPOINTS="$RESET_EXTERNAL_CHECKPOINTS" \
+bash RUN_V60_EXTERNAL_BASELINES_MATCHED_TRAIN_2GPU.sh
+
+# After the first clean launch, preserve the new checkpoints for resume.
+export RESET_EXTERNAL_CHECKPOINTS=0
+
+# 2. Verify exact checkpoint names, model variants and identical data manifests.
+python -m bdse.tools.validate_external_checkpoint_suite \
+  --checkpoint-root "$EXTERNAL_CKPT_ROOT" \
+  --expected-train-count 50000 \
+  --expected-val-count 500 \
+  --output "$EXTERNAL_CKPT_ROOT/external_checkpoint_suite_validation.json"
+
+# Expected files:
+# outputs/external/gameformer_budgeted.best.pt
+# outputs/external/dtpp_budgeted.best.pt
+# outputs/external/plantf_budgeted.best.pt
+# outputs/external/pluto_budgeted.best.pt
+
+# 3. Paired open-loop comparison on the same 1000 val_tune samples.
+# This is recommended even though closed-loop is the primary result: it exposes
+# action match/regret, fixed-budget behavior and latency before expensive CL runs.
+export OPEN_LOOP_OUT=outputs/v60_external_compare/open_loop_val_tune_1000
+OPEN_LOOP_SPLIT=val_tune \
+OPEN_LOOP_SCENARIOS=1000 \
+OPEN_LOOP_WORKERS_PER_GPU=1 \
+bash RUN_V60_EXTERNAL_OPEN_LOOP_2GPU.sh
+
+cat "$OPEN_LOOP_OUT/open_loop_summary.md"
+# Full metrics:
+# $OPEN_LOOP_OUT/open_loop_all_metrics.csv
+# $OPEN_LOOP_OUT/open_loop_all_metrics.json
+
+# 4. Strict budget SWEEP_OUT comparison.
+# Fallback is disabled so B is the true evidence-query budget.
+export SWEEP_OUT=outputs/v60_external_compare/budget_sweep_val_tune_1000
+BUDGETS="8 16 24 32" \
+SWEEP_SPLIT=val_tune \
+SWEEP_SCENARIOS=1000 \
+SWEEP_WORKERS_PER_GPU=1 \
+bash RUN_V60_BUDGET_BASELINE_SWEEP.sh
+
+cat "$SWEEP_OUT/budget_sweep.md"
+# Compact metrics: $SWEEP_OUT/budget_sweep.csv
+# All metrics:     $SWEEP_OUT/budget_sweep_all_metrics.csv
+
+# 5. Benchmark closed-loop process copies using 4 scenarios.
+# Compare processes_per_model=1 and 2. Only choose 2 when it is faster and both
+# systems report successful=4, failed=0.
+bash BENCHMARK_V60_EXTERNAL_CLOSED_LOOP_CONCURRENCY.sh
+
+# 6. Primary non-reactive CL20 comparison.
+# The runner schedules two models at once: one on each GPU.
+export CL_CHALLENGE=closed_loop_nonreactive_agents
+export CL_PROCESSES_PER_MODEL=1
+bash RUN_V60_EXTERNAL_CL20_2GPU.sh
+
+cat outputs/v60_external_compare/closed_loop_nonreactive_agents_cl20/closed_loop_summary.md
+# Full metrics:
+# outputs/v60_external_compare/closed_loop_nonreactive_agents_cl20/closed_loop_all_metrics.csv
+
+# 7. Primary non-reactive CL50 comparison.
+bash RUN_V60_EXTERNAL_CL50_2GPU.sh
+
+cat outputs/v60_external_compare/closed_loop_nonreactive_agents_cl50/closed_loop_summary.md
+
+# 8. Recommended additional reactive CL20/CL50.
+# These are separate experiments and use the same deterministic token manifest
+# within each suite.
+export CL_CHALLENGE=closed_loop_reactive_agents
+bash RUN_V60_EXTERNAL_CL20_2GPU.sh
+bash RUN_V60_EXTERNAL_CL50_2GPU.sh
+
+# 9. Run only a subset when diagnosing a model.
+# Example: V60 and PlanTF together on the two GPUs.
+CL_LIMIT=20 \
+CL_CHALLENGE=closed_loop_nonreactive_agents \
+CL_SYSTEMS="v60 plantf" \
+CL_OUT=outputs/v60_external_compare/debug_v60_plantf_cl20 \
+bash RUN_V60_EXTERNAL_CLOSED_LOOP_SUITE_2GPU.sh

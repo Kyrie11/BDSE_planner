@@ -1,132 +1,32 @@
-# External baseline commands
+# V60 external baseline runbook
 
-Set these paths once:
+The canonical commands are in `NEXT_COMMANDS_V60_EXTERNAL_BASELINES.txt` at the repository root.
 
-```bash
-export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/
-export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/
-export NUPLAN_ROOT=/data0/senzeyu2/dataset/nuplan
-mkdir -p outputs/external outputs/open_loop outputs/closed_loop
-```
-
-## Trainable external baselines
+## 1. Train four matched adapters
 
 ```bash
-for name in gameformer dtpp plantf pluto; do
-  cfg="bdse/configs/external_${name}_budgeted.yaml"
-  out="outputs/external/${name}_budgeted.pt"
-  python -m bdse.external_baselines.train \
-    --config "$cfg" \
-    --split train_boston train_pittsburgh train_singapore train_vegas_2 \
-    --preprocessed-dir "$BDSE_TRAIN_CACHE" \
-    --max-scenarios 50000 \
-    --max-scenarios-per-split 12500 \
-    --batch-size 32 \
-    --num-workers 12 \
-    --device cuda \
-    --amp \
-    --val-preprocessed-dir "$BDSE_VAL_CACHE" \
-    --val-split val \
-    --val-max-scenarios 1000 \
-    --val-mode loss \
-    --val-every-n-epochs 1 \
-    --epochs 30 \
-    --log-file "outputs/external/${name}.train_log.jsonl" \
-    --output "$out"
-done
+bash RUN_V60_EXTERNAL_BASELINES_MATCHED_TRAIN_2GPU.sh
 ```
 
-Optional indirect PPAD adapter:
+## 2. Paired open-loop comparison
 
 ```bash
-python -m bdse.external_baselines.train \
-  --config bdse/configs/external_ppad_budgeted.yaml \
-  --split train_boston train_pittsburgh train_singapore train_vegas_2 \
-  --preprocessed-dir "$BDSE_TRAIN_CACHE" \
-  --max-scenarios 50000 \
-  --max-scenarios-per-split 12500 \
-  --batch-size 32 \
-  --num-workers 12 \
-  --device cuda \
-  --amp \
-  --val-preprocessed-dir "$BDSE_VAL_CACHE" \
-  --val-split val \
-  --val-max-scenarios 1000 \
-  --epochs 30 \
-  --log-file outputs/external/ppad.train_log.jsonl \
-  --output outputs/external/ppad_budgeted.pt
+bash RUN_V60_EXTERNAL_OPEN_LOOP_2GPU.sh
 ```
 
-## Open-loop evaluation
+## 3. Strict budget sweep
 
 ```bash
-python -m bdse.experiments.evaluate_open_loop \
-  --config bdse/configs/external_pdm_closed_budgeted_fast_cl.yaml \
-  --split val \
-  --preprocessed-dir "$BDSE_VAL_CACHE" \
-  --max-scenarios 1000 \
-  --device cuda \
-  --output outputs/open_loop/open_loop_external_pdm_closed.json \
-  --per-sample-output outputs/open_loop/open_loop_external_pdm_closed.jsonl
-
-for name in gameformer dtpp plantf pluto; do
-  python -m bdse.experiments.evaluate_open_loop \
-    --config "bdse/configs/external_${name}_budgeted_fast_cl.yaml" \
-    --checkpoint "outputs/external/${name}_budgeted.best.pt" \
-    --split val \
-    --preprocessed-dir "$BDSE_VAL_CACHE" \
-    --max-scenarios 1000 \
-    --device cuda \
-    --output "outputs/open_loop/open_loop_external_${name}.json" \
-    --per-sample-output "outputs/open_loop/open_loop_external_${name}.jsonl"
-done
+SWEEP_OUT=outputs/v60_external_compare/budget_sweep \
+BUDGETS="8 16 24 32" \
+bash RUN_V60_BUDGET_BASELINE_SWEEP.sh
 ```
 
-## Closed-loop 20-scenario check
+## 4. Closed-loop
 
 ```bash
-python -m bdse.experiments.evaluate_closed_loop \
-  --config bdse/configs/external_pdm_closed_budgeted_fast_cl.yaml \
-  --device cuda \
-  --challenge closed_loop_nonreactive_agents \
-  --metric-aggregator closed_loop_nonreactive_agents_weighted_average \
-  --output-dir outputs/closed_loop/external_pdm_closed_20 \
-  --experiment-uid external_pdm_closed_20 \
-  --nuplan-module nuplan.planning.script.run_simulation \
-  --scenario-builder nuplan \
-  --worker single_machine_thread_pool \
-  --hydra-full-error \
-  --nuplan-data-root "$NUPLAN_ROOT" \
-  --nuplan-map-root "$NUPLAN_ROOT/maps" \
-  --nuplan-exp-root "$NUPLAN_ROOT/exp" \
-  --nuplan-db-root "$NUPLAN_ROOT/data/cache/val/" \
-  -- \
-  scenario_filter.limit_total_scenarios=20 \
-  scenario_filter.shuffle=false \
-  worker.max_workers=4 \
-  run_metric=true
-
-for name in gameformer dtpp plantf pluto; do
-  python -m bdse.experiments.evaluate_closed_loop \
-    --config "bdse/configs/external_${name}_budgeted_fast_cl.yaml" \
-    --checkpoint "outputs/external/${name}_budgeted.best.pt" \
-    --device cuda \
-    --challenge closed_loop_nonreactive_agents \
-    --metric-aggregator closed_loop_nonreactive_agents_weighted_average \
-    --output-dir "outputs/closed_loop/external_${name}_20" \
-    --experiment-uid "external_${name}_20" \
-    --nuplan-module nuplan.planning.script.run_simulation \
-    --scenario-builder nuplan \
-    --worker single_machine_thread_pool \
-    --hydra-full-error \
-    --nuplan-data-root "$NUPLAN_ROOT" \
-    --nuplan-map-root "$NUPLAN_ROOT/maps" \
-    --nuplan-exp-root "$NUPLAN_ROOT/exp" \
-    --nuplan-db-root "$NUPLAN_ROOT/data/cache/val/" \
-    -- \
-    scenario_filter.limit_total_scenarios=20 \
-    scenario_filter.shuffle=false \
-    worker.max_workers=4 \
-    run_metric=true
-done
+CL_PROCESSES_PER_MODEL=1 bash RUN_V60_EXTERNAL_CL20_2GPU.sh
+CL_PROCESSES_PER_MODEL=1 bash RUN_V60_EXTERNAL_CL50_2GPU.sh
 ```
+
+Increase `CL_PROCESSES_PER_MODEL` to 2 only after a small benchmark confirms that duplicate model copies do not cause GPU contention.

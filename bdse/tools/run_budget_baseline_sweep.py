@@ -25,6 +25,14 @@ class Task:
     output_dir: Path
 
 
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _strict_budget_config(source: Path, output: Path, budget: int, *, bdse_local: bool) -> None:
     cfg = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
     if not isinstance(cfg, dict):
@@ -75,8 +83,23 @@ def _worker(gpu: str, tasks: "queue.Queue[Task | None]", errors: "queue.Queue[st
             task.output_dir.mkdir(parents=True, exist_ok=True)
             metrics = task.output_dir / "metrics.json"
             rows = task.output_dir / "metrics.jsonl"
-            if args.resume and metrics.is_file() and rows.is_file():
-                continue
+            run_manifest = task.output_dir / "run_manifest.json"
+            expected_manifest = {
+                "config_sha256": _file_sha256(task.config),
+                "checkpoint_sha256": "" if task.checkpoint is None else _file_sha256(task.checkpoint),
+                "split": args.split,
+                "max_scenarios": int(args.max_scenarios),
+                "preprocessed_dir": str(Path(args.preprocessed_dir).resolve()),
+                "disable_dense": bool(args.disable_dense),
+                "budget": int(task.budget),
+            }
+            if args.resume and metrics.is_file() and rows.is_file() and run_manifest.is_file():
+                try:
+                    existing = json.loads(run_manifest.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {}
+                if existing == expected_manifest:
+                    continue
             cmd = [
                 sys.executable, "-m", "bdse.experiments.evaluate_open_loop",
                 "--config", str(task.config),
@@ -101,6 +124,7 @@ def _worker(gpu: str, tasks: "queue.Queue[Task | None]", errors: "queue.Queue[st
                 proc = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
             if proc.returncode != 0:
                 raise RuntimeError(f"failed {task.name} B={task.budget}; see {task.output_dir / 'run.log'}")
+            run_manifest.write_text(json.dumps(expected_manifest, indent=2, sort_keys=True), encoding="utf-8")
         except Exception as exc:
             errors.put(f"gpu={gpu}: {type(exc).__name__}: {exc}")
         finally:
@@ -117,6 +141,7 @@ def _metric(data: dict[str, Any], *keys: str) -> float:
 
 def _summarize(tasks: list[Task], output_root: Path) -> None:
     records: list[dict[str, Any]] = []
+    all_metric_records: list[dict[str, Any]] = []
     hashes: dict[int, set[str]] = {}
     for task in tasks:
         data = json.loads((task.output_dir / "metrics.json").read_text(encoding="utf-8"))
@@ -135,6 +160,15 @@ def _summarize(tasks: list[Task], output_root: Path) -> None:
             "fallback_rate": _metric(data, "fallback_would_trigger_rate", "fallback_would_trigger"),
             "scenario_timestamp_sha256": digest,
         })
+        wide = {"system": task.name, "budget": task.budget, "num_scenarios": count, "scenario_timestamp_sha256": digest}
+        for key, value in data.items():
+            if isinstance(value, bool):
+                wide[str(key)] = float(value)
+            elif isinstance(value, (int, float)):
+                import math
+                if math.isfinite(float(value)):
+                    wide[str(key)] = float(value)
+        all_metric_records.append(wide)
     bad = {b: list(v) for b, v in hashes.items() if len(v) != 1}
     if bad:
         raise RuntimeError(f"systems are not paired on identical scenario order: {bad}")
@@ -142,6 +176,10 @@ def _summarize(tasks: list[Task], output_root: Path) -> None:
     with (output_root / "budget_sweep.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(records)
     (output_root / "budget_sweep.json").write_text(json.dumps(records, indent=2, sort_keys=True), encoding="utf-8")
+    all_fields = sorted({key for row in all_metric_records for key in row}, key=lambda x: (x not in {"system", "budget", "num_scenarios", "scenario_timestamp_sha256"}, x))
+    with (output_root / "budget_sweep_all_metrics.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=all_fields); w.writeheader(); w.writerows(all_metric_records)
+    (output_root / "budget_sweep_all_metrics.json").write_text(json.dumps(all_metric_records, indent=2, sort_keys=True), encoding="utf-8")
     lines = ["# Strict fixed-budget open-loop comparison", "", "Fallback is disabled. BDSE uses the selected-local/no-residual path so cross-budget results do not reuse a B=16 residual certificate.", "", "| System | B | Teacher match | Teacher regret | p95 latency ms | Effective atoms |", "|---|---:|---:|---:|---:|---:|"]
     for r in sorted(records, key=lambda x: (x["budget"], x["system"])):
         lines.append(f"| {r['system']} | {r['budget']} | {r['teacher_action_match']:.4f} | {r['teacher_regret']:.2f} | {r['planner_latency_ms_p95']:.1f} | {r['effective_query_atom_count']:.2f} |")

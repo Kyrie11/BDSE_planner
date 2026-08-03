@@ -1,6 +1,7 @@
 evidence:
   budget: 16
   max_atoms: 128
+  unit_cost: true
 fallback:
   budget_stages:
   - 16
@@ -49,3 +50,9 @@ external_baseline:
     cost: 0.5
     pair: 1.0
     proposal: 0.25
+    deep_supervision: 0.25
+  implementation_label: GameFormer-inspired budget adapter
+  reference_paper: 'GameFormer: Game-theoretic Modeling and Learning of Transformer-based
+    Interactive Prediction and Planning for Autonomous Driving (ICCV 2023)'
+  reference_source: https://github.com/MCZhi/GameFormer
+  implementation_fidelity: partial

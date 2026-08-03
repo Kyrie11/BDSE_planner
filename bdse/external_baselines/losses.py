@@ -58,10 +58,18 @@ def compute_external_baseline_losses(out: dict[str, torch.Tensor], batch: dict[s
         bce = F.binary_cross_entropy_with_logits(prop_logits, target_mask, reduction="none")
         prop_loss = (bce * active.float()).sum() / active.float().sum().clamp_min(1.0)
 
+    deep_action = J.sum() * 0.0
+    aux = out.get("external_aux_costs")
+    if isinstance(aux, torch.Tensor) and aux.ndim == 3 and aux.shape[1] > 1:
+        aux_logits = (-aux.float()).masked_fill(~valid[:, None, :], -1e9)
+        repeated_target = target[:, None].expand(-1, aux.shape[1]).reshape(-1)
+        deep_action = F.cross_entropy(aux_logits.reshape(-1, aux.shape[-1]), repeated_target)
+
     total = (
         float(weights.get("action", 1.0)) * ce
         + float(weights.get("cost", 0.5)) * reg
         + float(weights.get("pair", 0.5)) * pair_loss
         + float(weights.get("proposal", 0.25)) * prop_loss
+        + float(weights.get("deep_supervision", 0.0)) * deep_action
     )
-    return {"loss": total, "action_ce": ce, "cost_reg": reg, "pair_rank": pair_loss, "proposal_bce": prop_loss}
+    return {"loss": total, "action_ce": ce, "cost_reg": reg, "pair_rank": pair_loss, "proposal_bce": prop_loss, "deep_action_ce": deep_action}
