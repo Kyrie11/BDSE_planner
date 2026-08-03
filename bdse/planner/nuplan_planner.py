@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 import atexit
@@ -40,7 +41,7 @@ from bdse.planner.candidate_generator import generate_candidate_bank
 from bdse.planner.evidence_atoms import enumerate_evidence_atoms
 from bdse.planner.evidence_queries import compute_query_features_for_pairs
 from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
-from bdse.planner.fallback import runtime_safety_diagnostics, runtime_safety_flags_from_runtime, runtime_safety_flag_components, runtime_risk_scores
+from bdse.planner.fallback import runtime_safety_cache_scope, runtime_safety_diagnostics, runtime_safety_flags_from_runtime, runtime_safety_flag_components, runtime_risk_scores
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, restrict_pairs_to_viability_frontier
 from bdse.planner.selector import (
     SelectionResult,
@@ -277,6 +278,19 @@ class BDSEPlannerCore:
         self.cfg = cfg or load_config()
         self.model = model
         self.inference_lock = inference_lock
+
+    def __getstate__(self) -> dict[str, Any]:
+        # nuPlan's SimulationLogCallback pickles the planner at the end of every
+        # scene. ``threading.RLock`` is not serializable; V58 therefore spent
+        # hours simulating and then marked every scene failed during log export.
+        # The lock is process-local synchronization state and must not be stored.
+        state = dict(self.__dict__)
+        state["inference_lock"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.inference_lock = None
 
     def _rule_score_sparse(self, runtime: RuntimeFeatures, candidates, evidence_bank, atom_indices: np.ndarray, action_indices: np.ndarray, cfg: dict[str, Any] | None = None) -> np.ndarray:
         cfg = cfg or self.cfg
@@ -933,6 +947,8 @@ class BDSEPlannerCore:
                 predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
                 residual_action_potential=pred.get("residual_action_potential", None),
                 residual_action_variance=pred.get("residual_action_var", None),
+                residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
+                residual_set_action_factors=pred.get("residual_set_action_factors", None),
                 evidence_certificate_fraction=selection.diagnostics.get(
                     "aocc_certified_pair_fraction", None
                 ),
@@ -1221,6 +1237,22 @@ class BDSEPlannerCore:
         return self._fallback_reason(tournament, cfg) not in {"disabled", "accepted", "accepted_low_delta"}
 
     def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
+        prediction_scope = getattr(self.model, "runtime_prediction_cache_scope", None)
+        model_scope = prediction_scope() if callable(prediction_scope) else nullcontext(None)
+        with runtime_safety_cache_scope() as safety_memo, model_scope as prediction_memo:
+            action, trajectory, diagnostics = self._plan_from_runtime_impl(runtime)
+            if os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}:
+                timing = diagnostics.setdefault("timing_core", {})
+                timing["runtime_safety_cache_hits"] = int(safety_memo.hits)
+                timing["runtime_safety_cache_misses"] = int(safety_memo.misses)
+                timing["runtime_safety_cache_entries"] = int(len(safety_memo.cache))
+                if prediction_memo is not None:
+                    timing["runtime_prediction_cache_hits"] = int(prediction_memo.hits)
+                    timing["runtime_prediction_cache_misses"] = int(prediction_memo.misses)
+                    timing["runtime_prediction_cache_entries"] = int(len(prediction_memo.cache))
+            return action, trajectory, diagnostics
+
+    def _plan_from_runtime_impl(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
         profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
         timing_core: dict[str, float] = {}
         t = time.perf_counter()

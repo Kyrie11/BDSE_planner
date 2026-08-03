@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from contextlib import contextmanager
 import os
+import threading
 import time
 
 import numpy as np
@@ -20,6 +22,18 @@ from bdse.planner.fallback import runtime_risk_scores, runtime_safety_flags_from
 from bdse.planner.hab import max_family_id, select_topm_atoms_hab
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, compact_runtime_pair_graph, restrict_pairs_to_viability_frontier, reweight_pairs_by_viability_scope
 from bdse.planner.selector import margin_normalization_scale, reserve_topm_candidates, restrict_topm_to_decision_evidence, structural_safety_mask
+
+
+
+_RUNTIME_PREDICTION_CACHE = threading.local()
+
+
+class _RuntimePredictionMemo:
+    def __init__(self) -> None:
+        self.cache: dict[tuple[int, int, int, int], tuple[Any, Any, Any, Any]] = {}
+        self.hits = 0
+        self.misses = 0
+        self.depth = 0
 
 EVIDENCE_TYPE_TO_ID = TYPE_NAMES
 FAMILY_TO_ID = FAMILY_NAMES
@@ -336,6 +350,29 @@ class BDSEModel(nn.Module):
             nn.init.zeros_(self.residual_action_var_head[-1].weight)
             nn.init.constant_(self.residual_action_var_head[-1].bias, -2.0)
 
+        # V59 FSCIP: a low-rank selected-set interaction potential.  The model
+        # predicts one factor per evidence atom and one factor per action before
+        # selection.  After the fixed-budget set is known, their DeepSets-style
+        # pooled interaction yields a global action potential without a second
+        # neural forward.  It is integrable by construction and captures evidence
+        # interactions that an independent atom sum cannot represent.
+        self.set_residual_rank = max(0, int(mcfg.get("set_residual_rank", 0)))
+        if self.set_residual_rank > 0:
+            self.residual_set_atom_head = nn.Sequential(
+                nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.ReLU(), nn.Linear(h, self.set_residual_rank)
+            )
+            self.residual_set_action_head = nn.Sequential(
+                nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.ReLU(), nn.Linear(h, self.set_residual_rank)
+            )
+            if bool(mcfg.get("zero_init_set_residual_head", True)):
+                nn.init.zeros_(self.residual_set_atom_head[-1].weight)
+                nn.init.zeros_(self.residual_set_atom_head[-1].bias)
+                nn.init.normal_(self.residual_set_action_head[-1].weight, mean=0.0, std=0.01)
+                nn.init.zeros_(self.residual_set_action_head[-1].bias)
+        else:
+            self.residual_set_atom_head = None
+            self.residual_set_action_head = None
+
         if bool(cfg.get("training", {}).get("freeze_unused_pair_variance_head", False)):
             for param in self.pair_var_head.parameters():
                 param.requires_grad_(False)
@@ -538,8 +575,23 @@ class BDSEModel(nn.Module):
             "family_pi": family_pi,
             "family_active": family_active,
             "evidence_valid": e_valid,
+            "action_valid": valid,
             "action_set_summary": u_A,
         }
+
+    def set_residual_factors(self, context: dict[str, torch.Tensor]) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if self.set_residual_rank <= 0 or self.residual_set_atom_head is None or self.residual_set_action_head is None:
+            return None, None
+        scene = context["scene"]
+        evidence_h = context["evidence_h"]
+        action_h = context["action_h"]
+        scene_e = scene[:, None, :].expand(-1, evidence_h.shape[1], -1)
+        scene_a = scene[:, None, :].expand(-1, action_h.shape[1], -1)
+        atom = self.residual_set_atom_head(torch.cat([evidence_h, scene_e], dim=-1))
+        action = self.residual_set_action_head(torch.cat([action_h, scene_a], dim=-1))
+        atom = atom.masked_fill(~context["evidence_valid"][:, :, None], 0.0)
+        action = action.masked_fill(~context["action_valid"][:, :, None], 0.0)
+        return atom, action
 
     def _sparse_pair_features(
         self,
@@ -879,12 +931,15 @@ class BDSEModel(nn.Module):
             residual_action = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
             residual_action_var = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
             pair_out = None
+        set_atom_factors, set_action_factors = self.set_residual_factors(ctx)
         out = {
             "J0": J0,
             "g": local,
             "g_var": local_var,
             "residual_action_potential": residual_action,
             "residual_action_var": residual_action_var,
+            "residual_set_atom_factors": set_atom_factors,
+            "residual_set_action_factors": set_action_factors,
             "proposal_logits": ctx["proposal_logits"],
             "selector_logits": ctx["proposal_logits"],
             "family_logits": ctx["family_logits"],
@@ -1004,25 +1059,75 @@ class BDSEModel(nn.Module):
             gamma = float(sel.get("gamma_max_default", sel.get("gamma_max", 100.0)))
         return eta, gamma
 
+    @contextmanager
+    def runtime_prediction_cache_scope(self):
+        """Reuse the expensive scene encoder across fallback stages of one plan.
+
+        The fixed runtime/candidate/evidence objects are immutable inside a
+        planner call, while B/M/L only affect proposal truncation and the sparse
+        query graph.  A thread-local scope is safe with a shared read-only model
+        and never leaks tensors across scenes.
+        """
+        memo = getattr(_RUNTIME_PREDICTION_CACHE, "memo", None)
+        owner = not isinstance(memo, _RuntimePredictionMemo) or memo.depth <= 0
+        if owner:
+            memo = _RuntimePredictionMemo()
+            _RUNTIME_PREDICTION_CACHE.memo = memo
+        memo.depth += 1
+        try:
+            yield memo
+        finally:
+            memo.depth -= 1
+            if owner:
+                try:
+                    delattr(_RUNTIME_PREDICTION_CACHE, "memo")
+                except AttributeError:
+                    pass
+
+    def _runtime_encoded_context(self, runtime, candidates, evidence_bank):
+        memo = getattr(_RUNTIME_PREDICTION_CACHE, "memo", None)
+        key = (id(self), id(runtime), id(candidates), id(evidence_bank))
+        if isinstance(memo, _RuntimePredictionMemo) and memo.depth > 0 and key in memo.cache:
+            memo.hits += 1
+            return (*memo.cache[key], True, 0.0, 0.0)
+        started = time.perf_counter()
+        batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=False)
+        make_batch_s = float(time.perf_counter() - started)
+        started = time.perf_counter()
+        self.eval()
+        with torch.inference_mode():
+            ctx = self.encode_context(batch)
+            set_atom_factors_t, set_action_factors_t = self.set_residual_factors(ctx)
+        encode_context_s = float(time.perf_counter() - started)
+        if isinstance(memo, _RuntimePredictionMemo) and memo.depth > 0:
+            memo.cache[key] = (batch, ctx, set_atom_factors_t, set_action_factors_t)
+            memo.misses += 1
+        return batch, ctx, set_atom_factors_t, set_action_factors_t, False, make_batch_s, encode_context_s
+
     def predict_certificate_numpy(self, runtime, candidates, evidence_bank, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         cfg = cfg or self.cfg
         profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
         model_timing: dict[str, float] = {}
         t_model = time.perf_counter()
-        batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=False)
+        (batch, ctx, set_atom_factors_t, set_action_factors_t, context_cache_hit,
+         make_batch_s, encode_context_s) = self._runtime_encoded_context(runtime, candidates, evidence_bank)
         if profile_enabled:
-            model_timing["model_make_batch_s"] = float(time.perf_counter() - t_model)
-            t_model = time.perf_counter()
-        self.eval()
-        with torch.inference_mode():
-            ctx = self.encode_context(batch)
-        if profile_enabled:
-            model_timing["model_encode_context_s"] = float(time.perf_counter() - t_model)
+            model_timing["model_context_cache_hit"] = float(context_cache_hit)
+            model_timing["model_make_batch_s"] = float(make_batch_s)
+            model_timing["model_encode_context_s"] = float(encode_context_s)
             t_model = time.perf_counter()
         J0 = ctx["J0"][0].detach().cpu().numpy().astype(np.float32)
         proposal_logits = ctx["proposal_logits"][0].detach().cpu().numpy().astype(np.float32)
         family_logits = ctx["family_logits"][0].detach().cpu().numpy().astype(np.float32)
         family_pi = ctx["family_pi"][0].detach().cpu().numpy().astype(np.float32)
+        set_atom_factors_np = (
+            set_atom_factors_t[0].detach().cpu().numpy().astype(np.float32)
+            if set_atom_factors_t is not None else None
+        )
+        set_action_factors_np = (
+            set_action_factors_t[0].detach().cpu().numpy().astype(np.float32)
+            if set_action_factors_t is not None else None
+        )
         flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
         # v12: an evidence-free, robustly normalized decision prior becomes part
         # of J0.  This keeps the fixed evidence budget intact while giving the
@@ -1590,6 +1695,10 @@ class BDSEModel(nn.Module):
         if bool(runtime_cfg.get("disable_pair_residual_intervention", False)):
             residual_action_sparse.fill(0.0)
             residual_action_var_sparse.fill(0.0)
+            if set_atom_factors_np is not None:
+                set_atom_factors_np.fill(0.0)
+            if set_action_factors_np is not None:
+                set_action_factors_np.fill(0.0)
         g_sparse[:, ~valid_mask] = 0.0
         g_var_sparse[:, ~valid_mask] = 0.0
         residual_action_sparse[:, ~valid_mask] = 0.0
@@ -1615,6 +1724,8 @@ class BDSEModel(nn.Module):
             "g_var": g_var_sparse,
             "residual_action_potential": residual_action_sparse,
             "residual_action_var": residual_action_var_sparse,
+            "residual_set_atom_factors": set_atom_factors_np,
+            "residual_set_action_factors": set_action_factors_np,
             "certificate_pair_atom_delta": certificate_selector_delta,
             "certificate_pair_atom_var": certificate_selector_var,
             "certificate_rival_pair_atom_delta": certificate_rival_delta,

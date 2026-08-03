@@ -669,6 +669,9 @@ def _evidence_action_potential_cost(
     valid_mask: np.ndarray,
     *,
     residual_action_variance: np.ndarray | None,
+    residual_set_atom_factors: np.ndarray | None = None,
+    residual_set_action_factors: np.ndarray | None = None,
+    set_residual_scale: float = 1.0,
     normalize_margins: bool,
     margin_scale: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, dict[str, float]]:
@@ -680,6 +683,23 @@ def _evidence_action_potential_cost(
     pot = np.asarray(residual_action_potential, dtype=np.float32) if residual_action_potential is not None else np.zeros((0, K), dtype=np.float32)
     selected = selected[(selected >= 0) & (selected < pot.shape[0])] if pot.ndim == 2 else np.zeros((0,), dtype=np.int64)
     action_potential = pot[selected].sum(axis=0).astype(np.float32) if selected.size else np.zeros((K,), dtype=np.float32)
+    set_action_potential = np.zeros((K,), dtype=np.float32)
+    atom_factors = np.asarray(residual_set_atom_factors, dtype=np.float32) if residual_set_atom_factors is not None else np.zeros((0, 0), dtype=np.float32)
+    action_factors = np.asarray(residual_set_action_factors, dtype=np.float32) if residual_set_action_factors is not None else np.zeros((0, 0), dtype=np.float32)
+    set_selected = selected[(selected >= 0) & (selected < atom_factors.shape[0])] if atom_factors.ndim == 2 else np.zeros((0,), dtype=np.int64)
+    if (
+        set_selected.size
+        and atom_factors.ndim == 2
+        and action_factors.ndim == 2
+        and atom_factors.shape[1] > 0
+        and action_factors.shape[0] >= K
+        and action_factors.shape[1] == atom_factors.shape[1]
+    ):
+        rank = int(atom_factors.shape[1])
+        pooled = atom_factors[set_selected].sum(axis=0) / np.sqrt(max(float(set_selected.size), 1.0))
+        pooled = np.tanh(pooled).astype(np.float32)
+        set_action_potential = (action_factors[:K] @ pooled / np.sqrt(max(float(rank), 1.0))).astype(np.float32)
+        action_potential = action_potential + float(set_residual_scale) * set_action_potential
     finite_valid = valid[:K] & np.isfinite(anchor)
     if bool(finite_valid.any()):
         action_potential = action_potential - float(np.mean(action_potential[finite_valid]))
@@ -694,6 +714,10 @@ def _evidence_action_potential_cost(
         "pair_potential_residual_edge_abs_mean": 0.0,
         "residual_action_potential_abs_mean": float(np.mean(np.abs(action_potential))) if action_potential.size else 0.0,
         "residual_action_potential_selected_atom_count": float(len(selected)),
+        "set_conditioned_residual_active": float(bool(set_selected.size and atom_factors.ndim == 2 and action_factors.ndim == 2)),
+        "set_conditioned_residual_rank": float(atom_factors.shape[1] if atom_factors.ndim == 2 else 0),
+        "set_conditioned_residual_abs_mean": float(np.mean(np.abs(set_action_potential))) if set_action_potential.size else 0.0,
+        "set_conditioned_residual_scale": float(set_residual_scale),
     }
     return anchor, corrected, sigma, diag
 
@@ -712,6 +736,8 @@ def run_pair_conditioned_tournament(
     predicted_atom_costs: np.ndarray | None = None,
     residual_action_potential: np.ndarray | None = None,
     residual_action_variance: np.ndarray | None = None,
+    residual_set_atom_factors: np.ndarray | None = None,
+    residual_set_action_factors: np.ndarray | None = None,
     evidence_certificate_fraction: float | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
@@ -762,6 +788,9 @@ def run_pair_conditioned_tournament(
             selected_atoms,
             valid_mask,
             residual_action_variance=residual_action_variance,
+            residual_set_atom_factors=residual_set_atom_factors,
+            residual_set_action_factors=residual_set_action_factors,
+            set_residual_scale=float(runtime_cfg.get("set_conditioned_residual_scale", 1.0)),
             normalize_margins=normalize_margins,
             margin_scale=float(pair_margin_scale or 1.0),
         )

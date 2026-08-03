@@ -3258,3 +3258,148 @@ Completed in the analysis environment:
 - strict gate audit regression: PASS.
 
 No fresh V58 nuPlan training, calibration, open-loop, non-reactive closed loop, reactive closed loop, or CL100 was executed here. No future gate PASS, closed-loop improvement, real-time claim, SOTA claim, or CCF-A-level empirical result is asserted in advance.
+
+---
+
+# V59 FSCIP-BFAR-DBAP — V58结果诊断、闭环工程修复与集合条件残差（2026-08-03）
+
+## 1. V58冻结结果
+
+V58 原始 open-loop gate 报告：
+
+- Protocol gate：PASS；
+- Minimum metrics / formal minimum gate：PASS；
+- Competitive metrics / formal competitive gate：FAIL。
+
+V58 在 1000 个配对场景上保持：candidate/local/foundation teacher match 均为 `0.141`，pair-full candidate/local 均为 `0.141`，最终 residual gain、pair-full residual gain、beneficial/harmful 均为零。Competitive FAIL 是真实算法失败，而不是阈值边缘失败。
+
+V58 的正向证据集中在 evidence path：proposal decisive recall `0.80247`、selected decisive recall `0.61065`、effective decisive recall `0.77631`、interaction decisive recall `0.57934`、evidence certificate `0.88803`、fallback `0.110`。因此 V59 不回退 selector/AOCC 主线。
+
+## 2. V58闭环结果不可用
+
+V58 candidate CL20 两个 shard 都完成了长时间仿真，但在 `SimulationLogCallback` 序列化 planner 时触发：
+
+```text
+TypeError: cannot pickle '_thread.RLock' object
+```
+
+两个 shard 最终均报告 `successful=0, failed=10`。旧脚本仍生成 combined summary 和 `.closed_loop_complete.json`，所以这些文件不能作为闭环结果。Local control 仅开始运行，三路 paired CL20 并未完成。
+
+V59 修复：
+
+- `BDSEPlannerCore.__getstate__/__setstate__` 删除进程本地 RLock；
+- 默认删除 `callback.simulation_log_callback`，保留 metric main callbacks；
+- 合并前强制逐 shard 检查成功数等于 token 数且失败数为零；
+- 只有全部 shard 验证通过后才写 `.closed_loop_complete.json`。
+
+## 3. V58耗时根因
+
+流水线近似耗时：anchor gate 13 分钟、8 epoch 训练 2 小时 40 分钟、双证书 calibration 25 分钟、三路并发 open-loop 9.8 分钟。正式 open-loop 不是主要瓶颈。
+
+Candidate CL20 从 gate 后运行约 3.1–3.6 小时仍以 20/20 失败结束。profile 显示 80% planner call 命中 plan cache，但所有调用平均 core plan 仍为 25.9–29.4 秒，其中 certificate stages 14.5–16.7 秒、final safety 4.76–4.80 秒。非缓存 replanning 的隐含成本约为每次 2 分钟以上。
+
+根因：
+
+1. 同一 replanning 的 route distance、agent envelope、TTC、hard/soft risk 在模型、selector、多级 fallback、rule rerank 和 final diagnostic 中重复计算；
+2. 每个 fallback B/M/L stage 重复构建 batch 和执行相同 scene encoder；
+3. 4 个 simulation threads 共用一份 GPU 模型与 RLock，CPU 几何工作也形成锁队列；
+4. 仿真结束后序列化错误使前面的全部计算失效。
+
+V59 增加 per-planner-call runtime safety memo、scene/context memo，并改为每 GPU 多进程、每进程一个 simulation worker。并发数必须通过 CL4 benchmark 在目标机器上选择，默认 2 process/GPU，不预先声称固定加速倍数。
+
+## 4. V58 residual calibration问题
+
+V58 residual calibration 只在实际 residual proposal 场景上收集分数：5000 个 calibration scenes 仅 90 个 proposal，得到 `epsilon=0.46431`，远大于训练 reserve `0.05`。1000-scene open-loop 中 raw proposal 约 1.2%，conditional residual certificate pass 为 0，所有 residual proposal 被拒绝。
+
+V59 将 residual conformal score 改为 scene-uniform all-rival score：每个场景固定 selected-local anchor，对所有 valid rivals 计算单侧 margin error，并取该场景最坏 rival 作为一个 exchangeable calibration score。actual-proposal calibration 仅保留为 diagnostic。
+
+第二遍工程审计发现并修复一个新实现中的键名错误：runtime 输出为 `residual_action_var`，校准器曾错误读取 `residual_action_variance`。V59 现在使用严格 helper，缺少正确 key、动作维度不一致或 sigma matrix 不完整时立即失败，禁止静默零方差校准。
+
+## 5. V58算法判断
+
+有效并保留：
+
+- immutable foundation anchor；
+- fixed B=16 evidence budget；
+- boundary pair curriculum；
+- sparse exact AOCC；
+- direct integrable action potential；
+- evidence/residual dual-certificate separation；
+- same-checkpoint local 与 matched foundation controls；
+- group-disjoint tune/calibration；
+- paired open-loop concurrency 与 token hashing。
+
+不足或无效：
+
+- 独立 per-evidence additive residual 没有产生最终 winner correction；
+- global action-potential reconstruction loss 从约 `0.372` 恶化至 `0.383`；
+- atomwise residual loss 约 `0.012` 基本不变；
+- certified winner loss 从约 `3.09` 降到 `2.86` 后停滞，robust winner boundary 未被跨越；
+- proposal-conditional calibration 太稀疏；
+- V58 checkpoint score 在所有 residual gain 为零时仍可由 selector 指标主导。
+
+## 6. V59算法：Focused Set-Conditioned Integrable Potential
+
+V59 在不增加 queried evidence budget 的前提下加入低秩 selected-set interaction potential：
+
+```text
+h_S(a) = sum_{i in S} h_i(a)
+       + < psi(a), tanh( sum_{i in S} phi(i) / sqrt(|S|) ) > / sqrt(r)
+```
+
+其中 `r=8`。该结构直接输出 action scalar potential，诱导的 pair margins 天然 antisymmetric/cycle-consistent；它表达 additive per-evidence head 无法表达的 evidence-set interaction，同时保持论文的 fixed-budget novelty。
+
+新增 `L_residual_boundary_margin_distill`，只在 selected-local anchor 错误且 teacher margin 足够大的 correctable scenes 上，直接拟合 teacher winner 相对当前 anchor 的 margin。V59 降低全局 reconstruction/atomwise loss 权重，提高 certified winner 与 boundary margin 权重，避免平均重构淹没最终 winner 信号。
+
+Residual mean 与 set heads 使用 5x LR，variance head 使用 2x LR。Warm start 时 additive residual 和 set atom factor 为零，set action factor小随机初始化，保证 step 0 仍为 anchor no-op，同时允许 set head获得梯度。
+
+## 7. V59 checkpoint与gate
+
+Competitive checkpoint score 新增：robust margin、proposal rate，并在 residual gain 与 pair-full gain 同时非正时施加大额 penalty，防止 selector-only checkpoint 被选为 paper main checkpoint。
+
+V59 protocol gate 新增：
+
+- `L_residual_boundary_margin_distill` 必须实际执行；
+- scene-uniform residual calibration 必须独立、覆盖至少 1000 scenes、覆盖率至少 80%；
+- residual calibration epsilon、uncertainty beta 和 runtime config 必须一致；
+- controls 必须关闭 additive/set residual 与 residual epsilon；
+- candidate/local/foundation paired hashes、counts 和 frozen anchor rows 必须一致。
+
+## 8. V59推荐实验顺序
+
+1. Smoke test；要求新 boundary loss、set-head LR groups、exact selector、winner/certificate losses 非零。
+2. Fresh 训练、scene-uniform calibration、三路并发 1000-scene open-loop；默认不自动运行 closed loop。
+3. 先看 pair-full residual gain：若仍为零，问题仍在 residual expressivity/optimization；不得放宽 certificate。
+4. 若 pair-full gain > 0 但 B16 gain = 0，强化 selector 与 set-conditioned winner coupling。
+5. 若 raw proposal 有益但全部被 calibration 拒绝，检查 uniform epsilon、raw error 和 sigma；不得使用 test 调参。
+6. Open-loop competitive gain 转正后运行 CL4 concurrency benchmark，再运行 paired NR-CL20 与 frozen R-CL20。
+7. 只有 beneficial > harmful 且安全指标无退化后运行 CL100。
+
+## 9. V59工程文件
+
+新增：
+
+- `bdse/configs/v59_fscip_bfar_dbap_{train_2gpu,cl,local_control_cl,anchor_control_cl}.yaml`；
+- `bdse/tools/calibrate_v59_dual_certificates.py`；
+- `bdse/tools/apply_v59_dual_calibration.py`；
+- `bdse/tools/check_v59_fscip_bfar_dbap_gate.py`；
+- `bdse/tests/test_v59_fscip_bfar.py`；
+- `run_v59_fscip_bfar_dbap.sh`；
+- `V59_FSCIP_BFAR_DBAP_NEXT_COMMANDS.sh`；
+- `RUN_V59_TRAINING_SMOKE.sh`；
+- `RUN_V59_REACTIVE_CL20.sh`；
+- `BENCHMARK_V59_OPEN_LOOP_CONCURRENCY.sh`；
+- `BENCHMARK_V59_CLOSED_LOOP_CONCURRENCY.sh`。
+
+核心修改：
+
+- `bdse/model/bdse_model.py`；
+- `bdse/model/losses.py`；
+- `bdse/planner/tournament.py`；
+- `bdse/planner/fallback.py`；
+- `bdse/planner/nuplan_planner.py`；
+- `bdse/experiments/train.py`。
+
+## 10. 验证边界
+
+本地静态/单元验证通过；未在当前环境执行 fresh V59 训练、calibration、open-loop 或 nuPlan closed-loop。V59 不预先声明三个 gate PASS、闭环提升、实时性、SOTA 或 CCF-A录用级结果。

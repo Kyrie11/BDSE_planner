@@ -43,6 +43,7 @@ _ACTION_FAMILY_LOSS_NAMES = (
     "action_potential_teacher",
     "residual_winner_correction",
     "certified_residual_winner",
+    "residual_boundary_margin_distill",
 )
 
 
@@ -1414,6 +1415,8 @@ def _evidence_action_potential_logits(
     selected_mask: torch.Tensor,
     valid: torch.Tensor,
     *,
+    residual_set_atom_factors: torch.Tensor | None = None,
+    residual_set_action_factors: torch.Tensor | None = None,
     pair_scale: torch.Tensor | None = None,
     normalize_margins: bool = True,
     cfg: dict[str, Any] | None = None,
@@ -1430,6 +1433,30 @@ def _evidence_action_potential_logits(
         potential = torch.zeros_like(anchor_cost)
     else:
         potential = (residual_action_potential * selected_mask[:, :, None].float()).sum(dim=1)
+    if (
+        residual_set_atom_factors is not None
+        and residual_set_action_factors is not None
+        and residual_set_atom_factors.ndim == 3
+        and residual_set_action_factors.ndim == 3
+        and residual_set_atom_factors.shape[:2] == selected_mask.shape
+        and residual_set_action_factors.shape[:2] == anchor_cost.shape
+        and residual_set_atom_factors.shape[2] == residual_set_action_factors.shape[2]
+        and residual_set_atom_factors.shape[2] > 0
+    ):
+        selected_f = selected_mask[:, :, None].float()
+        count = selected_f.sum(dim=1).clamp_min(1.0)
+        pooled = (residual_set_atom_factors * selected_f).sum(dim=1) / torch.sqrt(count)
+        pooled = torch.tanh(pooled)
+        rank = float(residual_set_atom_factors.shape[2])
+        set_potential = torch.einsum("bkr,br->bk", residual_set_action_factors, pooled) / max(rank ** 0.5, 1.0)
+        local_cfg = cfg or {}
+        set_scale = float(
+            ((local_cfg.get("training", {}) or {}).get(
+                "set_conditioned_residual_scale",
+                (local_cfg.get("runtime", {}) or {}).get("set_conditioned_residual_scale", 1.0),
+            ))
+        )
+        potential = potential + set_scale * set_potential
     valid_f = valid.float()
     center = (potential * valid_f).sum(dim=1, keepdim=True) / valid_f.sum(dim=1, keepdim=True).clamp_min(1.0)
     potential = (potential - center).masked_fill(~valid, 0.0)
@@ -1454,6 +1481,8 @@ def _action_potential_logits_dispatch(
     valid: torch.Tensor,
     *,
     residual_action_potential: torch.Tensor | None = None,
+    residual_set_atom_factors: torch.Tensor | None = None,
+    residual_set_action_factors: torch.Tensor | None = None,
     local_pair_delta: torch.Tensor | None = None,
     pair_delta_includes_local: bool = False,
     pair_scale: torch.Tensor | None = None,
@@ -1471,6 +1500,8 @@ def _action_potential_logits_dispatch(
             residual_action_potential,
             selected_mask,
             valid,
+            residual_set_atom_factors=residual_set_atom_factors,
+            residual_set_action_factors=residual_set_action_factors,
             pair_scale=pair_scale,
             normalize_margins=normalize_margins,
             cfg=cfg,
@@ -2933,6 +2964,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 pair_action_atom_mask,
                 valid,
                 residual_action_potential=out.get("residual_action_potential"),
+                residual_set_atom_factors=out.get("residual_set_atom_factors"),
+                residual_set_action_factors=out.get("residual_set_action_factors"),
                 local_pair_delta=local_atom_delta,
                 pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                 pair_scale=pair_scale,
@@ -2983,6 +3016,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     pair_selected_mask,
                     valid,
                     residual_action_potential=out.get("residual_action_potential"),
+                    residual_set_atom_factors=out.get("residual_set_atom_factors"),
+                    residual_set_action_factors=out.get("residual_set_action_factors"),
                     local_pair_delta=local_atom_delta,
                     pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                     pair_scale=pair_scale,
@@ -3147,6 +3182,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                         pair_selected_mask,
                         valid,
                         residual_action_potential=out.get("residual_action_potential"),
+                        residual_set_atom_factors=out.get("residual_set_atom_factors"),
+                        residual_set_action_factors=out.get("residual_set_action_factors"),
                         local_pair_delta=local_atom_delta,
                         pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
                         pair_scale=pair_scale,
@@ -3356,6 +3393,23 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             primary_corrected_cost.gather(1, anchor_cert[:, None])
             - primary_corrected_cost.gather(1, teacher_cert[:, None])
         ).squeeze(1) / pair_scale.reshape(-1).clamp_min(1e-6)
+        # V59 boundary-focused distillation regresses the exact teacher-vs-anchor
+        # margin instead of reconstructing every action/evidence entry.  This is
+        # the quantity whose one-sided error determines residual conformal epsilon.
+        boundary_cfg = train_cfg.get("residual_boundary_margin_distill", {}) or {}
+        boundary_beta = max(float(boundary_cfg.get("huber_delta", 0.05)), 1.0e-6)
+        boundary_target = true_margin_cert.detach().clamp(
+            min=-float(boundary_cfg.get("target_clip", 1.5)),
+            max=float(boundary_cfg.get("target_clip", 1.5)),
+        )
+        boundary_terms = F.smooth_l1_loss(
+            pred_margin_cert, boundary_target, reduction="none", beta=boundary_beta
+        )
+        boundary_weights = 1.0 + float(boundary_cfg.get("teacher_margin_weight", 2.0)) * boundary_target.abs()
+        boundary_mask = correctable_cert
+        L_residual_boundary_margin_distill = (
+            boundary_terms * boundary_weights * boundary_mask.float()
+        ).sum() / (boundary_weights * boundary_mask.float()).sum().clamp_min(1.0)
         selected_var_cert = (
             out["residual_action_var"].clamp_min(0.0)
             * primary_selected_mask[:, :, None].float()
@@ -3434,6 +3488,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         ).sum() / correctable_cert.float().sum().clamp_min(1.0)
     else:
         L_certified_residual_winner = J0.new_tensor(0.0)
+        L_residual_boundary_margin_distill = J0.new_tensor(0.0)
         certified_correctable_fraction = J0.new_tensor(0.0)
         certified_robust_margin_mean = J0.new_tensor(0.0)
 
@@ -3635,6 +3690,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("residual_action_uncertainty", 0.0)) * L_residual_action_uncertainty
         + float(lw.get("residual_winner_correction", 0.0)) * L_residual_winner_correction
         + float(lw.get("certified_residual_winner", 0.0)) * L_certified_residual_winner
+        + float(lw.get("residual_boundary_margin_distill", 0.0)) * L_residual_boundary_margin_distill
     )
     return {
         "loss": total,
@@ -3676,6 +3732,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_residual_action_uncertainty": L_residual_action_uncertainty,
         "L_residual_winner_correction": L_residual_winner_correction,
         "L_certified_residual_winner": L_certified_residual_winner,
+        "L_residual_boundary_margin_distill": L_residual_boundary_margin_distill,
         "certified_correctable_fraction": certified_correctable_fraction,
         "certified_robust_margin_mean": certified_robust_margin_mean,
         "action_family_enabled": J0.new_tensor(float(enable_action_loss)),

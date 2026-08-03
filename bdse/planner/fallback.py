@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+import json
+import threading
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -10,6 +13,85 @@ from bdse.data.state_schema import DEFAULT_VEHICLE_LENGTH_M, DEFAULT_VEHICLE_WID
 from bdse.planner.selector import runtime_greedy_selector
 from bdse.planner.tournament import TournamentResult, run_tournament
 from bdse.utils import compute_curvature, finite_difference, nearest_polyline_distance
+
+
+@dataclass
+class _RuntimeSafetyMemo:
+    cache: dict[tuple[Any, ...], Any] = field(default_factory=dict)
+    hits: int = 0
+    misses: int = 0
+    depth: int = 0
+
+
+_RUNTIME_SAFETY_MEMO = threading.local()
+
+
+def _active_runtime_safety_memo() -> _RuntimeSafetyMemo | None:
+    memo = getattr(_RUNTIME_SAFETY_MEMO, "memo", None)
+    return memo if isinstance(memo, _RuntimeSafetyMemo) and memo.depth > 0 else None
+
+
+def _runtime_safety_cfg_signature(cfg: dict[str, Any]) -> str:
+    """Stable signature for geometry/risk settings only.
+
+    Fallback stages alter evidence budget and rival count, but runtime geometry is
+    unchanged.  Excluding those stage-only fields lets all certificate stages in
+    one planner call reuse the same O(K*T*agents) safety computation.
+    """
+    if not isinstance(cfg, dict):
+        return "{}"
+    candidate = cfg.get("candidate", {}) or {}
+    payload = {
+        "runtime_safety": cfg.get("runtime_safety", {}) or {},
+        "candidate_step_s": candidate.get("step_s", 0.1),
+        "candidate_route_width_m": candidate.get("route_width_m", 4.0),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _memoized_runtime_safety(
+    kind: str,
+    runtime: RuntimeFeatures,
+    candidates: CandidateBank,
+    cfg: dict[str, Any],
+    compute,
+):
+    memo = _active_runtime_safety_memo()
+    if memo is None:
+        return compute()
+    key = (kind, id(runtime), id(candidates), _runtime_safety_cfg_signature(cfg))
+    if key in memo.cache:
+        memo.hits += 1
+        return memo.cache[key]
+    value = compute()
+    memo.cache[key] = value
+    memo.misses += 1
+    return value
+
+
+@contextmanager
+def runtime_safety_cache_scope() -> Iterator[_RuntimeSafetyMemo]:
+    """Per-thread, per-planner-call memoization for immutable runtime geometry.
+
+    The cache never crosses planner calls or threads, so no scene can reuse stale
+    candidates.  Nested helpers share the same scope, which is important because
+    ``runtime_risk_scores`` calls the flag-component routine internally.
+    """
+    memo = getattr(_RUNTIME_SAFETY_MEMO, "memo", None)
+    owner = not isinstance(memo, _RuntimeSafetyMemo) or memo.depth <= 0
+    if owner:
+        memo = _RuntimeSafetyMemo()
+        _RUNTIME_SAFETY_MEMO.memo = memo
+    memo.depth += 1
+    try:
+        yield memo
+    finally:
+        memo.depth -= 1
+        if owner:
+            try:
+                delattr(_RUNTIME_SAFETY_MEMO, "memo")
+            except AttributeError:
+                pass
 
 
 def _ccw(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
@@ -200,7 +282,7 @@ def _agent_envelope_metrics(
     return hard_def.astype(np.float32), soft_def.astype(np.float32), ttc_risk, min_ttc
 
 
-def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
+def _runtime_safety_flag_components_uncached(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
     """Return tiered runtime safety flags for candidate actions.
 
     v26 used one conservative boolean flag for several very different failure
@@ -328,7 +410,15 @@ def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: Candida
     return out
 
 
-def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
+
+def runtime_safety_flag_components(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
+    return _memoized_runtime_safety(
+        "components", runtime, candidates, cfg,
+        lambda: _runtime_safety_flag_components_uncached(runtime, candidates, cfg),
+    )
+
+
+def _runtime_risk_scores_uncached(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
     """Continuous runtime risk scores for min-violation recovery.
 
     Boolean hard flags are necessary for constraint filtering, but they are not
@@ -430,6 +520,14 @@ def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg
     out["hard"] = hard
     out["soft"] = soft
     return out
+
+
+
+def runtime_risk_scores(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
+    return _memoized_runtime_safety(
+        "risks", runtime, candidates, cfg,
+        lambda: _runtime_risk_scores_uncached(runtime, candidates, cfg),
+    )
 
 
 def runtime_safety_flags_from_runtime(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:

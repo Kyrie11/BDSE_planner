@@ -693,8 +693,11 @@ def _validation_competitive_score(metrics: dict[str, float]) -> float:
         finite("val_interaction_decisive_recall", 0.0),
     )
     fallback = finite("val_fallback_would_trigger_rate", 1.0)
+    robust_margin = finite("val_pair_action_anchor_robust_margin", -1.0)
+    proposal_rate = finite("val_local_pair_full_to_residual_flip_rate", 0.0)
     residual_gain = candidate - local
     pair_gain = pair_full - local
+    no_winner_progress_penalty = 100.0 if residual_gain <= 0.0 and pair_gain <= 0.0 else 0.0
     return float(
         250.0 * candidate
         + 500.0 * residual_gain
@@ -702,7 +705,10 @@ def _validation_competitive_score(metrics: dict[str, float]) -> float:
         + 500.0 * (beneficial - harmful)
         + 20.0 * selected_recall
         + 15.0 * interaction_recall
+        + 40.0 * robust_margin
+        + 20.0 * proposal_rate
         - 15.0 * fallback
+        - no_winner_progress_penalty
     )
 
 
@@ -1325,6 +1331,18 @@ def _reinitialize_modules_after_warm_start(
                 initial_raw = float(safe_cfg.get("residual_action_variance_raw_bias", -2.0))
                 if layer.bias is not None:
                     torch.nn.init.constant_(layer.bias, initial_raw)
+        if "residual_set_atom_head" in matched:
+            layer = _last_linear(modules["residual_set_atom_head"])
+            if layer is not None:
+                torch.nn.init.zeros_(layer.weight)
+                if layer.bias is not None:
+                    torch.nn.init.zeros_(layer.bias)
+        if "residual_set_action_head" in matched:
+            layer = _last_linear(modules["residual_set_action_head"])
+            if layer is not None:
+                torch.nn.init.normal_(layer.weight, mean=0.0, std=float(safe_cfg.get("set_action_factor_init_std", 0.01)))
+                if layer.bias is not None:
+                    torch.nn.init.zeros_(layer.bias)
     if is_main:
         print(
             f"[bdse] reinitialized warm-start modules={matched} "
