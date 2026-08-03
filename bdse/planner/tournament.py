@@ -904,8 +904,11 @@ def run_pair_conditioned_tournament(
             )
         )
         robust_margin = raw_margin
+        residual_beta_uncertainty = float(
+            dual_cfg.get("residual_beta_uncertainty", tc.get("beta_uncertainty", 0.0))
+        )
         if proposed_action != anchor_action:
-            robust_margin -= float(tc.get("beta_uncertainty", 0.0)) * residual_sigma
+            robust_margin -= residual_beta_uncertainty * residual_sigma
             robust_margin -= residual_epsilon
         score_gain = float(scores[proposed_action] - scores[anchor_action]) if proposed_action != anchor_action else float("inf")
         flip_margin = float(guard_cfg.get("flip_margin", runtime_cfg.get("pair_residual_trust", {}).get("flip_margin", 0.05)))
@@ -941,6 +944,7 @@ def run_pair_conditioned_tournament(
             "pair_action_anchor_proposed_action": int(proposed_action),
             "pair_action_anchor_raw_margin": float(raw_margin),
             "pair_action_anchor_residual_sigma": float(residual_sigma),
+            "pair_action_anchor_residual_beta_uncertainty": float(residual_beta_uncertainty),
             "pair_action_anchor_residual_epsilon_cal": float(residual_epsilon),
             "pair_action_anchor_robust_margin": float(robust_margin),
             "pair_action_anchor_score_gain": float(score_gain),

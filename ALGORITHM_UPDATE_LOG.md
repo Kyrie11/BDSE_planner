@@ -3403,3 +3403,42 @@ V59 protocol gate 新增：
 ## 10. 验证边界
 
 本地静态/单元验证通过；未在当前环境执行 fresh V59 训练、calibration、open-loop 或 nuPlan closed-loop。V59 不预先声明三个 gate PASS、闭环提升、实时性、SOTA 或 CCF-A录用级结果。
+
+# V60 — Dense-Winner-Aligned Policy-Calibrated Set-Potential BFAR-DBAP
+
+## 诊断来源
+
+- V59 Protocol PASS；Minimum PASS；Competitive FAIL。
+- dense full-interface teacher match 0.359，但 sparse Top-M full match 0.141。
+- B=16 对 sparse-full winner 保持率 0.981，说明主要瓶颈位于 dense evidence 到 Top-M proposal。
+- V59 pair-full open-loop/validation 漏传 set-conditioned factors，导致 set head 未被正确评估和用于 checkpoint selection。
+- V59 all-rival residual calibration epsilon=3.3076，远大于训练 reserve=0.15。
+
+## 保留设计
+
+- fixed B budget、exact AOCC、boundary curriculum、direct integrable potential、dual certificate、same-checkpoint local control、paired foundation control。
+
+## 新增算法
+
+1. `L_proposal_dense_winner`：hard-forward straight-through Top-M 保持 dense-local winner和 strongest-rival margin。
+2. teacher-aligned dense scene weighting。
+3. proposal-first residual curriculum：2 epoch 低 residual scale，4 epoch ramp。
+4. set atom/action factor双侧小随机安全初始化。
+5. policy-selected-top-rival split-conformal residual calibration。
+6. conformal-only residual certificate，`residual_beta_uncertainty=0`。
+
+## 工程修复
+
+1. open-loop pair-full 传入 `residual_set_atom_factors` 和 `residual_set_action_factors`。
+2. validation pair-full 同步修复，checkpoint score可评价 set head。
+3. query diagnostics导出 `set_conditioned_residual_*`。
+4. checkpoint competitive/fixed-budget score加入 sparse-full、budget-vs-full 和 dense proposal drop。
+5. gate要求 proposal dense-winner loss实际执行。
+6. 新增 strict budget baseline sweep 工具，验证所有系统 scenario/timestamp hash一致。
+
+## 禁止重复尝试
+
+- 不通过降低 residual certificate 阈值制造 flip。
+- 不重新启用 arbitrary pair field/Hodge projection。
+- 不继续单独堆高 B=16 selector loss而忽略 Top-M proposal bottleneck。
+- 不用不同 loss 权重下的 external adapter val loss直接做模型排名。

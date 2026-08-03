@@ -365,9 +365,13 @@ class BDSEModel(nn.Module):
                 nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.ReLU(), nn.Linear(h, self.set_residual_rank)
             )
             if bool(mcfg.get("zero_init_set_residual_head", True)):
-                nn.init.zeros_(self.residual_set_atom_head[-1].weight)
+                atom_std = max(float(mcfg.get("set_atom_factor_init_std", 0.005)), 0.0)
+                if atom_std > 0.0:
+                    nn.init.normal_(self.residual_set_atom_head[-1].weight, mean=0.0, std=atom_std)
+                else:
+                    nn.init.zeros_(self.residual_set_atom_head[-1].weight)
                 nn.init.zeros_(self.residual_set_atom_head[-1].bias)
-                nn.init.normal_(self.residual_set_action_head[-1].weight, mean=0.0, std=0.01)
+                nn.init.normal_(self.residual_set_action_head[-1].weight, mean=0.0, std=float(mcfg.get("set_action_factor_init_std", 0.01)))
                 nn.init.zeros_(self.residual_set_action_head[-1].bias)
         else:
             self.residual_set_atom_head = None

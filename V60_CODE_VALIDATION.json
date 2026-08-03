@@ -1,0 +1,36 @@
+{
+  "claims": "No fresh V60 training/calibration/open-loop/closed-loop results are claimed.",
+  "engineering_regressions": {
+    "pair_full_set_factors": "PASS",
+    "policy_selected_top_rival_calibration_contract": "PASS",
+    "residual_specific_beta": "PASS",
+    "set_diagnostics_export": "PASS",
+    "straight_through_topm_forward_and_gradient": "PASS",
+    "strict_budget_sweep_hash_check": "PASS"
+  },
+  "fresh_training_executed": false,
+  "patch_dry_run": "PASS",
+  "python_compile": "PASS",
+  "shell_scripts": {
+    "BENCHMARK_V60_CLOSED_LOOP_CONCURRENCY.sh": "PASS",
+    "BENCHMARK_V60_OPEN_LOOP_CONCURRENCY.sh": "PASS",
+    "RUN_V60_BUDGET_BASELINE_SWEEP.sh": "PASS",
+    "RUN_V60_REACTIVE_CL20.sh": "PASS",
+    "RUN_V60_TRAINING_SMOKE.sh": "PASS",
+    "V60_DWAPC_BFAR_DBAP_NEXT_COMMANDS.sh": "PASS",
+    "run_v60_dwapc_bfar_dbap.sh": "PASS"
+  },
+  "unit_tests": {
+    "passed": 222,
+    "status": "PASS",
+    "warnings": 8
+  },
+  "version": "V60 DWAPC-BFAR-DBAP",
+  "yaml_configs": {
+    "v60_dwapc_bfar_dbap_anchor_control_cl.yaml": "PASS",
+    "v60_dwapc_bfar_dbap_cl.yaml": "PASS",
+    "v60_dwapc_bfar_dbap_local_control_cl.yaml": "PASS",
+    "v60_dwapc_bfar_dbap_train_2gpu.yaml": "PASS"
+  },
+  "zip_integrity": "PASS"
+}

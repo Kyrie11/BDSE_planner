@@ -695,6 +695,10 @@ def _validation_competitive_score(metrics: dict[str, float]) -> float:
     fallback = finite("val_fallback_would_trigger_rate", 1.0)
     robust_margin = finite("val_pair_action_anchor_robust_margin", -1.0)
     proposal_rate = finite("val_local_pair_full_to_residual_flip_rate", 0.0)
+    dense_full = finite("val_full_interface_action_match", 0.0)
+    sparse_full = finite("val_sparse_full_interface_action_match", 0.0)
+    budget_vs_full = finite("val_budget_vs_full_match", 0.0)
+    dense_proposal_drop = max(0.0, dense_full - sparse_full)
     residual_gain = candidate - local
     pair_gain = pair_full - local
     no_winner_progress_penalty = 100.0 if residual_gain <= 0.0 and pair_gain <= 0.0 else 0.0
@@ -707,6 +711,9 @@ def _validation_competitive_score(metrics: dict[str, float]) -> float:
         + 15.0 * interaction_recall
         + 40.0 * robust_margin
         + 20.0 * proposal_rate
+        + 120.0 * budget_vs_full
+        + 80.0 * sparse_full
+        - 180.0 * dense_proposal_drop
         - 15.0 * fallback
         - no_winner_progress_penalty
     )
@@ -730,6 +737,8 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     interaction_metric_present = "val_selector_interaction_family_selected" in metrics
     teacher_match = finite("val_teacher_action_match", finite("val_decision_sufficiency", 0.0))
     full_match = finite("val_full_interface_action_match", 0.0)
+    sparse_full = finite("val_sparse_full_interface_action_match", 0.0)
+    dense_proposal_drop = max(0.0, full_match - sparse_full)
     pair_full = finite("val_pair_full_interface_action_match", 0.0)
     local_pair_full = finite(
         "val_selected_local_anchor_action_match",
@@ -776,6 +785,7 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
     return float(
         220.0 * teacher_match
         + 100.0 * full_match
+        + 100.0 * sparse_full
         + 80.0 * local_pair_full
         + 140.0 * pair_full
         + 60.0 * budget_pair
@@ -788,6 +798,7 @@ def _validation_fixed_budget_critical_score(metrics: dict[str, float]) -> float:
         - 9.0 * np.log1p(regret / 1000.0)
         - 100.0 * hard_shortfall
         - 180.0 * pair_shortfall
+        - 180.0 * dense_proposal_drop
         - 220.0 * residual_interface_drop
         - 120.0 * max(0.0, harmful_residual - beneficial_residual)
         - 100.0 * near_shortfall
@@ -1038,6 +1049,9 @@ def _run_validation_open_loop(
                     predicted_atom_costs=pred["g"],
                     residual_action_potential=pred.get("residual_action_potential", None),
                     residual_action_variance=pred.get("residual_action_var", None),
+                    residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
+                    residual_set_action_factors=pred.get("residual_set_action_factors", None),
+                    evidence_certificate_fraction=1.0,
                 )
                 pair_full_tour = core._apply_all_flagged_structural_guard(
                     pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
@@ -1334,7 +1348,11 @@ def _reinitialize_modules_after_warm_start(
         if "residual_set_atom_head" in matched:
             layer = _last_linear(modules["residual_set_atom_head"])
             if layer is not None:
-                torch.nn.init.zeros_(layer.weight)
+                atom_std = max(float(safe_cfg.get("set_atom_factor_init_std", 0.005)), 0.0)
+                if atom_std > 0.0:
+                    torch.nn.init.normal_(layer.weight, mean=0.0, std=atom_std)
+                else:
+                    torch.nn.init.zeros_(layer.weight)
                 if layer.bias is not None:
                     torch.nn.init.zeros_(layer.bias)
         if "residual_set_action_head" in matched:

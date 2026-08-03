@@ -1,0 +1,84 @@
+# V60 DWAPC-BFAR-DBAP next commands
+
+cd /home/senzeyu2/code/BDSE_planner_v60_dwapc
+
+export NUPLAN_ROOT=/data0/senzeyu2/dataset/nuplan
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE_ORIGINAL=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_SPLIT_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split
+
+export FOUNDATION_CKPT=/home/senzeyu2/code/BDSE_planner/outputs_v51_far_dbap_2gpu_v1/foundation_anchor/train/bdse_v51_foundation_anchor.best.pt
+export FOUNDATION_SOURCE_CONFIG=bdse/configs/v51_strong_foundation_anchor_2gpu.yaml
+export OUT_ROOT=outputs_v60_dwapc_bfar_dbap_fast_2gpu_v1
+export GPUS=0,1
+
+# 1. Mandatory smoke test
+SMOKE_OUT_ROOT=outputs_v60_dwapc_training_smoke \
+GPUS="$GPUS" \
+bash RUN_V60_TRAINING_SMOKE.sh
+
+# Verify smoke metrics
+cat outputs_v60_dwapc_training_smoke/train/bdse_v60_dwapc_bfar_dbap.train_log.jsonl
+
+# 2. Full pipeline. Closed loop remains off until the open-loop competitive signal is positive.
+PIPELINE_DETACH=1 \
+FOUNDATION_POLICY=explicit \
+RECOVER_SAFE_FOUNDATION_COPIES=0 \
+REBUILD_FOUNDATION_IF_MISSING=0 \
+ALLOW_ALGORITHM_CHECKPOINT_INIT=0 \
+RUN_CLOSED_LOOP_AFTER_GATE=0 \
+RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL=0 \
+TRAIN_BATCH_SIZE_PER_GPU=8 \
+TRAIN_NUM_WORKERS_PER_GPU=6 \
+FAST_SELECTOR_SCENES_PER_RANK=1 \
+FAST_SELECTOR_EVERY_N_STEPS=4 \
+EXACT_SELECTOR_CPU_BACKEND=process \
+EXACT_SELECTOR_WORKERS_PER_RANK=4 \
+OPEN_LOOP_WORKERS_PER_GPU=2 \
+GPUS="$GPUS" \
+bash V60_DWAPC_BFAR_DBAP_NEXT_COMMANDS.sh
+
+# Monitor
+tail -f "$OUT_ROOT"/logs/pipeline_*.log
+tail -f "$OUT_ROOT"/logs/train_2gpu.out
+cat "$OUT_ROOT"/calibration/v60_dual_certificate.json
+cat "$OUT_ROOT"/open_loop/v60_dwapc_bfar_gate_report.json
+
+# 3. Fast strict-budget advisor table after V60 checkpoint is frozen.
+# external checkpoint folder must contain:
+# gameformer_budgeted.best.pt, dtpp_budgeted.best.pt,
+# plantf_budgeted.best.pt, pluto_budgeted.best.pt
+export V60_CKPT="$OUT_ROOT/train/bdse_v60_dwapc_bfar_dbap.best.pt"
+export EXTERNAL_CKPT_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/external
+export BUDGET_SWEEP_OUT=outputs_v60_budget_external_val1000
+
+OUT_ROOT="$BUDGET_SWEEP_OUT" \
+BDSE_SPLIT_CACHE="$BDSE_SPLIT_CACHE" \
+V60_CKPT="$V60_CKPT" \
+EXTERNAL_CKPT_ROOT="$EXTERNAL_CKPT_ROOT" \
+BUDGETS="8 16 24 32" \
+SWEEP_WORKERS_PER_GPU=1 \
+GPUS="$GPUS" \
+bash RUN_V60_BUDGET_BASELINE_SWEEP.sh
+
+cat "$BUDGET_SWEEP_OUT/budget_sweep.md"
+
+# 4. Run paired NR-CL20 only after:
+# - Protocol PASS
+# - Minimum PASS
+# - sparse-full improves materially over 0.141
+# - pair-full residual gain > 0
+# - beneficial residual > harmful residual
+RUN_CLOSED_LOOP_AFTER_GATE=1 \
+RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL=0 \
+PIPELINE_DETACH=0 \
+OUT_ROOT="$OUT_ROOT" \
+FOUNDATION_CKPT="$FOUNDATION_CKPT" \
+GPUS="$GPUS" \
+bash V60_DWAPC_BFAR_DBAP_NEXT_COMMANDS.sh
+
+# 5. Frozen paired reactive CL20 after NR-CL20 integrity passes.
+SOURCE_OUT_ROOT="$OUT_ROOT" \
+REACTIVE_OUT_ROOT=outputs_v60_dwapc_bfar_dbap_reactive_cl20_2gpu_v1 \
+GPUS="$GPUS" \
+bash RUN_V60_REACTIVE_CL20.sh

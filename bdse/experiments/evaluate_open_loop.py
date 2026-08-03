@@ -83,6 +83,7 @@ def main() -> None:
                 or key.startswith("evidence_certificate_")
                 or key.startswith("residual_flip_")
                 or key.startswith("dual_certificate_")
+                or key.startswith("set_conditioned_residual_")
             ):
                 if isinstance(value, (bool, np.bool_)):
                     qdiag[key] = float(bool(value))
@@ -131,6 +132,8 @@ def main() -> None:
                 predicted_atom_costs=pred["g"],
                 residual_action_potential=pred.get("residual_action_potential", None),
                 residual_action_variance=pred.get("residual_action_var", None),
+                residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
+                residual_set_action_factors=pred.get("residual_set_action_factors", None),
                 evidence_certificate_fraction=1.0,
             )
             pair_full_tour = core._apply_all_flagged_structural_guard(

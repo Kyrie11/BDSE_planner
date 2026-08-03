@@ -143,6 +143,28 @@ def _neg_mask_value(x: torch.Tensor) -> float:
     return -1e9
 
 
+def _straight_through_topm_mask(
+    logits: torch.Tensor, active_mask: torch.Tensor, top_m: int, tau: float
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Hard Top-M forward with a smooth threshold surrogate backward.
+
+    The forward mask exactly matches the proposal truncation used at runtime.
+    Gradients flow through a sigmoid around the per-scene M-th logit, so the
+    proposal head can learn to preserve a dense-local winner without relaxing
+    the deployed fixed Top-M interface.
+    """
+    active = active_mask.bool()
+    B, E = logits.shape
+    k = min(max(int(top_m), 1), E)
+    masked = logits.masked_fill(~active, _neg_mask_value(logits))
+    top_values, top_indices = torch.topk(masked, k=k, dim=1)
+    hard = torch.zeros_like(logits).scatter(1, top_indices, 1.0) * active.float()
+    threshold = top_values[:, -1:].detach()
+    soft = torch.sigmoid((logits - threshold) / max(float(tau), 1.0e-4)) * active.float()
+    st = hard + soft - soft.detach()
+    return st, hard.bool()
+
+
 def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
     """Stop-gradient deployment certificate masks for L_act.
 
@@ -2821,6 +2843,67 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_prop_rank = J0.new_tensor(0.0)
     L_prop = L_prop_bce + float(train_cfg.get("proposal_rank_weight", 0.5)) * L_prop_rank
 
+    # V60: the dominant V59 failure happens before the B=16 selector.  Dense
+    # local evidence reaches substantially higher teacher match, while proposal
+    # Top-M truncation collapses the winner and the exact B=16 selector then
+    # faithfully preserves that already-wrong sparse winner.  Train the proposal
+    # head on the actual deployment operation: preserve the dense-local winner
+    # under a hard-forward, straight-through Top-M mask.  Detaching g confines
+    # this objective to proposal ranking instead of letting the local cost head
+    # move the target.
+    proposal_dense_cfg = train_cfg.get("proposal_dense_winner", {}) or {}
+    if bool(proposal_dense_cfg.get("enabled", False)):
+        proposal_m = int(proposal_dense_cfg.get(
+            "top_m", (cfg.get("selector", {}) or {}).get("proposal_top_m", 24)
+        ))
+        proposal_tau = float(proposal_dense_cfg.get("straight_through_tau", 0.15))
+        st_topm_mask, hard_topm_mask = _straight_through_topm_mask(
+            out["proposal_logits"], e_mask, proposal_m, proposal_tau
+        )
+        detached_g = g.detach()
+        dense_local_cost = finite_J0 + (detached_g * e_mask[:, :, None].float()).sum(dim=1)
+        sparse_topm_cost = finite_J0 + (detached_g * st_topm_mask[:, :, None]).sum(dim=1)
+        dense_local_cost = dense_local_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
+        sparse_topm_cost = sparse_topm_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
+        with torch.no_grad():
+            dense_local_winner = dense_local_cost.argmin(dim=1)
+            hard_sparse_cost = finite_J0 + (detached_g * hard_topm_mask[:, :, None].float()).sum(dim=1)
+            hard_sparse_cost = hard_sparse_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
+            hard_sparse_winner = hard_sparse_cost.argmin(dim=1)
+            dense_correct = dense_local_winner.eq(target_action)
+            proposal_dense_topm_match = hard_sparse_winner.eq(dense_local_winner).float().mean()
+            proposal_dense_correct_scene_fraction = dense_correct.float().mean()
+        sparse_logits = _negative_cost_logits(
+            sparse_topm_cost, valid,
+            min_scale=float(proposal_dense_cfg.get("min_action_scale", 1.0)),
+        )
+        dense_ce = F.cross_entropy(sparse_logits, dense_local_winner, reduction="none")
+        dense_correct_weight = float(proposal_dense_cfg.get("teacher_aligned_weight", 4.0))
+        dense_scene_weight = torch.where(
+            dense_correct, torch.full_like(dense_ce, dense_correct_weight), torch.ones_like(dense_ce)
+        )
+        L_proposal_dense_action = (dense_ce * dense_scene_weight).sum() / dense_scene_weight.sum().clamp_min(1.0)
+        rival_mask_dense = valid.clone()
+        rival_mask_dense.scatter_(1, dense_local_winner[:, None], False)
+        strongest_dense_rival = sparse_logits.masked_fill(
+            ~rival_mask_dense, _neg_mask_value(sparse_logits)
+        ).argmax(dim=1)
+        preserved_margin = (
+            sparse_topm_cost.gather(1, strongest_dense_rival[:, None])
+            - sparse_topm_cost.gather(1, dense_local_winner[:, None])
+        ).squeeze(1)
+        dense_margin_target = float(proposal_dense_cfg.get("preserve_margin", 0.02))
+        dense_margin_tau = max(float(proposal_dense_cfg.get("margin_tau", 0.05)), 1.0e-4)
+        dense_margin_terms = F.softplus((dense_margin_target - preserved_margin) / dense_margin_tau)
+        L_proposal_dense_margin = (dense_margin_terms * dense_scene_weight).sum() / dense_scene_weight.sum().clamp_min(1.0)
+        L_proposal_dense_winner = L_proposal_dense_action + float(
+            proposal_dense_cfg.get("margin_weight", 1.0)
+        ) * L_proposal_dense_margin
+    else:
+        L_proposal_dense_winner = J0.new_tensor(0.0)
+        proposal_dense_topm_match = J0.new_tensor(0.0)
+        proposal_dense_correct_scene_fraction = J0.new_tensor(0.0)
+
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed
     # that better budget allocation alone cannot recover interaction recall or
     # closed-loop score.  This term directly trains the pair-conditioned head and
@@ -3654,6 +3737,19 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     else:
         L_cal = J0.new_tensor(0.0)
 
+    curriculum_cfg = train_cfg.get("residual_curriculum", {}) or {}
+    if bool(curriculum_cfg.get("enabled", False)):
+        proposal_only_epochs = max(int(curriculum_cfg.get("proposal_only_epochs", 2)), 0)
+        ramp_epochs = max(int(curriculum_cfg.get("ramp_epochs", 4)), 1)
+        initial_scale = float(curriculum_cfg.get("initial_scale", 0.1))
+        if cur_epoch < proposal_only_epochs:
+            residual_curriculum_scale = initial_scale
+        else:
+            progress = min(max((cur_epoch - proposal_only_epochs + 1) / float(ramp_epochs), 0.0), 1.0)
+            residual_curriculum_scale = initial_scale + (1.0 - initial_scale) * progress
+    else:
+        residual_curriculum_scale = 1.0
+
     total = (
         float(lw.get("base", 1.0)) * L_base
         + float(lw.get("pair", 1.0)) * L_pair
@@ -3665,6 +3761,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("full_interface_rank_aux", lw.get("rank", 0.1))) * L_rank
         + float(lw.get("family", 0.5)) * L_fam
         + float(lw.get("proposal", lw.get("selection", 1.0))) * L_prop
+        + float(lw.get("proposal_dense_winner", 0.0)) * L_proposal_dense_winner
         + float(lw.get("action", 1.0)) * L_act
         + float(lw.get("full_action", 1.0)) * L_full_action
         + float(lw.get("full_margin", 0.5)) * L_full_margin
@@ -3680,17 +3777,17 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("cycle_consistency", 0.0)) * L_cycle
         + float(lw.get("counterfactual_critical_pair", 0.0)) * L_cf_critical_pair
         + float(lw.get("counterfactual_critical_proposal", 0.0)) * L_cf_critical_proposal
-        + float(lw.get("pair_full_action", 0.0)) * L_pair_full_action
-        + float(lw.get("pair_full_winner_margin", 0.0)) * L_pair_full_winner_margin
+        + residual_curriculum_scale * float(lw.get("pair_full_action", 0.0)) * L_pair_full_action
+        + residual_curriculum_scale * float(lw.get("pair_full_winner_margin", 0.0)) * L_pair_full_winner_margin
         + float(lw.get("budget_preserve_pair_full", 0.0)) * L_budget_preserve_pair_full
-        + float(lw.get("pair_full_anchor_preserve", 0.0)) * L_pair_full_anchor_preserve
+        + residual_curriculum_scale * float(lw.get("pair_full_anchor_preserve", 0.0)) * L_pair_full_anchor_preserve
         + float(lw.get("pair_potential_projection", 0.0)) * L_pair_potential_projection
-        + float(lw.get("action_potential_teacher", 0.0)) * L_action_potential_teacher
-        + float(lw.get("residual_action_atom", 0.0)) * L_residual_action_atom
-        + float(lw.get("residual_action_uncertainty", 0.0)) * L_residual_action_uncertainty
-        + float(lw.get("residual_winner_correction", 0.0)) * L_residual_winner_correction
-        + float(lw.get("certified_residual_winner", 0.0)) * L_certified_residual_winner
-        + float(lw.get("residual_boundary_margin_distill", 0.0)) * L_residual_boundary_margin_distill
+        + residual_curriculum_scale * float(lw.get("action_potential_teacher", 0.0)) * L_action_potential_teacher
+        + residual_curriculum_scale * float(lw.get("residual_action_atom", 0.0)) * L_residual_action_atom
+        + residual_curriculum_scale * float(lw.get("residual_action_uncertainty", 0.0)) * L_residual_action_uncertainty
+        + residual_curriculum_scale * float(lw.get("residual_winner_correction", 0.0)) * L_residual_winner_correction
+        + residual_curriculum_scale * float(lw.get("certified_residual_winner", 0.0)) * L_certified_residual_winner
+        + residual_curriculum_scale * float(lw.get("residual_boundary_margin_distill", 0.0)) * L_residual_boundary_margin_distill
     )
     return {
         "loss": total,
@@ -3704,6 +3801,10 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_rank": L_rank,
         "L_fam": L_fam,
         "L_prop": L_prop,
+        "L_proposal_dense_winner": L_proposal_dense_winner,
+        "proposal_dense_topm_match": proposal_dense_topm_match,
+        "proposal_dense_correct_scene_fraction": proposal_dense_correct_scene_fraction,
+        "residual_curriculum_scale": J0.new_tensor(float(residual_curriculum_scale)),
         "L_sel": L_prop,
         "L_act": L_act,
         "L_act_pair": L_act_pair if 'L_act_pair' in locals() else J0.new_tensor(0.0),
