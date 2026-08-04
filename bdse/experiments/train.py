@@ -687,10 +687,16 @@ def _validation_competitive_score(metrics: dict[str, float]) -> float:
         "val_harmful_pair_potential_intervention_rate",
         finite("val_harmful_residual_intervention_rate", 0.0),
     )
+    proposal_recall = finite("val_proposal_decisive_atom_recall", 0.0)
     selected_recall = finite("val_selected_decisive_atom_recall", 0.0)
+    effective_recall = finite("val_effective_selected_decisive_atom_recall", 0.0)
     interaction_recall = finite(
         "val_selected_interaction_decisive_recall",
         finite("val_interaction_decisive_recall", 0.0),
+    )
+    evidence_certificate = finite(
+        "val_pair_action_anchor_guard_evidence_certificate_fraction",
+        finite("val_evidence_certificate_fraction", 0.0),
     )
     fallback = finite("val_fallback_would_trigger_rate", 1.0)
     robust_margin = finite("val_pair_action_anchor_robust_margin", -1.0)
@@ -702,12 +708,29 @@ def _validation_competitive_score(metrics: dict[str, float]) -> float:
     residual_gain = candidate - local
     pair_gain = pair_full - local
     no_winner_progress_penalty = 100.0 if residual_gain <= 0.0 and pair_gain <= 0.0 else 0.0
+    # Checkpoint selection is lexicographically constrained by the formal
+    # minimum gate.  V60 selected epoch 3 over epoch 1 even though proposal
+    # recall had already fallen below 0.72, because a tiny auxiliary-score gain
+    # outweighed the missing gate constraint.  The shortfall penalty makes any
+    # minimum-feasible checkpoint dominate an infeasible one while preserving
+    # the competitive score as the tie-breaker inside the feasible set.
+    minimum_shortfall = (
+        max(0.0, 0.72 - proposal_recall)
+        + max(0.0, 0.50 - selected_recall)
+        + max(0.0, 0.62 - effective_recall)
+        + max(0.0, 0.40 - interaction_recall)
+        + max(0.0, 0.40 - evidence_certificate)
+        + max(0.0, fallback - 0.60)
+    )
+    minimum_gate_penalty = 2000.0 * minimum_shortfall
     return float(
         250.0 * candidate
         + 500.0 * residual_gain
         + 350.0 * pair_gain
         + 500.0 * (beneficial - harmful)
+        + 10.0 * proposal_recall
         + 20.0 * selected_recall
+        + 10.0 * effective_recall
         + 15.0 * interaction_recall
         + 40.0 * robust_margin
         + 20.0 * proposal_rate
@@ -716,6 +739,7 @@ def _validation_competitive_score(metrics: dict[str, float]) -> float:
         - 180.0 * dense_proposal_drop
         - 15.0 * fallback
         - no_winner_progress_penalty
+        - minimum_gate_penalty
     )
 
 
@@ -1169,6 +1193,14 @@ def _run_validation_open_loop(
     metrics["val_open_loop_count"] = float(fail_t[1].item())
     metrics["val_bdse_score"] = _validation_bdse_score(metrics)
     metrics["val_fixed_budget_critical_score"] = _validation_fixed_budget_critical_score(metrics)
+    metrics["val_minimum_gate_feasible"] = float(
+        float(metrics.get("val_proposal_decisive_atom_recall", 0.0)) >= 0.72
+        and float(metrics.get("val_selected_decisive_atom_recall", 0.0)) >= 0.50
+        and float(metrics.get("val_effective_selected_decisive_atom_recall", 0.0)) >= 0.62
+        and float(metrics.get("val_selected_interaction_decisive_recall", 0.0)) >= 0.40
+        and float(metrics.get("val_pair_action_anchor_guard_evidence_certificate_fraction", 0.0)) >= 0.40
+        and float(metrics.get("val_fallback_would_trigger_rate", 1.0)) <= 0.60
+    )
     metrics["val_competitive_score"] = _validation_competitive_score(metrics)
     if was_training:
         model.train()

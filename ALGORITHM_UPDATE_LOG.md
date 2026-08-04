@@ -3459,3 +3459,119 @@ Scope: external baseline adapters and comparison infrastructure only; no change 
 - Standardized output names to `outputs/external/{gameformer,dtpp,plantf,pluto}_budgeted.best.pt`, matching the V60 SWEEP loader.
 - Added two-GPU paired training, paired open-loop comparison, all-metric budget sweep, deterministic CL20/CL50 comparison, CL concurrency benchmark and integrity-checked completion markers.
 - Closed-loop now runs two systems concurrently on two GPUs, one worker per process, with optional multiple process copies per model after benchmarking.
+
+# V61 — Deployment-Exact Hierarchical Winner Preservation (DE-HWPP) BFAR-DBAP
+
+## 1. V60 结果复核
+
+V60 官方 gate report 为：Protocol PASS、Minimum FAIL、Competitive FAIL。Minimum 的唯一失败项是 proposal decisive recall `0.70011 < 0.72`。Competitive 同时失败于 candidate-local / candidate-foundation teacher-match gain、pair-full residual gain、净有益 residual intervention、proposal recall 与 selected recall。
+
+严格的论文级可归因复核不再把 V60 Protocol 视为充分：candidate 配置启用了 rank-8 set-conditioned residual 与 `evidence_action_potential`，但 1000 条 candidate JSONL 中 `set_conditioned_residual_active/rank/abs_mean/scale` 覆盖率均为 0。因此，最终 winner 没有改善这一事实可信，但不能从现有结果归因 set head 是否真正进入了实际评测二进制/路径。
+
+## 2. V60 dense-winner proposal 目标没有解决旧瓶颈
+
+V60 训练日志中的 `proposal_dense_topm_match≈0.965` 不是运行时 HAB Top-M 指标，而是一个 global Top-M proxy。真实验证始终为：
+
+```text
+dense full-interface teacher match = 0.359
+sparse-full teacher match          = 0.141
+B16 teacher match                  = 0.141
+budget-vs-dense winner match       = 0.172
+budget-vs-sparse winner match      = 0.981
+```
+
+V60 实现存在两个根本问题：
+
+1. straight-through threshold 在未约束 proposal logit 空间中 detach，允许所有 proposal logits 同时上移的无效优化方向；
+2. loss hard-forward 使用 global Top-M，但部署使用 HAB family slots、family score、soft interaction reserve、group diversity 与 structural safety bypass。
+
+训练的 `L_prop` 从 `15.09` 增长到 `1452.33`（96.2x），`L_deploy_select` 从 `6.45` 增长到 `833.63`，而真实 proposal recall 从 epoch 1 的 `0.7260` 降到 epoch 7 的 `0.6439`。因此 V60 不仅没有保留 dense winner，还在后期持续破坏 proposal 分支。
+
+## 3. V61 核心算法
+
+### 3.1 Deployment-exact hierarchical winner preservation
+
+新增部署一致的 dense-winner proposal 路径：
+
+- 所有训练场景使用 GPU HAB forward：family slot allocation、family-conditioned atom acquisition、soft interaction reservation、structural evidence exclusion/refill；
+- 旋转抽样场景使用与运行时完全相同的 NumPy HAB Top-M hard mask；
+- exact hard-forward 与 fast GPU hard-forward 共用 translation-invariant、family-conditioned straight-through surrogate；
+- global Top-M 只保留为诊断，不再作为算法成功证据；
+- 部署 evidence budget、proposal M 与 query budget均不增加。
+
+新增训练诊断：
+
+```text
+proposal_fast_hab_topm_match
+proposal_global_topm_match
+proposal_exact_hab_topm_match
+proposal_exact_hab_fraction
+proposal_fast_exact_mask_jaccard
+proposal_logit_abs_mean
+proposal_logit_rms_mean
+L_proposal_logit_stability
+```
+
+### 3.2 Stable proposal surrogate
+
+straight-through Top-M 在 active atoms 上先中心化，去除 uniform-logit null direction；soft mask归一化到 M 个 atoms 的总质量；forward 始终为 hard mask。新增 logit center/RMS regularization，gate 对 RMS runaway 与 proposal loss runaway 直接判 Protocol FAIL。
+
+### 3.3 Stage-decoupled residual routing
+
+对 selected sparse anchor 选错的场景分两类：
+
+- dense local 已选对 teacher：proposal bridge failure；residual winner/certificate/boundary loss权重降为 `0.1`；
+- dense local 仍选错 teacher：intrinsic residual correction；保留 `1.0` 权重。
+
+这避免 residual 被迫补偿 proposal 丢失的 evidence，并新增：
+
+```text
+residual_proposal_failure_scene_fraction
+residual_intrinsic_correction_scene_fraction
+```
+
+### 3.4 Gate-feasible checkpoint selection
+
+V60 epoch 1 的 proposal recall `0.7260` 已满足 Minimum，但 competitive score 选择了 recall `0.7001` 的 epoch 3。V61 checkpoint score 对正式 Minimum gate 的 shortfall 加入高权重惩罚，并记录 `val_minimum_gate_feasible`。任何 gate-feasible checkpoint 都优先于 gate-infeasible checkpoint，competitive score只在同一可行层内排序。
+
+### 3.5 Strict result provenance
+
+V61 gate 新增：
+
+- candidate JSONL 中 set-conditioned residual rank/activation/amplitude/scale 必须与 candidate config 一致，覆盖率至少 99%；
+- exact runtime HAB 必须在训练中实际抽样；
+- fast/exact/global HAB 指标和 proposal logit稳定性必须完整；
+- proposal loss runaway、proposal logit RMS runaway直接判 Protocol FAIL；
+- 启用 residual stage routing 时必须导出两类场景比例。
+
+## 4. 保留、升级与暂缓
+
+继续保留：immutable foundation anchor、fixed planner-interface budget、HAB、exact AOCC、boundary curriculum、direct integrable action potential、dual certificates、same-checkpoint local control、paired foundation control、group-disjoint calibration、paired scenario/timestamp evaluation。
+
+升级：proposal supervision 从 atom recall/global Top-M 升级为 deployment-HAB winner preservation；checkpoint selection 升级为 gate-feasible lexicographic selection；set potential 升级为强制 end-to-end observability；residual training 升级为 proposal/intrinsic error routing。
+
+暂不放大：set-conditioned residual、learned residual uncertainty 与 policy calibration可保留，但 V60 没有净有益 winner 证据。必须先修复 proposal bridge，再判断 residual expressivity。不得通过降低 certificate 阈值制造 flip。
+
+## 5. 新的禁止重复尝试
+
+- 不再用 global Top-M train metric 代替 runtime HAB Top-M。
+- 不再对 uncentered proposal logits 使用 detached threshold straight-through。
+- 不再允许 checkpoint score选择 formal Minimum gate 已失败的 epoch。
+- 不再把“代码单元测试能导出字段”当作“实际实验 JSONL 已使用该路径”的证据。
+- 不让 residual 主要学习 dense-correct/sparse-wrong 的 proposal failure 场景。
+- test set 未构建完成且存在负 full-interface teacher regret 等诊断异常，在修复前禁止用 test 调参、报主结果或做模型选择。
+- open-loop Minimum 与 winner-level信号未转正前不运行 CL100；默认不在 gate fail 后自动跑 diagnostic CL20。
+
+## 6. V61 运行判断顺序
+
+1. smoke：exact HAB fraction > 0，fast/exact Jaccard 可观测，proposal RMS < 20，proposal loss无爆炸；
+2. epoch 1/3：`val_proposal_decisive_atom_recall >= 0.72`，且不随训练单调下降；
+3. `sparse_full_interface_action_match > 0.141`、`budget_vs_full_match > 0.172`；
+4. `budget_vs_sparse_full_match` 保持高位，确认 B16 selector未退化；
+5. raw residual proposal 中 teacher-directed beneficial > harmful；
+6. set diagnostics覆盖率 100%，pair-full gain转正；
+7. candidate-local teacher match gain转正后，才运行 paired CL20；Minimum + Competitive 通过后再运行 CL100。
+
+## 7. 验证边界
+
+V61 本地验证完成：Python compile、4 个 V61 YAML、3 个 shell 脚本语法、231 个单元测试、补丁 dry-run 与 ZIP 完整性。当前环境未执行 fresh V61 训练、calibration、open-loop 或 nuPlan closed-loop，因此不预先声明 V61 gate PASS、闭环提升、实时性或 CCF-A 级性能。

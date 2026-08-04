@@ -1,0 +1,160 @@
+{
+  "dataset": {
+    "test": {
+      "B16_oracle": 0.8399212433996599,
+      "full_interface_oracle_match": 0.9342800035798454,
+      "full_interface_teacher_regret": -1961.5412421877031,
+      "identity_duplicates": 0,
+      "incomplete": true,
+      "route_p95_p90": 17.549999618530272,
+      "runtime_sufficiency": 0.6407326750395275,
+      "safe_candidate_exists": 0.5778616389725844,
+      "samples_current": 67042,
+      "usable_for_tuning": false
+    },
+    "val": {
+      "B16_oracle": 0.9120134205210723,
+      "evidence_sufficiency": 0.5921570636023291,
+      "full_interface_oracle_match": 0.9656612687870177,
+      "identity_duplicates": 0,
+      "runtime_sufficiency": 0.7490328323461947,
+      "safe_candidate_exists": 0.7172960388921223,
+      "samples": 58418,
+      "selector_value_ratio": 0.6603487302807882
+    }
+  },
+  "engineering_audit": {
+    "L_sel_equals_L_prop": "logging alias, not duplicate total loss",
+    "candidate_rows": 1000,
+    "set_diagnostic_coverage": {
+      "set_conditioned_residual_abs_mean": 0.0,
+      "set_conditioned_residual_active": 0.0,
+      "set_conditioned_residual_rank": 0.0,
+      "set_conditioned_residual_scale": 0.0
+    },
+    "set_rank_configured": 8,
+    "set_result_attribution_possible": false,
+    "test_negative_full_interface_regret": -1961.5412421877031
+  },
+  "fresh_v61_experiments_executed": false,
+  "gate": {
+    "competitive_failures": [
+      "total teacher-match gain=+0.000000 < +0.015",
+      "residual teacher-match gain=+0.000000 < +0.005",
+      "pair-full residual gain=+0.000000 < +0.005",
+      "residual not net beneficial=0.0/0.0",
+      "proposal decisive recall=0.70010982922088 < 0.80",
+      "selected decisive recall=0.5373473197833856 < 0.55"
+    ],
+    "minimum_failures": [
+      "proposal decisive recall=0.70010982922088 < 0.72"
+    ],
+    "official": {
+      "competitive": false,
+      "minimum": false,
+      "protocol": true
+    },
+    "strict_reaudit": {
+      "competitive": false,
+      "minimum": false,
+      "protocol_attribution": "incomplete/fail under V61 provenance checker",
+      "reasons": [
+        "set-conditioned residual result diagnostics absent",
+        "proposal loss runaway not caught by V60 checker",
+        "runtime-HAB proposal contract unmeasured"
+      ]
+    }
+  },
+  "proposal_training": {
+    "L_deploy_select_first": 6.4464715625,
+    "L_deploy_select_last": 833.62964,
+    "L_prop_first": 15.09177375,
+    "L_prop_growth": 96.2328977400685,
+    "L_prop_last": 1452.32512,
+    "proxy_match_range": [
+      0.96446,
+      0.97104
+    ],
+    "root_causes": [
+      "global Top-M hard forward differs from HAB deployment",
+      "detached uncentered ST threshold admits uniform-logit shortcut",
+      "checkpoint score selected formal-Minimum-infeasible epoch"
+    ],
+    "validation": [
+      {
+        "epoch": 1,
+        "val_budget_vs_full_match": 0.172,
+        "val_competitive_score": -52.46719599990164,
+        "val_effective_selected_decisive_atom_recall": 0.7325714480160687,
+        "val_proposal_decisive_atom_recall": 0.7260403563999533,
+        "val_selected_decisive_atom_recall": 0.5669072636494927,
+        "val_sparse_full_interface_action_match": 0.141
+      },
+      {
+        "epoch": 3,
+        "val_budget_vs_full_match": 0.172,
+        "val_competitive_score": -52.403645302395766,
+        "val_effective_selected_decisive_atom_recall": 0.7029008949062641,
+        "val_proposal_decisive_atom_recall": 0.70010982922088,
+        "val_selected_decisive_atom_recall": 0.5372367105396881,
+        "val_sparse_full_interface_action_match": 0.141
+      },
+      {
+        "epoch": 5,
+        "val_budget_vs_full_match": 0.172,
+        "val_competitive_score": -53.208448643461544,
+        "val_effective_selected_decisive_atom_recall": 0.679701124274317,
+        "val_proposal_decisive_atom_recall": 0.6633517163620759,
+        "val_selected_decisive_atom_recall": 0.514036939907741,
+        "val_sparse_full_interface_action_match": 0.141
+      },
+      {
+        "epoch": 7,
+        "val_budget_vs_full_match": 0.172,
+        "val_competitive_score": -53.51317027042685,
+        "val_effective_selected_decisive_atom_recall": 0.670058537861717,
+        "val_proposal_decisive_atom_recall": 0.6439332923039712,
+        "val_selected_decisive_atom_recall": 0.5043943534951411,
+        "val_sparse_full_interface_action_match": 0.141
+      }
+    ]
+  },
+  "residual": {
+    "calibrated_policy_epsilon": 0.5348745531167605,
+    "conclusion": "calibration is not the root cause; all raw proposals miss teacher and are below flip margin even before epsilon",
+    "flip_margin": 0.015,
+    "raw_margin_max": 0.002950082765892148,
+    "raw_margin_mean": 0.0013957492968377967,
+    "raw_proposal_count": 9,
+    "raw_proposal_rate": 0.009,
+    "teacher_directed_raw_proposals": 0
+  },
+  "v61_changes": [
+    "deployment-HAB hard forward on all scenes",
+    "sampled exact runtime HAB hard forward",
+    "translation-invariant mass-normalized ST surrogate",
+    "family-conditioned gradient surrogate",
+    "proposal logit stability regularization",
+    "gate-feasible checkpoint selection",
+    "stage-decoupled residual routing",
+    "strict set-result observability",
+    "fail-fast training health checker",
+    "gate-fail closed-loop disabled by default"
+  ],
+  "validation": {
+    "compile": true,
+    "full_tests": "231 passed, 12 warnings",
+    "shell": "3/3",
+    "targeted_tests": "8 passed",
+    "yaml": "4/4"
+  },
+  "version": "V60 diagnosis for V61 DE-HWPP",
+  "winner_path": {
+    "budget_teacher_match": 0.141,
+    "budget_vs_dense_match": 0.172,
+    "budget_vs_sparse_match": 0.981,
+    "dense_full_teacher_match": 0.359,
+    "interpretation": "dense local contains usable winner information; runtime proposal bridge destroys it; B16 selector mostly preserves sparse-pool winner",
+    "sparse_full_teacher_match": 0.141
+  }
+}

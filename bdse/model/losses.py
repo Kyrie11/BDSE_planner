@@ -143,25 +143,43 @@ def _neg_mask_value(x: torch.Tensor) -> float:
     return -1e9
 
 
+def _masked_center(logits: torch.Tensor, active_mask: torch.Tensor) -> torch.Tensor:
+    """Translation-invariant centering over active proposal atoms."""
+    active_f = active_mask.bool().float()
+    mean = (logits * active_f).sum(dim=1, keepdim=True) / active_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+    return logits - mean
+
+
 def _straight_through_topm_mask(
     logits: torch.Tensor, active_mask: torch.Tensor, top_m: int, tau: float
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Hard Top-M forward with a smooth threshold surrogate backward.
+    """Hard global Top-M forward with a stable smooth surrogate backward.
 
-    The forward mask exactly matches the proposal truncation used at runtime.
-    Gradients flow through a sigmoid around the per-scene M-th logit, so the
-    proposal head can learn to preserve a dense-local winner without relaxing
-    the deployed fixed Top-M interface.
+    V60 detached the M-th threshold from the *uncentered* logits.  The dense
+    winner loss could therefore be reduced by adding the same positive offset to
+    every proposal logit, although the deployed Top-M ranking was unchanged.
+    That shortcut made BCE/listwise proposal losses explode and degraded actual
+    proposal recall.  Centering on active atoms removes the null direction while
+    preserving the exact hard forward set.  The soft mass is normalized to M so
+    the backward path cannot imitate dense evidence by fractionally selecting
+    every atom.
+
+    This helper is intentionally named global Top-M.  Runtime HAB uses family
+    slots, interaction reservation, and structural-evidence exclusion; V61 adds a
+    separate deployment-HAB forward path for the winner-preservation objective.
     """
     active = active_mask.bool()
-    B, E = logits.shape
+    _, E = logits.shape
     k = min(max(int(top_m), 1), E)
-    masked = logits.masked_fill(~active, _neg_mask_value(logits))
+    centered = _masked_center(logits, active)
+    masked = centered.masked_fill(~active, _neg_mask_value(centered))
     top_values, top_indices = torch.topk(masked, k=k, dim=1)
     hard = torch.zeros_like(logits).scatter(1, top_indices, 1.0) * active.float()
     threshold = top_values[:, -1:].detach()
-    soft = torch.sigmoid((logits - threshold) / max(float(tau), 1.0e-4)) * active.float()
-    st = hard + soft - soft.detach()
+    soft = torch.sigmoid((centered - threshold) / max(float(tau), 1.0e-4)) * active.float()
+    target_mass = active.sum(dim=1, keepdim=True).clamp_max(k).to(dtype=soft.dtype)
+    soft = soft * (target_mass / soft.sum(dim=1, keepdim=True).clamp_min(1.0e-6))
+    st = soft + (hard - soft).detach()
     return st, hard.bool()
 
 
@@ -1091,6 +1109,132 @@ def _deployment_exact_distill_scene_indices(
     return _deployment_selector_scene_indices(batch_size, local_cfg, device)
 
 
+def _proposal_decision_active_mask(
+    active_mask: torch.Tensor,
+    costs: torch.Tensor,
+    family_ids: torch.Tensor,
+    evidence_features: torch.Tensor | None,
+    cfg: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return query-eligible decision atoms and structural safety atoms."""
+    s_cfg = cfg.get("selector", {})
+    active = active_mask.bool() & torch.isfinite(costs) & (costs > 0)
+    hard_feature = (
+        evidence_features[..., 0] > 0.5
+        if evidence_features is not None and evidence_features.ndim >= 3 and evidence_features.shape[-1] > 0
+        else torch.zeros_like(active)
+    )
+    include_feasibility = bool(s_cfg.get("structural_safety_include_feasibility", True))
+    structural = hard_feature | ((family_ids == 1) if include_feasibility else torch.zeros_like(active))
+    decision = active & (~structural if bool(s_cfg.get("decision_budget_excludes_structural_safety", False)) else True)
+    return decision, structural & active
+
+
+def _family_conditioned_proposal_logits(
+    proposal_logits: torch.Tensor,
+    family_scores: torch.Tensor | None,
+    family_ids: torch.Tensor,
+    active_mask: torch.Tensor,
+    family_weight: float,
+) -> torch.Tensor:
+    """Differentiable acquisition score used by the HAB straight-through path."""
+    centered = _masked_center(proposal_logits, active_mask)
+    if family_scores is None or float(family_weight) == 0.0:
+        return centered
+    B, F = family_scores.shape
+    fam = family_ids.long().clamp(0, max(F - 1, 0))
+    family_counts = torch.zeros((B, F), dtype=torch.long, device=proposal_logits.device)
+    family_counts.scatter_add_(1, fam, active_mask.bool().long())
+    present = family_counts > 0
+    if F > 1:
+        present[:, 0] &= ~present[:, 1:].any(dim=1)
+    masked_family = family_scores.masked_fill(~present, _neg_mask_value(family_scores))
+    log_pi = F_log_softmax_safe(masked_family, present)
+    atom_family_log_pi = torch.gather(log_pi, 1, fam)
+    return centered + float(family_weight) * atom_family_log_pi
+
+
+def F_log_softmax_safe(logits: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+    """Masked log-softmax with a finite fallback for empty rows."""
+    valid = valid_mask.bool()
+    any_valid = valid.any(dim=1, keepdim=True)
+    safe_valid = torch.where(any_valid, valid, torch.ones_like(valid))
+    out = F.log_softmax(logits.masked_fill(~safe_valid, _neg_mask_value(logits)), dim=1)
+    return torch.where(safe_valid, out, torch.zeros_like(out))
+
+
+def _family_slot_allocation_torch(
+    family_scores: torch.Tensor | None,
+    family_ids: torch.Tensor,
+    active_mask: torch.Tensor,
+    total_slots: int,
+    min_family_slots: dict[int, int] | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """GPU approximation of HAB's deterministic family slot allocator.
+
+    The loop count is bounded by ``proposal_top_m`` (24 in V61), independent of
+    the number of evidence atoms.  It avoids CPU synchronization on the common
+    training path while retaining the family-count and minimum-slot semantics.
+    """
+    B, E = active_mask.shape
+    inferred_f = int(family_scores.shape[1]) if family_scores is not None else int(family_ids.max().detach().cpu().item() + 1 if family_ids.numel() else 1)
+    Fcount = max(inferred_f, 1)
+    fam = family_ids.long().clamp(0, Fcount - 1)
+    counts = torch.zeros((B, Fcount), dtype=torch.long, device=active_mask.device)
+    counts.scatter_add_(1, fam, active_mask.bool().long())
+    present = counts > 0
+    if Fcount > 1:
+        present[:, 0] &= ~present[:, 1:].any(dim=1)
+    if family_scores is None:
+        raw_family = counts.float().clamp_min(0.0)
+        raw_family = raw_family.masked_fill(~present, 0.0)
+        pi = raw_family / raw_family.sum(dim=1, keepdim=True).clamp_min(1.0)
+    else:
+        scores = family_scores[:, :Fcount]
+        pi = torch.softmax(scores.masked_fill(~present, _neg_mask_value(scores)), dim=1)
+        pi = torch.where(present, pi, torch.zeros_like(pi))
+        pi = pi / pi.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
+
+    target = active_mask.sum(dim=1).clamp_max(max(int(total_slots), 0)).long()
+    slots = torch.zeros_like(counts)
+    remaining = target.clone()
+    mins = {int(k): max(0, int(v)) for k, v in (min_family_slots or {}).items()}
+    for fid in sorted(mins):
+        if fid < 0 or fid >= Fcount:
+            continue
+        take = torch.minimum(counts[:, fid], torch.full_like(remaining, mins[fid]))
+        take = torch.minimum(take, remaining)
+        slots[:, fid] = take
+        remaining -= take
+
+    zero_present = present & (slots == 0)
+    zero_count = zero_present.sum(dim=1)
+    enough = remaining >= zero_count
+    add_all = zero_present & enough[:, None]
+    slots += add_all.long()
+    remaining -= add_all.sum(dim=1)
+    # Rows with too few slots give one slot to the highest-probability families.
+    for _ in range(Fcount):
+        need = (remaining > 0) & ((present & (slots == 0)).any(dim=1))
+        priority = pi.masked_fill(~(present & (slots == 0)), -1.0)
+        chosen = priority.argmax(dim=1)
+        one = F.one_hot(chosen, num_classes=Fcount).long() * need[:, None].long()
+        slots += one
+        remaining -= need.long()
+
+    raw = float(max(int(total_slots), 0)) * pi
+    for _ in range(max(int(total_slots), 0)):
+        eligible = present & (slots < counts) & (remaining[:, None] > 0)
+        need = eligible.any(dim=1)
+        priority = (raw - slots.float()) + 1.0e-4 * pi
+        priority = priority.masked_fill(~eligible, -1.0e9)
+        chosen = priority.argmax(dim=1)
+        one = F.one_hot(chosen, num_classes=Fcount).long() * need[:, None].long()
+        slots += one
+        remaining -= need.long()
+    return slots, pi
+
+
 def _fast_topm_mask_torch(
     proposal_logits: torch.Tensor,
     active_mask: torch.Tensor,
@@ -1098,55 +1242,177 @@ def _fast_topm_mask_torch(
     family_ids: torch.Tensor,
     evidence_features: torch.Tensor | None,
     cfg: dict[str, Any],
+    family_scores: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """GPU Top-M approximation used only by the training-time fast surrogate.
+    """GPU HAB forward used by the all-scene proposal winner surrogate.
 
-    It preserves the deployment-critical constraints used by v45: inactive and
-    structural safety atoms are excluded from the decision budget, and a fixed
-    number of soft interaction atoms is reserved in Top-M.  Runtime evaluation
-    continues to use the exact HAB implementation.
+    Unlike V60's global Top-M objective, this path includes family slot
+    allocation, family logits, soft-interaction reservation, and structural
+    safety exclusion/refill.  A sampled exact NumPy HAB path is layered on top
+    for end-to-end identity checks without putting every training step on the
+    CPU critical path.
     """
     s_cfg = cfg.get("selector", {})
     B, E = proposal_logits.shape
     M = min(max(int(s_cfg.get("proposal_top_m", 64)), 1), E)
-    active = active_mask.bool() & torch.isfinite(costs) & (costs > 0)
+    active_all = active_mask.bool() & torch.isfinite(costs) & (costs > 0)
+    decision_active, structural = _proposal_decision_active_mask(
+        active_all, costs, family_ids, evidence_features, cfg
+    )
     hard_feature = (
         evidence_features[..., 0] > 0.5
         if evidence_features is not None and evidence_features.ndim >= 3 and evidence_features.shape[-1] > 0
-        else torch.zeros_like(active)
+        else torch.zeros_like(active_all)
     )
-    structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
-    include_feasibility = bool(s_cfg.get("structural_safety_include_feasibility", True))
-    structural = hard_feature | ((family_ids == 1) if include_feasibility else torch.zeros_like(active))
-    if structural_bypass:
-        active = active & ~structural
-
     interaction_ids = [int(x) for x in s_cfg.get("interaction_family_ids", [2, 3])]
-    interaction = torch.zeros_like(active)
-    for fam in interaction_ids:
-        interaction |= family_ids == fam
-    soft_interaction = active & interaction & ~hard_feature
-    reserve = max(0, int(s_cfg.get("min_soft_interaction_topm_slots", 0)))
+    interaction = torch.zeros_like(active_all)
+    for fam_id in interaction_ids:
+        interaction |= family_ids == fam_id
+    soft_interaction = active_all & interaction & ~hard_feature
 
-    neg_inf = torch.finfo(proposal_logits.dtype).min
-    topm_mask = torch.zeros_like(active)
-    row = torch.arange(B, device=proposal_logits.device)[:, None]
-    reserve_k = min(reserve, M, E)
-    if reserve_k > 0:
-        soft_scores = proposal_logits.masked_fill(~soft_interaction, neg_inf)
-        soft_idx = torch.topk(soft_scores, k=reserve_k, dim=1, largest=True, sorted=True).indices
-        soft_ok = soft_interaction.gather(1, soft_idx)
-        topm_mask[row.expand_as(soft_idx)[soft_ok], soft_idx[soft_ok]] = True
-    active_count = active.sum(dim=1).clamp_max(M)
-    remaining = (active_count - topm_mask.sum(dim=1)).clamp_min(0)
-    candidate = active & ~topm_mask
-    global_order = torch.argsort(proposal_logits.masked_fill(~candidate, neg_inf), dim=1, descending=True)
-    global_ok = candidate.gather(1, global_order)
-    positions = torch.arange(E, device=proposal_logits.device)[None, :]
-    take = global_ok & (positions < remaining[:, None])
-    topm_mask[row.expand_as(global_order)[take], global_order[take]] = True
+    if not bool(s_cfg.get("hab_enabled", True)):
+        masked = proposal_logits.masked_fill(~active_all, _neg_mask_value(proposal_logits))
+        idx = torch.topk(masked, k=M, dim=1).indices
+        topm_mask = torch.zeros_like(active_all).scatter(1, idx, True) & active_all
+    else:
+        slots, _ = _family_slot_allocation_torch(
+            family_scores, family_ids, active_all, M, s_cfg.get("min_family_topm_slots", None)
+        )
+        topm_mask = torch.zeros_like(active_all)
+        row = torch.arange(B, device=proposal_logits.device)[:, None]
+        max_family = int(slots.shape[1])
+        fam_clamped = family_ids.long().clamp(0, max_family - 1)
+        positions = torch.arange(E, device=proposal_logits.device)[None, :]
+        for fid in range(max_family):
+            fam_active = active_all & (fam_clamped == fid)
+            order = torch.argsort(
+                proposal_logits.masked_fill(~fam_active, _neg_mask_value(proposal_logits)),
+                dim=1,
+                descending=True,
+            )
+            valid_order = fam_active.gather(1, order)
+            take = valid_order & (positions < slots[:, fid : fid + 1])
+            topm_mask[row.expand_as(order)[take], order[take]] = True
+        target = active_all.sum(dim=1).clamp_max(M)
+        remaining = (target - topm_mask.sum(dim=1)).clamp_min(0)
+        candidates = active_all & ~topm_mask
+        order = torch.argsort(
+            proposal_logits.masked_fill(~candidates, _neg_mask_value(proposal_logits)),
+            dim=1,
+            descending=True,
+        )
+        take = candidates.gather(1, order) & (positions < remaining[:, None])
+        topm_mask[row.expand_as(order)[take], order[take]] = True
+
+    reserve = min(max(0, int(s_cfg.get("min_soft_interaction_topm_slots", 0))), M)
+    protected = structural if not bool(s_cfg.get("decision_budget_excludes_structural_safety", False)) else torch.zeros_like(structural)
+    for _ in range(reserve):
+        need = topm_mask.logical_and(soft_interaction).sum(dim=1) < reserve
+        addable = soft_interaction & ~topm_mask
+        removable = topm_mask & ~soft_interaction & ~protected
+        can_swap = need & addable.any(dim=1) & removable.any(dim=1)
+        add_idx = proposal_logits.masked_fill(~addable, _neg_mask_value(proposal_logits)).argmax(dim=1)
+        rm_idx = proposal_logits.masked_fill(~removable, torch.finfo(proposal_logits.dtype).max).argmin(dim=1)
+        rows = torch.nonzero(can_swap, as_tuple=False).flatten()
+        if rows.numel() == 0:
+            break
+        topm_mask[rows, rm_idx[rows]] = False
+        topm_mask[rows, add_idx[rows]] = True
+
+    if bool(s_cfg.get("decision_budget_excludes_structural_safety", False)):
+        topm_mask &= decision_active
+        target = decision_active.sum(dim=1).clamp_max(M)
+        remaining = (target - topm_mask.sum(dim=1)).clamp_min(0)
+        candidates = decision_active & ~topm_mask
+        order = torch.argsort(
+            proposal_logits.masked_fill(~candidates, _neg_mask_value(proposal_logits)),
+            dim=1,
+            descending=True,
+        )
+        positions = torch.arange(E, device=proposal_logits.device)[None, :]
+        row = torch.arange(B, device=proposal_logits.device)[:, None]
+        take = candidates.gather(1, order) & (positions < remaining[:, None])
+        topm_mask[row.expand_as(order)[take], order[take]] = True
     return topm_mask, soft_interaction
 
+
+def _runtime_hab_topm_hard_mask(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    cfg: dict[str, Any],
+) -> torch.Tensor:
+    """Exact stop-gradient runtime HAB Top-M mask for sampled training scenes."""
+    logits_t = outputs["proposal_logits"]
+    family_logits_t = outputs.get("family_logits")
+    active_t = batch.get("evidence_active", torch.ones_like(logits_t, dtype=torch.bool))
+    costs_t = batch.get("evidence_budget_costs", torch.ones_like(logits_t))
+    fam_t = batch.get("evidence_family_ids", torch.zeros_like(logits_t, dtype=torch.long))
+    group_t = batch.get("evidence_agent_group_ids", torch.full_like(fam_t, -1))
+    features_t = batch.get("evidence_features")
+    hard_t = batch.get("decisive_hard_mask")
+    snapshot = _packed_numpy_snapshot(
+        {
+            "logits": (logits_t, torch.float32),
+            "family_logits": (family_logits_t, torch.float32),
+            "active": (active_t, torch.bool),
+            "costs": (costs_t, torch.float32),
+            "family_ids": (fam_t, torch.int64),
+            "group_ids": (group_t, torch.int64),
+            "features": (features_t, torch.float32),
+            "decisive_hard": (hard_t, torch.bool),
+        }
+    )
+    logits = snapshot["logits"]
+    active = snapshot["active"]
+    costs = snapshot["costs"]
+    fam = snapshot["family_ids"]
+    group = snapshot["group_ids"]
+    family_logits = snapshot["family_logits"]
+    features = snapshot["features"]
+    decisive_hard = snapshot["decisive_hard"]
+    assert logits is not None and active is not None and costs is not None and fam is not None
+    B, E = logits.shape
+    mask = np.zeros((B, E), dtype=bool)
+    s_cfg = cfg.get("selector", {})
+    budget = float((cfg.get("evidence", {}) or {}).get("budget", 16))
+    M = int(s_cfg.get("proposal_top_m", max(int(2 * budget), int(budget) + 1)))
+    for bidx in range(B):
+        structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
+        topm, _, _ = select_topm_atoms_hab(
+            logits[bidx], fam[bidx], active[bidx], costs[bidx], budget, M,
+            family_scores=family_logits[bidx] if family_logits is not None else None,
+            free_budget=s_cfg.get("hab_free_budget", None),
+            reserve_fraction=float(s_cfg.get("hab_reserve_fraction", 0.2)),
+            enabled=bool(s_cfg.get("hab_enabled", True)),
+            min_family_slots=s_cfg.get("min_family_topm_slots", None),
+        )
+        if (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and decisive_hard is not None:
+            forced = np.flatnonzero(decisive_hard[bidx] & active[bidx])
+            if forced.size:
+                cap = int(s_cfg.get("max_forced_hard_topm", max(1, M // 2)))
+                forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(logits[bidx, i]), int(i)))[:cap], dtype=np.int64)
+                forced_set = set(forced.tolist())
+                topm = np.asarray((forced.tolist() + [int(i) for i in topm.tolist() if int(i) not in forced_set])[:M], dtype=np.int64)
+        hard_feature = features[bidx, :, 0] > 0.5 if features is not None else np.zeros((E,), dtype=bool)
+        interaction_ids = set(int(x) for x in s_cfg.get("interaction_family_ids", [2, 3]))
+        soft_interaction = np.asarray([int(x) in interaction_ids for x in fam[bidx].tolist()], dtype=bool) & active[bidx] & ~hard_feature
+        protected = structural_safety_mask(
+            hard_feature, fam[bidx], active[bidx],
+            include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
+        )
+        reserve = int(s_cfg.get("min_soft_interaction_topm_slots", 0))
+        if reserve > 0 and soft_interaction.any():
+            topm, _ = reserve_topm_candidates(
+                topm, soft_interaction, logits[bidx], M, reserve,
+                protected_mask=None if structural_bypass else protected,
+                group_ids=group[bidx] if group is not None else None,
+            )
+        if structural_bypass:
+            topm, _ = restrict_topm_to_decision_evidence(
+                topm, active[bidx] & ~protected, logits[bidx], M, family_ids=fam[bidx]
+            )
+        mask[bidx, np.asarray(topm, dtype=np.int64)] = True
+    return torch.from_numpy(mask).to(device=logits_t.device, non_blocking=True)
 
 def _pairwise_action_from_margin_torch(
     margins: torch.Tensor,
@@ -1204,7 +1470,7 @@ def _fast_pair_margin_surrogate_masks(
     fam = batch.get("evidence_family_ids", torch.zeros_like(logits, dtype=torch.long)).long()
     features = batch.get("evidence_features")
     flags = batch.get("runtime_safety_flags", torch.zeros_like(valid)).bool()
-    topm_mask, soft_interaction = _fast_topm_mask_torch(logits, active, costs, fam, features, cfg)
+    topm_mask, soft_interaction = _fast_topm_mask_torch(logits, active, costs, fam, features, cfg, family_scores=outputs.get("family_logits"))
 
     B, E, P = delta.shape
     K = J0.shape[1]
@@ -2843,21 +3109,73 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_prop_rank = J0.new_tensor(0.0)
     L_prop = L_prop_bce + float(train_cfg.get("proposal_rank_weight", 0.5)) * L_prop_rank
 
-    # V60: the dominant V59 failure happens before the B=16 selector.  Dense
-    # local evidence reaches substantially higher teacher match, while proposal
-    # Top-M truncation collapses the winner and the exact B=16 selector then
-    # faithfully preserves that already-wrong sparse winner.  Train the proposal
-    # head on the actual deployment operation: preserve the dense-local winner
-    # under a hard-forward, straight-through Top-M mask.  Detaching g confines
-    # this objective to proposal ranking instead of letting the local cost head
-    # move the target.
+    # V61: deployment-exact hierarchical winner preservation.  V60 optimized a
+    # global Top-M mask while runtime used HAB family slots, interaction
+    # reservation, and structural-evidence exclusion.  Its detached uncentered
+    # threshold also admitted a uniform-logit shortcut.  The all-scene forward
+    # below is a GPU HAB approximation; a rotating subset is replaced by the
+    # exact NumPy runtime HAB mask.  The backward surrogate is translation
+    # invariant and family-conditioned, so both proposal and family heads learn
+    # from the dense-winner boundary without increasing the deployed query budget.
     proposal_dense_cfg = train_cfg.get("proposal_dense_winner", {}) or {}
     if bool(proposal_dense_cfg.get("enabled", False)):
         proposal_m = int(proposal_dense_cfg.get(
             "top_m", (cfg.get("selector", {}) or {}).get("proposal_top_m", 24)
         ))
         proposal_tau = float(proposal_dense_cfg.get("straight_through_tau", 0.15))
-        st_topm_mask, hard_topm_mask = _straight_through_topm_mask(
+        costs_prop = batch.get("evidence_budget_costs", torch.ones_like(out["proposal_logits"])).float()
+        fam_prop = batch.get("evidence_family_ids", torch.zeros_like(out["proposal_logits"], dtype=torch.long)).long()
+        feat_prop = batch.get("evidence_features")
+        family_scores_prop = out.get("family_logits")
+        fast_hab_hard, _ = _fast_topm_mask_torch(
+            out["proposal_logits"], e_mask, costs_prop, fam_prop, feat_prop, cfg,
+            family_scores=family_scores_prop,
+        )
+        decision_active_prop, _ = _proposal_decision_active_mask(
+            e_mask, costs_prop, fam_prop, feat_prop, cfg
+        )
+        surrogate_logits = _family_conditioned_proposal_logits(
+            out["proposal_logits"], family_scores_prop, fam_prop, decision_active_prop,
+            float(proposal_dense_cfg.get("family_surrogate_weight", 1.0)),
+        )
+        soft_st, soft_global_hard = _straight_through_topm_mask(
+            surrogate_logits, decision_active_prop, proposal_m, proposal_tau
+        )
+        deployment_hard = fast_hab_hard.clone()
+
+        exact_cfg = dict(train_cfg)
+        exact_cfg["deployment_selector_scenes_per_rank"] = int(
+            proposal_dense_cfg.get("exact_runtime_scenes_per_rank", 2)
+        )
+        exact_cfg["deployment_selector_every_n_steps"] = int(
+            proposal_dense_cfg.get("exact_runtime_every_n_steps", 2)
+        )
+        exact_cfg["deployment_selector_full_last_n_steps"] = int(
+            proposal_dense_cfg.get("exact_runtime_full_last_n_steps", 0)
+        )
+        exact_scene_indices = _deployment_selector_scene_indices(
+            int(J0.shape[0]), exact_cfg, J0.device
+        )
+        proposal_exact_hab_fraction = J0.new_tensor(
+            float(exact_scene_indices.numel()) / max(float(J0.shape[0]), 1.0)
+        )
+        proposal_fast_exact_mask_jaccard = J0.new_tensor(1.0)
+        if exact_scene_indices.numel() > 0:
+            exact_out = _slice_scene_batch(out, exact_scene_indices, int(J0.shape[0]))
+            exact_batch = _slice_scene_batch(batch, exact_scene_indices, int(J0.shape[0]))
+            exact_hard_subset = _runtime_hab_topm_hard_mask(exact_out, exact_batch, cfg)
+            fast_subset = fast_hab_hard.index_select(0, exact_scene_indices)
+            deployment_hard.index_copy_(0, exact_scene_indices, exact_hard_subset)
+            intersection = (fast_subset & exact_hard_subset).sum(dim=1).float()
+            union = (fast_subset | exact_hard_subset).sum(dim=1).float().clamp_min(1.0)
+            proposal_fast_exact_mask_jaccard = (intersection / union).mean()
+        # ``soft_st - soft_global_hard`` is zero in the forward pass and carries
+        # only the stable family-conditioned gradient surrogate.
+        st_topm_mask = soft_st + (deployment_hard.float() - soft_st).detach()
+
+        # Old V60 global Top-M remains a diagnostic only.  A high value here no
+        # longer substitutes for the actual HAB interface.
+        _, old_global_hard = _straight_through_topm_mask(
             out["proposal_logits"], e_mask, proposal_m, proposal_tau
         )
         detached_g = g.detach()
@@ -2867,12 +3185,26 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         sparse_topm_cost = sparse_topm_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
         with torch.no_grad():
             dense_local_winner = dense_local_cost.argmin(dim=1)
-            hard_sparse_cost = finite_J0 + (detached_g * hard_topm_mask[:, :, None].float()).sum(dim=1)
+            hard_sparse_cost = finite_J0 + (detached_g * deployment_hard[:, :, None].float()).sum(dim=1)
             hard_sparse_cost = hard_sparse_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
             hard_sparse_winner = hard_sparse_cost.argmin(dim=1)
+            fast_sparse_cost = finite_J0 + (detached_g * fast_hab_hard[:, :, None].float()).sum(dim=1)
+            fast_sparse_cost = fast_sparse_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
+            fast_sparse_winner = fast_sparse_cost.argmin(dim=1)
+            global_sparse_cost = finite_J0 + (detached_g * old_global_hard[:, :, None].float()).sum(dim=1)
+            global_sparse_cost = global_sparse_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
+            global_sparse_winner = global_sparse_cost.argmin(dim=1)
             dense_correct = dense_local_winner.eq(target_action)
             proposal_dense_topm_match = hard_sparse_winner.eq(dense_local_winner).float().mean()
+            proposal_fast_hab_topm_match = fast_sparse_winner.eq(dense_local_winner).float().mean()
+            proposal_global_topm_match = global_sparse_winner.eq(dense_local_winner).float().mean()
             proposal_dense_correct_scene_fraction = dense_correct.float().mean()
+            if exact_scene_indices.numel() > 0:
+                proposal_exact_hab_topm_match = hard_sparse_winner.index_select(0, exact_scene_indices).eq(
+                    dense_local_winner.index_select(0, exact_scene_indices)
+                ).float().mean()
+            else:
+                proposal_exact_hab_topm_match = J0.new_tensor(0.0)
         sparse_logits = _negative_cost_logits(
             sparse_topm_cost, valid,
             min_scale=float(proposal_dense_cfg.get("min_action_scale", 1.0)),
@@ -2899,10 +3231,33 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_proposal_dense_winner = L_proposal_dense_action + float(
             proposal_dense_cfg.get("margin_weight", 1.0)
         ) * L_proposal_dense_margin
+
+        active_prop_f = e_mask.float()
+        active_count_prop = active_prop_f.sum(dim=1).clamp_min(1.0)
+        proposal_logit_mean = (out["proposal_logits"] * active_prop_f).sum(dim=1) / active_count_prop
+        proposal_logit_rms = torch.sqrt(
+            (out["proposal_logits"].pow(2) * active_prop_f).sum(dim=1) / active_count_prop + 1.0e-12
+        )
+        center_limit = float(proposal_dense_cfg.get("logit_center_limit", 2.0))
+        rms_limit = float(proposal_dense_cfg.get("logit_rms_limit", 8.0))
+        L_proposal_logit_stability = (
+            F.relu(proposal_logit_mean.abs() - center_limit).pow(2)
+            + F.relu(proposal_logit_rms - rms_limit).pow(2)
+        ).mean()
+        proposal_logit_abs_mean = proposal_logit_mean.abs().mean()
+        proposal_logit_rms_mean = proposal_logit_rms.mean()
     else:
         L_proposal_dense_winner = J0.new_tensor(0.0)
+        L_proposal_logit_stability = J0.new_tensor(0.0)
         proposal_dense_topm_match = J0.new_tensor(0.0)
+        proposal_fast_hab_topm_match = J0.new_tensor(0.0)
+        proposal_global_topm_match = J0.new_tensor(0.0)
+        proposal_exact_hab_topm_match = J0.new_tensor(0.0)
+        proposal_exact_hab_fraction = J0.new_tensor(0.0)
+        proposal_fast_exact_mask_jaccard = J0.new_tensor(0.0)
         proposal_dense_correct_scene_fraction = J0.new_tensor(0.0)
+        proposal_logit_abs_mean = J0.new_tensor(0.0)
+        proposal_logit_rms_mean = J0.new_tensor(0.0)
 
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed
     # that better budget allocation alone cannot recover interaction recall or
@@ -3402,6 +3757,29 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     else:
         L_budget_preserve_pair_full = J0.new_tensor(0.0)
 
+    # V61 stage-decoupled residual routing.  When the dense local interface
+    # already selects the teacher action but the deployed sparse anchor does not,
+    # the error is a proposal-bridge failure.  Asking the residual head to repair
+    # that scene lets it compensate for missing evidence and entangles the two
+    # stages again.  Such scenes keep only a small residual weight; full residual
+    # supervision is reserved for intrinsic dense-local errors.
+    residual_route_cfg = train_cfg.get("residual_stage_routing", {}) or {}
+    residual_route_enabled = bool(residual_route_cfg.get("enabled", False))
+    if residual_route_enabled:
+        with torch.no_grad():
+            residual_dense_local_cost = finite_J0 + (
+                g.detach() * e_mask[:, :, None].float()
+            ).sum(dim=1)
+            residual_dense_local_cost = residual_dense_local_cost.masked_fill(
+                ~valid, J0.new_tensor(1.0e6)
+            )
+            residual_dense_local_winner = residual_dense_local_cost.argmin(dim=1)
+            residual_dense_teacher_aligned = residual_dense_local_winner.eq(target_action)
+    else:
+        residual_dense_teacher_aligned = torch.zeros_like(target_action, dtype=torch.bool)
+    residual_proposal_failure_scene_fraction = J0.new_tensor(0.0)
+    residual_intrinsic_correction_scene_fraction = J0.new_tensor(0.0)
+
     # Winner-directed residual correction margin.  On an anchor-wrong scene,
     # the selected-B residual must put the teacher winner above the exact
     # selected-local anchor winner.  On an anchor-correct scene, it must retain
@@ -3438,6 +3816,29 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             torch.full_like(winner_correction_terms, wrong_scene_weight_wc),
             torch.ones_like(winner_correction_terms),
         )
+        if residual_route_enabled:
+            proposal_failure_wc = anchor_wrong_wc & residual_dense_teacher_aligned
+            intrinsic_correction_wc = anchor_wrong_wc & (~residual_dense_teacher_aligned)
+            proposal_failure_weight = float(
+                residual_route_cfg.get("proposal_failure_residual_weight", 0.1)
+            )
+            intrinsic_weight = float(
+                residual_route_cfg.get("intrinsic_correction_weight", 1.0)
+            )
+            route_weight_wc = torch.ones_like(winner_correction_weights)
+            route_weight_wc = torch.where(
+                proposal_failure_wc,
+                torch.full_like(route_weight_wc, proposal_failure_weight),
+                route_weight_wc,
+            )
+            route_weight_wc = torch.where(
+                intrinsic_correction_wc,
+                torch.full_like(route_weight_wc, intrinsic_weight),
+                route_weight_wc,
+            )
+            winner_correction_weights = winner_correction_weights * route_weight_wc
+            residual_proposal_failure_scene_fraction = proposal_failure_wc.float().mean()
+            residual_intrinsic_correction_scene_fraction = intrinsic_correction_wc.float().mean()
         L_residual_winner_correction = (winner_correction_terms * winner_correction_weights).sum() / winner_correction_weights.sum().clamp_min(1.0)
     else:
         L_residual_winner_correction = J0.new_tensor(0.0)
@@ -3490,6 +3891,29 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         )
         boundary_weights = 1.0 + float(boundary_cfg.get("teacher_margin_weight", 2.0)) * boundary_target.abs()
         boundary_mask = correctable_cert
+        if residual_route_enabled:
+            proposal_failure_cert = correctable_cert & residual_dense_teacher_aligned
+            intrinsic_correction_cert = correctable_cert & (~residual_dense_teacher_aligned)
+            proposal_failure_weight = float(
+                residual_route_cfg.get("proposal_failure_residual_weight", 0.1)
+            )
+            intrinsic_weight = float(
+                residual_route_cfg.get("intrinsic_correction_weight", 1.0)
+            )
+            route_weight_cert = torch.ones_like(boundary_weights)
+            route_weight_cert = torch.where(
+                proposal_failure_cert,
+                torch.full_like(route_weight_cert, proposal_failure_weight),
+                route_weight_cert,
+            )
+            route_weight_cert = torch.where(
+                intrinsic_correction_cert,
+                torch.full_like(route_weight_cert, intrinsic_weight),
+                route_weight_cert,
+            )
+            boundary_weights = boundary_weights * route_weight_cert
+            residual_proposal_failure_scene_fraction = proposal_failure_cert.float().mean()
+            residual_intrinsic_correction_scene_fraction = intrinsic_correction_cert.float().mean()
         L_residual_boundary_margin_distill = (
             boundary_terms * boundary_weights * boundary_mask.float()
         ).sum() / (boundary_weights * boundary_mask.float()).sum().clamp_min(1.0)
@@ -3560,6 +3984,27 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             torch.full_like(certified_terms, correctable_bonus),
             torch.ones_like(certified_terms),
         )
+        if residual_route_enabled:
+            proposal_failure_cert = correctable_cert & residual_dense_teacher_aligned
+            intrinsic_correction_cert = correctable_cert & (~residual_dense_teacher_aligned)
+            proposal_failure_weight = float(
+                residual_route_cfg.get("proposal_failure_residual_weight", 0.1)
+            )
+            intrinsic_weight = float(
+                residual_route_cfg.get("intrinsic_correction_weight", 1.0)
+            )
+            route_weight_cert = torch.ones_like(certified_weights)
+            route_weight_cert = torch.where(
+                proposal_failure_cert,
+                torch.full_like(route_weight_cert, proposal_failure_weight),
+                route_weight_cert,
+            )
+            route_weight_cert = torch.where(
+                intrinsic_correction_cert,
+                torch.full_like(route_weight_cert, intrinsic_weight),
+                route_weight_cert,
+            )
+            certified_weights = certified_weights * route_weight_cert
         train_uncorrectable = bool(cert_cfg.get("train_uncorrectable_anchor_wrong", False))
         certified_mask = (~anchor_wrong_cert) | correctable_cert | train_uncorrectable
         L_certified_residual_winner = (
@@ -3762,6 +4207,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("family", 0.5)) * L_fam
         + float(lw.get("proposal", lw.get("selection", 1.0))) * L_prop
         + float(lw.get("proposal_dense_winner", 0.0)) * L_proposal_dense_winner
+        + float(lw.get("proposal_logit_stability", 0.0)) * L_proposal_logit_stability
         + float(lw.get("action", 1.0)) * L_act
         + float(lw.get("full_action", 1.0)) * L_full_action
         + float(lw.get("full_margin", 0.5)) * L_full_margin
@@ -3802,8 +4248,16 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_fam": L_fam,
         "L_prop": L_prop,
         "L_proposal_dense_winner": L_proposal_dense_winner,
+        "L_proposal_logit_stability": L_proposal_logit_stability,
         "proposal_dense_topm_match": proposal_dense_topm_match,
+        "proposal_fast_hab_topm_match": proposal_fast_hab_topm_match,
+        "proposal_global_topm_match": proposal_global_topm_match,
+        "proposal_exact_hab_topm_match": proposal_exact_hab_topm_match,
+        "proposal_exact_hab_fraction": proposal_exact_hab_fraction,
+        "proposal_fast_exact_mask_jaccard": proposal_fast_exact_mask_jaccard,
         "proposal_dense_correct_scene_fraction": proposal_dense_correct_scene_fraction,
+        "proposal_logit_abs_mean": proposal_logit_abs_mean,
+        "proposal_logit_rms_mean": proposal_logit_rms_mean,
         "residual_curriculum_scale": J0.new_tensor(float(residual_curriculum_scale)),
         "L_sel": L_prop,
         "L_act": L_act,
@@ -3836,6 +4290,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_residual_boundary_margin_distill": L_residual_boundary_margin_distill,
         "certified_correctable_fraction": certified_correctable_fraction,
         "certified_robust_margin_mean": certified_robust_margin_mean,
+        "residual_proposal_failure_scene_fraction": residual_proposal_failure_scene_fraction,
+        "residual_intrinsic_correction_scene_fraction": residual_intrinsic_correction_scene_fraction,
         "action_family_enabled": J0.new_tensor(float(enable_action_loss)),
         "pair_potential_cycle_fraction": pair_potential_cycle_fraction,
         "selector_exact_fraction": selector_exact_fraction,
