@@ -2,7 +2,13 @@
 set -euo pipefail
 
 : "${BDSE_TRAIN_CACHE:?Set BDSE_TRAIN_CACHE}"
-: "${BDSE_VAL_CACHE_ORIGINAL:?Set BDSE_VAL_CACHE_ORIGINAL}"
+# Accept either historical variable name.  The previous wrapper required
+# BDSE_VAL_CACHE_ORIGINAL but the delegated runner actually consumes
+# BDSE_VAL_CACHE, which made otherwise valid launch commands environment-dependent.
+BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-${BDSE_VAL_CACHE_ORIGINAL:-}}"
+: "${BDSE_VAL_CACHE:?Set BDSE_VAL_CACHE (or BDSE_VAL_CACHE_ORIGINAL)}"
+BDSE_VAL_CACHE_ORIGINAL="${BDSE_VAL_CACHE_ORIGINAL:-$BDSE_VAL_CACHE}"
+export BDSE_VAL_CACHE BDSE_VAL_CACHE_ORIGINAL
 : "${BDSE_SPLIT_CACHE:?Set BDSE_SPLIT_CACHE}"
 : "${FOUNDATION_CKPT:?Set FOUNDATION_CKPT to the frozen foundation anchor}"
 

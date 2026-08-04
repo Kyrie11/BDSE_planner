@@ -555,9 +555,16 @@ class BDSEModel(nn.Module):
         scene_f = scene[:, None, :].expand(B, self.num_families, -1)
         u_f = u_A[:, None, :].expand(B, self.num_families, -1)
         family_logits_raw = self.family_head(torch.cat([scene_f, u_f, family_emb, family_act_h], dim=-1)).squeeze(-1)
-        neg_mask = torch.finfo(family_logits_raw.dtype).min / 2.0
+        # A bounded finite sentinel is sufficient because every downstream
+        # selector also receives ``family_active``.  Avoid dtype-min sentinels:
+        # AMP can promote the tensor to FP32 and later moment computations may
+        # square the masked value.
+        neg_mask = -1.0e4 if family_logits_raw.dtype in (torch.float16, torch.bfloat16) else -1.0e9
         family_logits = family_logits_raw.masked_fill(~family_active, neg_mask)
-        family_pi = torch.softmax(family_logits.float(), dim=1).to(family_logits.dtype) * family_active.float()
+        # Keep the gate probabilities in FP32.  Casting softmax probabilities to
+        # FP16 before taking log(atom_pi) can underflow a small but valid family
+        # probability to zero and create an active ``-inf`` proposal logit.
+        family_pi = torch.softmax(family_logits.float(), dim=1) * family_active.float()
         family_pi = family_pi / family_pi.sum(dim=1, keepdim=True).clamp_min(1e-6)
 
         atom_family_h = self.family_embed(fam_ids)
@@ -565,8 +572,8 @@ class BDSEModel(nn.Module):
         proposal_logits = self.proposal_head(torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h], dim=-1)).squeeze(-1)
         # Condition the atom proposal by the learned family gate.  Invalid atoms
         # are masked after adding the log gate so gradients still reach the gate.
-        proposal_logits = proposal_logits + torch.log(atom_pi)
-        proposal_neg_mask = torch.finfo(proposal_logits.dtype).min / 2.0
+        proposal_logits = proposal_logits.float() + torch.log(atom_pi.clamp_min(1.0e-12))
+        proposal_neg_mask = -1.0e4 if proposal_logits.dtype in (torch.float16, torch.bfloat16) else -1.0e9
         proposal_logits = proposal_logits.masked_fill(~e_valid, proposal_neg_mask)
         return {
             "scene": scene,

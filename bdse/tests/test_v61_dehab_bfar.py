@@ -6,6 +6,7 @@ import torch
 from bdse.experiments.train import _validation_competitive_score
 from bdse.model.losses import (
     _fast_topm_mask_torch,
+    _masked_logit_mean_rms,
     _runtime_hab_topm_hard_mask,
     _straight_through_topm_mask,
 )
@@ -47,6 +48,30 @@ def test_st_topm_is_translation_invariant_in_forward_and_backward() -> None:
     assert torch.equal(st1.detach(), hard1.float())
     assert torch.equal(st2.detach(), hard2.float())
     assert torch.allclose(x1.grad, x2.grad, atol=1e-6, rtol=1e-6)
+
+
+def test_masked_logit_moments_ignore_fp32_mask_sentinel_before_square() -> None:
+    sentinel = torch.finfo(torch.float32).min / 2.0
+    logits = torch.tensor([[1.0, -1.0, sentinel]], dtype=torch.float32, requires_grad=True)
+    active = torch.tensor([[True, True, False]])
+
+    mean, rms = _masked_logit_mean_rms(logits, active)
+    assert torch.isfinite(mean).all()
+    assert torch.isfinite(rms).all()
+    assert torch.allclose(mean, torch.zeros_like(mean))
+    assert torch.allclose(rms, torch.ones_like(rms), atol=1e-6, rtol=1e-6)
+
+    (mean.sum() + rms.sum()).backward()
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
+    assert logits.grad[0, 2].item() == 0.0
+
+
+def test_masked_logit_moments_do_not_hide_nonfinite_active_logits() -> None:
+    logits = torch.tensor([[float("inf"), 0.0, -1.0e9]], dtype=torch.float32)
+    active = torch.tensor([[True, True, False]])
+    _, rms = _masked_logit_mean_rms(logits, active)
+    assert not torch.isfinite(rms).all()
 
 
 def test_fast_hab_uses_family_scores_and_excludes_structural_atoms() -> None:

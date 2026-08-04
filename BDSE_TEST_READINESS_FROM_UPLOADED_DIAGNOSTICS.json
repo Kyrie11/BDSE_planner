@@ -1,0 +1,29 @@
+{
+  "completion_marker": null,
+  "completion_marker_exists": false,
+  "completion_verified": false,
+  "config_matches_val": true,
+  "config_mismatches": [],
+  "expected_count_matches_diagnostics": null,
+  "expected_count_matches_manifest": null,
+  "expected_samples": null,
+  "failed_preprocess_count": null,
+  "failed_preprocess_fraction": null,
+  "hard_failures": [],
+  "identity_duplicate_count": 0,
+  "identity_unique_count": 67042,
+  "interpretation": "Distribution differences are reported separately and are not build failures. Do not tune thresholds or checkpoints on this test split.",
+  "manifest_identity_duplicate_count": null,
+  "manifest_rows": 0,
+  "num_samples": 67042,
+  "num_skipped_missing_labels": 0,
+  "status": "PRELIMINARY_PASS",
+  "test_train_overlap": null,
+  "test_val_overlap": null,
+  "train_manifest_rows": 0,
+  "val_manifest_rows": 0,
+  "warnings": [
+    "No test cache manifest was supplied; cross-split leakage, failed-preprocess bias, log/city coverage, and completion cannot be proven from aggregate diagnostics alone.",
+    "Incomplete cache explicitly allowed: status is preliminary, not a final paper test result."
+  ]
+}

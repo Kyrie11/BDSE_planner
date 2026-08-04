@@ -60,6 +60,26 @@ def main() -> None:
     ap.add_argument("--val-cache")
     ap.add_argument("--min-preliminary-samples", type=int, default=10000)
     ap.add_argument("--max-failed-fraction", type=float, default=0.01)
+    ap.add_argument(
+        "--expected-samples",
+        type=int,
+        help=(
+            "Expected number of successfully materialized test samples.  When supplied, "
+            "the diagnostics count (and manifest row count when a cache is supplied) must match."
+        ),
+    )
+    ap.add_argument(
+        "--completion-marker",
+        help=(
+            "Path to a build-system marker created only after the complete test cache has been "
+            "successfully committed.  This is an alternative to --expected-samples."
+        ),
+    )
+    ap.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="Fail unless completion is verified by --expected-samples or --completion-marker.",
+    )
     ap.add_argument("--allow-incomplete", action="store_true")
     ap.add_argument("--output")
     args = ap.parse_args()
@@ -74,11 +94,28 @@ def main() -> None:
     config_diff = _config_mismatches(test.get("config_summary"), None if val is None else val.get("config_summary")) if val else []
 
     test_ids, manifest_rows, failed, manifests = _manifest_ids(args.test_cache)
-    train_ids, _, _, _ = _manifest_ids(args.train_cache)
-    val_ids, _, _, _ = _manifest_ids(args.val_cache)
+    train_ids, train_manifest_rows, _, train_manifests = _manifest_ids(args.train_cache)
+    val_ids, val_manifest_rows, _, val_manifests = _manifest_ids(args.val_cache)
     overlap_train = len(test_ids & train_ids) if test_ids and train_ids else None
     overlap_val = len(test_ids & val_ids) if test_ids and val_ids else None
     failed_fraction = failed / max(manifest_rows + failed, 1) if manifests else None
+    manifest_duplicate_count = manifest_rows - len(test_ids) if manifests else None
+    marker_path = Path(args.completion_marker).expanduser() if args.completion_marker else None
+    marker_exists = bool(marker_path and marker_path.is_file())
+    expected_count_matches_diagnostics = (
+        None if args.expected_samples is None else n == int(args.expected_samples)
+    )
+    expected_count_matches_manifest = (
+        None
+        if args.expected_samples is None or not manifests
+        else manifest_rows == int(args.expected_samples)
+    )
+    expected_count_verified = bool(
+        args.expected_samples is not None
+        and expected_count_matches_diagnostics
+        and expected_count_matches_manifest is not False
+    )
+    completion_verified = bool(marker_exists or expected_count_verified)
 
     hard_failures: list[str] = []
     warnings: list[str] = []
@@ -96,14 +133,43 @@ def main() -> None:
         hard_failures.append(f"test/val identity overlap={overlap_val}")
     if failed_fraction is not None and failed_fraction > args.max_failed_fraction:
         hard_failures.append(f"failed_preprocess_fraction={failed_fraction:.6f} > {args.max_failed_fraction:.6f}")
+    if manifests and manifest_rows != n:
+        hard_failures.append(f"manifest_rows={manifest_rows} != diagnostics sample_count={n}")
+    if manifest_duplicate_count not in (None, 0):
+        hard_failures.append(f"manifest identity duplicates={manifest_duplicate_count}")
+    if args.expected_samples is not None and not expected_count_matches_diagnostics:
+        hard_failures.append(f"diagnostics sample_count={n} != expected_samples={args.expected_samples}")
+    if args.expected_samples is not None and expected_count_matches_manifest is False:
+        hard_failures.append(f"manifest_rows={manifest_rows} != expected_samples={args.expected_samples}")
+    if args.completion_marker and not marker_exists:
+        hard_failures.append(f"completion marker does not exist: {marker_path}")
+    if args.require_complete and not completion_verified:
+        hard_failures.append(
+            "test completion is not verified; provide a correct --expected-samples or an existing --completion-marker"
+        )
+    if args.require_complete and not manifests:
+        hard_failures.append("final-test readiness requires at least one test manifest.jsonl")
+    if args.require_complete and not train_manifests:
+        hard_failures.append("final-test readiness requires train manifests for leakage auditing")
+    if args.require_complete and not val_manifests:
+        hard_failures.append("final-test readiness requires val manifests for leakage auditing")
     if not manifests:
         warnings.append("No test cache manifest was supplied; cross-split leakage, failed-preprocess bias, log/city coverage, and completion cannot be proven from aggregate diagnostics alone.")
-    if not args.allow_incomplete:
+    if completion_verified:
+        warnings.append("Test-cache completion was verified; this does not by itself preserve the split from adaptive algorithm development.")
+    elif not args.allow_incomplete:
         warnings.append("Completion cannot be inferred unless an expected-scenario index/count is supplied; use this result only after preprocessing finishes.")
     else:
         warnings.append("Incomplete cache explicitly allowed: status is preliminary, not a final paper test result.")
 
-    status = "FAIL" if hard_failures else ("PRELIMINARY_PASS" if args.allow_incomplete else "INTEGRITY_PASS_COMPLETION_UNVERIFIED")
+    if hard_failures:
+        status = "FAIL"
+    elif completion_verified:
+        status = "INTEGRITY_PASS_COMPLETE"
+    elif args.allow_incomplete:
+        status = "PRELIMINARY_PASS"
+    else:
+        status = "INTEGRITY_PASS_COMPLETION_UNVERIFIED"
     report = {
         "status": status,
         "num_samples": n,
@@ -113,8 +179,17 @@ def main() -> None:
         "config_matches_val": bool(val is not None and not config_diff),
         "config_mismatches": config_diff,
         "manifest_rows": manifest_rows,
+        "manifest_identity_duplicate_count": manifest_duplicate_count,
+        "train_manifest_rows": train_manifest_rows,
+        "val_manifest_rows": val_manifest_rows,
         "failed_preprocess_count": failed if manifests else None,
         "failed_preprocess_fraction": failed_fraction,
+        "expected_samples": args.expected_samples,
+        "expected_count_matches_diagnostics": expected_count_matches_diagnostics,
+        "expected_count_matches_manifest": expected_count_matches_manifest,
+        "completion_marker": str(marker_path) if marker_path else None,
+        "completion_marker_exists": marker_exists,
+        "completion_verified": completion_verified,
         "test_train_overlap": overlap_train,
         "test_val_overlap": overlap_val,
         "hard_failures": hard_failures,

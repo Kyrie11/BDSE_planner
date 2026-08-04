@@ -138,16 +138,44 @@ def selected_budget_margin(J0: torch.Tensor, g: torch.Tensor, pairs: torch.Tenso
 
 
 def _neg_mask_value(x: torch.Tensor) -> float:
+    """Finite negative sentinel safe for AMP and downstream arithmetic.
+
+    ``finfo.min / 2`` is unnecessary for masked top-k/softmax operations and is
+    dangerous once an AMP-promoted FP32 tensor is squared: the sentinel becomes
+    ``inf`` and a later multiplication by a zero mask yields ``NaN``.
+    """
     if torch.is_floating_point(x):
-        return float(torch.finfo(x.dtype).min / 2.0)
+        return -1.0e4 if x.dtype in (torch.float16, torch.bfloat16) else -1.0e9
     return -1e9
 
 
 def _masked_center(logits: torch.Tensor, active_mask: torch.Tensor) -> torch.Tensor:
     """Translation-invariant centering over active proposal atoms."""
-    active_f = active_mask.bool().float()
-    mean = (logits * active_f).sum(dim=1, keepdim=True) / active_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+    active = active_mask.bool()
+    active_f = active.to(dtype=logits.dtype)
+    safe_logits = torch.where(active, logits, torch.zeros_like(logits))
+    mean = safe_logits.sum(dim=1, keepdim=True) / active_f.sum(dim=1, keepdim=True).clamp_min(1.0)
     return logits - mean
+
+
+def _masked_logit_mean_rms(
+    logits: torch.Tensor, active_mask: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute active-only logit moments without evaluating mask sentinels.
+
+    Masking *after* ``logits.square()`` is not safe: an inactive FP32 sentinel
+    near ``finfo.min`` overflows to ``inf`` and ``inf * 0`` becomes ``NaN``.
+    ``torch.where`` removes inactive entries before any nonlinear arithmetic,
+    while genuine non-finite values on active atoms remain visible to the global
+    training-objective finite check.
+    """
+    active = active_mask.bool()
+    logits_f = logits.float()
+    safe_logits = torch.where(active, logits_f, torch.zeros_like(logits_f))
+    active_count = active.sum(dim=1).to(dtype=logits_f.dtype).clamp_min(1.0)
+    mean = safe_logits.sum(dim=1) / active_count
+    rms = torch.sqrt(safe_logits.square().sum(dim=1) / active_count + 1.0e-12)
+    return mean, rms
 
 
 def _straight_through_topm_mask(
@@ -3232,11 +3260,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             proposal_dense_cfg.get("margin_weight", 1.0)
         ) * L_proposal_dense_margin
 
-        active_prop_f = e_mask.float()
-        active_count_prop = active_prop_f.sum(dim=1).clamp_min(1.0)
-        proposal_logit_mean = (out["proposal_logits"] * active_prop_f).sum(dim=1) / active_count_prop
-        proposal_logit_rms = torch.sqrt(
-            (out["proposal_logits"].pow(2) * active_prop_f).sum(dim=1) / active_count_prop + 1.0e-12
+        proposal_logit_mean, proposal_logit_rms = _masked_logit_mean_rms(
+            out["proposal_logits"], e_mask
         )
         center_limit = float(proposal_dense_cfg.get("logit_center_limit", 2.0))
         rms_limit = float(proposal_dense_cfg.get("logit_rms_limit", 8.0))
