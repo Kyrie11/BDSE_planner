@@ -4,8 +4,12 @@ import numpy as np
 import torch
 
 from bdse.data.cache_schema import CandidateBank, EvidenceAtom, EvidenceBank, PairLabels, TeacherLabels
-from bdse.metrics.bdse_metrics import compute_bdse_diagnostics
+from bdse.experiments.evaluate_open_loop import _align_bool_mask
+from bdse.metrics.bdse_metrics import BDSEMetricResult, OnlineMetricMean, aggregate_metric_results, compute_bdse_diagnostics
+from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import _exact_winner_flip_critical_proposal_loss
+from bdse.planner.nuplan_planner import runtime_query_diagnostics
+from bdse.utils import deterministic_order
 
 
 def test_exact_winner_flip_criticality_uses_literal_loo_action_flip() -> None:
@@ -112,3 +116,77 @@ def test_metric_export_keeps_set_residual_fields_and_names_signed_scalar_delta()
     assert result.values["teacher_nonnegative_scalar_regret"] == 0.0
     assert result.values["action_query_mode_all_valid"] == 1.0
     assert result.values["queried_valid_action_fraction"] == 1.0
+
+
+def test_dense_diagnostic_mask_padding_matches_configured_atom_axis() -> None:
+    raw = np.array([True, False, True], dtype=bool)
+    aligned = _align_bool_mask(raw, 8)
+    assert aligned.shape == (8,)
+    assert aligned.tolist() == [True, False, True, False, False, False, False, False]
+    assert _align_bool_mask(np.ones((10,), dtype=bool), 4).tolist() == [True] * 4
+
+
+def test_all_valid_action_bridge_reports_fixed_b_times_k_certificate_queries() -> None:
+    pred = {
+        "top_m_atoms": np.arange(48, dtype=np.int64),
+        "queried_actions": np.arange(32, dtype=np.int64),
+        "rival_pair_indices": np.arange(20, dtype=np.int64).reshape(10, 2),
+        "action_query_mode_all_valid": True,
+        "action_atom_query_count": 48 * 32,
+        "unique_pair_atom_query_count": 48 * 10,
+    }
+    diag = runtime_query_diagnostics(pred, selected_atoms=np.arange(16, dtype=np.int64))
+    assert diag["selected_certificate_query_count"] == 16 * 32
+    assert diag["effective_query_count"] == 16 * 32
+
+
+def test_optimized_dense_prediction_matches_full_forward(synthetic_sample, cfg) -> None:
+    model = BDSEModel(cfg).eval()
+    batch = model._make_batch(
+        synthetic_sample.runtime,
+        synthetic_sample.candidates,
+        synthetic_sample.evidence_bank,
+        include_dense_query=True,
+    )
+    with torch.inference_mode():
+        reference = model.forward(batch)
+    ref_j0 = reference["J0"][0].detach().cpu().numpy().astype(np.float32)
+    ref_g = reference["g"][0].detach().cpu().numpy().astype(np.float32)
+    ref_g_var = reference["g_var"][0].detach().cpu().numpy().astype(np.float32)
+    active = _align_bool_mask(synthetic_sample.evidence_bank.active_mask, ref_g.shape[0])
+    valid = _align_bool_mask(synthetic_sample.candidates.valid_mask, ref_g.shape[1])
+    ref_g[~active, :] = 0.0
+    ref_g[:, ~valid] = 0.0
+    ref_g_var[~active, :] = 0.0
+    ref_g_var[:, ~valid] = 0.0
+
+    dense = model.predict_dense_numpy(
+        synthetic_sample.runtime,
+        synthetic_sample.candidates,
+        synthetic_sample.evidence_bank,
+        cfg,
+    )
+    np.testing.assert_allclose(dense["J0"], ref_j0, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(dense["g"], ref_g, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(dense["g_var"], ref_g_var, rtol=1e-6, atol=1e-6)
+    assert dense["g"].shape[0] == int(cfg["evidence"]["max_atoms"])
+
+
+def test_deterministic_order_supports_one_shot_iterables() -> None:
+    keys = (value for value in ["z", "a", "m"])
+    assert deterministic_order(keys) == [1, 2, 0]
+
+
+def test_online_metric_mean_matches_batch_aggregation() -> None:
+    rows = [
+        BDSEMetricResult(values={"a": 1.0, "b": float("nan")}, details={}),
+        BDSEMetricResult(values={"a": 3.0, "b": 4.0}, details={}),
+    ]
+    online = OnlineMetricMean()
+    for row in rows:
+        online.update(row)
+    expected = aggregate_metric_results(rows)
+    actual = online.result()
+    assert actual.keys() == expected.keys()
+    for key in actual:
+        np.testing.assert_allclose(actual[key], expected[key], rtol=0.0, atol=0.0, equal_nan=True)

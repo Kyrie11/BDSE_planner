@@ -185,7 +185,9 @@ def _maybe_shard_planner_device(device: str | None) -> str | None:
         return device
 
 
-def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | np.ndarray | None = None) -> dict[str, int]:
+def runtime_query_diagnostics(
+    pred: dict[str, Any], selected_atoms: list[int] | np.ndarray | None = None
+) -> dict[str, int | float]:
     """Return unambiguous runtime sparse-query counts.
 
     We separate the scores evaluated by the runtime model from the smaller
@@ -211,7 +213,19 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
         selected_count = 0
     else:
         selected_count = int(len(np.asarray(selected_atoms, dtype=np.int64).reshape(-1)))
-    if len(rival_pairs):
+    # V62's deployment-complete action bridge is action-conditioned: every
+    # selected atom is queried on every valid action, while the rival graph only
+    # defines tournament comparisons.  Reporting B*|pairs| here would silently
+    # undercount the paper-facing fixed B*K interface.  Older/direct pair-only
+    # paths retain their historical pair-based accounting.
+    action_query_mode = str(pred.get("action_query_mode", "")).strip().lower()
+    action_bridge_executed = action_atom > 0 and len(actions) > 0 and (
+        bool(pred.get("action_query_mode_all_valid", False))
+        or action_query_mode in {"all_valid", "rival_graph", "runtime_pairs", "fallback_top_l"}
+    )
+    if action_bridge_executed:
+        selected_certificate = int(selected_count * len(actions))
+    elif len(rival_pairs):
         # rival_pair_indices are canonicalized to one query per unordered pair.
         selected_certificate = int(selected_count * len(rival_pairs))
     else:

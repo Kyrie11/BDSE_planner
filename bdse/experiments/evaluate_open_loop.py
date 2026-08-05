@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
+import json
 from pathlib import Path
 import time
 
@@ -10,7 +12,7 @@ from tqdm import tqdm
 
 from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
-from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
+from bdse.metrics.bdse_metrics import OnlineMetricMean, compute_bdse_diagnostics
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.tournament import full_interface_action, run_pair_conditioned_tournament
@@ -23,6 +25,60 @@ def load_model(checkpoint: str | None, cfg, device: torch.device):
     # baseline adapters.  PDM-Closed is rule-based and may be evaluated without
     # a checkpoint; trainable external baselines and BDSE require one.
     return load_model_for_config(checkpoint, cfg, device)
+
+
+def _align_bool_mask(mask: np.ndarray, size: int) -> np.ndarray:
+    """Return a boolean mask with exactly ``size`` entries.
+
+    Cached samples store only the atoms/actions that actually exist in the scene,
+    while dense model outputs use the configured padded dimensions.  Slicing a
+    shorter mask does not extend it and therefore cannot be broadcast against a
+    padded tensor.  Explicit zero-padding preserves the intended semantics:
+    nonexistent padded entries are inactive/invalid.
+    """
+
+    if size < 0:
+        raise ValueError(f"mask size must be non-negative, got {size}")
+    source = np.asarray(mask, dtype=bool).reshape(-1)
+    aligned = np.zeros((size,), dtype=bool)
+    count = min(size, source.shape[0])
+    if count:
+        aligned[:count] = source[:count]
+    return aligned
+
+
+def _validate_dense_prediction(
+    dense_j0: np.ndarray,
+    dense_g: np.ndarray,
+    active_atoms: np.ndarray,
+    valid_actions: np.ndarray,
+    *,
+    scenario_token: str,
+) -> None:
+    """Fail early with a useful message when a dense diagnostic is malformed."""
+
+    if dense_j0.ndim != 1:
+        raise ValueError(
+            f"dense J0 must have shape [K], got {dense_j0.shape} for scenario={scenario_token!r}"
+        )
+    if dense_g.ndim != 2 or dense_g.shape[1] != dense_j0.shape[0]:
+        raise ValueError(
+            "dense g must have shape [E,K] with the same K as J0; "
+            f"got J0={dense_j0.shape}, g={dense_g.shape} for scenario={scenario_token!r}"
+        )
+    if active_atoms.shape != (dense_g.shape[0],) or valid_actions.shape != (dense_g.shape[1],):
+        raise ValueError(
+            "aligned diagnostic masks have inconsistent shapes: "
+            f"active={active_atoms.shape}, valid={valid_actions.shape}, g={dense_g.shape}"
+        )
+    if valid_actions.any() and not np.isfinite(dense_j0[valid_actions]).all():
+        raise FloatingPointError(f"non-finite dense J0 on a valid action for scenario={scenario_token!r}")
+    if active_atoms.any() and valid_actions.any():
+        active_valid_g = dense_g[np.ix_(active_atoms, valid_actions)]
+        if not np.isfinite(active_valid_g).all():
+            raise FloatingPointError(
+                f"non-finite dense atom/action contribution for scenario={scenario_token!r}"
+            )
 
 
 def main() -> None:
@@ -57,17 +113,35 @@ def main() -> None:
         if len(args.split) != 1:
             raise ValueError("On-the-fly open-loop evaluation supports one split; use --preprocessed-dir for multiple split folders.")
         dataset = NuPlanBDSEDataset(cfg, split=args.split[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
-    results = []
-    per_sample_rows = []
+    metric_means = OnlineMetricMean()
+    per_sample_file = None
+    if args.per_sample_output:
+        per_sample_path = Path(args.per_sample_output)
+        per_sample_path.parent.mkdir(parents=True, exist_ok=True)
+        per_sample_file = per_sample_path.open("w", encoding="utf-8", buffering=1024 * 1024)
     planner_latencies_ms: list[float] = []
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        planner_start = time.perf_counter()
-        pred, sel, tour, stage_atom_active = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        planner_latency_ms = 1000.0 * (time.perf_counter() - planner_start)
+        # Keep the sparse certificate stage and the optional dense diagnostic in
+        # one model cache scope.  The dense path can then reuse the identical scene,
+        # action and evidence encodings without changing any planner output.
+        prediction_scope_factory = getattr(model, "runtime_prediction_cache_scope", None)
+        prediction_scope = prediction_scope_factory() if callable(prediction_scope_factory) else nullcontext()
+        with prediction_scope:
+            planner_start = time.perf_counter()
+            pred, sel, tour, stage_atom_active = core._run_certificate_stage(
+                sample.runtime, sample.candidates, sample.evidence_bank, cfg
+            )
+            # Native/external model adapters return NumPy arrays, so their CUDA-to-
+            # CPU transfers already synchronize the kernels that determine the
+            # planner result.  Extra full-device synchronizations only serialize
+            # concurrent paper-grade workers and do not improve this wall-clock
+            # measurement.
+            planner_latency_ms = 1000.0 * (time.perf_counter() - planner_start)
+            dense = None
+            if not args.disable_dense_diagnostic and hasattr(model, "predict_dense_numpy"):
+                dense = model.predict_dense_numpy(
+                    sample.runtime, sample.candidates, sample.evidence_bank, cfg
+                )
         planner_latencies_ms.append(float(planner_latency_ms))
         qdiag = runtime_query_diagnostics(pred, sel.selected)
         qdiag["planner_latency_ms"] = float(planner_latency_ms)
@@ -169,9 +243,6 @@ def main() -> None:
                 )
                 local_pair_full_action = int(local_pair_full_tour.action_index)
 
-        dense = None
-        if not args.disable_dense_diagnostic and hasattr(model, "predict_dense_numpy"):
-            dense = model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
         diag = compute_bdse_diagnostics(
             sample.candidates,
             sample.evidence_bank,
@@ -189,9 +260,17 @@ def main() -> None:
             certificate_margin_matrix=tour.margins,
         )
         if dense is not None:
-            valid_actions = np.asarray(sample.candidates.valid_mask, dtype=bool)
             dense_g = np.asarray(dense["g"], dtype=np.float32)
-            dense_j0 = np.asarray(dense["J0"], dtype=np.float32)
+            dense_j0 = np.asarray(dense["J0"], dtype=np.float32).reshape(-1)
+            valid_actions = _align_bool_mask(sample.candidates.valid_mask, dense_j0.shape[0])
+            active_atoms = _align_bool_mask(sample.evidence_bank.active_mask, dense_g.shape[0])
+            _validate_dense_prediction(
+                dense_j0,
+                dense_g,
+                active_atoms,
+                valid_actions,
+                scenario_token=str(getattr(sample, "scenario_token", "")),
+            )
             topm_atoms = np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1)
             topm_atoms = topm_atoms[(topm_atoms >= 0) & (topm_atoms < dense_g.shape[0])]
             selected_atoms = np.asarray(sel.selected, dtype=np.int64).reshape(-1)
@@ -222,9 +301,11 @@ def main() -> None:
             # Literal novelty diagnostic: atom i is critical iff removing it
             # changes the dense winner action.  This is evaluated independently
             # of the historical margin-deficit proxy.
-            active_atoms = np.asarray(sample.evidence_bank.active_mask, dtype=bool).reshape(-1)
-            active_atoms = active_atoms[: dense_g.shape[0]]
-            active_dense_g = dense_g * active_atoms[:, None].astype(dense_g.dtype)
+            # np.where (rather than multiplication) also sanitizes any malformed
+            # non-finite values in padded/inactive rows: 0 * NaN is still NaN.
+            active_dense_g = np.where(active_atoms[:, None], dense_g, 0.0).astype(
+                dense_g.dtype, copy=False
+            )
             dense_cost = dense_j0 + active_dense_g.sum(axis=0)
             dense_cost = np.where(valid_actions, dense_cost, np.inf)
             if np.isfinite(dense_cost).any() and active_atoms.any():
@@ -299,7 +380,7 @@ def main() -> None:
             diag.values["teacher_action_match_not_fully_certified"] = float(budget_correct) if not fully_certified else float("nan")
             diag.details["pair_full_action"] = int(pair_full_action)
             diag.details["local_pair_full_action"] = int(local_pair_full_action)
-        results.append(diag)
+        metric_means.update(diag)
         if args.per_sample_output:
             row = {
                 "scenario_token": str(getattr(sample, "scenario_token", "")),
@@ -315,8 +396,11 @@ def main() -> None:
                 "fallback_would_trigger": bool(qdiag.get("fallback_would_trigger", False)),
                 "planner_latency_ms": float(planner_latency_ms),
             }
-            per_sample_rows.append(row)
-    summary = aggregate_metric_results(results)
+            assert per_sample_file is not None
+            per_sample_file.write(json.dumps(row, sort_keys=True) + "\n")
+    if per_sample_file is not None:
+        per_sample_file.close()
+    summary = metric_means.result()
     summary["device"] = str(device)
     if planner_latencies_ms:
         latency = np.asarray(planner_latencies_ms, dtype=np.float64)
@@ -334,13 +418,7 @@ def main() -> None:
         summary["cuda_peak_memory_mb"] = float(torch.cuda.max_memory_allocated(device) / (1024.0**2))
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    import json
-
     out.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    if args.per_sample_output:
-        ps = Path(args.per_sample_output)
-        ps.parent.mkdir(parents=True, exist_ok=True)
-        ps.write_text("\n".join(json.dumps(r, sort_keys=True) for r in per_sample_rows) + ("\n" if per_sample_rows else ""), encoding="utf-8")
     print(summary)
 
 

@@ -196,7 +196,11 @@ def ensure_dir(path: str | Path) -> Path:
 
 
 def deterministic_order(keys: Iterable[object]) -> list[int]:
-    return sorted(range(len(list(keys))), key=lambda i: str(list(keys)[i]))
+    # Materialize once.  Repeated ``list(keys)`` calls consume generators and
+    # previously made this helper fail or return inconsistent results for any
+    # non-reiterable input.
+    materialized = list(keys)
+    return sorted(range(len(materialized)), key=lambda i: str(materialized[i]))
 
 
 def resolve_torch_device(device: str | None = "auto", *, context: str = "BDSE"):

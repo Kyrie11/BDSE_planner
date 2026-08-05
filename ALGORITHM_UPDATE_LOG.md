@@ -3658,3 +3658,47 @@ V61 的 dense full match=0.359、runtime sparse-full=0.141、B16 vs sparse-full=
 
 V62 已完成 Python compile、YAML parse、shell syntax、targeted/full unit tests、TeX build 和合成 microbenchmark。当前环境未执行 fresh V62 train/calibration/open-loop/closed-loop，因此不声明 gate PASS、闭环提升或 SOTA。
 
+
+# V62.1 Engineering Hotfix — Dense Mask Alignment, Query Accounting, and Evaluation Efficiency
+
+## 1. Nature of this update
+
+This is an engineering/measurement hotfix, not a new algorithm version.  It does not
+change the BDSE objective, architecture, evidence budget, HAB selector, winner-flip
+labels, tournament, calibration thresholds, or fallback policy.
+
+## 2. Fixed issues
+
+- Dense diagnostics use configured padded `[E_max,K]`, while cached evidence masks may
+  store only actual scene atoms.  Explicit zero-padding/truncation now preserves padded
+  semantics and fixes the `(128,32) * (48,1)` crash.
+- Literal LOO criticality uses `np.where` masking so malformed inactive/padded NaNs
+  cannot leak through `0 * NaN`.
+- V62 all-valid bridge query accounting now reports selected-stage `B*K_valid` rather
+  than incorrectly preferring `B*|rival_pairs|`.
+- Dense evaluation reuses the certificate-stage encoded context and skips unused full
+  forward heads.
+- Open-loop metric/JSONL aggregation is streaming rather than retaining all scene
+  objects in memory.
+- Redundant evaluator-wide CUDA synchronizations were removed; NumPy-returning model
+  adapters already block on relevant CUDA-to-CPU transfers.
+- `deterministic_order` now handles one-shot iterables correctly.
+
+## 3. New non-regression constraints
+
+- Never repair an actual-vs-padded atom mismatch by cropping dense predictions; align
+  masks and preserve the configured interface dimensions.
+- For action-conditioned all-valid deployment, paper-facing selected query count is
+  `B*K_valid`; rival-pair count is a separate tournament diagnostic.
+- Dense diagnostic optimization is acceptable only when `J0`, `g`, and `g_var` are
+  numerically equivalent to the full-forward reference under active/valid masks.
+- Do not change Transformer `norm_first` merely to suppress the nested-tensor warning;
+  that would alter model/checkpoint semantics.
+
+## 4. Validation boundary
+
+Python compile, 315 YAML files, 41 shell scripts, V62-specific regression tests, and
+the full 240-test suite pass.  A reduced CPU combined certificate+dense benchmark
+improved by 12.70% on average.  Fresh GPU training/calibration/open-loop/closed-loop
+has not been executed in this environment, so no model-performance improvement is
+claimed from this hotfix alone.

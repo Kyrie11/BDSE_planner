@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import os
 import re
 import time
@@ -1014,15 +1015,19 @@ def _run_validation_open_loop(
     for idx in tqdm(indices, desc=f"val-open-loop {epoch}", disable=not is_main):
         try:
             sample = dataset[int(idx)]
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            planner_start = time.perf_counter()
-            pred, sel, tour, stage_atom_active = core._run_certificate_stage(
-                sample.runtime, sample.candidates, sample.evidence_bank, cfg
-            )
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            planner_latency_ms = 1000.0 * (time.perf_counter() - planner_start)
+            prediction_scope_factory = getattr(raw_model, "runtime_prediction_cache_scope", None)
+            prediction_scope = prediction_scope_factory() if callable(prediction_scope_factory) else nullcontext()
+            with prediction_scope:
+                planner_start = time.perf_counter()
+                pred, sel, tour, stage_atom_active = core._run_certificate_stage(
+                    sample.runtime, sample.candidates, sample.evidence_bank, cfg
+                )
+                planner_latency_ms = 1000.0 * (time.perf_counter() - planner_start)
+                dense = None
+                if dense_diagnostic and hasattr(raw_model, "predict_dense_numpy"):
+                    dense = raw_model.predict_dense_numpy(
+                        sample.runtime, sample.candidates, sample.evidence_bank, cfg
+                    )
             qdiag = runtime_query_diagnostics(pred, sel.selected)
             qdiag["planner_latency_ms"] = float(planner_latency_ms)
             qdiag["configured_decision_budget_atom_count"] = float(
@@ -1107,9 +1112,6 @@ def _run_validation_open_loop(
                     )
                     local_pair_full_action = int(local_pair_full_tour.action_index)
 
-            dense = None
-            if dense_diagnostic and hasattr(raw_model, "predict_dense_numpy"):
-                dense = raw_model.predict_dense_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
             diag = compute_bdse_diagnostics(
                 sample.candidates,
                 sample.evidence_bank,

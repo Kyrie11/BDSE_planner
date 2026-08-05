@@ -3,13 +3,13 @@
 # Run from the unpacked bdse_v62_dcab_ewfc repository root.
 set -euo pipefail
 
-cd /ABS/PATH/TO/bdse_v62_dcab_ewfc
+cd /home/senzeyu2/code/BDSE_planner
 
-export BDSE_TRAIN_CACHE=/ABS/PATH/TO/bdse_train_cache
-export BDSE_VAL_CACHE_ORIGINAL=/ABS/PATH/TO/bdse_val_cache
-export BDSE_SPLIT_CACHE=/ABS/PATH/TO/bdse_val_group_disjoint_split
-export BDSE_TEST_CACHE=/ABS/PATH/TO/COMPLETE_FROZEN_test_cache
-export FOUNDATION_CKPT=/ABS/PATH/TO/IMMUTABLE_FOUNDATION/bdse_v53_factorized_anchor.best.pt
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_SPLIT_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+export FOUNDATION_CKPT=outputs_v53_wc_bfar_dbap_fast_2gpu_v1/train/bdse_v53_wc_bfar_dbap.best.pt
 export V30_CKPT_IN="$FOUNDATION_CKPT"
 export GPUS=0,1
 
@@ -17,7 +17,6 @@ export GPUS=0,1
 # loads only the frozen foundation and reinitializes the residual/set heads.
 
 # 0) Direct runner/smoke must export the variable actually consumed by train/eval.
-export BDSE_VAL_CACHE="$BDSE_VAL_CACHE_ORIGINAL"
 
 # 1) One-epoch smoke.
 SMOKE_OUT_ROOT=outputs_v62_dcab_ewfc_training_smoke \

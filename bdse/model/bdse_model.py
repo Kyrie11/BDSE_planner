@@ -1225,7 +1225,7 @@ class BDSEModel(nn.Module):
             }
         budget = float(cfg.get("evidence", {}).get("budget", 16))
         M = int(cfg.get("selector", {}).get("proposal_top_m", max(2 * int(budget), int(budget) + 1)))
-        active = np.asarray(evidence_bank.active_mask, dtype=bool)
+        active = np.asarray(evidence_bank.active_mask, dtype=bool).reshape(-1)
         costs = np.asarray(evidence_bank.budget_costs(), dtype=np.float32)
         if "evidence_family_ids" in batch:
             family_ids = batch["evidence_family_ids"][0].detach().cpu().numpy().astype(np.int64)[: evidence_bank.E]
@@ -1838,15 +1838,31 @@ class BDSEModel(nn.Module):
         reconstruction versus the sparse selected certificate.
         """
         cfg = cfg or self.cfg
-        batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=True)
+        # Reuse the certificate-stage context when called inside
+        # ``runtime_prediction_cache_scope``.  Even without an outer scope this
+        # computes the context exactly once, then evaluates only the dense local
+        # action-conditioned head needed by this diagnostic.  The previous
+        # ``self.forward`` call also evaluated proposal/set/residual plumbing that
+        # the dense full-interface metric never consumes.
+        _, ctx, _, _, _, _, _ = self._runtime_encoded_context(runtime, candidates, evidence_bank)
+        dense_batch = self._make_batch(runtime, candidates, evidence_bank, include_dense_query=True)
         self.eval()
-        with torch.no_grad():
-            out = self.forward(batch)
-        J0 = out["J0"][0].detach().cpu().numpy().astype(np.float32)
-        g = out["g"][0].detach().cpu().numpy().astype(np.float32)
-        g_var = out.get("g_var")
-        g_var_np = g_var[0].detach().cpu().numpy().astype(np.float32) if g_var is not None else np.zeros_like(g, dtype=np.float32)
-        valid = np.asarray(candidates.valid_mask, dtype=bool)
+        with torch.inference_mode():
+            share_q = bool(self.cfg.get("training", {}).get("shared_dense_query_projection", True))
+            q_h_all = self._dense_query_projection(dense_batch) if (share_q and self.pair_conditioned) else None
+            g_t, g_var_t, _, _ = self._dense_local_from_batch(
+                ctx,
+                dense_batch,
+                q_h_all=q_h_all,
+                compute_variance=self._need_dense_local_variance(),
+            )
+        J0 = ctx["J0"][0].detach().cpu().numpy().astype(np.float32)
+        g = g_t[0].detach().cpu().numpy().astype(np.float32)
+        g_var_np = g_var_t[0].detach().cpu().numpy().astype(np.float32)
+        valid = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
+        if valid.shape[0] < g.shape[1]:
+            valid = np.pad(valid, (0, g.shape[1] - valid.shape[0]), constant_values=False)
+        valid = valid[: g.shape[1]]
         active = np.asarray(evidence_bank.active_mask, dtype=bool)
         if active.shape[0] < g.shape[0]:
             active = np.pad(active, (0, g.shape[0] - active.shape[0]), constant_values=False)
@@ -1855,7 +1871,15 @@ class BDSEModel(nn.Module):
         g_var_np[~active, :] = 0.0
         g[:, ~valid] = 0.0
         g_var_np[:, ~valid] = 0.0
-        return {"J0": J0, "g": g, "g_var": g_var_np, "dense_atom_count": int(active.sum()), "dense_action_count": int(valid.sum())}
+        return {
+            "J0": J0,
+            "g": g,
+            "g_var": g_var_np,
+            "active_mask": active,
+            "valid_action_mask": valid,
+            "dense_atom_count": int(active.sum()),
+            "dense_action_count": int(valid.sum()),
+        }
 
     def predict_numpy(self, runtime, candidates, evidence_bank):
         # Legacy API: return only base and sparse-scored local costs.  The runtime

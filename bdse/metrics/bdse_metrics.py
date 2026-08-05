@@ -16,6 +16,39 @@ class BDSEMetricResult:
     details: dict[str, Any]
 
 
+class OnlineMetricMean:
+    """Memory-bounded equivalent of :func:`aggregate_metric_results`.
+
+    Paper-grade test splits can contain tens of thousands of scenes and hundreds
+    of diagnostic scalars per scene.  Retaining every ``BDSEMetricResult`` solely
+    to compute finite-value means can consume multiple gigabytes.  This
+    accumulator preserves the same per-key finite-value mean semantics in O(keys)
+    memory.
+    """
+
+    def __init__(self) -> None:
+        self._seen: set[str] = set()
+        self._sums: dict[str, float] = {}
+        self._counts: dict[str, int] = {}
+
+    def update(self, result: BDSEMetricResult) -> None:
+        for key, value in result.values.items():
+            self._seen.add(key)
+            if np.isfinite(value):
+                self._sums[key] = self._sums.get(key, 0.0) + float(value)
+                self._counts[key] = self._counts.get(key, 0) + 1
+
+    def result(self) -> dict[str, float]:
+        return {
+            key: (
+                float(self._sums[key] / self._counts[key])
+                if self._counts.get(key, 0) > 0
+                else float("nan")
+            )
+            for key in sorted(self._seen)
+        }
+
+
 def evidence_sufficiency(M_teacher: np.ndarray, M_pred: np.ndarray, pairs: np.ndarray, weights: np.ndarray, eps: float = 1e-6) -> float:
     if len(pairs) == 0:
         return 1.0
