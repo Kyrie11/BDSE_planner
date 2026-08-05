@@ -147,6 +147,7 @@ def _training_health(
         "L_certified_residual_winner",
         "L_residual_boundary_margin_distill",
         "L_proposal_dense_winner",
+        "L_exact_winner_flip_critical_proposal",
     )
     winner_loss_values: list[float] = []
     winner_loss_by_key: dict[str, list[float]] = {key: [] for key in winner_loss_keys}
@@ -193,6 +194,7 @@ def _training_health(
             "certified_residual_winner",
             "residual_boundary_margin_distill",
             "proposal_dense_winner",
+            "exact_winner_flip_critical_proposal",
         )
     )
     if configured_winner_supervision:
@@ -210,6 +212,7 @@ def _training_health(
             "certified_residual_winner": "L_certified_residual_winner",
             "residual_boundary_margin_distill": "L_residual_boundary_margin_distill",
             "proposal_dense_winner": "L_proposal_dense_winner",
+            "exact_winner_flip_critical_proposal": "L_exact_winner_flip_critical_proposal",
         }
         for weight_name, metric_name in metric_for_weight.items():
             if float(loss_weights.get(weight_name, 0.0)) <= 0.0:
@@ -402,7 +405,7 @@ def _set_residual_observability(
 
 
 def _proposal_training_contract(rows: list[dict[str, Any]]) -> tuple[list[str], dict[str, Any]]:
-    """Audit the V61 deployment-HAB proposal objective and logit stability."""
+    """Audit the V62 deployment-HAB proposal objective and logit stability."""
     failures: list[str] = []
     required = (
         "proposal_fast_hab_topm_match",
@@ -418,7 +421,7 @@ def _proposal_training_contract(rows: list[dict[str, Any]]) -> tuple[list[str], 
         vals = [_finite(row, key) for row in rows]
         vals = [v for v in vals if math.isfinite(v)]
         if not vals:
-            failures.append(f"missing V61 proposal training diagnostic: {key}")
+            failures.append(f"missing V62 proposal training diagnostic: {key}")
     exact = [_finite(row, "proposal_exact_hab_fraction") for row in rows]
     exact = [v for v in exact if math.isfinite(v)]
     if exact and max(exact) <= 0.0:
@@ -441,7 +444,7 @@ def _proposal_training_contract(rows: list[dict[str, Any]]) -> tuple[list[str], 
     }
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Three-tier V61 DE-HWPP-BFAR open-loop gate")
+    p = argparse.ArgumentParser(description="Three-tier V62 DCAB-EWFC open-loop gate")
     p.add_argument("candidate", type=Path)
     p.add_argument("local_control", type=Path)
     p.add_argument("foundation_control", type=Path)
@@ -544,6 +547,15 @@ def main() -> int:
     fill = decision_atoms / max(configured, 1e-9)
     calibrated, exact_target = val(cand, "selector_aocc_bound_calibrated"), val(cand, "selector_aocc_exact_tournament_target_active")
     latency = val(cand, "planner_latency_ms_p95")
+    action_query_all_valid = val(cand, "action_query_mode_all_valid")
+    queried_valid_fraction = val(cand, "queried_valid_action_fraction")
+    dense_hab_topm_match = val(cand, "dense_vs_hab_topm_dense_value_match")
+    dense_hab_teacher_match = val(cand, "hab_topm_dense_value_action_match")
+    sparse_value_bridge_match = val(cand, "hab_topm_dense_value_vs_runtime_sparse_full_match")
+    selected_dense_bridge_match = val(cand, "dense_vs_selected_budget_dense_value_match")
+    exact_critical_topm_recall = val(cand, "exact_winner_flip_critical_recall_topm")
+    exact_critical_selected_recall = val(cand, "exact_winner_flip_critical_recall_selected")
+    exact_critical_scene_rate = val(cand, "exact_winner_flip_critical_scene_rate")
 
     # V60 protocol integrity compares the same immutable interface row-by-row.
     # V53 incorrectly compared candidate.local_pair_full against local-control
@@ -573,6 +585,10 @@ def main() -> int:
         (math.isfinite(dense_anchor_drift) and dense_anchor_drift <= 0.005, f"dense frozen-anchor row drift={dense_anchor_drift} > 0.005"),
         (math.isfinite(calibrated) and calibrated >= 0.5, f"AOCC evidence certificate is not independently calibrated: {calibrated}"),
         (math.isfinite(exact_target) and exact_target >= 0.5, f"exact downstream tournament target inactive: {exact_target}"),
+        (math.isfinite(action_query_all_valid) and action_query_all_valid >= 0.99, f"all-valid action query mode inactive: {action_query_all_valid}"),
+        (math.isfinite(queried_valid_fraction) and queried_valid_fraction >= 0.99, f"valid-action query coverage={queried_valid_fraction} < 0.99"),
+        (math.isfinite(sparse_value_bridge_match), "missing dense-HAB to runtime sparse-value bridge diagnostic"),
+        (math.isfinite(exact_critical_scene_rate), "missing exact winner-flip criticality diagnostic"),
     ]
     for ok, msg in protocol_checks:
         if not ok: protocol_failures.append(msg)
@@ -636,6 +652,9 @@ def main() -> int:
         (math.isfinite(interaction) and interaction >= 0.50, f"interaction decisive recall={interaction} < 0.50"),
         (math.isfinite(fallback) and fallback <= 0.40, f"fallback rate={fallback} > 0.40"),
         (math.isfinite(residual_proposal_rate) and residual_proposal_rate >= 0.001, f"raw residual proposal rate={residual_proposal_rate} < 0.001"),
+        (math.isfinite(sparse_value_bridge_match) and sparse_value_bridge_match >= 0.95, f"dense-HAB/runtime sparse-value bridge match={sparse_value_bridge_match} < 0.95"),
+        (math.isfinite(exact_critical_topm_recall) and exact_critical_topm_recall >= 0.80, f"exact winner-flip critical Top-M recall={exact_critical_topm_recall} < 0.80"),
+        (math.isfinite(exact_critical_selected_recall) and exact_critical_selected_recall >= 0.50, f"exact winner-flip critical selected recall={exact_critical_selected_recall} < 0.50"),
     ]
     for ok, msg in competitive_checks:
         if not ok: comp_failures.append(msg)
@@ -649,7 +668,7 @@ def main() -> int:
     competitive_metrics_pass = not comp_failures
     competitive_pass = minimum_pass and competitive_metrics_pass
     report = {
-        "gate": "v61_dehab_bfar",
+        "gate": "v62_dcab_ewfc",
         "protocol_pass": protocol_pass,
         "protocol_integrity_pass": protocol_pass,
         "minimum_metrics_pass": minimum_metrics_pass,
@@ -685,6 +704,15 @@ def main() -> int:
             "proposal_decisive_recall": proposal, "selected_decisive_recall": selected,
             "effective_decisive_recall": effective, "interaction_decisive_recall": interaction,
             "fallback_rate": fallback, "budget_fill": fill, "latency_p95_ms": latency,
+            "action_query_mode_all_valid": action_query_all_valid,
+            "queried_valid_action_fraction": queried_valid_fraction,
+            "dense_vs_hab_topm_dense_value_match": dense_hab_topm_match,
+            "hab_topm_dense_value_action_match": dense_hab_teacher_match,
+            "hab_topm_dense_value_vs_runtime_sparse_full_match": sparse_value_bridge_match,
+            "dense_vs_selected_budget_dense_value_match": selected_dense_bridge_match,
+            "exact_winner_flip_critical_recall_topm": exact_critical_topm_recall,
+            "exact_winner_flip_critical_recall_selected": exact_critical_selected_recall,
+            "exact_winner_flip_critical_scene_rate": exact_critical_scene_rate,
         },
         "training": train_stats,
         "proposal_training_contract": proposal_contract_stats,
@@ -696,13 +724,13 @@ def main() -> int:
     args.report_json.parent.mkdir(parents=True, exist_ok=True)
     args.report_json.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
-    print(f"\nV61 protocol-integrity gate [{'PASS' if protocol_pass else 'FAIL'}]")
+    print(f"\nV62 protocol-integrity gate [{'PASS' if protocol_pass else 'FAIL'}]")
     min_label = "PASS" if minimum_pass else ("METRICS PASS / OFFICIAL BLOCKED BY PROTOCOL" if minimum_metrics_pass else "FAIL")
     comp_label = "PASS" if competitive_pass else (
         "METRICS PASS / OFFICIAL BLOCKED BY EARLIER GATE" if competitive_metrics_pass else "FAIL"
     )
-    print(f"V61 minimum-completeness gate [{min_label}]")
-    print(f"V61 competitive gate [{comp_label}]")
+    print(f"V62 minimum-completeness gate [{min_label}]")
+    print(f"V62 competitive gate [{comp_label}]")
     print(json.dumps(report["metrics"], indent=2, sort_keys=True))
     for warning in warnings: print(f"  ! WARNING: {warning}")
     for failure in protocol_failures: print(f"  - PROTOCOL: {failure}")

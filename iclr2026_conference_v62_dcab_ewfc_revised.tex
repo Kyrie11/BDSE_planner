@@ -1,0 +1,761 @@
+\documentclass{article}
+
+\usepackage{times}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{hyperref}
+\usepackage[backend=biber,style=numeric,sorting=none]{biblatex}
+\addbibresource{iclr2026_conference_revised.bib}
+\usepackage{xcolor}
+
+\title{Budgeted Decision-Sufficient Evidence for Interactive Autonomous Planning}
+\author{Anonymous Authors}
+\date{}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{definition}{Definition}
+\newcommand{\A}{\mathcal{A}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\R}{\mathcal{R}}
+\newcommand{\X}{\mathcal{X}}
+\newcommand{\B}{\mathcal{B}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\softmin}{\operatorname{softmin}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Real-time autonomous planners cannot consume or reason over the full predictive world model. They operate through a bounded interface: only a limited number of trajectories, map constraints, interaction hypotheses, or risk cues can be queried before an action must be selected. This makes uncertainty compression a decision problem rather than a reconstruction problem. Under a fixed planner-interface budget, preserving distributional fidelity is neither necessary nor sufficient for preserving the downstream action: high-probability futures may be irrelevant to the final ranking, while a rare interaction cue can be decisive if removing it flips the margin between two feasible actions.
+
+We propose \emph{Budgeted Decision-Sufficient Evidence} (BDSE), a planning interface that selects a small set of queryable decision evidence atoms to preserve the action chosen by a full-information candidate-set teacher. Each evidence atom is a local, auditable, action-queryable factor, such as an interaction conflict, traffic-rule constraint, map constraint, or kinematic-comfort factor. BDSE decomposes teacher action-cost margins into a base cost from dense context and residual costs explained by selected evidence. A budgeted selector then retains evidence that protects decisive winner-versus-rival margins, and a pairwise tournament chooses the final planned trajectory. We define an evidence atom as action-critical exactly when removing it flips the full-interface winner, yielding a directly auditable counterfactual target for proposal learning. We show that if the selected evidence preserves the full-interface decisive margins within bounded error, the budgeted planner either recovers the teacher action or incurs bounded teacher regret. We instantiate BDSE on nuPlan-style log data using candidate-set teacher supervision and design experiments that isolate oracle quality, evidence sufficiency, rival recall, budget effects, latency, and closed-loop robustness.
+\end{abstract}
+
+\section{Introduction}
+
+Autonomous driving planners must act under uncertainty. Surrounding agents may yield, accelerate, cut in, or stop; traffic lights and map constraints restrict feasible behaviors; and safe progress depends on how ego actions interact with these uncertain futures. Recent learning-based systems have responded by improving future prediction, scene reconstruction, and end-to-end planning representations~\cite{caesar2021nuplan,hu2023uniad,jiang2023vad,huang2023gameformer,huang2024dtpp,chen2024ppad,janner2022planning}. These advances are important, but they do not remove a practical bottleneck: a real-time planner cannot explicitly evaluate the full predictive world model before every control decision. It must operate through a bounded interface.
+
+This interface budget can arise from latency, memory, action-evidence query cost, or safety-auditing constraints. A planner may only evaluate a finite set of ego rollouts, a small subset of agent hypotheses, or a compact set of interaction and rule cues. Therefore, the central question is not how to reconstruct the full future distribution under compression, but how to preserve the information that is sufficient for the downstream decision. Distributional fidelity and decision preservation are different objectives. A compressed representation may retain most probability mass or reconstruct occupancy well, yet discard the low-probability conflict that separates proceeding from braking. Conversely, a rare cue can be indispensable if it protects the margin between the teacher-best action and its closest rival.
+
+We study \emph{budgeted decision-sufficient planning}: given a finite candidate action set and a full-information teacher utility, select a small set of planner-queryable evidence so that the budgeted planner chooses the same action as the full-interface teacher, or at least suffers low teacher regret. This formulation follows the spirit of decision-focused learning~\cite{mandi2023decisionfocused}: prediction or representation quality should be judged by the decision it enables, not only by reconstruction error. However, unlike standard predict-then-optimize settings, autonomous planning also requires explicit interfaces that are queryable by ego rollouts and auditable by human engineers. We therefore introduce \emph{decision evidence atoms}: compact local factors that can be queried by candidate actions and assigned a contribution to pairwise action margins.
+
+Our method, \textbf{Budgeted Decision-Sufficient Evidence} (BDSE), separates dense context from explicit decision support. A scene encoder summarizes the full local context and produces a base action utility. Evidence atoms expose only the budgeted, auditable factors that may change action rankings, including interaction conflicts, traffic-rule and map constraints, and kinematic-comfort factors. For each action pair, BDSE estimates how each atom changes the teacher margin. A selector keeps the evidence subset that best preserves decisive margins under a query budget, and a risk-aware pairwise tournament chooses the final action. This three-part structure---base utility, evidence utility, and risk utility---keeps the method expressive without forcing every scene detail into a discrete symbolic representation.
+
+Our core claim is the following: \emph{under a fixed planner-interface budget, preserving decision-sufficient evidence is theoretically better aligned with planning than preserving distributional fidelity, because only information that affects action margins can change the downstream decision. If selected evidence preserves the full-interface teacher's decisive pairwise margins within bounded error, the budgeted planner preserves the teacher action or incurs bounded regret.}
+
+We make four contributions:
+\begin{enumerate}[leftmargin=*]
+    \item We formulate autonomous planning under a \emph{planner-interface budget}, where uncertainty compression is evaluated by decision preservation rather than likelihood, mass, or reconstruction fidelity.
+    \item We define \emph{decision evidence atoms}, a queryable and auditable representation for interaction, rule/map, and kinematic-comfort factors that can contribute to action margins.
+    \item We propose BDSE, a framework that learns base utility, evidence-conditioned residual margins, budgeted evidence selection, and risk-aware pairwise action selection in a single planner interface.
+    \item We provide a margin-preservation theorem and a nuPlan-oriented experimental protocol that separately tests teacher quality, evidence sufficiency, rival recall, budget sensitivity, and closed-loop fallback behavior.
+\end{enumerate}
+
+\section{Related Work}
+
+\paragraph{Planning-oriented autonomous driving.}
+End-to-end and integrated driving systems increasingly optimize perception, prediction, and planning together. UniAD casts perception, prediction, mapping, occupancy, and planning as a unified planning-oriented framework~\cite{hu2023uniad}. VAD replaces dense rasterized inputs with vectorized scene elements to improve planning efficiency and safety~\cite{jiang2023vad}. GameFormer, DTPP, PPAD, and hybrid prediction-planning frameworks further couple interaction prediction and planning costs~\cite{huang2023gameformer,huang2024dtpp,chen2024ppad,liu2025hybrid}. BDSE is complementary to these systems. Instead of proposing another dense scene representation or end-to-end planner, it asks which explicit support should be exposed when the planner can only query a small part of the predictive world model.
+
+\paragraph{Multimodal prediction, occupancy, and uncertainty reconstruction.}
+Many methods model future uncertainty through multimodal trajectories, occupancy, latent futures, or diffusion-based sampling~\cite{janner2022planning,zheng2025diffusion,zhong2025coplanner,shao2024uncertainty,nair2024predictive,michelmore2018evaluating}. Such representations are often evaluated by likelihood, minADE/minFDE, calibration, occupancy IoU, or diversity. These metrics measure future fidelity, but the planner ultimately outputs one action. BDSE does not require discarding predictive models; it changes the compression target. The retained support is selected because it preserves downstream action margins, not because it best reconstructs the full predictive distribution.
+
+\paragraph{Candidate-based planning and decision-focused learning.}
+Classical autonomous driving planners commonly generate a finite set of candidate trajectories or motion primitives and score them under safety, comfort, progress, and rule costs~\cite{mcnaughton2011conformal,pivtoraiko2009differentially,zhou2021spatiotemporal}. Learned planners also often sample or propose candidate trajectories before reranking~\cite{bansal2019chauffeurnet,jiang2023vad}. BDSE adopts this practical candidate-set view and makes the approximation explicit: its guarantee is with respect to the best candidate under a teacher utility, with candidate coverage treated as a measurable error term. Conceptually, BDSE is also related to decision-focused learning, which trains predictive components to improve downstream decision quality~\cite{mandi2023decisionfocused}. Our setting differs because the learned representation must also be a compact, queryable, auditable planning interface.
+
+
+\section{Method}
+\label{sec:method}
+
+At time $t$, the planner receives only runtime-available information
+\begin{equation}
+    x_t=(H_t^{\mathrm{ego}},H_t^{\mathrm{agents}},M_t,L_t,R_t,G_t),
+\end{equation}
+where $H_t^{\mathrm{ego}}$ and $H_t^{\mathrm{agents}}$ are ego and surrounding-agent histories, $M_t$ is the local HD-map context, $L_t$ is the current traffic-control state, $R_t$ is the route, and $G_t$ is the mission goal. BDSE selects one future ego rollout from a finite candidate bank $\A_t=\{a_1,\ldots,a_K\}$ under a planner-interface evidence budget $B$. Each action $a$ corresponds to a trajectory
+\begin{equation}
+    \xi_a=\{(x_k,y_k,\psi_k,v_k,t_k)\}_{k=1}^{T},
+\end{equation}
+which is returned to the downstream planner interface.
+
+The central object in BDSE is not a reconstructed future distribution, but a sparse set of queryable evidence atoms that is sufficient to preserve the ranking of the teacher-best candidate against its decisive rivals. Let $J_T(a\mid x_t)$ be the offline teacher cost over the same candidate set, and
+\begin{equation}
+    a_T^*=\argmin_{a\in\A_t}J_T(a\mid x_t),\qquad
+    M_T(a,b)=J_T(b\mid x_t)-J_T(a\mid x_t).
+    \label{eq:teacher_action_margin}
+\end{equation}
+A positive margin $M_T(a,b)>0$ means that $a$ is preferred to $b$. BDSE learns to preserve these positive margins with a hierarchical, uncertainty-aware atom builder. We use the term \emph{certificate} only for the calibrated lower-confidence margin in Appendix~\ref{app:proof}; the main method is an evidence-selection interface rather than a formal proof system.
+
+\subsection{Candidate Actions and Metric-Aligned Teacher}
+\label{sec:candidate_teacher}
+
+BDSE uses a route-conditioned semantic candidate lattice. A candidate action is
+\begin{equation}
+    a=(m,\theta,\xi_a),
+\end{equation}
+where $m$ is a maneuver class, $\theta$ contains speed, stopping, lateral-offset, and acceleration-profile parameters, and $\xi_a$ is a kinematically parameterized rollout. Illegal maneuvers are masked rather than forced into the action set. The guarantee and all diagnostics are defined with respect to the finite bank $\A_t$; Appendix~\ref{app:candidate} gives the default $K=32$ sampling table, dynamic checks, and coverage diagnostics.
+
+The offline teacher is a robust, metric-aligned candidate evaluator. The logged ego trajectory is used only as a weak demonstration prior, not as an oracle label. For each candidate, the teacher evaluates a set of plausible environment responses $\Omega_t$, including logged-agent futures for label construction, constant-velocity and braking envelopes, yield/non-yield interaction modes, and optional learned reactive modes. The teacher cost is
+\begin{equation}
+    J_T(a)=J_{\mathrm{qual}}^T(a)
+    +\mathbb E_{\omega\sim\Omega_t}\!\left[\ell(a,\omega)\right]
+    +\lambda_{\mathrm{risk}}\operatorname{CVaR}_{\alpha}\!\left(\ell(a,\omega)\right)
+    +\lambda_{\mathrm{demo}}D(a,a_{\mathrm{log}}),
+    \label{eq:robust_teacher}
+\end{equation}
+where $J_{\mathrm{qual}}^T$ contains route progress, comfort, and route-adherence terms, $\ell(a,\omega)$ contains safety and rule losses under world $\omega$, and $D(a,a_{\mathrm{log}})$ is a weak distance-to-log prior. Hard feasibility is handled lexicographically: candidates with collision, severe off-drivable motion, wrong-way motion, or hard red-light violation are ranked below feasible candidates, and only ties within the same feasibility level are resolved by Eq.~\eqref{eq:robust_teacher}. Appendix~\ref{app:labels} gives the executable teacher partition and normalization.
+
+\subsection{Evidence Atoms and Pair-Conditioned Margins}
+\label{sec:evidence_atoms}
+
+A decision evidence atom is a local, auditable factor for a constraint, interaction risk, rule state, or action-boundary factor:
+\begin{equation}
+    e_i=(\tau_i,r_i,\phi_i,\Omega_i,\mathcal D_i,\lambda_i,c_i), \qquad e_i\in\E_t.
+    \label{eq:atom_def}
+\end{equation}
+Here $\tau_i$ is the atom family, $r_i$ is an anchor such as an agent reachable tube, conflict point, lane boundary, stop line, route connector, or dynamic segment, $\phi_i(a,\omega)$ is a local slack or risk function, $\Omega_i$ is the set of response modes relevant to the atom, $\mathcal D_i$ is the atom's validity domain, $\lambda_i$ is a dual or family weight, and $c_i$ is its query cost. The local teacher contribution is
+\begin{equation}
+    g_i^T(a)=\lambda_i\,\rho_i\!\left(\{\phi_i(a,\omega):\omega\in\Omega_i\}\right),
+    \label{eq:local_atom_cost}
+\end{equation}
+where $\rho_i$ is a normalized expectation, quantile, or CVaR-style risk aggregator. Each hard event has a unique atom owner, so it is counted exactly once.
+
+The teacher decomposes into a dense base term and local atom terms:
+\begin{equation}
+    J_T(a)=J_{\mathrm{base}}^T(a)+\sum_{e_i\in\E_t}g_i^T(a).
+    \label{eq:teacher_partition}
+\end{equation}
+Rather than treating $g_i^T(a)$ only as a cost residual for a single action, BDSE trains atoms to explain \emph{pair-conditioned margin contributions}
+\begin{equation}
+    d_i^T(a,b)=g_i^T(b)-g_i^T(a),\qquad
+    R_T(a,b)=\sum_{e_i\in\E_t}d_i^T(a,b).
+    \label{eq:atom_pair_margin_label}
+\end{equation}
+This label is available from the same candidate-set teacher evaluation: it compares two ego rollouts in the same scene under the same response set. We therefore avoid the stronger causal term ``counterfactual'' in the main text; the supervision is comparative over candidate actions, not an intervention on the world state.
+
+The model encodes the scene, candidate actions, and atoms as
+\begin{equation}
+    h_x=f_x(x_t),\qquad h_a=f_a(a,h_x),\qquad h_i=f_e(e_i,h_x).
+\end{equation}
+For an atom--pair query, BDSE applies the two candidate rollouts to the same local atom and forms query features
+\begin{equation}
+    q_i(a,b)=\big[q_i(a),q_i(b),q_i(b)-q_i(a),q_i(a)\odot q_i(b)\big].
+\end{equation}
+The pair scorer outputs a mean margin contribution and an uncertainty estimate:
+\begin{equation}
+    (\hat d_i(a,b),\hat s_i^2(a,b))
+    =f_d(h_x,h_a,h_b,h_i,q_i(a,b)),
+    \label{eq:pair_atom_scorer}
+\end{equation}
+with antisymmetry enforced by construction, $\hat d_i(b,a)=-\hat d_i(a,b)$ and $\hat s_i^2(b,a)=\hat s_i^2(a,b)$. A factorized implementation can set
+\begin{equation}
+    \hat d_i(a,b)=\hat g_i(b)-\hat g_i(a)+\hat r_i(a,b),
+    \quad \hat r_i(b,a)=-\hat r_i(a,b),
+    \label{eq:factorized_pair_head}
+\end{equation}
+where $\hat r_i$ is an optional pair-refinement head. Setting $\hat r_i=0$ recovers the current action-conditioned residual model while keeping the same pair-margin labels.
+
+Given a queried atom set $S\subseteq\E_t$, the predicted signed margin is
+\begin{equation}
+    \hat M_S(a,b)=\hat J_0(b)-\hat J_0(a)
+    +\sum_{e_i\in S}m_i(a,b)\hat d_i(a,b),
+    \label{eq:margin_decomp}
+\end{equation}
+where $m_i(a,b)=m_i(b,a)$ is an optional geometric relevance mask. The corresponding margin uncertainty is
+\begin{equation}
+    \hat\sigma_S^2(a,b)=\hat\sigma_0^2(a,b)+
+    \sum_{e_i\in S}m_i(a,b)^2\hat s_i^2(a,b),
+    \label{eq:margin_uncertainty}
+\end{equation}
+with validation calibration described in Appendix~\ref{app:uncertainty}.
+
+\subsection{Hierarchical Atom Builder}
+\label{sec:hierarchical_atom_builder}
+
+The deployed planner should not evaluate all atom--action pairs before deciding what evidence matters. BDSE therefore replaces a flat atom selector with a \emph{Hierarchical Atom Builder} (HAB), which first allocates budget across semantic families and then selects atoms within each active family.
+
+First, a cheap family gate predicts which evidence families are likely to be decision-relevant:
+\begin{equation}
+    \pi_\tau=f_{\mathrm{fam}}(h_x,u(\A_t),z_\tau),\qquad
+    B_\tau=\max\!\left(0,\left\lfloor B\frac{\pi_\tau}{\sum_{\tau'}\pi_{\tau'}+\epsilon}\right\rceil\right),
+    \label{eq:family_budget}
+\end{equation}
+where $u(\A_t)$ contains base-score entropy, near-tie statistics, maneuver coverage, and cheap safety flags, and $z_\tau$ summarizes family-level activity. A small reserve budget $B_{\mathrm{free}}$ is kept for cross-family atoms with high acquisition scores.
+
+Second, an atom proposal head scores each atom using only runtime-available scene context and cheap atom features:
+\begin{equation}
+    p_i=f_{\mathrm{prop}}\!\left(h_x,z_i,u(\A_t),\pi_{\tau_i}\right),\qquad
+    U_M=\bigcup_\tau \operatorname{TopM}_{e_i:\tau_i=\tau}p_i .
+    \label{eq:proposal_head}
+\end{equation}
+The feature $z_i$ contains atom type, anchor geometry, route relevance, cheap distance and TTC proxies, rule state, and coarse overlap with the candidate trajectory envelope. The proposal size $M$ is larger than the final budget, typically $M\in[2B,4B]$, but only selected atoms consume the planner-interface query budget.
+
+Third, BDSE constructs a small runtime rival graph from base scores and cheap safety flags:
+\begin{equation}
+    \widehat{\mathcal P}_0
+    =
+    \mathcal P_{\mathrm{top}}
+    \cup \mathcal P_{\mathrm{near}}
+    \cup \mathcal P_{\mathrm{safety}} .
+    \label{eq:runtime_pair_screen}
+\end{equation}
+The rival graph $\widehat{\mathcal P}_0$ defines the comparisons consumed by the tournament. In the deployment-complete action-conditioned implementation used for the main method, every proposed or selected atom is evaluated on all valid actions in the fixed candidate bank, while only the selected evidence atoms consume the planner-interface evidence budget. Hence the selected-stage atom--action query count is bounded by $B|\A_t|$ (and the proposal-stage diagnostic count by $M|\A_t|$); both are fixed because $B$, $M$, and the candidate-bank size are fixed. A screened-action variant is retained as an efficiency ablation, and direct pair-conditioned implementations use $|S_B|\cdot |\widehat{\mathcal P}_0|$ queries.
+
+HAB selects atoms by an uncertainty-aware acquisition objective. For a partial set $S$, let
+\begin{align}
+    \mu_S(a,b)&=\hat J_0(b)-\hat J_0(a)+\sum_{e_j\in S}m_j(a,b)\hat d_j(a,b),\nonumber\\
+    u_S(a,b)&=\hat\sigma_0^2(a,b)+\sum_{e_j\in S}m_j(a,b)^2\hat s_j^2(a,b),\nonumber\\
+    \operatorname{LCB}_S(a,b)&=\mu_S(a,b)-\beta\sqrt{u_S(a,b)}-\epsilon_{\mathrm{cal}} .
+\end{align}
+The selected set is the greedy solution under family and total budgets:
+\begin{equation}
+\begin{split}
+    S_B=\operatorname{Greedy}_{S\subseteq U_M}
+    \sum_{(a,b)\in\widehat{\mathcal P}_0}\hat w_{ab}
+    \Big[&
+    \min\!\left(\hat\Gamma_{ab},[\operatorname{LCB}_S(a,b)]_+\right)\\
+    &+\lambda_{\mathrm{info}}
+    \min\!\left(\hat U_{ab},\Delta u_S(a,b)\right)
+    \Big]
+\end{split}
+\label{eq:hab_objective}
+\end{equation}
+subject to $C(S)=\sum_{e_i\in S}c_i\le B$ and $C(S\cap\E_\tau)\le B_\tau+B_{\mathrm{free}}$. The first term protects positive decision margins; the second term rewards atoms expected to reduce uncertainty on near-tie or safety-critical pairs. Appendix~\ref{app:pairs} gives the batched and lazy-greedy implementations. The objective preserves the previous submodular coverage view when $\lambda_{\mathrm{info}}=0$ and uncertainties are fixed~\cite{nemhauser1978analysis}; the uncertainty term follows the same information-gathering motivation as submodular observation selection~\cite{krause2008near} but is tied to planner margins rather than state reconstruction.
+
+At deployment, this fixed-budget AOCC operator is executed exactly, rather than replaced by a learned selector surrogate; ``exact'' here refers to faithful execution of the specified deterministic budgeted operator, whose acquisition order is greedy, not to a claim of globally solving the constrained set optimization problem. To expose the decision-critical evidence target directly, let $a_{\E}=\arg\min_{a\in\A_t}\hat J_{\E}(a)$ and define
+\begin{equation}
+    \kappa_i=\mathbf{1}\!\left[\arg\min_{a\in\A_t}\hat J_{\E\setminus\{e_i\}}(a)\ne a_{\E}\right].
+    \label{eq:exact_critical_atom}
+\end{equation}
+Thus an atom is critical only when its literal leave-one-atom-out removal changes the winner action. BDSE uses $\kappa_i$ as an auditable proposal target and reports its recall in both $U_M$ and $S_B$; margin magnitude is used only to rank atoms already labeled critical.
+
+\subsection{Deployment-Consistent Learning and Risk-Aware Action Selection}
+\label{sec:learning_action}
+
+BDSE is trained with the same builder pathway used at deployment. Offline supervision supplies base costs, atom-pair margin labels, oracle family/atom gains, candidate regrets, and calibration residuals. The pair-margin loss is
+\begin{equation}
+    \mathcal L_{\mathrm{pair}}=
+    \sum_{(a,b)\in\mathcal P_t^+}\sum_{e_i\in\E_t}
+    w_{ab}v_i(a,b)
+    \rho\!\left(d_i^T(a,b)-\hat d_i(a,b)\right),
+    \label{eq:pair_atom_loss}
+\end{equation}
+where $\mathcal P_t^+=\{(a,b):M_T(a,b)>0\}$ stores the better action first and $v_i(a,b)$ masks irrelevant atom--pair labels. We also keep an aggregate residual loss,
+\begin{equation}
+    \mathcal L_{\mathrm{res}}=
+    \sum_{(a,b)\in\mathcal P_t^+}w_{ab}
+    \rho\!\left(
+    R_T(a,b)-\sum_{e_i\in\E_t}m_i(a,b)\hat d_i(a,b)
+    \right),
+    \label{eq:res_loss}
+\end{equation}
+which remains valid when only the summed residual margin is trusted. The uncertainty head is trained with a heteroscedastic likelihood and then calibrated on validation residuals:
+\begin{equation}
+    \mathcal L_{\mathrm{unc}}=
+    \sum_{i,a,b}v_i(a,b)
+    \left[\frac{(d_i^T(a,b)-\hat d_i(a,b))^2}{\hat s_i^2(a,b)+\epsilon}
+    +\log(\hat s_i^2(a,b)+\epsilon)\right].
+    \label{eq:unc_loss}
+\end{equation}
+The family and proposal heads are trained by listwise ranking losses against oracle marginal gains from Eq.~\eqref{eq:hab_objective}. The final action objective uses the predicted budgeted set $S_B$:
+\begin{equation}
+    \mathcal L_{\mathrm{act}}=
+    \operatorname{CE}\!\left(
+    \operatorname{softmax}(-\hat J_B/\tau),
+    \operatorname{softmax}(-J_T/\tau_T)
+    \right),
+    \label{eq:act_loss}
+\end{equation}
+where $\hat J_B$ is the tournament-induced cost over candidates. Appendix~\ref{app:network} gives the complete loss and teacher-forcing schedule.
+
+At runtime, the selected action is obtained by a calibrated pairwise tournament over a high-recall rival set $\R(a)$:
+\begin{equation}
+    Q_B(a)=
+    \operatorname{SoftMin}_{b\in\R(a)}
+    \left[
+    \hat M_{S_B}(a,b)-\beta\hat\sigma_{S_B}(a,b)-\epsilon_{\mathrm{cal}}
+    \right],
+    \label{eq:tournament}
+\end{equation}
+\begin{equation}
+    \hat a_B=\argmax_{a\in\A_t}Q_B(a).
+    \label{eq:selected_action}
+\end{equation}
+Here $\beta$ controls risk sensitivity and $\epsilon_{\mathrm{cal}}$ is a validation-calibrated one-sided margin radius. Unlike a pure compression system, BDSE can spend budget to query evidence that either increases a decisive margin or reduces uncertainty about a near-tie/safety-critical comparison. Appendix~\ref{app:proof} states the one-sided preservation condition for the hard-min tournament and the screened-rival error terms.
+
+
+\section{Experiments}
+\label{sec:experiments}
+
+The experiments test whether decision-sufficient evidence improves planning under fixed planner-interface budgets. We use nuPlan DB scenarios for training labels and nuPlan-style closed-loop simulation for final planning performance~\cite{caesar2021nuplan}. All runtime features are past/current ego states, tracked agents, map context, current traffic-light state, route, and mission goal. Logged future states are used only for teacher labels and never as runtime input.
+
+\subsection{Datasets and Evaluation}
+We evaluate on the nuPlan train/validation split or a fixed held-out subset when compute is limited. A training sample is a scenario timestep with 2 seconds of history and an 8 second planning horizon. Unless otherwise stated, candidate rollouts are generated at $10$ Hz and returned as an 8-second ego trajectory with $T=80$ states; model internals may downsample to $5$ Hz or $T=40$ and then interpolate back to the nuPlan output format. Agent and map context are encoded in the ego-centric frame.
+
+Evaluation includes three modes: open-loop log replay, closed-loop non-reactive agents, and closed-loop reactive agents. Standard metrics include overall nuPlan planning score, no at-fault collision, drivable-area compliance, route progress, speed-limit compliance, time-to-collision, and comfort. BDSE-specific diagnostics include teacher action match, teacher-cost regret, full-interface action match, budget-vs-full action match, decisive-rival recall, preserved margin error, evidence sufficiency ratio, fallback rate, latency, and effective query count.
+
+\begin{equation}
+\mathrm{Suff}(S)=
+\operatorname{clip}_{[0,1]}\left(
+1-\frac{\sum_{(a,b)\in\mathcal P_t^+}w_{ab}|M_T(a,b)-\hat M_S(a,b)|}
+{\sum_{(a,b)\in\mathcal P_t^+}w_{ab}|M_T(a,b)|+\epsilon}
+\right).
+\label{eq:sufficiency_metric}
+\end{equation}
+We report both this reconstruction-style sufficiency score and the decision sufficiency indicator
+\begin{equation}
+\mathrm{DecSuff}(S)=\mathbf 1[\argmax_a Q_S(a)=a_T^*].
+\end{equation}
+
+\begin{table}[h]
+\centering
+\caption{BDSE-specific diagnostic metrics.}
+\label{tab:bdse_metrics}
+\begin{tabular}{ll}
+\toprule
+Metric & Definition \\
+\midrule
+Teacher regret & $J_T(\hat a_B)-J_T(a_T^*)$ \\
+Teacher action match & $\mathbf 1[\hat a_B=a_T^*]$ \\
+Full-interface match & $\mathbf 1[\hat a_{\E}=a_T^*]$ \\
+Budget-vs-full match & $\mathbf 1[\hat a_B=\hat a_{\E}]$ \\
+Preserved margin error & $|\hat M_B(a_T^*,b)-M_T(a_T^*,b)|$ over decisive rivals \\
+Decisive-rival recall & Fraction of $\mathcal D(a_T^*)$ included in $\R(a_T^*)$ \\
+Evidence sufficiency & Eq.~\eqref{eq:sufficiency_metric} over positive-margin pairs \\
+Selector value ratio & $F_T(S_{\mathrm{runtime}})/(F_T(S_{\mathrm{oracle}})+\epsilon)$ \\
+Hard-evidence recall & Fraction of hard collision/rule/map atoms selected when active \\
+Effective query count & $|S_B|\cdot |\mathcal P_{\mathrm{infer}}|$ or $|S_B|\cdot K$ \\
+Fallback rate & Fraction of frames triggering runtime expansion or conservative fallback \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Baselines}
+Baselines are grouped to avoid unfair comparisons across incompatible sensor and benchmark settings.
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Direct nuPlan planner baselines:} IDM/rule-based planner, centerline-only planner, PDM-Closed or PDM-Hybrid-style proposal-and-scoring planner, and nuPlan-compatible learning planners such as GameFormer Planner, DTPP, or PPAD when implemented with the same DB/map/vector inputs~\cite{huang2023gameformer,huang2024dtpp,chen2024ppad,dauner2023parting}.
+    \item \textbf{Budgeted evidence baselines:} random evidence, top predicted-magnitude evidence, diversity coverage, interaction-only evidence, rule/map-only evidence, risk-only evidence, full evidence, and an oracle greedy selector using teacher margins.
+    \item \textbf{Related but indirect baselines:} camera/BEV or end-to-end planning systems such as UniAD and VAD are discussed as related work and included only if reimplemented under the same nuPlan DB input, candidate bank, and evaluation protocol~\cite{hu2023uniad,jiang2023vad}.
+\end{enumerate}
+
+\subsection{Main Results}
+The main closed-loop table reports planning quality, safety, budget usage, and latency. Values are placeholders until experiments are run.
+
+\begin{table}[h]
+\centering
+\caption{nuPlan-style closed-loop planning results. Placeholder values should be replaced by measured means with confidence intervals.}
+\label{tab:main_closed_loop}
+\begin{tabular}{lcccccc}
+\toprule
+Method & Score $\uparrow$ & Collision $\downarrow$ & DAC $\uparrow$ & Progress $\uparrow$ & Comfort $\uparrow$ & Latency ms $\downarrow$\\
+\midrule
+IDM / rule planner & -- & -- & -- & -- & -- & -- \\
+Centerline-only planner & -- & -- & -- & -- & -- & -- \\
+PDM-style proposal scorer & -- & -- & -- & -- & -- & -- \\
+Learning planner baseline & -- & -- & -- & -- & -- & -- \\
+BDSE, $B=8$ & -- & -- & -- & -- & -- & -- \\
+BDSE, $B=16$ & -- & -- & -- & -- & -- & -- \\
+BDSE, $B=32$ & -- & -- & -- & -- & -- & -- \\
+BDSE, full evidence & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Decision-preservation diagnostics. These metrics directly test the BDSE claim.}
+\label{tab:decision_preservation}
+\begin{tabular}{lcccccc}
+\toprule
+Method & Regret $\downarrow$ & Match $\uparrow$ & Full-match $\uparrow$ & Sel. ratio $\uparrow$ & Hard recall $\uparrow$ & Queries $\downarrow$\\
+\midrule
+Random evidence & -- & -- & -- & -- & -- & -- \\
+Top-magnitude evidence & -- & -- & -- & -- & -- & -- \\
+Diversity evidence & -- & -- & -- & -- & -- & -- \\
+Interaction-only & -- & -- & -- & -- & -- & -- \\
+Rule/map-only & -- & -- & -- & -- & -- & -- \\
+Oracle greedy & -- & -- & -- & -- & -- & -- \\
+BDSE greedy & -- & -- & -- & -- & -- & -- \\
+BDSE full evidence & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Diagnostic Experiments}
+We keep the diagnostic suite compact but aligned with the theoretical and implementation claims.
+
+\paragraph{E1: Teacher sanity and candidate coverage.}
+This experiment verifies that the candidate-set teacher is not merely log imitation and is not trivially unsafe. Report teacher-vs-log disagreement, safe-candidate-exists rate, teacher hard-violation rate, proxy teacher cost, route progress, comfort, and closed-loop proxy score.
+\begin{table}[h]
+\centering
+\caption{Teacher sanity diagnostics.}
+\label{tab:teacher_sanity}
+\begin{tabular}{lccccc}
+\toprule
+Teacher variant & Disagree $\uparrow$ & Safe candidate $\uparrow$ & Hard viol. $\downarrow$ & Progress $\uparrow$ & Comfort $\uparrow$\\
+\midrule
+Log-nearest candidate & -- & -- & -- & -- & -- \\
+Non-reactive teacher & -- & -- & -- & -- & -- \\
+Hybrid/reactive-proxy teacher & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{E2: Evidence sufficiency.}
+Compare margin reconstruction and decision sufficiency across evidence families and budgets. This tests whether BDSE preserves decision-relevant margins rather than simply selecting likely futures. Report oracle greedy value, runtime selector value ratio, selected-set overlap, hard-evidence recall, preserved margin error, and decision sufficiency.
+
+\paragraph{E3: Rival recall sweep.}
+Define decisive rivals as
+\begin{equation}
+\mathcal D(a_T^*)=\{b:M_T(a_T^*,b)<\eta_D\}\cup
+\{b:b\text{ is safety-critical}\}\cup
+\text{Top-}L_D\text{ low-cost rivals},
+\end{equation}
+with default $L_D=16$ and $\eta_D$ equal to the 20th percentile of positive teacher margins on the validation set. Sweep $L_{\mathrm{infer}}\in\{4,8,16,24,K-1\}$ and report decisive-rival recall, regret, match rate, and latency.
+
+\paragraph{E4: Budget sweep with frozen support.}
+Hold the candidate bank, pair set, and evidence bank fixed while sweeping $B\in\{4,8,16,24,32\}$. Report teacher regret, budget-vs-full match, preserved margin error, query count, and latency. This isolates the selection objective from candidate-generation variance.
+
+\paragraph{E5: Fallback and runtime expansion.}
+Ablate BDSE without fallback, rival expansion only, budget expansion only, rule-based top-$K'$ reranking, and full fallback. Report closed-loop safety, fallback trigger rate, average expanded budget, average rival size, emergency fallback rate, and latency.
+
+
+\section{Conclusion}
+
+We introduced BDSE, a budgeted decision-sufficient evidence interface for autonomous planning. The central idea is to optimize what the planner needs to decide, not what is easiest to reconstruct. By decomposing action-cost margins into dense base cost and explicit evidence residuals, selecting evidence under budget, and choosing actions through a pairwise tournament, BDSE provides a theoretically grounded and auditable alternative to distribution-fidelity-driven uncertainty compression. The resulting guarantee links selected evidence to candidate-set teacher preservation and bounded teacher regret, while the proposed nuPlan protocol tests teacher quality, evidence sufficiency, rival recall, budget, latency, and closed-loop fallback.
+
+\appendix
+
+\section{Notation and Planner-Interface Budgets}
+\label{app:notation}
+
+BDSE operates on a finite candidate set $\A_t=\{a_1,\ldots,a_K\}$ and an evidence atom bank $\E_t=\{e_1,\ldots,e_N\}$ at each planning step. The offline teacher evaluates every candidate and provides $J_T(a)$, a teacher-best action $a_T^*$, and pairwise margins $M_T(a,b)=J_T(b)-J_T(a)$. The deployable planner observes only runtime features $x_t$ and may query only a budgeted subset of atom--action or atom--pair evidence.
+
+We distinguish three budgets:
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Candidate budget} $K$: number of ego rollouts in the candidate bank.
+    \item \textbf{Proposal budget} $M$: number of cheap atom proposals retained by the Hierarchical Atom Builder before expensive evidence queries.
+    \item \textbf{Evidence query budget} $B$: total retained atom cost $C(S)=\sum_{e_i\in S}c_i$. This is the main planner-interface budget.
+\end{enumerate}
+For an action-conditioned implementation, the effective query count is
+\begin{equation}
+    Q_{\mathrm{eff}}=|S_B|\cdot |\A(\widehat{\mathcal P}_0)|,
+\end{equation}
+where $\A(\widehat{\mathcal P}_0)$ is the set of unique actions appearing in the runtime rival graph. For a direct pair-conditioned implementation, the conservative count is
+\begin{equation}
+    Q_{\mathrm{eff}}^{\mathrm{pair}}=|S_B|\cdot |\widehat{\mathcal P}_0|.
+\end{equation}
+We report the former for the factorized action-conditioned scorer and the latter only when the direct pair head is evaluated for each pair independently.
+
+\section{Runtime Inputs and Label-Only Futures}
+\label{app:runtime_inputs}
+
+All runtime features are available at time $t$: ego history, tracked-agent histories, map context, traffic-control state, route, mission goal, and cheap trajectory-envelope features computed from the candidate bank. Logged future states and agent futures are used only to construct teacher labels, atom labels, and diagnostics. They are never passed to the deployed model.
+
+The response set $\Omega_t$ used by the teacher can include logged-agent futures, constant-velocity rollouts, braking envelopes, and yield/non-yield modes. At runtime, BDSE may use current-state reachable envelopes and cheap CV/braking proxies to form atom anchors and safety flags, but not future labels. This separation is important for the pair-conditioned margin label: $d_i^T(a,b)$ is generated offline by comparing two candidate ego actions under the same response set, while the deployed scorer predicts $\hat d_i(a,b)$ from current observations and candidate rollouts.
+
+\section{Candidate Action Generation and Coverage}
+\label{app:candidate}
+
+The candidate bank is a route-conditioned semantic lattice. The default $K=32$ bank contains keep-lane, yield, follow, stop, accelerate, decelerate, and lane-offset variants. Each candidate is a kinematically feasible trajectory sampled at $10$ Hz for an $8$ s horizon and may be internally downsampled to $5$ Hz for scoring. Candidates are masked if their maneuver is incompatible with route topology or if the kinematic profile violates hard acceleration, jerk, curvature, or speed bounds before teacher evaluation.
+
+Coverage is reported separately from BDSE evidence quality. Important diagnostics include valid-candidate count, dynamic-feasible rate, safe-candidate-exists rate, teacher hard-violation rate, and logged-trajectory nearest-candidate ADE. A low safe-candidate-exists rate should be interpreted as a candidate-bank limitation rather than an evidence-selection failure. In training, we recommend either down-weighting no-safe-candidate scenes for the action loss or marking them as coverage-failure scenes for a separate robustness analysis.
+
+\section{Robust Metric-Aligned Teacher}
+\label{app:labels}
+
+The teacher cost is partitioned into a cheap base term and local atom terms:
+\begin{equation}
+    J_T(a)=J_{\mathrm{base}}^T(a)+\sum_{e_i\in\E_t}g_i^T(a).
+\end{equation}
+The base term contains route progress, route distance, smoothness, and weak distance-to-log priors. Atom terms contain local interaction, rule, map, and dynamic-regularity factors. Hard feasibility is applied lexicographically: any feasible candidate outranks any candidate with a hard collision, severe off-drivable motion, wrong-way motion, or hard red-light violation. Within a feasibility level, candidates are ranked by the normalized cost in Eq.~\eqref{eq:robust_teacher}.
+
+For pairwise supervision, each training pair stores the better action first:
+\begin{equation}
+    \mathcal P_t^+=\{(a,b):M_T(a,b)>0\}.
+\end{equation}
+The base margin, atom margin, and residual margin are
+\begin{align}
+    M_{\mathrm{base}}^T(a,b)&=J_{\mathrm{base}}^T(b)-J_{\mathrm{base}}^T(a),\\
+    d_i^T(a,b)&=g_i^T(b)-g_i^T(a),\\
+    R_T(a,b)&=M_T(a,b)-M_{\mathrm{base}}^T(a,b)=\sum_i d_i^T(a,b).
+\end{align}
+If the cache stores $g_i^T(a)$ for all valid candidates, $d_i^T(a,b)$ is computed exactly on the fly. If only aggregate residuals are trusted, training can drop $\mathcal L_{\mathrm{pair}}$ and rely on $\mathcal L_{\mathrm{res}}$, but then the paper should report that the pair-conditioned atom head is weakly supervised.
+
+\section{Evidence Atoms and Pair-Conditioned Margin Labels}
+\label{app:evidence}
+
+Each atom stores $(\tau_i,r_i,\phi_i,\Omega_i,\mathcal D_i,\lambda_i,c_i)$ as in Eq.~\eqref{eq:atom_def}. A hard event belongs to exactly one hard atom: an agent overlap belongs to its reachable-tube atom, a red-light crossing belongs to its stop-line atom, and off-drivable motion belongs to its drivable-area or lane-boundary atom. This unique ownership avoids double-counting hard events in the evidence decomposition.
+
+\begin{table}[h]
+\centering
+\caption{Evidence families used by the Hierarchical Atom Builder.}
+\label{tab:evidence_families}
+\begin{tabular}{lll}
+\toprule
+Family & Anchor $r_i$ & Local margin source \\
+\midrule
+Feasibility & lane boundary, stop line, route connector & map/rule violation slack and hard flags \\
+Reachability interaction & agent reachable tube & occupancy, TTC, and collision risk under $\Omega_i$ \\
+Precedence & conflict point or crosswalk & arrival-time and right-of-way gap \\
+Decision boundary & near-tie action envelope & atom whose removal changes a close action margin \\
+Dynamic regularity & rollout segment & acceleration, jerk, curvature, lateral-accel slack \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For reproducibility, the default raw local costs are:
+\begin{align}
+r_{\mathrm{reach}}^T(a;i)&=
+\rho_i\!\left(
+\left\{\sum_k[d_{\mathrm{safe}}-d(\mathcal O_a^k,\mathcal R_j^{\omega,k})]_+^2
++C_{\mathrm{col}}\mathbf 1[\mathcal O_a^k\cap\mathcal R_j^{\omega,k}\ne\emptyset]\right\}_{\omega\in\Omega_i}
+\right),\\
+r_{\mathrm{preced}}^T(a;i)&=
+[\tau_{\mathrm{gap}}-\Delta t_i(a,j)]_+^2
++C_{\mathrm{yield}}\mathbf 1[\text{right-of-way violation}],\\
+r_{\mathrm{red}}^T(a;i)&=
+C_{\mathrm{red}}\mathbf 1[\xi_a\text{ crosses stop line while red}]
++[d_{\mathrm{stop}}^{\min}-d_{\mathrm{line}}]_+^2,\\
+r_{\mathrm{drive}}^T(a;i)&=
+C_{\mathrm{off}}\mathbf 1[\mathrm{off\ drivable}]
++C_{\mathrm{wrong}}\mathbf 1[\mathrm{wrong\ way}]
++\sum_k[d_{\mathrm{margin}}-d_{\mathrm{boundary}}(\xi_a^k)]_+^2,\\
+r_{\mathrm{dyn}}^T(a;i)&=
+\sum_k[|a_k|-a_{\max}]_+^2+
+\sum_k[|j_k|-j_{\max}]_+^2+
+\sum_k[|\kappa_k|-\kappa_{\max}]_+^2.
+\end{align}
+The local teacher term is $g_i^T(a)=\lambda_i r_i^T(a)$ after family normalization. The atom-pair label is $d_i^T(a,b)=g_i^T(b)-g_i^T(a)$. This is a pair-conditioned comparative label over candidate rollouts, not a causal counterfactual label. The term ``counterfactual'' should be avoided unless an additional intervention dataset is constructed.
+
+\section{Hierarchical Atom Builder and Runtime Rival Graph}
+\label{app:pairs}
+
+\paragraph{Family gate.}
+The family gate predicts $\pi_\tau$ for each atom family using scene context, candidate-bank statistics, and family activity features. The family target is the oracle family gain:
+\begin{equation}
+    y_\tau^{\mathrm{fam}}=F_T(S_{k-1}\cup \E_\tau^{\mathrm{oracle}})-F_T(S_{k-1}),
+\end{equation}
+where $\E_\tau^{\mathrm{oracle}}$ is the best atom from family $\tau$ under the oracle greedy objective. We train the family gate with a listwise softmax or pairwise ranking loss. A small free budget prevents early family-gate mistakes from eliminating rare but decisive atoms.
+
+\paragraph{Atom proposal features.}
+The proposal head uses only cheap atom features:
+\begin{equation}
+ z_i=[
+ \mathrm{onehot}(\tau_i),
+ \mathrm{anchor\ geometry},
+ d_{\min}(e_i,\A_t),
+ \operatorname{TTC}_{\min}(e_i,\A_t),
+ \mathbf 1[\mathrm{route\ relevant}],
+ \mathbf 1[\mathrm{rule\ active}],
+ \mathrm{candidate\ envelope\ overlap},
+ \pi_{\tau_i}
+ ].
+\end{equation}
+The atom importance target is the oracle marginal gain under the same objective used for the runtime builder:
+\begin{equation}
+    y_i^{\mathrm{marg}}=F_T(S_{k-1}\cup\{e_i\})-F_T(S_{k-1}).
+\end{equation}
+
+\paragraph{Training pairs.}
+The training pair set stores the better action first:
+\begin{equation}
+\mathcal P_t^+=
+\mathcal P_{\mathrm{winner}}
+\cup
+\mathcal P_{\mathrm{near}}
+\cup
+\mathcal P_{\mathrm{safety}}
+\cup
+\mathcal P_{\mathrm{random}}.
+\end{equation}
+The default components are
+\begin{align}
+\mathcal P_{\mathrm{winner}}&=
+\{(a_T^*,b):b\in\operatorname{Top}L_T\text{ valid non-teacher candidates by low }J_T\},\\
+\mathcal P_{\mathrm{near}}&=
+\{(a,b):0<M_T(a,b)<\eta\},\\
+\mathcal P_{\mathrm{safety}}&=
+\{(a,b):a\text{ is feasible and }b\text{ has a hard violation}\}.
+\end{align}
+Random positive-margin pairs are subsampled so that $|\mathcal P_t^+|\in[64,256]$ per scene.
+
+\paragraph{Runtime rival pairs.}
+At inference, the pair screen uses only predicted base scores and cheap flags:
+\begin{align}
+\mathcal P_{\mathrm{top}}&=\{(a,b):a,b\in\operatorname{Top}L_0\text{ by low }\hat J_0\},\\
+\mathcal P_{\mathrm{near}}&=\{(a,b):|\hat J_0(a)-\hat J_0(b)|<\eta_0\},\\
+\mathcal P_{\mathrm{safety}}&=\{(a,b):b\text{ triggers a cheap safety-critical flag}\}.
+\end{align}
+The resulting pair set is Eq.~\eqref{eq:runtime_pair_screen}. Pair-local masks $m_i(a,b)$ may suppress atoms that are geometrically irrelevant to a pair, but the mask must satisfy $m_i(a,b)=m_i(b,a)$ to preserve antisymmetry.
+
+\paragraph{Uncertainty-aware greedy selection.}
+For each candidate atom $e_i\in U_M$, HAB evaluates the gain-to-cost ratio of Eq.~\eqref{eq:hab_objective}. In a sequential implementation, only the selected atom is queried at each step and the margin mean/variance is updated before the next step. In a batched implementation, atom-pair scores for $U_M$ are computed in parallel for speed, but diagnostics still report the retained-interface budget and, separately, the proposal-pool size. The oracle training objective has the same form with teacher labels:
+\begin{equation}
+F_T(S)=
+\sum_{(a,b)\in\mathcal P_t^+}w_{ab}^T
+\left[
+\min\!\left(\Gamma_{ab}^T,[M_{\mathrm{base}}^T(a,b)+\sum_{e_i\in S}d_i^T(a,b)]_+\right)
++\lambda_{\mathrm{info}}\Delta U_T(S;a,b)
+\right],
+\end{equation}
+where $\Gamma_{ab}^T=M_T(a,b)$ and $\Delta U_T$ is an oracle uncertainty-reduction proxy computed from validation residuals or ensemble disagreement. This objective is used for oracle labels and diagnostics, never as a runtime input.
+
+\section{Uncertainty-Aware Evidence Query and Calibration}
+\label{app:uncertainty}
+
+The uncertainty head predicts $\hat s_i^2(a,b)$ for atom-pair margin residuals. It can represent aleatoric uncertainty with heteroscedastic regression and epistemic uncertainty with an ensemble, MC dropout, or a lightweight disagreement head. The default implementation uses heteroscedastic Gaussian regression in Eq.~\eqref{eq:unc_loss}. For an ensemble of $R$ scorers, the atom uncertainty is
+\begin{equation}
+    \hat s_i^2(a,b)=
+    \underbrace{\frac{1}{R}\sum_{r=1}^R \hat s_{i,r}^2(a,b)}_{\mathrm{aleatoric}}
+    +
+    \underbrace{\frac{1}{R}\sum_{r=1}^R(\hat d_{i,r}(a,b)-\bar d_i(a,b))^2}_{\mathrm{epistemic}}.
+\end{equation}
+The margin uncertainty is aggregated by Eq.~\eqref{eq:margin_uncertainty}. We calibrate the one-sided radius $\epsilon_{\mathrm{cal}}$ on a held-out validation set:
+\begin{equation}
+    \epsilon_{\mathrm{cal}}=\text{Quantile}_{1-\alpha}\left(
+    \left|M_T(a,b)-\hat M_{\E}(a,b)\right|/\left(\hat\sigma_{\E}(a,b)+\epsilon\right)
+    \right).
+\end{equation}
+This gives a practical lower-confidence margin used by the tournament and fallback policy. The calibration is empirical, not a distribution-free closed-loop safety guarantee; if formal conformal coverage is claimed, the validation protocol and exchangeability assumptions must be stated explicitly~\cite{lindemann2023safe}.
+
+The information term in Eq.~\eqref{eq:hab_objective} prioritizes atoms whose query is expected to reduce uncertainty for near-tie or safety-critical pairs:
+\begin{equation}
+    \Delta u_S(a,b;e_i)=
+    \max\!\left(0,u_S(a,b)-u_{S\cup\{e_i\}}(a,b)\right),
+\end{equation}
+weighted by $\hat w_{ab}$ and capped by $\hat U_{ab}$. This makes BDSE an active planner-interface query method: evidence is selected not only because its predicted mean supports the current best action, but also because it reduces uncertainty where the action decision is fragile. This complements uncertainty-aware prediction and planning methods~\cite{shao2024uncertainty,nair2024predictive,yang2025uncad} while keeping the uncertainty budget tied to pairwise action margins.
+
+\section{Network Architecture and Training Objective}
+\label{app:network}
+
+The scene encoder is a vectorized transformer over ego history, agent polylines, map polylines, route tokens, and traffic-control tokens. The action encoder consumes sampled trajectory points, maneuver ID, speed profile, route-relative progress, terminal lateral offset, and validity masks. The evidence encoder consumes atom type, anchor geometry, associated agent or map state, cheap proposal features, and query features. The direct pair scorer consumes $h_a,h_b,h_i,q_i(a,b)$ and predicts $\hat d_i(a,b)$ and $\hat s_i^2(a,b)$. A factorized implementation can reuse the existing action-conditioned scorer and set $\hat r_i=0$ in Eq.~\eqref{eq:factorized_pair_head}.
+
+\begin{table}[h]
+\centering
+\caption{Default network and training configuration.}
+\label{tab:network_config}
+\begin{tabular}{lc}
+\toprule
+Hyperparameter & Default \\
+\midrule
+Hidden dimension & 256 \\
+Transformer layers & 4 \\
+Attention heads & 8 \\
+Max agents & 32 \\
+Max map polylines & 128 \\
+Max evidence atoms & 128 \\
+Max candidates & 32 \\
+Proposal size $M$ & $2B$--$4B$ \\
+Pair batch per scene & 128 \\
+Optimizer & AdamW \\
+Learning rate & $10^{-4}$ \\
+Weight decay & $10^{-2}$ \\
+Batch size & 64 \\
+Epochs & 20 \\
+Gradient clipping & 5.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The total loss is
+\begin{equation}
+\mathcal L=
+\lambda_0\mathcal L_{\mathrm{base}}
++\lambda_p\mathcal L_{\mathrm{pair}}
++\lambda_r\mathcal L_{\mathrm{res}}
++\lambda_{\mathrm{rank}}\mathcal L_{\mathrm{rank}}
++\lambda_{\mathrm{fam}}\mathcal L_{\mathrm{fam}}
++\lambda_{\mathrm{prop}}\mathcal L_{\mathrm{prop}}
++\lambda_{\mathrm{unc}}\mathcal L_{\mathrm{unc}}
++\lambda_{\mathrm{act}}\mathcal L_{\mathrm{act}}.
+\end{equation}
+The components are:
+\begin{enumerate}[leftmargin=*]
+    \item $\mathcal L_{\mathrm{base}}$ regresses $\hat J_0(a)$ to $J_{\mathrm{base}}^T(a)$ over valid candidates.
+    \item $\mathcal L_{\mathrm{pair}}$ is Eq.~\eqref{eq:pair_atom_loss}; it supervises atom-level pair margins when $d_i^T(a,b)$ is available.
+    \item $\mathcal L_{\mathrm{res}}$ is Eq.~\eqref{eq:res_loss}; it supervises the aggregate residual margin and is retained even when atom-level labels are noisy.
+    \item $\mathcal L_{\mathrm{rank}}=\sum_{(a,b)\in\mathcal P_t^+}w_{ab}\log(1+\exp[-\hat M_{\E}(a,b)/\tau])$ enforces positive full-evidence margins during offline supervision.
+    \item $\mathcal L_{\mathrm{fam}}$ and $\mathcal L_{\mathrm{prop}}$ are listwise ranking losses over oracle family and atom marginal gains.
+    \item $\mathcal L_{\mathrm{unc}}$ is Eq.~\eqref{eq:unc_loss}; it trains calibrated atom-pair uncertainty.
+    \item $\mathcal L_{\mathrm{act}}$ is computed through the deployment pathway: family gate, proposal, greedy atom builder, and risk-aware tournament.
+\end{enumerate}
+For stability, training uses a scheduled mixture of oracle and predicted atom sets inside $\mathcal L_{\mathrm{act}}$ and anneals to fully predicted HAB selection. The deployed model uses only predicted family gates, predicted proposals, predicted atom-pair scores, and calibrated uncertainty.
+
+\section{Planner Output and nuPlan Integration}
+\label{app:integration}
+
+The planner outputs the selected rollout $\xi_{\hat a_B}$ in the nuPlan planner interface format. If the internal model uses a downsampled horizon, the selected trajectory is interpolated back to the expected output rate. Closed-loop experiments should report both planner quality and interface usage: final nuPlan score, no-at-fault collision, drivable-area compliance, progress, comfort, speed-limit compliance, time-to-collision, latency, proposal size, retained budget, effective query count, and fallback trigger rate.
+
+\section{One-Sided Margin Guarantee}
+\label{app:proof}
+
+The theoretical condition is stated for the hard-min version of Eq.~\eqref{eq:tournament}:
+\begin{equation}
+\tilde Q_B(a)=\min_{b\in\R(a)}
+\left[
+\hat M_{S_B}(a,b)-\beta\hat\sigma_{S_B}(a,b)-\epsilon_{\mathrm{cal}}
+\right].
+\end{equation}
+The soft-min version differs by at most $\tau_Q\log |\R(a)|$.
+
+\begin{definition}[One-sided margin evidence]
+For a candidate $a$ against rival $b$, BDSE certifies the comparison $a\succ b$ only if
+\begin{equation}
+\operatorname{LCB}_B(a,b)=
+\hat M_{S_B}(a,b)-\beta\hat\sigma_{S_B}(a,b)-\epsilon_{\mathrm{cal}}>0.
+\end{equation}
+\end{definition}
+
+\begin{theorem}[Candidate-set preservation under one-sided margins]
+Let $a_T^*$ be the unique teacher-best candidate and let $\mathcal D(a_T^*)$ be its decisive rival set. Assume that every decisive rival is included in the teacher-action rival graph, $c\in\R(a_T^*)$ for all $c\in\mathcal D(a_T^*)$, and that each competing candidate is challenged by the teacher action, $a_T^*\in\R(c)$. If
+\begin{equation}
+\operatorname{LCB}_B(a_T^*,c)>0,
+\qquad \forall c\in\mathcal D(a_T^*),
+\end{equation}
+and all non-decisive rivals have teacher margin at least $\eta_D$, then the hard-min tournament selects $a_T^*$ up to the screened-rival error $\epsilon_R$ and the non-decisive margin tolerance $\eta_D$. For soft-min scoring, the sufficient margin is increased by $\tau_Q\log L$.
+\end{theorem}
+
+\begin{proof}
+For every decisive rival $c$, the lower-confidence margin condition gives $\tilde Q_B(a_T^*)>0$ on the comparison against $c$. Since $\hat M_{S_B}$ is antisymmetric and the same pairwise evidence is used in both directions, $\hat M_{S_B}(c,a_T^*)=-\hat M_{S_B}(a_T^*,c)$. Thus any competing $c$ that includes $a_T^*$ in its rival set has a non-positive certified comparison against the teacher action, while $a_T^*$ has positive certified comparisons against decisive rivals. Non-decisive rivals are absorbed into $\eta_D$, and missing rival edges are accounted for by $\epsilon_R$. The soft-min statement follows from the standard bound between the minimum and temperature-$\tau_Q$ soft minimum.
+\end{proof}
+
+A regret form with teacher misspecification is
+\begin{equation}
+J^*(\hat a_B)-J^*(a^*)
+\le
+\epsilon_{\A}
++2\epsilon_T
++2\epsilon_{\mathrm{model}}
++2\epsilon_{\mathrm{prop}}
++2\epsilon_{\mathrm{select}}
++\epsilon_R
++\tau_Q\log L,
+\end{equation}
+where $\epsilon_{\A}$ is candidate coverage error, $\epsilon_T$ is teacher-to-closed-loop-objective mismatch, $\epsilon_{\mathrm{model}}$ is local score estimation error, $\epsilon_{\mathrm{prop}}$ is missed critical evidence from hierarchical proposal, $\epsilon_{\mathrm{select}}$ is greedy selection loss relative to the best budgeted atom set within $U_M$, and $\epsilon_R$ is missed decisive-rival mass. Each term has a corresponding diagnostic: oracle candidate score, teacher closed-loop score, residual margin error, proposal recall, builder coverage, and decisive-rival recall.
+
+\section{Fallback Policy}
+\label{app:fallback}
+
+Define the predicted margin gap
+\begin{equation}
+    \hat\Delta_B=Q_B(\hat a_B)-\max_{a\ne\hat a_B}Q_B(a).
+\end{equation}
+If $\hat\Delta_B<\tau_\Delta$, if the calibrated lower-confidence margin is negative for a safety-critical rival, or if uncertainty remains large on a near-tie pair, the planner expands only runtime-available computation:
+\begin{enumerate}[leftmargin=*]
+    \item increase rival size $L:8\rightarrow16\rightarrow31$;
+    \item increase proposal size $M$ and evidence budget $B$ up to configured maxima;
+    \item rerank the top candidates using a slower runtime rule scorer based on current observations, map, route, and CV/braking envelopes;
+    \item if every top candidate remains unsafe or confidence remains low, return the conservative safe fallback rollout.
+\end{enumerate}
+The threshold $\tau_\Delta$ is set on validation as a low percentile of successful margin gaps. Experiments report fallback trigger rate, safety improvement, average expanded budget, average rival size, emergency fallback rate, and latency increase.
+
+
+\printbibliography
+
+\end{document}

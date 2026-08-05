@@ -3575,3 +3575,86 @@ V61 gate 新增：
 ## 7. 验证边界
 
 V61 本地验证完成：Python compile、4 个 V61 YAML、3 个 shell 脚本语法、231 个单元测试、补丁 dry-run 与 ZIP 完整性。当前环境未执行 fresh V61 训练、calibration、open-loop 或 nuPlan closed-loop，因此不预先声明 V61 gate PASS、闭环提升、实时性或 CCF-A 级性能。
+
+# V62 — Deployment-Complete Action Bridge + Exact Winner-Flip Criticality BFAR-DBAP (DCAB-EWFC)
+
+## 1. V61 结果复核后的状态修正
+
+V61 gate 不能继续写成“三个算法 gate 全部失败”：
+
+- Protocol：FAIL 来自 `set_conditioned_residual_*` 在 metrics 末端被过滤，属于结果可观测性/导出错误；现有旧 JSONL 不能追认 PASS，必须 fresh rerun。
+- Minimum：`minimum_metrics_pass=true` 且 failures 为空；official `minimum_pass=false` 只是被 Protocol 串联阻断。proposal decisive recall=0.803054，selected=0.611521。
+- Competitive：真实 FAIL。candidate/local/foundation teacher match=0.141，total/residual/pair-full gain 都为 0。
+
+V61 已经消除 V60 proposal-logit runaway：L_prop 稳定下降、proposal RMS<2、fast/exact HAB mask Jaccard=1、每次 validation minimum feasible。禁止再次退回 global Top-M hard forward、未中心化 threshold，或仅通过放大 proposal loss重做 V60 路线。
+
+## 2. 新发现的主要上游缺陷：action-query bridge
+
+V61 训练的 deployment-HAB winner preservation 只对 evidence atom 维度做 HAB mask，但对全部 actions 使用 dense `g(i,a)`；真实 runtime 只查询 rival graph 中 actions，其他 action contribution 置零。训练指标和部署路径不等价：
+
+```text
+training: HAB Top-M atoms × all actions
+runtime:  HAB Top-M atoms × rival-graph actions
+```
+
+V61 的 dense full match=0.359、runtime sparse-full=0.141、B16 vs sparse-full=0.981、B16 vs dense=0.172。当前 selector 对给定 sparse interface 基本忠实。禁止在 action-query bridge 未验证前把 0.359→0.141 全部归因于 potential/residual。
+
+## 3. V62 算法变更
+
+### 3.1 Deployment-complete action query
+
+主配置新增 `runtime.action_query_mode: all_valid`。对固定 B 个 queried evidence atoms，向固定 candidate bank 的全部 valid actions 计算 contribution，查询上界为 `B*K`（B=16，K<=32）。evidence atom budget 不变，不增加 atom、不使用 dense oracle、不绕过 selector。保留 `rival_graph` 同 checkpoint ablation。
+
+新增诊断：`action_query_mode_all_valid`、`valid_action_count`、`queried_valid_action_fraction`、`hab_topm_dense_value_action_match`、`hab_topm_dense_value_vs_runtime_sparse_full_match`、`runtime_sparse_value_bridge_flip_rate`、`selected_budget_dense_value_action_match`、`selected_budget_dense_value_vs_deployed_match`。
+
+### 3.2 Exact winner-flip critical evidence
+
+新增 literal leave-one-atom-out label：atom i 仅在移除后 dense winner action 改变时为 critical。severity 只用于 critical atoms 内排序，不能把“margin 改变但 winner 不变”标成 critical。
+
+新增 `L_exact_winner_flip_critical_proposal`、Top-M/selected critical recall、critical atom/scene fraction、teacher-aligned scene fraction。主权重为 8.0；dense-winner proposal 权重从 24 调整为 20，避免总目标无控制增长。
+
+### 3.3 Residual routing 不变，归因顺序改变
+
+继续保留 proposal-failure residual weight=0.1、intrinsic correction=1.0。先验证 all-valid action bridge；只有 sparse-full 恢复而 pair-full/residual 仍失败时，才升级 potential projection 或 residual target。禁止直接关闭 conformal epsilon、扩大 residual scale 或降低 flip margin制造未经 teacher direction 验证的 flips。
+
+## 4. 工程与效率修复
+
+- metrics 导出 `set_conditioned_residual_*`、`pair_potential_*`、`direct_evidence_action_potential_*`。
+- gate 同时报告 metrics pass 与 official protocol-blocked pass。
+- runner 接受 `BDSE_VAL_CACHE -> BDSE_SPLIT_CACHE -> BDSE_VAL_CACHE_ORIGINAL` fallback；主 pipeline 仍显式 export。
+- signed scalar delta 与 nonnegative regret 分离。
+- 顶层 action loss=0 时跳过 CPU deployment certificate mask。
+- local uncertainty 关闭时跳过 local variance head。
+- 修复极端 cost range 下 invalid-action sentinel。
+- literal criticality 使用 `[B,E,K]` 张量化 LOO，无 Python per-atom loop。
+
+## 5. 论文表述同步
+
+核心 novelty 保留：固定 planner-interface evidence budget、可审计 evidence atoms、预算内确定性 selector、literal winner-flip criticality、双证书。正文新增 fixed `B*K` action expansion。
+
+“exact selector”仅指对论文定义的 deterministic fixed-budget AOCC operator 精确执行/审计；当前 acquisition order 是 greedy/anytime，不宣称求解全局 combinatorial optimum。
+
+## 6. V62 决策门
+
+1. Protocol：set 字段 coverage>=0.99；all-valid mode=1；queried valid fraction>=0.99。
+2. Minimum metrics：proposal recall>=0.72；与 official protocol blocking 分开报告。
+3. Bridge：HAB dense-value vs runtime sparse-full match>=0.95，bridge flip<=0.05。
+4. Criticality：Top-M recall>=0.80，selected>=0.50，同时报告 critical scene fraction。
+5. Winner：sparse-full/pair-full/candidate match 必须超过 V61 0.141，budget-vs-sparse 保持高位。
+6. Residual：raw teacher-directed proposal出现且 beneficial>harmful，再分析 calibration。
+7. 先 paired CL20；Competitive PASS + CL20无安全退化后再 CL100。
+
+## 7. 不重复尝试清单
+
+- 不再使用 global Top-M 替代部署 HAB 作为主要训练成功指标。
+- 不再使用未中心化 logits + detached threshold 的可平移 proposal surrogate。
+- 不再按 Competitive score 选择 Minimum-infeasible checkpoint。
+- 不再用 incomplete test 调参、选 checkpoint 或选择版本。
+- 不在字段 coverage=0 时宣称某 head 生效或无效。
+- 不在 action-query bridge 未对齐时让 residual 补偿 upstream missing values。
+- 不通过增加 evidence atom budget 换结果。
+
+## 8. 验证边界
+
+V62 已完成 Python compile、YAML parse、shell syntax、targeted/full unit tests、TeX build 和合成 microbenchmark。当前环境未执行 fresh V62 train/calibration/open-loop/closed-loop，因此不声明 gate PASS、闭环提升或 SOTA。
+

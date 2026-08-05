@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Allow either:
-#   GPUS=0,1 RUN_MODE=train_open_loop bash run_v61_dehab_bfar_dbap.sh
+#   GPUS=0,1 RUN_MODE=train_open_loop bash run_v62_dcab_ewfc.sh
 # or:
-#   bash run_v61_dehab_bfar_dbap.sh GPUS=0,1 RUN_MODE=train_open_loop
+#   bash run_v62_dcab_ewfc.sh GPUS=0,1 RUN_MODE=train_open_loop
 for kv in "$@"; do
   [[ "$kv" == *=* ]] && export "$kv"
 done
@@ -22,7 +22,7 @@ V30_CKPT_IN="$FOUNDATION_CKPT"  # backwards-compatible alias; no hard-coded outp
 INIT_MODE="${INIT_MODE:-warm_start}"  # warm_start | scratch
 FOUNDATION_CONFIG="${FOUNDATION_CONFIG:-bdse/configs/v53_factorized_anchor_fast_2gpu.yaml}"
 FOUNDATION_OUT_ROOT="${FOUNDATION_OUT_ROOT:-outputs_v53_factorized_anchor}"
-OUT_ROOT="${OUT_ROOT:-outputs_v61_dehab_bfar_dbap_2gpu}"
+OUT_ROOT="${OUT_ROOT:-outputs_v62_dcab_ewfc_2gpu}"
 RUN_MODE="${RUN_MODE:-train_open_loop}"
 DEVICE="${DEVICE:-cuda}"
 GPUS="${GPUS:-0,1}"
@@ -31,8 +31,8 @@ MASTER_PORT="${MASTER_PORT:-29545}"
 MAX_TRAIN_SCENARIOS="${MAX_TRAIN_SCENARIOS:-50000}"
 VAL_SCENARIOS="${VAL_SCENARIOS:-500}"
 OPEN_LOOP_MAX_SCENARIOS="${OPEN_LOOP_MAX_SCENARIOS:-1000}"
-EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v61_dehab_bfar_dbap_cl.yaml}"
-TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v61_dehab_bfar_dbap_train_2gpu.yaml}"
+EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v62_dcab_ewfc_cl.yaml}"
+TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v62_dcab_ewfc_train_2gpu.yaml}"
 # Paper-grade protocol: checkpoint/hyperparameter selection uses val_tune only;
 # one-sided residual calibration uses the log-disjoint val_calib manifest only.
 VAL_SPLIT="${VAL_SPLIT:-val}"
@@ -68,10 +68,10 @@ SELECTOR_FULL_LAST_N_STEPS="${SELECTOR_FULL_LAST_N_STEPS:-64}"
 EXACT_DISTILL_SCENES_PER_RANK="${EXACT_DISTILL_SCENES_PER_RANK:-0}"
 EXACT_DISTILL_EVERY_N_STEPS="${EXACT_DISTILL_EVERY_N_STEPS:-1}"
 CL_PROCESSES_PER_GPU="${CL_PROCESSES_PER_GPU:-2}"
-CL_WORKERS_PER_GPU="${CL_WORKERS_PER_GPU:-1}"  # compatibility; V61 enforces one simulation worker per process
+CL_WORKERS_PER_GPU="${CL_WORKERS_PER_GPU:-1}"  # compatibility; V62 enforces one simulation worker per process
 CL_TOKEN_SCAN_MAX="${CL_TOKEN_SCAN_MAX:-2000}"
 CL_RENDER_SUMMARY_PDF="${CL_RENDER_SUMMARY_PDF:-0}"
-# V55/V61 diagnostic CL20 historically used the non-reactive challenge.  Keep
+# V55/V62 diagnostic CL20 historically used the non-reactive challenge.  Keep
 # that default for fast iteration, but make the protocol explicit so the same
 # frozen checkpoint can later be evaluated under the publication-critical
 # reactive challenge without editing source code.  Use a separate OUT_ROOT when
@@ -143,13 +143,13 @@ if [[ "$DETACH" == "1" && "${BDSE_DETACHED_CHILD:-0}" != "1" ]]; then
   setsid nohup bash "$script_path" "$@" </dev/null >>"$launcher_log" 2>&1 &
   child_pid=$!
   echo "$child_pid" > "$OUT_ROOT/logs/train.pid"
-  echo "[v61] detached session started pid=$child_pid log=$launcher_log"
+  echo "[v62] detached session started pid=$child_pid log=$launcher_log"
   exit 0
 fi
 
 # A single output root must have a single writer.  V47 was accidentally launched
 # twice and produced duplicate epoch rows plus competing checkpoint writes.
-RUN_LOCK_DIR="$OUT_ROOT/.v61_run.lock"
+RUN_LOCK_DIR="$OUT_ROOT/.v62_run.lock"
 if [[ "${ALLOW_CONCURRENT_OUT_ROOT:-0}" != "1" ]]; then
   if ! mkdir "$RUN_LOCK_DIR" 2>/dev/null; then
     owner="$(cat "$RUN_LOCK_DIR/pid" 2>/dev/null || echo unknown)"
@@ -161,9 +161,9 @@ if [[ "${ALLOW_CONCURRENT_OUT_ROOT:-0}" != "1" ]]; then
   printf '%s\n' "$RUN_MODE" > "$RUN_LOCK_DIR/run_mode"
   trap 'rm -rf "$RUN_LOCK_DIR"' EXIT INT TERM
 fi
-CKPT="$OUT_ROOT/train/bdse_v61_dehab_bfar_dbap.pt"
-BEST_CKPT="$OUT_ROOT/train/bdse_v61_dehab_bfar_dbap.best.pt"
-LATEST_CKPT="$OUT_ROOT/train/bdse_v61_dehab_bfar_dbap.latest.pt"
+CKPT="$OUT_ROOT/train/bdse_v62_dcab_ewfc.pt"
+BEST_CKPT="$OUT_ROOT/train/bdse_v62_dcab_ewfc.best.pt"
+LATEST_CKPT="$OUT_ROOT/train/bdse_v62_dcab_ewfc.latest.pt"
 
 check_checkpoint() {
   local checkpoint="${1:-}"
@@ -204,7 +204,7 @@ for path in dict.fromkeys(candidates):
         except TypeError:
             state = torch.load(path, map_location="cpu")
     except Exception as exc:
-        print(f"[v61] ignore unreadable checkpoint {path}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"[v62] ignore unreadable checkpoint {path}: {type(exc).__name__}: {exc}", file=sys.stderr)
         continue
     # A final inference-only model is not resumable; optimizer and epoch state
     # are required to continue the same training run.
@@ -240,20 +240,20 @@ train_2gpu() {
   fi
   if [[ -n "$resume_checkpoint" ]]; then
     checkpoint_args+=(--resume-from "$resume_checkpoint")
-    echo "[v61] resume checkpoint=$resume_checkpoint"
+    echo "[v62] resume checkpoint=$resume_checkpoint"
   elif [[ "$INIT_MODE" == "warm_start" ]]; then
     check_checkpoint "$V30_CKPT_IN"
     checkpoint_args+=(--warm-start-from "$V30_CKPT_IN")
-    echo "[v61] warm-start checkpoint=$V30_CKPT_IN"
+    echo "[v62] warm-start checkpoint=$V30_CKPT_IN"
   else
-    echo "[v61] training from random initialization (INIT_MODE=scratch)"
+    echo "[v62] training from random initialization (INIT_MODE=scratch)"
   fi
-  echo "[v61] DDP training on physical GPUs $GPU0,$GPU1"
-  echo "[v61] batch_per_gpu=$BATCH_SIZE_PER_GPU global_batch=$effective_global_batch workers_per_gpu=$NUM_WORKERS_PER_GPU"
-  echo "[v61] train_config=$TRAIN_CONFIG val_split=$VAL_SPLIT val_scenarios=$VAL_SCENARIOS val_every=$VAL_EVERY_N_EPOCHS dense_val=$VAL_DENSE_DIAGNOSTIC"
-  echo "[v61] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS init_mode=$INIT_MODE"
-  echo "[v61] exact_selector_cpu_backend=$EXACT_SELECTOR_CPU_BACKEND workers_per_rank=$EXACT_SELECTOR_WORKERS_PER_RANK"
-  echo "[v58-csip-bfar] fixed-budget evidence certificate + deployment-aligned certified residual winner correction"
+  echo "[v62] DDP training on physical GPUs $GPU0,$GPU1"
+  echo "[v62] batch_per_gpu=$BATCH_SIZE_PER_GPU global_batch=$effective_global_batch workers_per_gpu=$NUM_WORKERS_PER_GPU"
+  echo "[v62] train_config=$TRAIN_CONFIG val_split=$VAL_SPLIT val_scenarios=$VAL_SCENARIOS val_every=$VAL_EVERY_N_EPOCHS dense_val=$VAL_DENSE_DIAGNOSTIC"
+  echo "[v62] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS init_mode=$INIT_MODE"
+  echo "[v62] exact_selector_cpu_backend=$EXACT_SELECTOR_CPU_BACKEND workers_per_rank=$EXACT_SELECTOR_WORKERS_PER_RANK"
+  echo "[v62-dcab-ewfc] all-valid action bridge + literal winner-flip critical evidence supervision"
 
   local val_dense_args=()
   if [[ "$VAL_DENSE_DIAGNOSTIC" == "1" || "$VAL_DENSE_DIAGNOSTIC" == "true" ]]; then
@@ -298,7 +298,7 @@ train_2gpu() {
       --save-every-n-steps "$SAVE_EVERY_N_STEPS" \
       --best-metric competitive_score \
       --best-metrics competitive_score minimum_gate_feasible fixed_budget_critical_score teacher_action_match teacher_regret full_interface_action_match \
-      --log-file "$OUT_ROOT/train/bdse_v61_dehab_bfar_dbap.train_log.jsonl" \
+      --log-file "$OUT_ROOT/train/bdse_v62_dcab_ewfc.train_log.jsonl" \
       --output "$CKPT" \
     2>&1 | tee -a "$OUT_ROOT/logs/train_2gpu.out"
 }
@@ -429,8 +429,8 @@ run_open_loop_shard() {
     --split val \
     --preprocessed-dir "$shard_cache" \
     --device cuda \
-    --output "$OUT_ROOT/open_loop/open_loop_v61_dehab_bfar_dbap.gpu${shard_id}.json" \
-    --per-sample-output "$OUT_ROOT/open_loop/open_loop_v61_dehab_bfar_dbap.gpu${shard_id}.jsonl" \
+    --output "$OUT_ROOT/open_loop/open_loop_v62_dcab_ewfc.gpu${shard_id}.json" \
+    --per-sample-output "$OUT_ROOT/open_loop/open_loop_v62_dcab_ewfc.gpu${shard_id}.jsonl" \
     > "$OUT_ROOT/logs/open_loop_gpu${shard_id}.out" 2>&1
 }
 
@@ -447,8 +447,8 @@ import numpy as np
 
 root = Path(sys.argv[1])
 wall_seconds = float(sys.argv[2])
-summary_paths = [root / f"open_loop_v61_dehab_bfar_dbap.gpu{i}.json" for i in range(2)]
-row_paths = [root / f"open_loop_v61_dehab_bfar_dbap.gpu{i}.jsonl" for i in range(2)]
+summary_paths = [root / f"open_loop_v62_dcab_ewfc.gpu{i}.json" for i in range(2)]
+row_paths = [root / f"open_loop_v62_dcab_ewfc.gpu{i}.jsonl" for i in range(2)]
 
 summaries = [json.loads(path.read_text(encoding="utf-8")) for path in summary_paths]
 shard_rows = []
@@ -514,8 +514,8 @@ for idx, peak in enumerate(peaks):
     if math.isfinite(peak):
         out[f"cuda_peak_memory_mb_gpu{idx}"] = peak
 
-(root / "open_loop_v61_dehab_bfar_dbap.json").write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
-with (root / "open_loop_v61_dehab_bfar_dbap.jsonl").open("w", encoding="utf-8") as f:
+(root / "open_loop_v62_dcab_ewfc.json").write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+with (root / "open_loop_v62_dcab_ewfc.jsonl").open("w", encoding="utf-8") as f:
     for row in rows:
         f.write(json.dumps(row, sort_keys=True) + "\n")
 print(json.dumps(out, indent=2, sort_keys=True))
@@ -523,12 +523,12 @@ PY
 }
 
 open_loop_2gpu() {
-  local checkpoint="${V61_CKPT:-$BEST_CKPT}"
+  local checkpoint="${V62_CKPT:-$BEST_CKPT}"
   check_checkpoint "$checkpoint"
   local shard_root="$OUT_ROOT/open_loop/.two_gpu_shards"
   prepare_open_loop_shards "$shard_root"
 
-  echo "[v61] Open-loop source_split=$OPEN_LOOP_SPLIT across physical GPUs $GPU0 and $GPU1"
+  echo "[v62] Open-loop source_split=$OPEN_LOOP_SPLIT across physical GPUs $GPU0 and $GPU1"
   local start_time end_time
   start_time=$(date +%s)
   run_open_loop_shard "$GPU0" 0 "$checkpoint" "$shard_root" & local pid0=$!
@@ -607,7 +607,7 @@ run_closed_loop_shard() {
     --config "$EVAL_CONFIG" --checkpoint "$checkpoint" --device cuda \
     --challenge "$CL_CHALLENGE" --metric-aggregator "$CL_METRIC_AGGREGATOR" \
     --output-dir "$run_root/shard${shard_id}" \
-    --experiment-uid "v61_dehab_bfar_dbap_${limit}_shard${shard_id}" \
+    --experiment-uid "v62_dcab_ewfc_${limit}_shard${shard_id}" \
     --nuplan-module nuplan.planning.script.run_simulation --scenario-builder nuplan \
     --worker single_machine_thread_pool --hydra-full-error \
     --nuplan-data-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_ROOT/maps" \
@@ -679,15 +679,15 @@ PY_MERGE
 closed_loop_2gpu() {
   local limit="$1"
   : "${NUPLAN_ROOT:?Set NUPLAN_ROOT for closed-loop evaluation}"
-  local checkpoint="${V61_CKPT:-$BEST_CKPT}"
+  local checkpoint="${V62_CKPT:-$BEST_CKPT}"
   check_checkpoint "$checkpoint"
   (( CL_PROCESSES_PER_GPU >= 1 )) || { echo "CL_PROCESSES_PER_GPU must be >= 1" >&2; exit 2; }
   local total_shards=$((2 * CL_PROCESSES_PER_GPU))
-  local run_root="$OUT_ROOT/closed_loop/v61_dehab_bfar_dbap_${limit}"
+  local run_root="$OUT_ROOT/closed_loop/v62_dcab_ewfc_${limit}"
   local token_root="$run_root/scenario_token_shards"
   rm -rf "$run_root"; mkdir -p "$run_root" "$OUT_ROOT/logs"
   prepare_closed_loop_token_shards "$limit" "$token_root" "$total_shards"
-  echo "[v61] Closed-loop $limit scenarios: $CL_PROCESSES_PER_GPU process(es)/GPU, one worker/process"
+  echo "[v62] Closed-loop $limit scenarios: $CL_PROCESSES_PER_GPU process(es)/GPU, one worker/process"
   local start_time end_time shard_id physical_gpu failed=0 pid
   local pids=()
   start_time=$(date +%s)

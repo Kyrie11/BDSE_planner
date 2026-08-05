@@ -211,11 +211,99 @@ def _straight_through_topm_mask(
     return st, hard.bool()
 
 
+def _exact_winner_flip_critical_proposal_loss(
+    J0: torch.Tensor,
+    g: torch.Tensor,
+    valid: torch.Tensor,
+    active: torch.Tensor,
+    proposal_logits: torch.Tensor,
+    deployment_hard: torch.Tensor,
+    target_action: torch.Tensor,
+    atom_costs: torch.Tensor,
+    cfg: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Supervise proposal logits with literal leave-one-atom-out winner flips.
+
+    An evidence atom is *critical* iff removing that atom from the dense local
+    interface changes the winner action.  This is deliberately stricter than
+    the historical margin-deficit proxy: the binary target is an exact action
+    flip, while the ranking utility only orders already-critical atoms by the
+    severity of the induced flip and their planner-interface cost.
+    """
+    train_cfg = cfg.get("training", {}) or {}
+    crit_cfg = train_cfg.get("exact_winner_flip_criticality", {}) or {}
+    if not bool(crit_cfg.get("enabled", False)):
+        zero = J0.new_tensor(0.0)
+        return zero, zero, zero, zero, zero
+
+    active = active.bool()
+    valid = valid.bool()
+    detached_g = g.detach()
+    dense_cost = J0.detach() + (detached_g * active[:, :, None].float()).sum(dim=1)
+    dense_cost = dense_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
+    dense_winner = dense_cost.argmin(dim=1)
+
+    loo_cost = dense_cost[:, None, :] - detached_g
+    loo_cost = loo_cost.masked_fill(~valid[:, None, :], J0.new_tensor(1.0e6))
+    loo_winner = loo_cost.argmin(dim=2)
+    critical = active & loo_winner.ne(dense_winner[:, None])
+    has_critical = critical.any(dim=1)
+
+    # Severity is the old winner's normalized disadvantage after the atom is
+    # removed.  It is positive exactly when a different action wins.
+    old_winner_cost = loo_cost.gather(
+        2, dense_winner[:, None, None].expand(-1, loo_cost.shape[1], 1)
+    ).squeeze(2)
+    loo_best_cost = loo_cost.min(dim=2).values
+    action_scale = _valid_row_scale(
+        dense_cost,
+        valid,
+        min_scale=float(crit_cfg.get("min_action_scale", 1.0)),
+    ).squeeze(1)
+    severity = ((old_winner_cost - loo_best_cost) / action_scale[:, None].clamp_min(1.0e-6)).clamp_min(0.0)
+    safe_cost = atom_costs.float().clamp_min(float(crit_cfg.get("min_atom_cost", 1.0e-3)))
+    utility = critical.float() * (1.0 + float(crit_cfg.get("severity_weight", 1.0)) * severity) / safe_cost
+
+    teacher_aligned = dense_winner.eq(target_action)
+    scene_weight = torch.where(
+        teacher_aligned,
+        torch.full_like(action_scale, float(crit_cfg.get("teacher_aligned_weight", 4.0))),
+        torch.ones_like(action_scale),
+    )
+    supervised_scene_weight = scene_weight * has_critical.float()
+
+    bce = F.binary_cross_entropy_with_logits(proposal_logits, critical.float(), reduction="none")
+    atom_weight = torch.where(
+        critical,
+        torch.full_like(bce, float(crit_cfg.get("positive_weight", 12.0))),
+        torch.full_like(bce, float(crit_cfg.get("negative_weight", 0.25))),
+    )
+    bce_mask = active & has_critical[:, None]
+    weighted_bce = bce * atom_weight * supervised_scene_weight[:, None]
+    L_bce = weighted_bce.masked_select(bce_mask).sum() / (
+        (atom_weight * supervised_scene_weight[:, None]).masked_select(bce_mask).sum().clamp_min(1.0)
+    )
+
+    target_dist = utility / utility.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
+    logp = F.log_softmax(proposal_logits.masked_fill(~active, _neg_mask_value(proposal_logits)), dim=1)
+    rank_terms = -(target_dist * logp).sum(dim=1)
+    L_rank = (rank_terms * supervised_scene_weight).sum() / supervised_scene_weight.sum().clamp_min(1.0)
+    loss = L_bce + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
+
+    critical_count = critical.float().sum()
+    recall = (critical & deployment_hard.bool()).float().sum() / critical_count.clamp_min(1.0)
+    critical_fraction = critical_count / active.float().sum().clamp_min(1.0)
+    critical_scene_fraction = has_critical.float().mean()
+    teacher_aligned_critical_scene_fraction = (has_critical & teacher_aligned).float().mean()
+    return loss, recall, critical_fraction, critical_scene_fraction, teacher_aligned_critical_scene_fraction
+
+
 def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
     """Stop-gradient deployment certificate masks for L_act.
 
-    Dense ``g`` is available during training, but the deployment path only sees
-    scores for HAB Top-M atoms and actions contained in the base rival graph.
+    Dense ``g`` is available during training, but deployment sees only HAB
+    Top-M atoms.  The queried action set follows ``runtime.action_query_mode``:
+    either the base rival graph (legacy) or every valid candidate action (V62).
     This helper mirrors that path and returns the selected atom mask plus the
     sparse atom-action query mask, preventing dense-label leakage into action
     supervision.
@@ -352,7 +440,12 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
                 continue
             action_set.add(int(a_idx))
             action_set.update(int(r) for r in rivals)
-        if action_set:
+        action_query_mode = str((cfg.get("runtime", {}) or {}).get("action_query_mode", "rival_graph")).strip().lower()
+        if action_query_mode in {"all", "all_valid", "full_valid"}:
+            action_ids = np.flatnonzero(valid[bidx]).astype(np.int64)
+            for ei in np.flatnonzero(atom_active):
+                query_mask[bidx, ei, action_ids] = True
+        elif action_set:
             action_ids = np.asarray(sorted(action_set), dtype=np.int64)
             for ei in np.flatnonzero(atom_active):
                 query_mask[bidx, ei, action_ids] = True
@@ -1965,7 +2058,11 @@ def _negative_cost_logits(cost: torch.Tensor, valid: torch.Tensor, min_scale: fl
     scale = _valid_row_scale(finite_cost, valid, min_scale=min_scale)
     center = torch.where(valid.bool(), finite_cost, torch.zeros_like(finite_cost)).sum(dim=1, keepdim=True) / valid.float().sum(dim=1, keepdim=True).clamp_min(1.0)
     logits = -(finite_cost - center.detach()) / scale
-    return logits.masked_fill(~valid.bool(), _neg_mask_value(logits))
+    # These logits feed CE/argmax directly and are never squared.  Use a much
+    # stronger finite sentinel than the generic AMP-safe mask so invalid actions
+    # cannot re-enter when valid costs span very large normalized ranges.
+    mask_value = -1.0e4 if logits.dtype in (torch.float16, torch.bfloat16) else -1.0e30
+    return logits.masked_fill(~valid.bool(), mask_value)
 
 
 def _config_with_evidence_budget(cfg: dict[str, Any], budget: float) -> dict[str, Any]:
@@ -3284,6 +3381,37 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         proposal_logit_abs_mean = J0.new_tensor(0.0)
         proposal_logit_rms_mean = J0.new_tensor(0.0)
 
+    # V62: paper-faithful criticality.  The target is not a generic high-margin
+    # atom or a teacher-pair heuristic; it is the exact leave-one-atom-out event
+    # that changes the dense winner action under the fixed interface.
+    if "deployment_hard" not in locals():
+        deployment_hard, _ = _fast_topm_mask_torch(
+            out["proposal_logits"],
+            e_mask,
+            batch.get("evidence_budget_costs", torch.ones_like(out["proposal_logits"])).float(),
+            batch.get("evidence_family_ids", torch.zeros_like(out["proposal_logits"], dtype=torch.long)).long(),
+            batch.get("evidence_features"),
+            cfg,
+            family_scores=out.get("family_logits"),
+        )
+    (
+        L_exact_winner_flip_critical_proposal,
+        exact_winner_flip_critical_recall_topm,
+        exact_winner_flip_critical_atom_fraction,
+        exact_winner_flip_critical_scene_fraction,
+        exact_winner_flip_teacher_aligned_scene_fraction,
+    ) = _exact_winner_flip_critical_proposal_loss(
+        finite_J0,
+        g,
+        valid,
+        e_mask,
+        out["proposal_logits"],
+        deployment_hard,
+        target_action,
+        batch.get("evidence_budget_costs", torch.ones_like(out["proposal_logits"])),
+        cfg,
+    )
+
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed
     # that better budget allocation alone cannot recover interaction recall or
     # closed-loop score.  This term directly trains the pair-conditioned head and
@@ -3391,7 +3519,12 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     potential_cycle_terms: list[torch.Tensor] = []
     potential_teacher_terms: list[torch.Tensor] = []
 
-    if enable_action_loss and action_act_weight_cfg > 0.0:
+    # Avoid the stop-gradient CPU certificate construction when the aggregate
+    # legacy action term is disabled.  V61 configured action=0 while leaving the
+    # child coefficient at 1, so this path consumed substantial wall time but
+    # could not contribute to the optimized objective.
+    action_aggregate_weight = float(lw.get("action", 1.0))
+    if enable_action_loss and action_aggregate_weight > 0.0 and action_act_weight_cfg > 0.0:
         selected_mask, query_mask = _predicted_certificate_masks(out, batch, cfg)
         g_runtime = g * query_mask.float()
         budgeted_cost = finite_J0 + (g_runtime * selected_mask[:, :, None].float()).sum(dim=1)
@@ -4233,6 +4366,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("proposal", lw.get("selection", 1.0))) * L_prop
         + float(lw.get("proposal_dense_winner", 0.0)) * L_proposal_dense_winner
         + float(lw.get("proposal_logit_stability", 0.0)) * L_proposal_logit_stability
+        + float(lw.get("exact_winner_flip_critical_proposal", 0.0)) * L_exact_winner_flip_critical_proposal
         + float(lw.get("action", 1.0)) * L_act
         + float(lw.get("full_action", 1.0)) * L_full_action
         + float(lw.get("full_margin", 0.5)) * L_full_margin
@@ -4274,6 +4408,11 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_prop": L_prop,
         "L_proposal_dense_winner": L_proposal_dense_winner,
         "L_proposal_logit_stability": L_proposal_logit_stability,
+        "L_exact_winner_flip_critical_proposal": L_exact_winner_flip_critical_proposal,
+        "exact_winner_flip_critical_recall_topm": exact_winner_flip_critical_recall_topm,
+        "exact_winner_flip_critical_atom_fraction": exact_winner_flip_critical_atom_fraction,
+        "exact_winner_flip_critical_scene_fraction": exact_winner_flip_critical_scene_fraction,
+        "exact_winner_flip_teacher_aligned_scene_fraction": exact_winner_flip_teacher_aligned_scene_fraction,
         "proposal_dense_topm_match": proposal_dense_topm_match,
         "proposal_fast_hab_topm_match": proposal_fast_hab_topm_match,
         "proposal_global_topm_match": proposal_global_topm_match,

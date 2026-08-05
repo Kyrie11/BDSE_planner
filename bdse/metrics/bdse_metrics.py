@@ -256,16 +256,24 @@ def compute_bdse_diagnostics(
     valid_base = valid & np.isfinite(np.asarray(predicted_base, dtype=np.float32).reshape(-1))
     base_action = int(np.argmin(np.where(valid_base, finite_base, np.inf))) if bool(valid_base.any()) else -1
 
-    def _teacher_regret_for(action: int) -> float:
+    def _teacher_scalar_delta_for(action: int) -> float:
+        """Scalar J_T difference to the lexicographic teacher action.
+
+        The robust teacher first minimizes hard-violation components and only
+        then uses J_T as a tie-breaker.  Consequently this scalar delta may be
+        negative without implying a broken cache or an invalid teacher label.
+        Keep the legacy ``*_teacher_regret`` names for compatibility, but expose
+        semantically correct aliases below.
+        """
         if action < 0 or action >= len(J) or not bool(valid[action]) or not np.isfinite(J[action]) or not np.isfinite(J[a_star]):
             return float("inf")
         return float(J[action] - J[a_star])
 
     budget_vs_full = int(action_index == full_action)
-    teacher_regret = _teacher_regret_for(int(action_index))
-    full_interface_teacher_regret = _teacher_regret_for(int(full_action))
-    sparse_full_interface_teacher_regret = _teacher_regret_for(int(sparse_full_action))
-    base_interface_teacher_regret = _teacher_regret_for(int(base_action))
+    teacher_regret = _teacher_scalar_delta_for(int(action_index))
+    full_interface_teacher_regret = _teacher_scalar_delta_for(int(full_action))
+    sparse_full_interface_teacher_regret = _teacher_scalar_delta_for(int(sparse_full_action))
+    base_interface_teacher_regret = _teacher_scalar_delta_for(int(base_action))
     query_pairs = pairs.pairs[pairs.valid_mask] if inference_pairs is None else np.asarray(inference_pairs, dtype=np.int64).reshape(-1, 2)
     if query_pairs.size:
         queried_actions = np.unique(query_pairs.reshape(-1))
@@ -353,6 +361,14 @@ def compute_bdse_diagnostics(
         "full_interface_teacher_regret": full_interface_teacher_regret,
         "sparse_full_interface_teacher_regret": sparse_full_interface_teacher_regret,
         "base_interface_teacher_regret": base_interface_teacher_regret,
+        "teacher_scalar_cost_delta": teacher_regret,
+        "full_interface_teacher_scalar_cost_delta": full_interface_teacher_regret,
+        "sparse_full_interface_teacher_scalar_cost_delta": sparse_full_interface_teacher_regret,
+        "base_interface_teacher_scalar_cost_delta": base_interface_teacher_regret,
+        "teacher_nonnegative_scalar_regret": max(teacher_regret, 0.0) if np.isfinite(teacher_regret) else teacher_regret,
+        "full_interface_teacher_nonnegative_scalar_regret": max(full_interface_teacher_regret, 0.0) if np.isfinite(full_interface_teacher_regret) else full_interface_teacher_regret,
+        "sparse_full_interface_teacher_nonnegative_scalar_regret": max(sparse_full_interface_teacher_regret, 0.0) if np.isfinite(sparse_full_interface_teacher_regret) else sparse_full_interface_teacher_regret,
+        "base_interface_teacher_nonnegative_scalar_regret": max(base_interface_teacher_regret, 0.0) if np.isfinite(base_interface_teacher_regret) else base_interface_teacher_regret,
         "teacher_action_match": float(action_index == a_star),
         "full_interface_action_match": float(full_action == a_star),
         "budget_vs_full_match": float(budget_vs_full),
@@ -390,6 +406,9 @@ def compute_bdse_diagnostics(
         "effective_query_count": float(qdiag.get("effective_query_count", effective_query_count)),
         "effective_query_atom_count": float(qdiag.get("selected_atom_count", query_atom_count)),
         "effective_query_action_count": float(qdiag.get("queried_action_count", query_action_count)),
+        "valid_action_count": float(qdiag.get("valid_action_count", int(valid.sum()))),
+        "queried_valid_action_fraction": float(qdiag.get("queried_valid_action_fraction", query_action_count / max(int(valid.sum()), 1))),
+        "action_query_mode_all_valid": float(qdiag.get("action_query_mode_all_valid", 0.0)),
         "effective_pair_count": float(qdiag.get("tournament_pair_count", len(query_pairs))),
         "teacher_pair_count": float(len(pairs.pairs)),
         "total_sparse_query_count": float(qdiag.get("total_sparse_query_count", qdiag.get("sparse_query_count", effective_query_count))),
@@ -430,6 +449,9 @@ def compute_bdse_diagnostics(
                 or str(k).startswith("residual_flip_")
                 or str(k).startswith("dual_certificate_")
                 or str(k).startswith("pair_action_anchor_")
+                or str(k).startswith("set_conditioned_residual_")
+                or str(k).startswith("pair_potential_")
+                or str(k).startswith("direct_evidence_action_potential_")
             )
             and isinstance(v, (int, float, np.integer, np.floating, bool, np.bool_))
             and np.isfinite(float(v))

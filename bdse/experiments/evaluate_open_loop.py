@@ -13,7 +13,7 @@ from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
-from bdse.planner.tournament import run_pair_conditioned_tournament
+from bdse.planner.tournament import full_interface_action, run_pair_conditioned_tournament
 from bdse.utils import configure_torch_for_device, resolve_torch_device
 from bdse.external_baselines.model_factory import load_model_for_config
 
@@ -188,6 +188,66 @@ def main() -> None:
             dense_predicted_atom_costs=None if dense is None else dense["g"],
             certificate_margin_matrix=tour.margins,
         )
+        if dense is not None:
+            valid_actions = np.asarray(sample.candidates.valid_mask, dtype=bool)
+            dense_g = np.asarray(dense["g"], dtype=np.float32)
+            dense_j0 = np.asarray(dense["J0"], dtype=np.float32)
+            topm_atoms = np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1)
+            topm_atoms = topm_atoms[(topm_atoms >= 0) & (topm_atoms < dense_g.shape[0])]
+            selected_atoms = np.asarray(sel.selected, dtype=np.int64).reshape(-1)
+            selected_atoms = selected_atoms[(selected_atoms >= 0) & (selected_atoms < dense_g.shape[0])]
+            dense_topm_g = np.zeros_like(dense_g)
+            dense_selected_g = np.zeros_like(dense_g)
+            if topm_atoms.size:
+                dense_topm_g[topm_atoms] = dense_g[topm_atoms]
+            if selected_atoms.size:
+                dense_selected_g[selected_atoms] = dense_g[selected_atoms]
+            dense_full_action = int(diag.details.get("full_action", -1))
+            dense_topm_action = full_interface_action(dense_j0, dense_topm_g, valid_actions, cfg)
+            dense_selected_action = full_interface_action(dense_j0, dense_selected_g, valid_actions, cfg)
+            runtime_sparse_full_action = int(diag.details.get("sparse_full_action", -1))
+            teacher_action = int(sample.teacher.a_star)
+            diag.values.update(
+                {
+                    "hab_topm_dense_value_action_match": float(dense_topm_action == teacher_action),
+                    "dense_vs_hab_topm_dense_value_match": float(dense_topm_action == dense_full_action),
+                    "hab_topm_dense_value_vs_runtime_sparse_full_match": float(dense_topm_action == runtime_sparse_full_action),
+                    "runtime_sparse_value_bridge_flip_rate": float(dense_topm_action != runtime_sparse_full_action),
+                    "selected_budget_dense_value_action_match": float(dense_selected_action == teacher_action),
+                    "dense_vs_selected_budget_dense_value_match": float(dense_selected_action == dense_full_action),
+                    "selected_budget_dense_value_vs_deployed_match": float(dense_selected_action == int(tour.action_index)),
+                }
+            )
+
+            # Literal novelty diagnostic: atom i is critical iff removing it
+            # changes the dense winner action.  This is evaluated independently
+            # of the historical margin-deficit proxy.
+            active_atoms = np.asarray(sample.evidence_bank.active_mask, dtype=bool).reshape(-1)
+            active_atoms = active_atoms[: dense_g.shape[0]]
+            active_dense_g = dense_g * active_atoms[:, None].astype(dense_g.dtype)
+            dense_cost = dense_j0 + active_dense_g.sum(axis=0)
+            dense_cost = np.where(valid_actions, dense_cost, np.inf)
+            if np.isfinite(dense_cost).any() and active_atoms.any():
+                winner = int(np.nanargmin(dense_cost))
+                loo_cost = dense_cost[None, :] - active_dense_g
+                loo_cost[:, ~valid_actions] = np.inf
+                loo_winner = np.nanargmin(loo_cost, axis=1)
+                critical_mask = active_atoms & (loo_winner != winner)
+                critical_count = int(critical_mask.sum())
+                if critical_count > 0:
+                    topm_mask = np.zeros_like(critical_mask)
+                    selected_mask = np.zeros_like(critical_mask)
+                    topm_mask[topm_atoms] = True
+                    selected_mask[selected_atoms] = True
+                    diag.values["exact_winner_flip_critical_recall_topm"] = float((critical_mask & topm_mask).sum() / critical_count)
+                    diag.values["exact_winner_flip_critical_recall_selected"] = float((critical_mask & selected_mask).sum() / critical_count)
+                else:
+                    diag.values["exact_winner_flip_critical_recall_topm"] = float("nan")
+                    diag.values["exact_winner_flip_critical_recall_selected"] = float("nan")
+                diag.values["exact_winner_flip_critical_atom_fraction"] = float(critical_count / max(int(active_atoms.sum()), 1))
+                diag.values["exact_winner_flip_critical_scene_rate"] = float(critical_count > 0)
+                diag.details["dense_hab_topm_action"] = int(dense_topm_action)
+                diag.details["dense_selected_budget_action"] = int(dense_selected_action)
         selected_local_anchor_action = int(tour_diag.get("pair_action_anchor_action", diag.details.get("sparse_full_action", -1)))
         teacher_action_for_anchor = int(sample.teacher.a_star)
         if selected_local_anchor_action >= 0:

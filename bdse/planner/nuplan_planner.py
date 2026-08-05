@@ -220,6 +220,9 @@ def runtime_query_diagnostics(pred: dict[str, Any], selected_atoms: list[int] | 
     return {
         "proposal_atom_count": int(len(topm)),
         "queried_action_count": int(len(actions)),
+        "action_query_mode_all_valid": float(bool(pred.get("action_query_mode_all_valid", False))),
+        "valid_action_count": int(pred.get("valid_action_count", len(actions))),
+        "queried_valid_action_fraction": float(pred.get("queried_valid_action_fraction", 0.0)),
         "runtime_pair_count": int(len(runtime_pairs)),
         "tournament_pair_count": int(len(rival_pairs)),
         "action_atom_query_count": action_atom,

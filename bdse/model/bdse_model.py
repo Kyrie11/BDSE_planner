@@ -265,8 +265,9 @@ class BDSEModel(nn.Module):
     and exposes all quantities needed by the deployment-time HAB selector:
     base costs, proposal logits, family gates, local atom means, and local atom
     heteroscedastic variances.  The dense forward path is used for training;
-    ``predict_certificate_numpy`` mirrors runtime by only scoring Top-M HAB atoms
-    on actions that appear in the screened rival graph.
+    ``predict_certificate_numpy`` mirrors runtime by scoring only Top-M HAB
+    atoms, with the action axis controlled by ``runtime.action_query_mode``
+    (screened rivals for legacy runs or all valid candidates for V62).
     """
 
     def __init__(self, cfg: dict[str, Any]):
@@ -703,7 +704,14 @@ class BDSEModel(nn.Module):
         mean = self.local_head(z).squeeze(-1)
         if not return_uncertainty and not return_residual_action:
             return mean
-        var = self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
+        # The residual branch may need its own uncertainty while the deployment
+        # certificate explicitly disables local evidence uncertainty.  Avoid an
+        # otherwise unused local_var_head pass in that common configuration.
+        var = (
+            self._positive_variance(self.local_var_head(z).squeeze(-1), self.var_floor)
+            if return_uncertainty
+            else torch.zeros_like(mean)
+        )
         if not return_residual_action:
             return mean, var
         residual = self.residual_action_head(z).squeeze(-1)
@@ -1324,13 +1332,24 @@ class BDSEModel(nn.Module):
             max_pairs=query_pair_cap,
             canonicalize_reciprocals=bool(cfg.get("selector", {}).get("canonicalize_reciprocal_queries", True)),
         )
-        if action_set:
+        runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
+        action_query_mode = str(runtime_cfg.get("action_query_mode", "rival_graph")).strip().lower()
+        if action_query_mode in {"all", "all_valid", "full_valid"}:
+            # V62 deployment-complete action bridge: the planner-interface budget
+            # still limits evidence atoms, while every valid candidate action is
+            # evaluated for those queried atoms.  This removes a hidden second
+            # sparsification axis that was absent from the V61 proposal loss.
+            action_ids = np.flatnonzero(candidates.valid_mask).astype(np.int64)
+            action_query_mode = "all_valid"
+        elif action_set:
             action_ids = np.asarray(sorted(action_set), dtype=np.int64)
+            action_query_mode = "rival_graph"
         elif len(pairs):
             action_ids = np.unique(pairs.reshape(-1))
+            action_query_mode = "runtime_pairs"
         else:
             action_ids = np.flatnonzero(candidates.valid_mask)[: max(1, int(cfg.get("tournament", {}).get("L_infer", 16)))]
-        runtime_cfg = cfg.get("runtime", {}) if isinstance(cfg, dict) else {}
+            action_query_mode = "fallback_top_l"
         mcfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
         scfg = cfg.get("selector", {}) if isinstance(cfg, dict) else {}
         use_pair_runtime = bool(runtime_cfg.get("use_pair_conditioned_margins", self.pair_conditioned))
@@ -1470,9 +1489,15 @@ class BDSEModel(nn.Module):
                 act_t = torch.from_numpy(action_ids_rep[None].astype(np.int64)).to(next(self.parameters()).device)
                 q_t = torch.from_numpy(q[None].astype(np.float32)).to(next(self.parameters()).device)
                 with torch.inference_mode():
+                    dual_cfg_early = (runtime_cfg.get("dual_certificate", {}) or {})
+                    need_local_uncertainty = (
+                        str(dual_cfg_early.get("evidence_uncertainty_source", "none")).lower() == "local"
+                        or float((cfg.get("tournament", {}) or {}).get("beta_uncertainty", 0.0)) > 0.0
+                        or float((cfg.get("selector", {}) or {}).get("lambda_info", 0.0)) > 0.0
+                    )
                     vals, var, residual_vals, residual_var = self.score_sparse_queries(
                         ctx, atom_t, act_t, q_t,
-                        return_uncertainty=True,
+                        return_uncertainty=need_local_uncertainty,
                         return_residual_action=True,
                     )
                     vals_np = vals[0].detach().cpu().numpy().astype(np.float32)
@@ -1758,6 +1783,12 @@ class BDSEModel(nn.Module):
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
+            "action_query_mode": action_query_mode,
+            "action_query_mode_all_valid": float(action_query_mode == "all_valid"),
+            "valid_action_count": int(np.asarray(candidates.valid_mask, dtype=bool).sum()),
+            "queried_valid_action_fraction": float(
+                len(action_ids) / max(int(np.asarray(candidates.valid_mask, dtype=bool).sum()), 1)
+            ),
             # Query accounting uses explicit categories.  Keep queried_pair_count
             # as a backward-compatible alias for the total number of sparse model
             # scores actually evaluated in this runtime certificate stage.
