@@ -1,0 +1,30 @@
+{
+  "bash_syntax": {
+    "files": 6,
+    "pass": true
+  },
+  "config_contract": "PASS",
+  "full_pytest": {
+    "failed": 0,
+    "pass": true,
+    "passed": 254,
+    "seconds": 16.96,
+    "warnings": 16
+  },
+  "limitations": [
+    "No nuPlan cache mounted in this environment",
+    "No uploaded model checkpoint bytes",
+    "No CUDA/closed-loop simulator execution",
+    "No fresh V64.2 training or official gate report generated here"
+  ],
+  "python_compile": "PASS",
+  "support_audit_reanalysis": "PASS",
+  "targeted_tests": {
+    "count": 4,
+    "pass": true
+  },
+  "yaml_parse": {
+    "files": 6,
+    "pass": true
+  }
+}

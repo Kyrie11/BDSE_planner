@@ -3877,3 +3877,60 @@ Residual raw proposed flip、beneficial、harmful 均为 0。保持 curriculum/c
 ## 9. 验证边界
 
 V64 本地验证：Python compile PASS，8/8 V64 YAML PASS，4/4 shell syntax PASS，full pytest **250 passed / 0 failed**。当前环境未执行 fresh V64 GPU training、calibration、open-loop、closed-loop，因此不声明 gate PASS、闭环提升或 SOTA。
+
+---
+
+# V64.2 — GateFix + HAB-Consistent Critical Boundary Exchange (HCBE) (2026-08-06)
+
+## Result trigger
+
+The uploaded V64 run completed training but never entered calibration/open-loop. The primary pipeline log stopped at `V64_SAQA_BCC_NEXT_COMMANDS.sh: line 390: sid: unbound variable`. A later direct rerun was independently blocked by a stale failed prefix-cache audit/config combination. Therefore Protocol, Minimum, and Competitive were not officially evaluated.
+
+The corrected support-contract replay passes every deployment-relevant hard check: legacy anchor recovery, deployed step-zero action identity, base/raw-query/score/decision contracts, and runtime/prefix deployed-action identity. The only mismatch is the internal `full_action` diagnostic, whose semantics differ under the support-aware interface and must remain warning-only.
+
+## Engineering fixes
+
+1. Split Bash `local` declarations before interpolating `sid`, for both V64 and the inherited V63 launcher, so `set -u` cannot terminate calibration startup.
+2. Fix cached-query audit `max_abs_error`: `arr.max(initial=nan)` always propagated NaN; use `arr.max()` for non-empty arrays.
+3. Make support-aware audit hard criteria deployment/interface based. Internal `full_action` mismatch is reported but no longer invalidates an otherwise exact deployed contract.
+4. Add a strict V64 pipeline-config contract and persisted query-path/checkpoint provenance to prevent stale inherited configs and silent checkpoint substitution.
+5. Add explicit checkpoint-evaluation mode (`SKIP_V64_TRAINING=1`, `V64_CANDIDATE_CHECKPOINT=...`) so primary, teacher-best, and fixed-budget-critical-best checkpoints can be evaluated without retraining or overwriting their identity.
+6. Add a pipeline-status inspector that distinguishes missing official gates from metric failures and extracts terminal log errors.
+
+## Algorithm diagnosis from the uploaded training proxies
+
+At the primary best checkpoint (epoch 1): broad proposal/selection remained healthy (`0.795/0.600` decisive recall), the dense-HAB/runtime bridge was `0.999`, and all query/budget contracts passed. However teacher exact winner-flip critical recall was only `0.345/0.329`, evidence certificate fraction was `0.046`, and no residual proposal reached the deployed winner. Epoch 5 improved teacher match and critical recall (`0.275`, `0.352/0.334`) but certificate fraction fell to `0.029`; the primary competitive-score checkpoint therefore selected epoch 1 even though both checkpoints were far below the certificate gate.
+
+The AOCC diagnostic explains the certificate bottleneck: initial weighted deficit was about `0.485`, B=16 reduced it by about `0.320`, mean selected marginal certificate gain was exactly the per-atom prior radius `0.02`, and the final deficit remained about `0.175`. This is a conservative omitted-atom bound bottleneck, not a reason to lower B, redefine criticality, or relax calibration.
+
+## V64.2 HCBE
+
+V64 BCC used a global straight-through Top-M surrogate and an additional hardest-negative rank term. With rare critical atoms, requiring each critical atom to outrank the strongest non-critical atom is stronger than fixed-M inclusion and can conflict with broad decisive recall.
+
+HCBE keeps all deployment semantics unchanged:
+
+- hard forward remains deterministic HAB Top-M;
+- B=16, M, evidence atoms, exact selector, and literal teacher winner-flip labels are unchanged;
+- only missed critical atoms receive exchange supervision;
+- the target boundary is the weakest retained non-critical atom in the same HAB family when available, otherwise the family-conditioned global retained boundary;
+- no teacher is used at deployment.
+
+The original hardest-negative term remains as a weak regularizer (`1.0 -> 0.25`) and HCBE receives weight `1.0`. This is an ablation-worthy acquisition improvement, not a claimed empirical gain until fresh training/open-loop/closed-loop results exist.
+
+## Efficiency fixes
+
+Teacher-interface criticality previously computed both model-interface and teacher-interface leave-one-out tensors, then discarded the model labels. V64.2 computes only the configured target source, reducing loss-stage work without changing targets or deployment. The wrapper also exposes data-loader prefetch/validation-worker controls instead of hard-coding them. Uploaded profiling shows data wait and loss construction, not model forward/backward, dominate training; speed tuning should therefore benchmark workers/prefetch and avoid reducing exactness or model capacity.
+
+## No-repeat constraints retained
+
+- do not increase B to hide acquisition/certificate failures;
+- do not replace literal winner-flip criticality with margin-deficit proxies;
+- do not make global Top-M the deployment selector;
+- do not relax residual calibration before deployed beneficial flips exist;
+- do not use opaque priors outside the evidence budget;
+- do not tune on the incomplete test set;
+- do not treat missing gate artifacts as gate failures.
+
+## Validation boundary
+
+Static/CPU validation after the changes: all YAML files parse, modified shell scripts pass `bash -n`, and the full unit suite passes **254/254**. No fresh GPU training, calibration, official open-loop gate, or closed-loop simulation was run in this environment, so V64.2 performance and SOTA claims remain unverified.

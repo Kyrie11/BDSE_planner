@@ -387,7 +387,8 @@ calibration_shard_fresh() {
 
 LAUNCHED_CALIBRATION_PID=""
 launch_calibration_shard() {
-  local sid="$1" gpu="$2" raw="$OUT_ROOT/calibration/raw/gpu${sid}.npz"
+  local sid="$1" gpu="$2"
+  local raw="$OUT_ROOT/calibration/raw/gpu${sid}.npz"
   local manifest="$CAL_SHARD_ROOT/gpu${sid}/val/manifest.jsonl"
   local log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
   if calibration_shard_fresh "$raw" "$manifest"; then
@@ -406,7 +407,8 @@ launch_calibration_shard() {
 }
 
 wait_calibration_shard() {
-  local sid="$1" pid="$2" log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
+  local sid="$1" pid="$2"
+  local log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
   if wait "$pid"; then
     [[ -s "$OUT_ROOT/calibration/raw/gpu${sid}.npz" ]] || {
       echo "[v63] calibration shard gpu${sid} exited 0 but raw output is missing" >&2

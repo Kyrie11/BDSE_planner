@@ -1,0 +1,75 @@
+{
+  "audit": "v64_support_aware_query_contract",
+  "checks": {
+    "base_contract": true,
+    "decision_contract": true,
+    "legacy_anchor_recovered": true,
+    "prefix_cache_matches_runtime": true,
+    "raw_query_contract": true,
+    "raw_query_contract_available": true,
+    "score_contract": true,
+    "support_step0_matches_legacy_deployed": true
+  },
+  "diagnostic_checks": {
+    "support_step0_matches_legacy_dense_diagnostic": false
+  },
+  "metrics": {
+    "legacy_anchor": {
+      "dense_runtime_base_contract_pass": 1.0,
+      "dense_runtime_query_decision_match": 0.207,
+      "dense_runtime_query_score_allclose_fraction": 0.08703052949571594,
+      "dense_runtime_query_score_contract_pass": 0.0,
+      "dense_runtime_raw_query_feature_allclose_fraction": 0.7460150801875608,
+      "dense_runtime_raw_query_feature_contract_available": 1.0,
+      "dense_runtime_raw_query_feature_contract_pass": 0.0,
+      "full_interface_action_match": 0.359,
+      "hab_topm_dense_value_vs_runtime_sparse_full_match": 0.207,
+      "teacher_action_match": 0.231
+    },
+    "prefix_cache": {
+      "dense_runtime_base_contract_pass": 1.0,
+      "dense_runtime_query_decision_match": 0.207,
+      "dense_runtime_query_score_allclose_fraction": 0.08703052949571594,
+      "dense_runtime_query_score_contract_pass": 0.0,
+      "dense_runtime_raw_query_feature_allclose_fraction": 0.7460150801875608,
+      "dense_runtime_raw_query_feature_contract_available": 1.0,
+      "dense_runtime_raw_query_feature_contract_pass": 0.0,
+      "full_interface_action_match": 0.359,
+      "hab_topm_dense_value_vs_runtime_sparse_full_match": 0.207,
+      "teacher_action_match": 0.231
+    },
+    "structural_prior": {
+      "dense_runtime_base_contract_pass": 1.0,
+      "dense_runtime_query_decision_match": 0.998,
+      "dense_runtime_query_score_allclose_fraction": 1.0,
+      "dense_runtime_query_score_contract_pass": 1.0,
+      "dense_runtime_raw_query_feature_allclose_fraction": 1.0,
+      "dense_runtime_raw_query_feature_contract_available": 1.0,
+      "dense_runtime_raw_query_feature_contract_pass": 1.0,
+      "full_interface_action_match": 0.184,
+      "hab_topm_dense_value_vs_runtime_sparse_full_match": 0.998,
+      "teacher_action_match": 0.229
+    },
+    "support_aware_nominal": {
+      "dense_runtime_base_contract_pass": 1.0,
+      "dense_runtime_query_decision_match": 1.0,
+      "dense_runtime_query_score_allclose_fraction": 1.0,
+      "dense_runtime_query_score_contract_pass": 1.0,
+      "dense_runtime_raw_query_feature_allclose_fraction": 1.0,
+      "dense_runtime_raw_query_feature_contract_available": 1.0,
+      "dense_runtime_raw_query_feature_contract_pass": 1.0,
+      "full_interface_action_match": 0.184,
+      "hab_topm_dense_value_vs_runtime_sparse_full_match": 1.0,
+      "teacher_action_match": 0.231
+    }
+  },
+  "pass": true,
+  "row_mismatch": {
+    "legacy_vs_support_deployed_action": 0.0,
+    "legacy_vs_support_full_action": 0.793,
+    "runtime_vs_prefix_cache_deployed_action": 0.0
+  },
+  "warnings": [
+    "support-aware full_action differs from the legacy internal full-interface diagnostic; deployed bdse_action and the three query contracts remain the hard immutability criteria"
+  ]
+}

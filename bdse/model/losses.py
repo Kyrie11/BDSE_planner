@@ -225,6 +225,8 @@ def _exact_winner_flip_critical_proposal_loss(
     teacher_cost: torch.Tensor | None = None,
     teacher_g: torch.Tensor | None = None,
     deployment_soft_mask: torch.Tensor | None = None,
+    deployment_acquisition_logits: torch.Tensor | None = None,
+    family_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Train proposal logits from literal leave-one-atom-out winner flips.
 
@@ -281,11 +283,28 @@ def _exact_winner_flip_critical_proposal_loss(
         ).clamp_min(0.0)
         return critical_local, severity_local, scalar_winner, aligned
 
-    detached_g = g.detach()
-    model_dense_cost = J0.detach() + (detached_g * active[:, :, None].float()).sum(dim=1)
-    model_critical, model_severity, model_winner, model_aligned = exact_labels(
-        model_dense_cost, detached_g
-    )
+    source = str(crit_cfg.get("target_source", "model_dense")).strip().lower()
+    model_sources = {"model", "model_dense", "self", "hybrid", "hybrid_union", "teacher_model_union"}
+    teacher_sources = {"teacher", "teacher_interface", "teacher_exact", "hybrid", "hybrid_union", "teacher_model_union"}
+    need_model_labels = source in model_sources
+    need_teacher_labels = source in teacher_sources
+
+    # V64.2 execution fix: teacher-interface training previously computed the
+    # full model leave-one-out tensor even though those labels were discarded.
+    # Exact criticality is one of the dominant loss-stage costs, so compute only
+    # the label sources requested by the configured objective.  This changes no
+    # target, hard forward set, or deployment behavior.
+    if need_model_labels:
+        detached_g = g.detach()
+        model_dense_cost = J0.detach() + (detached_g * active[:, :, None].float()).sum(dim=1)
+        model_critical, model_severity, model_winner, model_aligned = exact_labels(
+            model_dense_cost, detached_g
+        )
+    else:
+        model_critical = torch.zeros_like(active)
+        model_severity = torch.zeros_like(g[..., 0])
+        model_winner = target_action
+        model_aligned = torch.zeros_like(target_action, dtype=torch.bool)
 
     teacher_available = (
         teacher_cost is not None
@@ -294,7 +313,7 @@ def _exact_winner_flip_critical_proposal_loss(
         and teacher_g.ndim == 3
         and teacher_g.shape[:2] == g.shape[:2]
     )
-    if teacher_available:
+    if need_teacher_labels and teacher_available:
         teacher_dense_cost = teacher_cost.detach().to(dtype=J0.dtype)
         teacher_atom_values = teacher_g.detach().to(dtype=g.dtype)
         teacher_critical, teacher_severity, teacher_winner, teacher_aligned = exact_labels(
@@ -303,12 +322,10 @@ def _exact_winner_flip_critical_proposal_loss(
             forced_target=target_action,
         )
     else:
-        teacher_critical = torch.zeros_like(model_critical)
-        teacher_severity = torch.zeros_like(model_severity)
+        teacher_critical = torch.zeros_like(active)
+        teacher_severity = torch.zeros_like(g[..., 0])
         teacher_winner = target_action
         teacher_aligned = torch.zeros_like(target_action, dtype=torch.bool)
-
-    source = str(crit_cfg.get("target_source", "model_dense")).strip().lower()
     if source in {"teacher", "teacher_interface", "teacher_exact"}:
         if not teacher_available:
             raise ValueError(
@@ -423,11 +440,62 @@ def _exact_winner_flip_critical_proposal_loss(
             hard_coverage * supervised_scene_weight
         ).sum() / supervised_scene_weight.sum().clamp_min(1.0)
 
+    # V64.2 HAB-consistent critical boundary exchange (HCBE).  The old
+    # hardest-negative term asks every rare critical atom to outrank the single
+    # strongest non-critical atom in the whole scene.  That condition is much
+    # stronger than fixed-M inclusion and can fight the broad decisive-recall
+    # objective.  HCBE instead supervises only *missed* literal winner-flip
+    # atoms against the weakest currently retained exchange boundary.  When a
+    # same-family boundary exists it is used, matching HAB's family slots;
+    # otherwise the family-conditioned global boundary trains cross-family slot
+    # competition.  Forward deployment_hard remains the deterministic HAB set.
+    acquisition_logits = (
+        deployment_acquisition_logits
+        if deployment_acquisition_logits is not None
+        else proposal_logits
+    )
+    acquisition_logits = acquisition_logits.to(dtype=J0.dtype)
+    selected_noncritical = deployment_hard.bool() & active & ~critical
+    missed_critical = critical & ~deployment_hard.bool()
+    pos_inf = torch.finfo(acquisition_logits.dtype).max
+    global_boundary = acquisition_logits.masked_fill(~selected_noncritical, pos_inf).min(dim=1).values
+    has_global_boundary = selected_noncritical.any(dim=1)
+    boundary = global_boundary[:, None].expand_as(acquisition_logits).clone()
+    boundary_available = has_global_boundary[:, None].expand_as(active).clone()
+    if family_ids is not None:
+        fam = family_ids.long()
+        max_family = int(fam.max().detach().cpu().item() + 1) if fam.numel() else 0
+        for fid in range(max_family):
+            same_selected = selected_noncritical & fam.eq(fid)
+            same_boundary = acquisition_logits.masked_fill(~same_selected, pos_inf).min(dim=1).values
+            has_same = same_selected.any(dim=1)
+            atom_rows = fam.eq(fid)
+            use_same = atom_rows & has_same[:, None]
+            boundary = torch.where(use_same, same_boundary[:, None], boundary)
+            boundary_available = boundary_available | use_same
+    exchange_mask = missed_critical & boundary_available & torch.isfinite(boundary)
+    exchange_scene = exchange_mask.any(dim=1)
+    exchange_utility = utility * exchange_mask.float()
+    exchange_dist = exchange_utility / exchange_utility.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
+    exchange_tau = max(float(crit_cfg.get("exchange_temperature", 0.25)), 1.0e-4)
+    exchange_margin = float(crit_cfg.get("exchange_margin", 0.20))
+    exchange_terms = exchange_tau * F.softplus(
+        (exchange_margin + boundary - acquisition_logits) / exchange_tau
+    )
+    # Rows without an exchange candidate carry +inf sentinels in ``boundary``;
+    # erase them before multiplication so a disabled HCBE weight cannot produce
+    # the IEEE 0*inf -> NaN failure.
+    exchange_terms = exchange_terms.masked_fill(~exchange_mask, 0.0)
+    exchange_per_scene = (exchange_dist * exchange_terms).sum(dim=1)
+    exchange_scene_weight = supervised_scene_weight * exchange_scene.float()
+    L_exchange = (exchange_per_scene * exchange_scene_weight).sum() / exchange_scene_weight.sum().clamp_min(1.0)
+
     loss = (
         L_bce
         + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
         + float(crit_cfg.get("pairwise_rank_weight", 0.0)) * L_pair_rank
         + float(crit_cfg.get("coverage_weight", 0.0)) * L_coverage
+        + float(crit_cfg.get("exchange_rank_weight", 0.0)) * L_exchange
     )
 
     critical_count = critical.float().sum()
@@ -3561,6 +3629,10 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         teacher_cost=batch.get("teacher_J_T"),
         teacher_g=batch.get("teacher_g_evid"),
         deployment_soft_mask=st_topm_mask if "st_topm_mask" in locals() else None,
+        deployment_acquisition_logits=(
+            surrogate_logits if "surrogate_logits" in locals() else out["proposal_logits"]
+        ),
+        family_ids=batch.get("evidence_family_ids"),
     )
 
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed

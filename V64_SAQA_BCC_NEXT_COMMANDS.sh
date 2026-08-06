@@ -4,7 +4,7 @@ set -euo pipefail
 # v64.0 checkpoint-independent pipeline.  Resolve every relative path from the
 # checked-in script directory so a stale working directory cannot silently run a
 # different config or helper script.
-PIPELINE_VERSION="v64.1-support-aware-query-adapter-budgeted-critical-coverage"
+PIPELINE_VERSION="v64.2-gatefix-saqa-bcc-hcbe"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 echo "[v64] pipeline_version=$PIPELINE_VERSION script=$SCRIPT_DIR/$(basename "$0")"
@@ -35,7 +35,7 @@ export EXACT_SELECTOR_CPU_BACKEND="${EXACT_SELECTOR_CPU_BACKEND:-process}"
 export GPUS="${GPUS:-0,1}"
 export FOUNDATION_CONTROL_CONFIG="${FOUNDATION_CONTROL_CONFIG:-bdse/configs/v64_saqa_bcc_anchor_control_cl.yaml}"
 export LOCAL_CONTROL_CONFIG="${LOCAL_CONTROL_CONFIG:-bdse/configs/v64_saqa_bcc_local_control_cl.yaml}"
-export TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v64_saqa_bcc_train_2gpu.yaml}"
+export TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v64_2_saqa_bcc_hcbe_train_2gpu.yaml}"
 export EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v64_saqa_bcc_cl.yaml}"
 export QUERY_CACHE_AUDIT_REPORT="${QUERY_CACHE_AUDIT_REPORT:-$OUT_ROOT/provenance/query_cache_audit.json}"
 export CONTROL_CONFIG="${CONTROL_CONFIG:-$FOUNDATION_CONTROL_CONFIG}"  # compatibility alias
@@ -45,6 +45,8 @@ export LOCAL_CONTROL_ROOT="${LOCAL_CONTROL_ROOT:-$OUT_ROOT/control_local_same_ch
 export PIPELINE_DETACH="${PIPELINE_DETACH:-1}"
 export PIPELINE_FORCE="${PIPELINE_FORCE:-0}"
 export RUN_CLOSED_LOOP_AFTER_GATE="${RUN_CLOSED_LOOP_AFTER_GATE:-0}"
+export SKIP_V64_TRAINING="${SKIP_V64_TRAINING:-0}"
+export V64_CANDIDATE_CHECKPOINT="${V64_CANDIDATE_CHECKPOINT:-}"
 export RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL="${RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL:-0}"
 export RUN_CL100_AFTER_CL20="${RUN_CL100_AFTER_CL20:-0}"
 # Keep algorithmic closed-loop validation separate from the deployment-latency
@@ -52,6 +54,8 @@ export RUN_CL100_AFTER_CL20="${RUN_CL100_AFTER_CL20:-0}"
 export ENFORCE_LATENCY_BEFORE_CL="${ENFORCE_LATENCY_BEFORE_CL:-0}"
 export TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-8}"
 export TRAIN_NUM_WORKERS_PER_GPU="${TRAIN_NUM_WORKERS_PER_GPU:-6}"
+export TRAIN_PREFETCH_FACTOR="${TRAIN_PREFETCH_FACTOR:-2}"
+export VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-2}"
 export FAST_SELECTOR_SCENES_PER_RANK="${FAST_SELECTOR_SCENES_PER_RANK:-1}"
 export FAST_SELECTOR_EVERY_N_STEPS="${FAST_SELECTOR_EVERY_N_STEPS:-4}"
 export CL_PROCESSES_PER_GPU="${CL_PROCESSES_PER_GPU:-2}"
@@ -62,7 +66,15 @@ case "$FOUNDATION_POLICY" in
   *) echo "FOUNDATION_POLICY must be auto, rebuild, recover, or explicit" >&2; exit 2 ;;
 esac
 
-mkdir -p "$OUT_ROOT/logs"
+mkdir -p "$OUT_ROOT/logs" "$OUT_ROOT/provenance"
+
+# Fail before any long-running work when an inherited TRAIN_CONFIG/EVAL_CONFIG
+# points to an older algorithm family or violates the fixed planner-interface
+# support contract.  This also makes the selected config auditable.
+python -m bdse.tools.validate_v64_pipeline_config \
+  --train-config "$TRAIN_CONFIG" \
+  --eval-config "$EVAL_CONFIG" \
+  --output "$OUT_ROOT/provenance/v64_pipeline_config_contract.json"
 
 # Detach the complete pipeline, not only the training child.  Detaching only
 # run_v64_saqa_bcc.sh lets this parent continue immediately into calibration while
@@ -235,7 +247,7 @@ resolve_foundation_checkpoint() {
   fi
 
   echo "[v64] no safe historical foundation found; rebuilding from random initialization"
-  DETACH=0   GPUS="$GPUS"   INIT_MODE=scratch   V30_CKPT_IN=   OUT_ROOT="$FOUNDATION_ROOT"   FOUNDATION_OUT_ROOT="$FOUNDATION_ROOT"   FOUNDATION_CONFIG="$FOUNDATION_CONFIG"   RUN_MODE=foundation   AUTO_RESUME=1   VAL_SPLIT=val_tune   VAL_SCENARIOS=1000   BATCH_SIZE_PER_GPU="$TRAIN_BATCH_SIZE_PER_GPU"   NUM_WORKERS_PER_GPU="$TRAIN_NUM_WORKERS_PER_GPU"   PREFETCH_FACTOR=2   SAVE_EVERY_N_STEPS=1000   bash run_v64_saqa_bcc.sh
+  DETACH=0   GPUS="$GPUS"   INIT_MODE=scratch   V30_CKPT_IN=   OUT_ROOT="$FOUNDATION_ROOT"   FOUNDATION_OUT_ROOT="$FOUNDATION_ROOT"   FOUNDATION_CONFIG="$FOUNDATION_CONFIG"   RUN_MODE=foundation   AUTO_RESUME=1   VAL_SPLIT=val_tune   VAL_SCENARIOS=1000   BATCH_SIZE_PER_GPU="$TRAIN_BATCH_SIZE_PER_GPU"   NUM_WORKERS_PER_GPU="$TRAIN_NUM_WORKERS_PER_GPU"   PREFETCH_FACTOR="$TRAIN_PREFETCH_FACTOR"   SAVE_EVERY_N_STEPS=1000   bash run_v64_saqa_bcc.sh
 
   [[ -s "$rebuilt_best" ]] || {
     echo "Foundation rebuild did not produce $rebuilt_best" >&2
@@ -311,7 +323,13 @@ python -m bdse.tools.check_v53_anchor_quality "$FOUNDATION_QUALITY_JSON" \
 # 1. Main v64 training. Base/local encoders are frozen by config; only the
 #    reset residual/uncertainty and proposal-family heads are trainable.
 # ---------------------------------------------------------------------------
-if training_complete; then
+if [[ "$SKIP_V64_TRAINING" == "1" ]]; then
+  [[ -n "$V64_CANDIDATE_CHECKPOINT" && -s "$V64_CANDIDATE_CHECKPOINT" ]] || {
+    echo "SKIP_V64_TRAINING=1 requires a valid V64_CANDIDATE_CHECKPOINT" >&2
+    exit 2
+  }
+  echo "[v64] stage 1 skipped by explicit checkpoint-evaluation mode: $V64_CANDIDATE_CHECKPOINT"
+elif training_complete; then
   echo "[v64] stage 1 already complete: reuse final/best checkpoints"
 else
   DETACH=0 \
@@ -328,7 +346,8 @@ else
   OPEN_LOOP_SPLIT=val_tune \
   BATCH_SIZE_PER_GPU="$TRAIN_BATCH_SIZE_PER_GPU" \
   NUM_WORKERS_PER_GPU="$TRAIN_NUM_WORKERS_PER_GPU" \
-  PREFETCH_FACTOR=2 \
+  PREFETCH_FACTOR="$TRAIN_PREFETCH_FACTOR" \
+  VAL_NUM_WORKERS_PER_GPU="$VAL_NUM_WORKERS_PER_GPU" \
   SAVE_EVERY_N_STEPS=1000 \
   SELECTOR_SCENES_PER_RANK="$FAST_SELECTOR_SCENES_PER_RANK" \
   SELECTOR_EVERY_N_STEPS="$FAST_SELECTOR_EVERY_N_STEPS" \
@@ -342,8 +361,20 @@ else
   bash run_v64_saqa_bcc.sh
 fi
 
-BEST_CHECKPOINT="$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt"
-[[ -s "$BEST_CHECKPOINT" ]] || { echo "Missing v64 best checkpoint: $BEST_CHECKPOINT" >&2; exit 2; }
+BEST_CHECKPOINT="${V64_CANDIDATE_CHECKPOINT:-$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt}"
+[[ -s "$BEST_CHECKPOINT" ]] || { echo "Missing v64 candidate checkpoint: $BEST_CHECKPOINT" >&2; exit 2; }
+python - "$BEST_CHECKPOINT" "$OUT_ROOT/provenance/v64_candidate_checkpoint.json" <<'PY_CANDIDATE_CKPT'
+import hashlib, json, sys
+from pathlib import Path
+src, out = map(Path, sys.argv[1:])
+h = hashlib.sha256()
+with src.open('rb') as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b''):
+        h.update(chunk)
+payload = {"path": str(src.resolve()), "sha256": h.hexdigest(), "size_bytes": src.stat().st_size}
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding='utf-8')
+PY_CANDIDATE_CKPT
 
 # ---------------------------------------------------------------------------
 # 2. One shared evidence calibration plus candidate-only residual calibration.
@@ -387,7 +418,8 @@ calibration_shard_fresh() {
 
 LAUNCHED_CALIBRATION_PID=""
 launch_calibration_shard() {
-  local sid="$1" gpu="$2" raw="$OUT_ROOT/calibration/raw/gpu${sid}.npz"
+  local sid="$1" gpu="$2"
+  local raw="$OUT_ROOT/calibration/raw/gpu${sid}.npz"
   local manifest="$CAL_SHARD_ROOT/gpu${sid}/val/manifest.jsonl"
   local log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
   if calibration_shard_fresh "$raw" "$manifest"; then
@@ -406,7 +438,8 @@ launch_calibration_shard() {
 }
 
 wait_calibration_shard() {
-  local sid="$1" pid="$2" log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
+  local sid="$1" pid="$2"
+  local log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
   if wait "$pid"; then
     [[ -s "$OUT_ROOT/calibration/raw/gpu${sid}.npz" ]] || {
       echo "[v64] calibration shard gpu${sid} exited 0 but raw output is missing" >&2

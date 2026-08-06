@@ -160,7 +160,7 @@ def main() -> int:
         "full_model_query_dim": qdim,
         "audited_support_dim": support_dim,
         "runtime_extension_dim": max(qdim - support_dim, 0),
-        "max_abs_error": float(arr.max(initial=float("nan"))) if arr.size else float("nan"),
+        "max_abs_error": float(arr.max()) if arr.size else float("nan"),
         "mean_scene_max_abs_error": float(arr.mean()) if arr.size else float("nan"),
         "p50_scene_max_abs_error": float(np.quantile(arr, 0.50)) if arr.size else float("nan"),
         "p95_scene_max_abs_error": float(np.quantile(arr, 0.95)) if arr.size else float("nan"),
