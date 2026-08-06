@@ -1,0 +1,293 @@
+{
+  "calibration_audit": [
+    {
+      "atom_pair_count": 12717544,
+      "family": {
+        "1": {
+          "count": 1573320,
+          "empirical_violation_rate": 0.00302100017796761,
+          "epsilon": 0.0
+        },
+        "2": {
+          "count": 6682816,
+          "empirical_violation_rate": 0.024060366168992233,
+          "epsilon": 0.0
+        },
+        "3": {
+          "count": 3341408,
+          "empirical_violation_rate": 0.0,
+          "epsilon": 0.0
+        },
+        "5": {
+          "count": 1120000,
+          "empirical_violation_rate": 0.0,
+          "epsilon": 0.0
+        }
+      },
+      "learned_variance_fraction": 0.0,
+      "method": "split-conformal one-sided adverse residual calibration",
+      "name": "candidate",
+      "raw_error_mae": 0.02099841606807294,
+      "recommended_adverse_certificate_epsilon": 0.0,
+      "scene_count": 5000
+    },
+    {
+      "atom_pair_count": 12717544,
+      "family": {
+        "1": {
+          "count": 1573320,
+          "empirical_violation_rate": 0.00302100017796761,
+          "epsilon": 0.0
+        },
+        "2": {
+          "count": 6682816,
+          "empirical_violation_rate": 0.024060366168992233,
+          "epsilon": 0.0
+        },
+        "3": {
+          "count": 3341408,
+          "empirical_violation_rate": 0.0,
+          "epsilon": 0.0
+        },
+        "5": {
+          "count": 1120000,
+          "empirical_violation_rate": 0.0,
+          "epsilon": 0.0
+        }
+      },
+      "learned_variance_fraction": 0.0,
+      "method": "split-conformal one-sided adverse residual calibration",
+      "name": "local_control",
+      "raw_error_mae": 0.02099841606807294,
+      "recommended_adverse_certificate_epsilon": 0.0,
+      "scene_count": 5000
+    },
+    {
+      "atom_pair_count": 12717544,
+      "family": {
+        "1": {
+          "count": 1573320,
+          "empirical_violation_rate": 0.00302100017796761,
+          "epsilon": 0.0
+        },
+        "2": {
+          "count": 6682816,
+          "empirical_violation_rate": 0.024060366168992233,
+          "epsilon": 0.0
+        },
+        "3": {
+          "count": 3341408,
+          "empirical_violation_rate": 0.0,
+          "epsilon": 0.0
+        },
+        "5": {
+          "count": 1120000,
+          "empirical_violation_rate": 0.0,
+          "epsilon": 0.0
+        }
+      },
+      "learned_variance_fraction": 0.0,
+      "method": "split-conformal one-sided adverse residual calibration",
+      "name": "foundation_control",
+      "raw_error_mae": 0.020998498044789215,
+      "recommended_adverse_certificate_epsilon": 0.0,
+      "scene_count": 5000
+    }
+  ],
+  "claim_boundary": "V58 was statically validated and unit tested only; no fresh training/open-loop/closed-loop result is claimed.",
+  "closed_loop": {
+    "error": "main_callback.metric_summary_callback=null -> AttributeError: 'NoneType' object has no attribute '_target_'",
+    "status": "NOT_RUN_ENGINEERING_CRASH"
+  },
+  "gate_metrics": {
+    "beneficial_residual_rate": 0.0,
+    "budget_fill": 1.0,
+    "dense_anchor_row_drift": 0.0,
+    "deployed_residual_flip_rate": 0.0,
+    "dual_certificate_deployment_certified": 0.719,
+    "effective_decisive_recall": 0.7735447176250216,
+    "evidence_certified_fraction": 0.8880333333333333,
+    "fallback_rate": 0.11,
+    "frontier_retained": 0.7814220440859662,
+    "harmful_residual_rate": 0.0,
+    "interaction_decisive_recall": 0.5776969241422928,
+    "internal_beneficial_pair_potential_rate": 0.0,
+    "internal_harmful_pair_potential_rate": 0.0,
+    "latency_p95_ms": 905.0107977818697,
+    "local_anchor_row_drift": 0.0,
+    "local_control_local_pair_full_match": 0.141,
+    "local_pair_full_match": 0.141,
+    "pair_full_match": 0.141,
+    "pair_residual_gain_vs_local_pair": 0.0,
+    "paired_deployed_flip_stats": {
+      "beneficial_given_flip": 0.0,
+      "beneficial_rate": 0.0,
+      "flip_rate": 0.0,
+      "harmful_given_flip": 0.0,
+      "harmful_rate": 0.0,
+      "n": 1000.0,
+      "unchanged_rate": 1.0
+    },
+    "proposal_decisive_recall": 0.7993391833959718,
+    "residual_flip_certificate_pass": 0.914,
+    "residual_gain_vs_local": 0.0,
+    "selected_decisive_recall": 0.6078805332584458,
+    "selector_gain_vs_foundation": 0.0,
+    "teacher_match_candidate": 0.141,
+    "teacher_match_foundation": 0.141,
+    "teacher_match_local": 0.141
+  },
+  "open_loop_profile_ms": {
+    "mean_latency": 586.18,
+    "p95_latency": 905.0107977818697,
+    "prediction": 441.05,
+    "selector": 77.45,
+    "tournament": 6.4
+  },
+  "pipeline_timing_seconds": {
+    "anchor_quality": 804,
+    "candidate_calibration": 2246,
+    "candidate_open_loop": 391,
+    "foundation_calibration": 2427,
+    "foundation_open_loop": 727,
+    "local_calibration": 2270,
+    "local_open_loop": 750,
+    "total_start_to_gate": 17377,
+    "training": 7758
+  },
+  "recorded_gate_status": {
+    "competitive_failures": [
+      "total teacher-match gain=+0.000000 < +0.015",
+      "residual teacher-match gain=+0.000000 < +0.005",
+      "pair-full residual gain=+0.000000 < +0.005",
+      "residual not net beneficial=0.0/0.0",
+      "proposal decisive recall=0.7993391833959718 < 0.80"
+    ],
+    "competitive_pass": false,
+    "minimum_metrics_pass": true,
+    "minimum_pass": true,
+    "protocol_pass": true
+  },
+  "residual_metric_audit": {
+    "all_flagged_guard_scenes": 22,
+    "beneficial_deployed": 0,
+    "deployed_flips": 0,
+    "genuine_raw_residual_attempts_blocked": 86,
+    "harmful_deployed": 0,
+    "reported_proposals": 99,
+    "structural_guard_artifacts_reported_as_proposals": 13
+  },
+  "source_archives": {
+    "code": "/mnt/data/bdse(2).zip",
+    "results": "/mnt/data/outputs_v57_wcdcip_bfar_dbap_fast_2gpu_v1.zip"
+  },
+  "strict_engineering_interpretation": {
+    "competitive": "FAIL",
+    "formal_minimum_with_protocol_prerequisite": "FAIL",
+    "minimum_metrics": "PASS",
+    "protocol": "INCOMPLETE_FAIL",
+    "reason": "training/pairing subprotocol passed, but V57 did not calibrate direct residual uncertainty, residual proposal metrics were contaminated by structural guard changes, and closed-loop execution crashed before any scene ran"
+  },
+  "training_health": {
+    "configured_min_exact_fraction": 0.015,
+    "gate_min_exact_fraction": 0.015,
+    "last_exact_fraction": 0.02568,
+    "max_action_family_enabled": 1.0,
+    "max_deployment_selection_loss": 0.0862795361328125,
+    "max_exact_fraction": 0.02568,
+    "max_winner_level_loss": 10.0748590625,
+    "mean_training_pair_fraction": 0.5884010026041667,
+    "rows": 6.0,
+    "unique_epochs": 6.0
+  },
+  "training_losses": {
+    "L_action_potential_teacher": {
+      "first": 0.36287830078125,
+      "last": 0.3630141796875,
+      "maximum": 0.3641808203125,
+      "minimum": 0.36287830078125
+    },
+    "L_pair_full_winner_margin": {
+      "first": 10.0748590625,
+      "last": 8.1748303125,
+      "maximum": 10.0748590625,
+      "minimum": 8.1748303125
+    },
+    "L_residual_action_atom": {
+      "first": 0.0120314013671875,
+      "last": 0.012012696533203126,
+      "maximum": 0.01204616455078125,
+      "minimum": 0.012012696533203126
+    },
+    "L_residual_action_uncertainty": {
+      "first": 3.98120234375,
+      "last": 2.377028984375,
+      "maximum": 3.98120234375,
+      "minimum": 2.377028984375
+    },
+    "L_residual_winner_correction": {
+      "first": 7.233839375,
+      "last": 5.3784875,
+      "maximum": 7.233839375,
+      "minimum": 5.3784875
+    },
+    "selector_exact_fraction": {
+      "first": 0.01564,
+      "last": 0.02568,
+      "maximum": 0.02568,
+      "minimum": 0.0156
+    }
+  },
+  "training_time_breakdown_epoch_seconds": {
+    "data_wait_wall": [
+      40.55900525022298,
+      4.012621748261154,
+      3.6692153783515096,
+      3.674687745049596,
+      3.726811297237873,
+      3.521484484896064
+    ],
+    "epoch_wall": [
+      1206.9792574364692,
+      1134.4824262103066,
+      1060.554281433113,
+      989.8662690101191,
+      1043.3421867238358,
+      1040.5435271523893
+    ],
+    "loss_wall": [
+      788.9767251359299,
+      770.4827895211056,
+      721.4652110086754,
+      710.7277105618268,
+      737.8722028024495,
+      746.9069406455383
+    ],
+    "pair_sampling_wall": [
+      174.3693633954972,
+      184.0157694388181,
+      179.60244662314653,
+      120.32711565960199,
+      138.64566893782467,
+      129.15712940320373
+    ]
+  },
+  "v58_changes": [
+    "correct immutable raw residual proposal/action metrics before structural guard",
+    "one shared evidence calibration plus candidate-only direct residual margin calibration, sharded over two GPUs",
+    "bounded concurrent candidate/local/foundation open-loop worker pool with exact paired hashes",
+    "deployment-aligned certified residual winner loss using mean - beta*sigma - residual conformal epsilon",
+    "residual mean/variance learning-rate multipliers",
+    "checkpoint score that explicitly rewards residual/pair-full winner gain and beneficial-minus-harmful interventions",
+    "strict protocol gate audits calibration and individual configured winner losses",
+    "valid nuPlan callback and hard closed-loop completion marker"
+  ],
+  "validation_positive_signals": {
+    "pair_full_action_match_epoch5": 0.141,
+    "proposal_decisive_recall_epoch5": 0.8012977043063192,
+    "selected_decisive_recall_epoch5": 0.6089698977089376,
+    "selected_interaction_decisive_recall_epoch5": 0.5776603728822225,
+    "selected_local_action_match_epoch5": 0.141
+  },
+  "version": "V57 WC-DCIP-BFAR-DBAP"
+}

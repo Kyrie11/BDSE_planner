@@ -4,11 +4,13 @@ import numpy as np
 import torch
 
 from bdse.data.cache_schema import CandidateBank, EvidenceAtom, EvidenceBank, PairLabels, TeacherLabels
+from bdse.data.tensorizer import evidence_arrays
 from bdse.experiments.evaluate_open_loop import _align_bool_mask
 from bdse.metrics.bdse_metrics import BDSEMetricResult, OnlineMetricMean, aggregate_metric_results, compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import _exact_winner_flip_critical_proposal_loss
 from bdse.planner.nuplan_planner import runtime_query_diagnostics
+from bdse.planner.evidence_atoms import compute_query_features
 from bdse.utils import deterministic_order
 
 
@@ -190,3 +192,208 @@ def test_online_metric_mean_matches_batch_aggregation() -> None:
     assert actual.keys() == expected.keys()
     for key in actual:
         np.testing.assert_allclose(actual[key], expected[key], rtol=0.0, atol=0.0, equal_nan=True)
+
+
+def test_teacher_interface_criticality_overrides_model_self_critical_atom() -> None:
+    # The model interface says atom 0 is critical.  The stable teacher interface
+    # says atom 1 is critical: teacher action 1 wins at [0.3, 0.2], but removing
+    # atom 1's [0.3, 0.0] contribution makes action 0 win.
+    J0 = torch.tensor([[0.0, 0.2]])
+    g = torch.tensor([[[1.0, 0.0], [0.0, 0.0]]])
+    valid = torch.tensor([[True, True]])
+    active = torch.tensor([[True, True]])
+    logits = torch.tensor([[0.0, 0.0]], requires_grad=True)
+    deployed = torch.tensor([[False, True]])
+    target = torch.tensor([1])
+    costs = torch.ones((1, 2))
+    teacher_cost = torch.tensor([[0.3, 0.2]])
+    teacher_g = torch.tensor([[[0.0, 0.0], [0.3, 0.0]]])
+    cfg = {
+        "training": {
+            "exact_winner_flip_criticality": {
+                "enabled": True,
+                "target_source": "teacher_interface",
+                "positive_weight": 8.0,
+                "negative_weight": 0.25,
+                "rank_weight": 1.0,
+                "pairwise_rank_weight": 1.0,
+                "rank_margin": 1.0,
+                "teacher_aligned_weight": 4.0,
+                "min_action_scale": 1.0,
+            }
+        }
+    }
+    loss, recall, atom_fraction, scene_fraction, teacher_scene_fraction = (
+        _exact_winner_flip_critical_proposal_loss(
+            J0,
+            g,
+            valid,
+            active,
+            logits,
+            deployed,
+            target,
+            costs,
+            cfg,
+            teacher_cost=teacher_cost,
+            teacher_g=teacher_g,
+        )
+    )
+    assert torch.isfinite(loss)
+    assert float(recall) == 1.0
+    assert float(atom_fraction) == 0.5
+    assert float(scene_fraction) == 1.0
+    assert float(teacher_scene_fraction) == 1.0
+    loss.backward()
+    assert logits.grad is not None
+    assert logits.grad[0, 1] < logits.grad[0, 0]
+
+
+def test_runtime_recompute_dense_query_ignores_stale_shape_valid_cache(synthetic_sample, cfg) -> None:
+    cfg = {**cfg, "runtime": {**cfg.get("runtime", {}), "dense_query_feature_source": "runtime_recompute"}}
+    bank = synthetic_sample.evidence_bank
+    stale = np.full_like(bank.query_features, 123.0, dtype=np.float32)
+    stale_bank = EvidenceBank(
+        atoms=bank.atoms,
+        query_features=stale,
+        active_mask=bank.active_mask,
+        proposal_features=bank.proposal_features,
+    )
+    arrays = evidence_arrays(
+        stale_bank,
+        synthetic_sample.candidates,
+        synthetic_sample.runtime,
+        cfg,
+        include_dense_query=True,
+    )
+    expected = compute_query_features(
+        stale_bank.atoms,
+        synthetic_sample.candidates,
+        synthetic_sample.runtime,
+        cfg,
+    )
+    E = min(len(stale_bank.atoms), int(cfg["evidence"]["max_atoms"]))
+    qdim = int(cfg["model"]["query_feature_dim"])
+    np.testing.assert_allclose(
+        arrays["evidence_query_features"][:E, :, :qdim],
+        expected[:E, :, :qdim],
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert not np.all(arrays["evidence_query_features"][:E, :, :qdim] == 123.0)
+
+
+def test_cache_verified_query_contract_rejects_stale_cache(synthetic_sample, cfg) -> None:
+    cfg = {
+        **cfg,
+        "runtime": {
+            **cfg.get("runtime", {}),
+            "dense_query_feature_source": "cache_verified",
+            "dense_query_cache_tolerance": 1.0e-8,
+        },
+    }
+    bank = synthetic_sample.evidence_bank
+    stale = np.full_like(bank.query_features, 123.0, dtype=np.float32)
+    stale_bank = EvidenceBank(
+        atoms=bank.atoms,
+        query_features=stale,
+        active_mask=bank.active_mask,
+        proposal_features=bank.proposal_features,
+    )
+    import pytest
+    with pytest.raises(ValueError, match="Cached/runtime query-feature contract mismatch"):
+        evidence_arrays(
+            stale_bank,
+            synthetic_sample.candidates,
+            synthetic_sample.runtime,
+            cfg,
+            include_dense_query=True,
+        )
+
+
+def test_query_accounting_exposes_acquisition_expansion() -> None:
+    pred = {
+        "top_m_atoms": np.arange(24, dtype=np.int64),
+        "queried_actions": np.arange(30, dtype=np.int64),
+        "action_atom_query_count": 24 * 30,
+        "configured_decision_budget_atom_count": 16,
+        "action_query_mode": "all_valid",
+        "action_query_mode_all_valid": True,
+        "valid_action_count": 30,
+        "queried_valid_action_fraction": 1.0,
+    }
+    diag = runtime_query_diagnostics(pred, selected_atoms=np.arange(16, dtype=np.int64))
+    assert diag["acquisition_action_atom_query_count"] == 24 * 30
+    assert diag["selected_certificate_query_count"] == 16 * 30
+    assert diag["proposal_to_certificate_atom_expansion"] == 1.5
+    assert diag["retained_interface_atom_budget_pass"] == 1.0
+
+
+def test_v63_dense_sparse_contract_audits_base_and_query_values() -> None:
+    from types import SimpleNamespace
+
+    from bdse.experiments.evaluate_open_loop import add_dense_bridge_diagnostics
+
+    candidates = CandidateBank(
+        trajectories=np.zeros((2, 2, 5), dtype=np.float32),
+        valid_mask=np.array([True, True]),
+        maneuver_ids=np.zeros((2,), dtype=np.int64),
+        theta=[{}, {}],
+        dynamic_flags=[{}, {}],
+        metadata=[{}, {}],
+    )
+    atoms = [
+        EvidenceAtom(
+            atom_id=i,
+            type="yield",
+            anchor={},
+            budget_cost=1.0,
+            is_hard=False,
+            family="interaction",
+            active_mask=True,
+        )
+        for i in range(2)
+    ]
+    evidence = EvidenceBank(
+        atoms=atoms,
+        query_features=np.zeros((2, 2, 1), dtype=np.float32),
+        active_mask=np.array([True, True]),
+    )
+    teacher = TeacherLabels(
+        J_base=np.array([0.0, 1.0], dtype=np.float32),
+        g_evid=np.zeros((2, 2), dtype=np.float32),
+        J_evid=np.zeros((2,), dtype=np.float32),
+        J_T=np.array([0.0, 1.0], dtype=np.float32),
+        a_star=0,
+        hard_violation_mask=np.array([False, False]),
+    )
+    sample = SimpleNamespace(
+        candidates=candidates,
+        evidence_bank=evidence,
+        teacher=teacher,
+        scenario_token="contract-test",
+    )
+    diag = BDSEMetricResult(values={}, details={"full_action": 0, "sparse_full_action": 0, "deployed_action": 0})
+    dense = {
+        "J0": np.array([0.0, 1.0], dtype=np.float32),
+        "J0_deployment": np.array([0.0, 1.0], dtype=np.float32),
+        "J0_model": np.array([0.0, 1.0], dtype=np.float32),
+        "g": np.zeros((2, 2), dtype=np.float32),
+        "dense_query_feature_source_runtime": 1.0,
+    }
+    pred = {
+        "J0": np.array([0.0, 1.0], dtype=np.float32),
+        "g": np.zeros((2, 2), dtype=np.float32),
+        "top_m_atoms": np.array([0, 1], dtype=np.int64),
+        "queried_actions": np.array([0, 1], dtype=np.int64),
+    }
+    add_dense_bridge_diagnostics(
+        diag,
+        dense=dense,
+        pred=pred,
+        selected_atoms=[0],
+        sample=sample,
+        cfg={"runtime": {"dense_base_value_tolerance": 1.0e-6, "dense_query_value_tolerance": 1.0e-6}},
+    )
+    assert diag.values["dense_runtime_base_contract_pass"] == 1.0
+    assert diag.values["dense_runtime_query_contract_pass"] == 1.0
+    assert diag.values["hab_topm_dense_value_vs_runtime_sparse_full_match"] == 1.0

@@ -231,8 +231,11 @@ def runtime_query_diagnostics(
     else:
         selected_certificate = int(selected_count * len(actions))
 
+    budget_atom_count = int(pred.get("configured_decision_budget_atom_count", selected_count))
+    acquisition_expansion = float(len(topm) / max(selected_count, 1)) if selected_count else float("nan")
     return {
         "proposal_atom_count": int(len(topm)),
+        "proposal_candidate_atom_count": int(len(topm)),
         "queried_action_count": int(len(actions)),
         "action_query_mode_all_valid": float(bool(pred.get("action_query_mode_all_valid", False))),
         "valid_action_count": int(pred.get("valid_action_count", len(actions))),
@@ -240,6 +243,10 @@ def runtime_query_diagnostics(
         "runtime_pair_count": int(len(runtime_pairs)),
         "tournament_pair_count": int(len(rival_pairs)),
         "action_atom_query_count": action_atom,
+        "acquisition_action_atom_query_count": action_atom,
+        "proposal_to_certificate_atom_expansion": acquisition_expansion,
+        "configured_decision_budget_atom_count": budget_atom_count,
+        "retained_interface_atom_budget_pass": float(selected_count <= budget_atom_count),
         "selector_pair_atom_query_count": selector_pair_atom,
         "tournament_pair_atom_query_count": tournament_pair_atom,
         "unique_pair_atom_query_count": unique_pair_atom,
@@ -254,6 +261,12 @@ def runtime_query_diagnostics(
         "structural_safety_include_feasibility": int(bool(pred.get("structural_safety_include_feasibility", False))),
         "structural_residual_enabled": int(bool(pred.get("structural_residual_enabled", False))),
         "structural_residual_weight": float(pred.get("structural_residual_weight", 0.0)),
+        "base_prior_enabled": int(bool(pred.get("base_prior_enabled", False))),
+        "base_prior_weight": float(pred.get("base_prior_weight", 0.0)),
+        "base_prior_scale": float(pred.get("base_prior_scale", 0.0)),
+        "base_prior_best_action": int(pred.get("base_prior_best_action", -1)),
+        "learned_base_best_action": int(pred.get("learned_base_best_action", -1)),
+        "base_prior_replaced_best": int(bool(pred.get("base_prior_replaced_best", False))),
         "pair_delta_calibration_enabled": int(bool(pred.get("pair_delta_calibration_enabled", False))),
         "pair_delta_selector_local_weight_mean": float(pred.get("pair_delta_selector_local_weight_mean", 0.0)),
         "pair_delta_selector_local_weight_p90": float(pred.get("pair_delta_selector_local_weight_p90", 0.0)),

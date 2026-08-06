@@ -81,6 +81,278 @@ def _validate_dense_prediction(
             )
 
 
+
+def _criticality_metrics(
+    base_cost: np.ndarray,
+    atom_costs: np.ndarray,
+    active_atoms: np.ndarray,
+    valid_actions: np.ndarray,
+    topm_atoms: np.ndarray,
+    selected_atoms: np.ndarray,
+    *,
+    prefix: str,
+    forced_winner: int | None = None,
+) -> tuple[dict[str, float], dict[str, int]]:
+    """Literal leave-one-atom-out winner-flip diagnostics."""
+
+    base = np.asarray(base_cost, dtype=np.float32).reshape(-1)
+    atom = np.asarray(atom_costs, dtype=np.float32)
+    active = _align_bool_mask(active_atoms, atom.shape[0])
+    valid = _align_bool_mask(valid_actions, base.shape[0])
+    values: dict[str, float] = {}
+    details: dict[str, int] = {}
+    dense_cost = base + np.where(active[:, None], atom, 0.0).sum(axis=0)
+    dense_cost = np.where(valid, dense_cost, np.inf)
+    if not np.isfinite(dense_cost).any() or not active.any():
+        values[f"{prefix}_critical_recall_topm"] = float("nan")
+        values[f"{prefix}_critical_recall_selected"] = float("nan")
+        values[f"{prefix}_critical_atom_fraction"] = 0.0
+        values[f"{prefix}_critical_scene_rate"] = 0.0
+        return values, details
+
+    scalar_winner = int(np.nanargmin(dense_cost))
+    winner = scalar_winner if forced_winner is None else int(forced_winner)
+    winner_aligned = bool(winner == scalar_winner and 0 <= winner < dense_cost.shape[0] and valid[winner])
+    values[f"{prefix}_scalar_winner_aligned"] = float(winner_aligned)
+    if not winner_aligned:
+        values[f"{prefix}_critical_recall_topm"] = float("nan")
+        values[f"{prefix}_critical_recall_selected"] = float("nan")
+        values[f"{prefix}_critical_atom_fraction"] = float("nan")
+        values[f"{prefix}_critical_scene_rate"] = float("nan")
+        details[f"{prefix}_winner"] = winner
+        details[f"{prefix}_scalar_winner"] = scalar_winner
+        return values, details
+
+    loo_cost = dense_cost[None, :] - np.where(active[:, None], atom, 0.0)
+    loo_cost[:, ~valid] = np.inf
+    loo_winner = np.nanargmin(loo_cost, axis=1)
+    critical = active & (loo_winner != winner)
+    critical_count = int(critical.sum())
+    topm_mask = np.zeros_like(critical)
+    selected_mask = np.zeros_like(critical)
+    topm_mask[topm_atoms[(topm_atoms >= 0) & (topm_atoms < critical.shape[0])]] = True
+    selected_mask[selected_atoms[(selected_atoms >= 0) & (selected_atoms < critical.shape[0])]] = True
+    values[f"{prefix}_critical_recall_topm"] = (
+        float((critical & topm_mask).sum() / critical_count) if critical_count else float("nan")
+    )
+    values[f"{prefix}_critical_recall_selected"] = (
+        float((critical & selected_mask).sum() / critical_count) if critical_count else float("nan")
+    )
+    values[f"{prefix}_critical_atom_fraction"] = float(critical_count / max(int(active.sum()), 1))
+    values[f"{prefix}_critical_scene_rate"] = float(critical_count > 0)
+    details[f"{prefix}_winner"] = winner
+    details[f"{prefix}_critical_count"] = critical_count
+    return values, details
+
+
+def add_dense_bridge_diagnostics(
+    diag,
+    *,
+    dense: dict[str, object],
+    pred: dict[str, object],
+    selected_atoms: list[int] | np.ndarray,
+    sample,
+    cfg: dict[str, object],
+) -> None:
+    """Add deployment-consistent bridge, query-contract, and criticality metrics.
+
+    The learned foundation base, deployment base priors, query-feature source, HAB
+    proposal, B-atom selector, and final residual are deliberately measured as
+    separate transitions.  This prevents a low end-to-end match from being
+    incorrectly attributed to the selector or evidence proposal.
+    """
+
+    dense_g = np.asarray(dense["g"], dtype=np.float32)
+    dense_j0_deployment = np.asarray(
+        dense.get("J0_deployment", dense["J0"]), dtype=np.float32
+    ).reshape(-1)
+    dense_j0_model = np.asarray(
+        dense.get("J0_model", dense_j0_deployment), dtype=np.float32
+    ).reshape(-1)
+    valid_actions = _align_bool_mask(sample.candidates.valid_mask, dense_j0_deployment.shape[0])
+    active_atoms = _align_bool_mask(sample.evidence_bank.active_mask, dense_g.shape[0])
+    _validate_dense_prediction(
+        dense_j0_deployment,
+        dense_g,
+        active_atoms,
+        valid_actions,
+        scenario_token=str(getattr(sample, "scenario_token", "")),
+    )
+    topm_atoms = np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1)
+    topm_atoms = topm_atoms[(topm_atoms >= 0) & (topm_atoms < dense_g.shape[0])]
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    selected = selected[(selected >= 0) & (selected < dense_g.shape[0])]
+    dense_topm_g = np.zeros_like(dense_g)
+    dense_selected_g = np.zeros_like(dense_g)
+    if topm_atoms.size:
+        dense_topm_g[topm_atoms] = dense_g[topm_atoms]
+    if selected.size:
+        dense_selected_g[selected] = dense_g[selected]
+
+    model_dense_full_action = int(diag.details.get("full_action", -1))
+    deployment_dense_full_action = full_interface_action(
+        dense_j0_deployment, dense_g, valid_actions, cfg
+    )
+    dense_topm_action = full_interface_action(
+        dense_j0_deployment, dense_topm_g, valid_actions, cfg
+    )
+    dense_selected_action = full_interface_action(
+        dense_j0_deployment, dense_selected_g, valid_actions, cfg
+    )
+    runtime_sparse_full_action = int(diag.details.get("sparse_full_action", -1))
+    teacher_action = int(sample.teacher.a_star)
+    diag.values.update(
+        {
+            "model_dense_full_action_match": float(model_dense_full_action == teacher_action),
+            "deployment_dense_full_action_match": float(deployment_dense_full_action == teacher_action),
+            "model_dense_vs_deployment_dense_full_match": float(
+                model_dense_full_action == deployment_dense_full_action
+            ),
+            "hab_topm_dense_value_action_match": float(dense_topm_action == teacher_action),
+            "deployment_dense_vs_hab_topm_dense_value_match": float(
+                dense_topm_action == deployment_dense_full_action
+            ),
+            # Preserve the historical key, but make its semantics deployment
+            # consistent from V63 onward.
+            "dense_vs_hab_topm_dense_value_match": float(
+                dense_topm_action == deployment_dense_full_action
+            ),
+            "hab_topm_dense_value_vs_runtime_sparse_full_match": float(
+                dense_topm_action == runtime_sparse_full_action
+            ),
+            "runtime_sparse_value_bridge_flip_rate": float(
+                dense_topm_action != runtime_sparse_full_action
+            ),
+            "selected_budget_dense_value_action_match": float(
+                dense_selected_action == teacher_action
+            ),
+            "deployment_dense_vs_selected_budget_dense_value_match": float(
+                dense_selected_action == deployment_dense_full_action
+            ),
+            "dense_vs_selected_budget_dense_value_match": float(
+                dense_selected_action == deployment_dense_full_action
+            ),
+            "selected_budget_dense_value_vs_deployed_match": float(
+                dense_selected_action == int(diag.details.get("deployed_action", -1))
+                if "deployed_action" in diag.details
+                else dense_selected_action == int(pred.get("deployed_action", -1))
+            ),
+            "dense_query_feature_source_runtime": float(
+                dense.get("dense_query_feature_source_runtime", 0.0)
+            ),
+        }
+    )
+
+    # Direct numerical contract checks.  The deployment base must be exactly the
+    # one used by the sparse planner, and the atom/action values must match on
+    # every entry actually scored by that planner.  Any violation is an
+    # engineering/provenance failure rather than an algorithmic bridge failure.
+    sparse_j0 = np.asarray(pred.get("J0", np.full_like(dense_j0_deployment, np.nan)), dtype=np.float32).reshape(-1)
+    base_limit = min(dense_j0_deployment.shape[0], sparse_j0.shape[0])
+    base_valid = valid_actions[:base_limit]
+    if base_limit and base_valid.any():
+        base_abs_err = np.abs(dense_j0_deployment[:base_limit][base_valid] - sparse_j0[:base_limit][base_valid])
+        base_tol = float((cfg.get("runtime", {}) or {}).get("dense_base_value_tolerance", 1.0e-5))
+        diag.values.update(
+            {
+                "dense_runtime_base_value_mae": float(base_abs_err.mean()),
+                "dense_runtime_base_value_max_abs": float(base_abs_err.max()),
+                "dense_runtime_base_value_allclose_fraction": float((base_abs_err <= base_tol).mean()),
+                "dense_runtime_base_contract_pass": float(
+                    np.isfinite(base_abs_err).all() and float(base_abs_err.max()) <= base_tol
+                ),
+            }
+        )
+    else:
+        diag.values.update(
+            {
+                "dense_runtime_base_value_mae": float("nan"),
+                "dense_runtime_base_value_max_abs": float("nan"),
+                "dense_runtime_base_value_allclose_fraction": float("nan"),
+                "dense_runtime_base_contract_pass": 0.0,
+            }
+        )
+
+    sparse_g = np.asarray(pred.get("g", np.zeros_like(dense_g)), dtype=np.float32)
+    queried_actions = np.asarray(pred.get("queried_actions", []), dtype=np.int64).reshape(-1)
+    queried_actions = queried_actions[
+        (queried_actions >= 0) & (queried_actions < dense_g.shape[1])
+    ]
+    e_limit = min(dense_g.shape[0], sparse_g.shape[0]) if sparse_g.ndim == 2 else 0
+    a_limit = min(dense_g.shape[1], sparse_g.shape[1]) if sparse_g.ndim == 2 else 0
+    contract_atoms = topm_atoms[topm_atoms < e_limit]
+    contract_actions = queried_actions[queried_actions < a_limit]
+    if contract_atoms.size and contract_actions.size:
+        dense_vals = dense_g[np.ix_(contract_atoms, contract_actions)]
+        sparse_vals = sparse_g[np.ix_(contract_atoms, contract_actions)]
+        abs_err = np.abs(dense_vals - sparse_vals)
+        tol = float((cfg.get("runtime", {}) or {}).get("dense_query_value_tolerance", 1.0e-5))
+        diag.values.update(
+            {
+                "dense_runtime_query_value_mae": float(abs_err.mean()),
+                "dense_runtime_query_value_max_abs": float(abs_err.max()),
+                "dense_runtime_query_value_allclose_fraction": float((abs_err <= tol).mean()),
+                "dense_runtime_query_contract_pass": float(
+                    np.isfinite(abs_err).all() and float(abs_err.max()) <= tol
+                ),
+            }
+        )
+    else:
+        diag.values.update(
+            {
+                "dense_runtime_query_value_mae": float("nan"),
+                "dense_runtime_query_value_max_abs": float("nan"),
+                "dense_runtime_query_value_allclose_fraction": float("nan"),
+                "dense_runtime_query_contract_pass": 0.0,
+            }
+        )
+
+    deployment_critical, deployment_details = _criticality_metrics(
+        dense_j0_deployment,
+        dense_g,
+        active_atoms,
+        valid_actions,
+        topm_atoms,
+        selected,
+        prefix="exact_winner_flip",
+    )
+    diag.values.update(deployment_critical)
+    diag.details.update(deployment_details)
+
+    # Stable teacher-directed criticality for V63 training/audit.  Only scenes
+    # where scalar teacher costs reproduce the lexicographic teacher winner are
+    # eligible; misaligned scenes are explicitly reported rather than silently
+    # fabricating labels.
+    teacher_g = np.zeros_like(dense_g)
+    source_teacher_g = np.asarray(sample.teacher.g_evid, dtype=np.float32)
+    teacher_g[: min(teacher_g.shape[0], source_teacher_g.shape[0]), : min(teacher_g.shape[1], source_teacher_g.shape[1])] = source_teacher_g[
+        : teacher_g.shape[0], : teacher_g.shape[1]
+    ]
+    teacher_cost = np.full((dense_g.shape[1],), np.inf, dtype=np.float32)
+    source_teacher_cost = np.asarray(sample.teacher.J_T, dtype=np.float32).reshape(-1)
+    teacher_cost[: min(teacher_cost.shape[0], source_teacher_cost.shape[0])] = source_teacher_cost[
+        : teacher_cost.shape[0]
+    ]
+    # _criticality_metrics expects base + atom sum.  J_T already contains the
+    # complete atom sum, so subtract it once to obtain the matching base.
+    teacher_base = teacher_cost - np.where(active_atoms[:, None], teacher_g, 0.0).sum(axis=0)
+    teacher_critical, teacher_details = _criticality_metrics(
+        teacher_base,
+        teacher_g,
+        active_atoms,
+        valid_actions,
+        topm_atoms,
+        selected,
+        prefix="teacher_exact_winner_flip",
+        forced_winner=teacher_action,
+    )
+    diag.values.update(teacher_critical)
+    diag.details.update(teacher_details)
+    diag.details["model_dense_full_action"] = model_dense_full_action
+    diag.details["deployment_dense_full_action"] = deployment_dense_full_action
+    diag.details["dense_hab_topm_action"] = int(dense_topm_action)
+    diag.details["dense_selected_budget_action"] = int(dense_selected_action)
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=None)
@@ -158,6 +430,9 @@ def main() -> None:
                 or key.startswith("residual_flip_")
                 or key.startswith("dual_certificate_")
                 or key.startswith("set_conditioned_residual_")
+                or key.startswith("base_prior_")
+                or key.startswith("learned_base_")
+                or key.startswith("structural_residual_")
             ):
                 if isinstance(value, (bool, np.bool_)):
                     qdiag[key] = float(bool(value))
@@ -255,80 +530,20 @@ def main() -> None:
             cfg=cfg,
             inference_pairs=pred.get("rival_pair_indices", sel.pair_indices),
             query_diagnostics=qdiag,
-            dense_predicted_base=None if dense is None else dense["J0"],
+            dense_predicted_base=None if dense is None else dense.get("J0_model", dense["J0"]),
             dense_predicted_atom_costs=None if dense is None else dense["g"],
             certificate_margin_matrix=tour.margins,
         )
         if dense is not None:
-            dense_g = np.asarray(dense["g"], dtype=np.float32)
-            dense_j0 = np.asarray(dense["J0"], dtype=np.float32).reshape(-1)
-            valid_actions = _align_bool_mask(sample.candidates.valid_mask, dense_j0.shape[0])
-            active_atoms = _align_bool_mask(sample.evidence_bank.active_mask, dense_g.shape[0])
-            _validate_dense_prediction(
-                dense_j0,
-                dense_g,
-                active_atoms,
-                valid_actions,
-                scenario_token=str(getattr(sample, "scenario_token", "")),
+            diag.details["deployed_action"] = int(tour.action_index)
+            add_dense_bridge_diagnostics(
+                diag,
+                dense=dense,
+                pred=pred,
+                selected_atoms=sel.selected,
+                sample=sample,
+                cfg=cfg,
             )
-            topm_atoms = np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1)
-            topm_atoms = topm_atoms[(topm_atoms >= 0) & (topm_atoms < dense_g.shape[0])]
-            selected_atoms = np.asarray(sel.selected, dtype=np.int64).reshape(-1)
-            selected_atoms = selected_atoms[(selected_atoms >= 0) & (selected_atoms < dense_g.shape[0])]
-            dense_topm_g = np.zeros_like(dense_g)
-            dense_selected_g = np.zeros_like(dense_g)
-            if topm_atoms.size:
-                dense_topm_g[topm_atoms] = dense_g[topm_atoms]
-            if selected_atoms.size:
-                dense_selected_g[selected_atoms] = dense_g[selected_atoms]
-            dense_full_action = int(diag.details.get("full_action", -1))
-            dense_topm_action = full_interface_action(dense_j0, dense_topm_g, valid_actions, cfg)
-            dense_selected_action = full_interface_action(dense_j0, dense_selected_g, valid_actions, cfg)
-            runtime_sparse_full_action = int(diag.details.get("sparse_full_action", -1))
-            teacher_action = int(sample.teacher.a_star)
-            diag.values.update(
-                {
-                    "hab_topm_dense_value_action_match": float(dense_topm_action == teacher_action),
-                    "dense_vs_hab_topm_dense_value_match": float(dense_topm_action == dense_full_action),
-                    "hab_topm_dense_value_vs_runtime_sparse_full_match": float(dense_topm_action == runtime_sparse_full_action),
-                    "runtime_sparse_value_bridge_flip_rate": float(dense_topm_action != runtime_sparse_full_action),
-                    "selected_budget_dense_value_action_match": float(dense_selected_action == teacher_action),
-                    "dense_vs_selected_budget_dense_value_match": float(dense_selected_action == dense_full_action),
-                    "selected_budget_dense_value_vs_deployed_match": float(dense_selected_action == int(tour.action_index)),
-                }
-            )
-
-            # Literal novelty diagnostic: atom i is critical iff removing it
-            # changes the dense winner action.  This is evaluated independently
-            # of the historical margin-deficit proxy.
-            # np.where (rather than multiplication) also sanitizes any malformed
-            # non-finite values in padded/inactive rows: 0 * NaN is still NaN.
-            active_dense_g = np.where(active_atoms[:, None], dense_g, 0.0).astype(
-                dense_g.dtype, copy=False
-            )
-            dense_cost = dense_j0 + active_dense_g.sum(axis=0)
-            dense_cost = np.where(valid_actions, dense_cost, np.inf)
-            if np.isfinite(dense_cost).any() and active_atoms.any():
-                winner = int(np.nanargmin(dense_cost))
-                loo_cost = dense_cost[None, :] - active_dense_g
-                loo_cost[:, ~valid_actions] = np.inf
-                loo_winner = np.nanargmin(loo_cost, axis=1)
-                critical_mask = active_atoms & (loo_winner != winner)
-                critical_count = int(critical_mask.sum())
-                if critical_count > 0:
-                    topm_mask = np.zeros_like(critical_mask)
-                    selected_mask = np.zeros_like(critical_mask)
-                    topm_mask[topm_atoms] = True
-                    selected_mask[selected_atoms] = True
-                    diag.values["exact_winner_flip_critical_recall_topm"] = float((critical_mask & topm_mask).sum() / critical_count)
-                    diag.values["exact_winner_flip_critical_recall_selected"] = float((critical_mask & selected_mask).sum() / critical_count)
-                else:
-                    diag.values["exact_winner_flip_critical_recall_topm"] = float("nan")
-                    diag.values["exact_winner_flip_critical_recall_selected"] = float("nan")
-                diag.values["exact_winner_flip_critical_atom_fraction"] = float(critical_count / max(int(active_atoms.sum()), 1))
-                diag.values["exact_winner_flip_critical_scene_rate"] = float(critical_count > 0)
-                diag.details["dense_hab_topm_action"] = int(dense_topm_action)
-                diag.details["dense_selected_budget_action"] = int(dense_selected_action)
         selected_local_anchor_action = int(tour_diag.get("pair_action_anchor_action", diag.details.get("sparse_full_action", -1)))
         teacher_action_for_anchor = int(sample.teacher.a_star)
         if selected_local_anchor_action >= 0:

@@ -3702,3 +3702,105 @@ the full 240-test suite pass.  A reduced CPU combined certificate+dense benchmar
 improved by 12.70% on average.  Fresh GPU training/calibration/open-loop/closed-loop
 has not been executed in this environment, so no model-performance improvement is
 claimed from this hotfix alone.
+
+
+# V63 — Deployment-Consistent Query Contract + Teacher-Flip Criticality Ranking BFAR-DBAP (DCQC-TFCR)
+
+## 1. V62 uploaded-result status correction
+
+The uploaded V62 package does not contain completed dual calibration, candidate/local/foundation open-loop outputs, or `v62_dcab_ewfc_gate_report.json`. The pipeline logs stop after checkpoint reuse and the two calibration workers terminate around 46--47% without raw shard outputs. Therefore:
+
+- Protocol: **not evaluated**, not PASS/FAIL;
+- Minimum: **not officially evaluated**; train-time feasibility is only a positive proxy;
+- Competitive: **not officially evaluated**, with strong failure warning from the 0.141 teacher-match plateau and zero residual gain.
+
+The V53 factorized-anchor replay in the V62 output directory is an immutable foundation control only. It must never be reported as a V62 candidate gate result.
+
+## 2. Engineering confound discovered in the V62 bridge metric
+
+The old dense-to-sparse comparison mixed different interfaces:
+
+- dense/training query features could come from a shape-compatible cached tensor;
+- sparse runtime query features were recomputed by the current canonical implementation;
+- dense used learned `J0_model`;
+- deployment used `J0_model` plus runtime base prior and structural safety residual prior.
+
+Thus `budget_vs_full_match=0.172` combined query-cache drift, base/prior drift, actual sparse-value drift, and selection loss. Since `budget_vs_sparse_full_match=0.981`, the B=16 selector is not the first component to modify.
+
+## 3. V63 algorithm update
+
+### 3.1 Deployment-consistent query/base contract
+
+- Add `runtime.dense_query_feature_source` with safe `runtime_recompute`, debug `cache_verified`, audited `cache`, and legacy fallback modes.
+- Main V63 uses `runtime_recompute`.
+- `predict_dense_numpy` now returns both `J0_model` and deployment-consistent `J0_deployment`, applying the exact same base and structural priors as sparse runtime.
+- Open-loop exports direct MAE/max/allclose/pass checks for deployment base values and queried atom-action values.
+- Protocol gate requires these numerical contracts before any bridge/selector conclusion is valid.
+
+### 3.2 Teacher-interface literal winner-flip criticality
+
+The primary target is now:
+
+```text
+critical_T(i) = 1[removing teacher atom i changes the teacher scalar winner]
+```
+
+Training excludes scalar/lexicographic teacher-winner mismatch scenes, preserves literal leave-one-out semantics, and adds hardest-negative pairwise proposal-logit ranking. Model-self criticality remains available only as an ablation. Severity ranks already-critical atoms and cannot create a critical label.
+
+### 3.3 Fixed-budget semantics and honest compute accounting
+
+The retained planner-interface evidence budget remains B=16. V63 reports separately:
+
+- acquisition pool M=24;
+- action scores for acquisition M*K;
+- retained certificate payload B*K;
+- pair-conditioned query scores.
+
+Never describe B*K as total internal acquisition compute. Never increase B to hide proposal or bridge failure.
+
+### 3.4 Layered attribution metrics
+
+Report transitions separately:
+
+1. learned model base -> deployment base;
+2. deployment dense full -> HAB Top-M dense value;
+3. HAB Top-M dense value -> runtime sparse value;
+4. deployment dense full -> B16 selected dense value;
+5. selected dense value -> deployed action;
+6. local same-checkpoint -> residual candidate.
+
+Teacher exact critical Top-M/selected recall, scene rate, and scalar alignment are exported. If the frozen suite contains fewer than approximately 20 critical scenes, gate output warns that recall is high variance.
+
+## 4. Pipeline and efficiency update
+
+- Full-pipeline detach and OUT_ROOT lock.
+- Reuse fresh calibration shards; launch only missing shards.
+- Preserve worker failure markers and tail failed logs.
+- Atomic calibration merge.
+- Same-checkpoint V62 contract attribution script with nominal/no-base/no-structural/no-runtime-priors controls and freshness reuse.
+- Optional cached-query speed path requires a PASS audit plus matching code/config fingerprints.
+- Keep pair-head scoring disabled, local variance disabled when unused, vectorized LOO criticality, and B/K unchanged.
+
+## 5. V63 gate order
+
+1. Protocol numerical contract, provenance, all-valid coverage, fixed retained B;
+2. Minimum completeness metrics;
+3. Competitive teacher-match gains, paired regret, net-beneficial residual flips, bridge match, and teacher-critical recall;
+4. paired CL20 after Protocol PASS;
+5. CL100 only after Minimum + Competitive PASS and no CL20 safety regression;
+6. completed frozen test exactly once after readiness audit.
+
+## 6. New do-not-repeat list
+
+- Do not interpret a missing gate report from an interrupted pipeline as gate FAIL.
+- Do not use a V53 anchor replay as a V62/V63 candidate result.
+- Do not diagnose selector quality until base/query numerical contracts pass.
+- Do not use global Top-M as the deployment-success metric.
+- Do not use model-self criticality as the primary target.
+- Do not relax residual calibration to create flips before raw teacher-directed proposals are net beneficial.
+- Do not increase B or restore the expensive pair head to compensate for upstream contract failure.
+- Do not use the incomplete test set for tuning or model/version selection.
+
+## 7. Validation boundary
+
+V63 local validation: Python compile PASS, 9 V63 YAML files PASS, 3 shell entrypoints PASS, full test suite **245 passed / 0 failed**. Fresh GPU training, calibration, open-loop, and closed-loop have not been executed, so no gate or performance improvement is claimed yet.

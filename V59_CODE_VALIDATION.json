@@ -1,0 +1,51 @@
+{
+  "checks": {
+    "boundary_margin_loss": true,
+    "closed_loop_marker_after_validation": true,
+    "closed_loop_success_failure_audit": true,
+    "no_silent_zero_variance_fallback": true,
+    "patch_dry_run_p4": true,
+    "planner_pickle_contract": true,
+    "python_compile": true,
+    "runtime_prediction_cache": true,
+    "runtime_safety_cache": true,
+    "scene_uniform_all_rival_calibration": true,
+    "set_conditioned_rank_8": true,
+    "shell_syntax_6": true,
+    "simulation_log_callback_removed_for_cl": true,
+    "strict_runtime_variance_key": true,
+    "unit_test_warnings_8": true,
+    "unit_tests_219": true,
+    "yaml_count_4": true
+  },
+  "claim_boundary": "No fresh V59 training, calibration, open-loop, non-reactive closed-loop, reactive closed-loop, or CL100 was executed in this environment. No gate PASS or speedup is claimed in advance.",
+  "failed_checks": [],
+  "overall": "PASS",
+  "patch": {
+    "dry_run": "PASS",
+    "dry_run_strip_level": 4,
+    "path": "/mnt/data/bdse_v58_to_v59_fscip.patch"
+  },
+  "shell_files": [
+    "run_v59_fscip_bfar_dbap.sh",
+    "V59_FSCIP_BFAR_DBAP_NEXT_COMMANDS.sh",
+    "RUN_V59_TRAINING_SMOKE.sh",
+    "RUN_V59_REACTIVE_CL20.sh",
+    "BENCHMARK_V59_CLOSED_LOOP_CONCURRENCY.sh",
+    "BENCHMARK_V59_OPEN_LOOP_CONCURRENCY.sh"
+  ],
+  "unit_tests": {
+    "duration_s": 8.78,
+    "log": "/mnt/data/v59_pytest_final.log",
+    "passed": 219,
+    "warnings": 8
+  },
+  "validation_date": "2026-08-03",
+  "version": "V59 FSCIP-BFAR-DBAP",
+  "yaml_files": [
+    "v59_fscip_bfar_dbap_anchor_control_cl.yaml",
+    "v59_fscip_bfar_dbap_cl.yaml",
+    "v59_fscip_bfar_dbap_local_control_cl.yaml",
+    "v59_fscip_bfar_dbap_train_2gpu.yaml"
+  ]
+}

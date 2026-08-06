@@ -1,0 +1,30 @@
+{
+  "performance_risk": "runtime_recompute may cost extra CPU feature construction; benchmark audited cache only after correctness contract passes.",
+  "query_accounting": {
+    "acquisition_action_scores_upper_bound_MxK": 768,
+    "acquisition_pool_M": 24,
+    "candidate_actions_K_max": 32,
+    "note": "B is the fixed planner-interface atom budget; MxK is internal acquisition compute and is reported separately.",
+    "proposal_to_certificate_atom_expansion": 1.5,
+    "retained_certificate_action_queries_upper_bound_BxK": 512,
+    "retained_evidence_budget_B": 16
+  },
+  "v62_observed_training": {
+    "samples_per_second_final": 65.26787640843618,
+    "samples_per_second_max": 65.89399284577448,
+    "samples_per_second_min": 50.8559870570023,
+    "validation_internal_ms_final": 666.3196486616507,
+    "validation_predict_ms_final": 499.85461287386715,
+    "validation_selector_ms_final": 87.37679277267307,
+    "validation_tournament_ms_final": 7.666119576431811
+  },
+  "v63_efficiency_actions": [
+    "runtime_recompute is the correctness default for dense query features",
+    "optional cache path requires numerical audit and code/config fingerprints",
+    "exact teacher leave-one-out criticality is vectorized",
+    "unused pair head and local variance paths remain skipped",
+    "calibration shards and completed pipeline stages are reusable",
+    "same-checkpoint contract audit reuses a fresh report unless FORCE=1"
+  ],
+  "version": "V63 DCQC-TFCR"
+}

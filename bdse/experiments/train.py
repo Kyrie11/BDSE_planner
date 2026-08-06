@@ -22,6 +22,7 @@ from bdse.data.cache_schema import Sample, load_sample_npz
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.data.tensorizer import sample_to_model_inputs
 from bdse.data.quality import quality_decision
+from bdse.experiments.evaluate_open_loop import add_dense_bridge_diagnostics
 from bdse.metrics.bdse_metrics import compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import compute_bdse_losses
@@ -1035,7 +1036,17 @@ def _run_validation_open_loop(
             )
             tour_diag = getattr(tour, "diagnostics", {}) or {}
             for key, value in tour_diag.items():
-                if key.startswith("pair_potential_") or key.startswith("pair_action_anchor_"):
+                if (
+                    key.startswith("pair_potential_")
+                    or key.startswith("pair_action_anchor_")
+                    or key.startswith("evidence_certificate_")
+                    or key.startswith("residual_flip_")
+                    or key.startswith("dual_certificate_")
+                    or key.startswith("set_conditioned_residual_")
+                    or key.startswith("base_prior_")
+                    or key.startswith("learned_base_")
+                    or key.startswith("structural_residual_")
+                ):
                     if isinstance(value, (bool, np.bool_)):
                         qdiag[key] = float(bool(value))
                     elif isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(float(value)):
@@ -1124,10 +1135,20 @@ def _run_validation_open_loop(
                 cfg=cfg,
                 inference_pairs=pred.get("rival_pair_indices", sel.pair_indices),
                 query_diagnostics=qdiag,
-                dense_predicted_base=None if dense is None else dense["J0"],
+                dense_predicted_base=None if dense is None else dense.get("J0_model", dense["J0"]),
                 dense_predicted_atom_costs=None if dense is None else dense["g"],
                 certificate_margin_matrix=tour.margins,
             )
+            if dense is not None:
+                diag.details["deployed_action"] = int(tour.action_index)
+                add_dense_bridge_diagnostics(
+                    diag,
+                    dense=dense,
+                    pred=pred,
+                    selected_atoms=sel.selected,
+                    sample=sample,
+                    cfg=cfg,
+                )
             selected_local_anchor_action = int(tour_diag.get("pair_action_anchor_action", diag.details.get("sparse_full_action", -1)))
             teacher_action_for_anchor = int(sample.teacher.a_star)
             if selected_local_anchor_action >= 0:

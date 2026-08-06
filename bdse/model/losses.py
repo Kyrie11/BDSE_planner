@@ -221,14 +221,20 @@ def _exact_winner_flip_critical_proposal_loss(
     target_action: torch.Tensor,
     atom_costs: torch.Tensor,
     cfg: dict[str, Any],
+    *,
+    teacher_cost: torch.Tensor | None = None,
+    teacher_g: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Supervise proposal logits with literal leave-one-atom-out winner flips.
+    """Train proposal logits from literal leave-one-atom-out winner flips.
 
-    An evidence atom is *critical* iff removing that atom from the dense local
-    interface changes the winner action.  This is deliberately stricter than
-    the historical margin-deficit proxy: the binary target is an exact action
-    flip, while the ranking utility only orders already-critical atoms by the
-    severity of the induced flip and their planner-interface cost.
+    ``target_source=model_dense`` preserves V62 exactly.  V63 additionally
+    supports ``teacher_interface``: remove each auditable teacher atom from the
+    full teacher interface and mark it critical only when the teacher winner
+    changes.  These labels are stable across optimization steps and directly
+    teacher-directed; scenes whose scalar teacher costs do not reproduce the
+    lexicographic teacher action are excluded and reported rather than silently
+    assigned an inconsistent target.  ``hybrid_union`` keeps exact critical
+    atoms from either aligned interface.
     """
     train_cfg = cfg.get("training", {}) or {}
     crit_cfg = train_cfg.get("exact_winner_flip_criticality", {}) or {}
@@ -238,41 +244,118 @@ def _exact_winner_flip_critical_proposal_loss(
 
     active = active.bool()
     valid = valid.bool()
+    invalid_fill = J0.new_tensor(float(crit_cfg.get("invalid_action_cost", 1.0e6)))
+
+    def exact_labels(
+        dense_cost_in: torch.Tensor,
+        atom_values: torch.Tensor,
+        *,
+        forced_target: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dense_cost_local = dense_cost_in.detach().masked_fill(~valid, invalid_fill)
+        scalar_winner = dense_cost_local.argmin(dim=1)
+        aligned = (
+            scalar_winner.eq(forced_target.long())
+            if forced_target is not None
+            else torch.ones_like(scalar_winner, dtype=torch.bool)
+        )
+        atom_detached = atom_values.detach() * active[:, :, None].float()
+        loo_cost_local = dense_cost_local[:, None, :] - atom_detached
+        loo_cost_local = loo_cost_local.masked_fill(~valid[:, None, :], invalid_fill)
+        loo_winner_local = loo_cost_local.argmin(dim=2)
+        critical_local = active & loo_winner_local.ne(scalar_winner[:, None])
+        critical_local = critical_local & aligned[:, None]
+        old_winner_cost = loo_cost_local.gather(
+            2, scalar_winner[:, None, None].expand(-1, loo_cost_local.shape[1], 1)
+        ).squeeze(2)
+        loo_best_cost = loo_cost_local.min(dim=2).values
+        action_scale_local = _valid_row_scale(
+            dense_cost_local,
+            valid,
+            min_scale=float(crit_cfg.get("min_action_scale", 1.0)),
+        ).squeeze(1)
+        severity_local = (
+            (old_winner_cost - loo_best_cost)
+            / action_scale_local[:, None].clamp_min(1.0e-6)
+        ).clamp_min(0.0)
+        return critical_local, severity_local, scalar_winner, aligned
+
     detached_g = g.detach()
-    dense_cost = J0.detach() + (detached_g * active[:, :, None].float()).sum(dim=1)
-    dense_cost = dense_cost.masked_fill(~valid, J0.new_tensor(1.0e6))
-    dense_winner = dense_cost.argmin(dim=1)
+    model_dense_cost = J0.detach() + (detached_g * active[:, :, None].float()).sum(dim=1)
+    model_critical, model_severity, model_winner, model_aligned = exact_labels(
+        model_dense_cost, detached_g
+    )
 
-    loo_cost = dense_cost[:, None, :] - detached_g
-    loo_cost = loo_cost.masked_fill(~valid[:, None, :], J0.new_tensor(1.0e6))
-    loo_winner = loo_cost.argmin(dim=2)
-    critical = active & loo_winner.ne(dense_winner[:, None])
+    teacher_available = (
+        teacher_cost is not None
+        and teacher_g is not None
+        and teacher_cost.ndim == 2
+        and teacher_g.ndim == 3
+        and teacher_g.shape[:2] == g.shape[:2]
+    )
+    if teacher_available:
+        teacher_dense_cost = teacher_cost.detach().to(dtype=J0.dtype)
+        teacher_atom_values = teacher_g.detach().to(dtype=g.dtype)
+        teacher_critical, teacher_severity, teacher_winner, teacher_aligned = exact_labels(
+            teacher_dense_cost,
+            teacher_atom_values,
+            forced_target=target_action,
+        )
+    else:
+        teacher_critical = torch.zeros_like(model_critical)
+        teacher_severity = torch.zeros_like(model_severity)
+        teacher_winner = target_action
+        teacher_aligned = torch.zeros_like(target_action, dtype=torch.bool)
+
+    source = str(crit_cfg.get("target_source", "model_dense")).strip().lower()
+    if source in {"teacher", "teacher_interface", "teacher_exact"}:
+        if not teacher_available:
+            raise ValueError(
+                "exact_winner_flip_criticality.target_source=teacher_interface "
+                "requires teacher_J_T and teacher_g_evid"
+            )
+        critical = teacher_critical
+        severity = teacher_severity
+        winner_for_alignment = teacher_winner
+        source_aligned = teacher_aligned
+    elif source in {"hybrid", "hybrid_union", "teacher_model_union"}:
+        if not teacher_available:
+            raise ValueError(
+                "exact_winner_flip_criticality.target_source=hybrid_union "
+                "requires teacher_J_T and teacher_g_evid"
+            )
+        critical = model_critical | teacher_critical
+        severity = torch.maximum(model_severity, teacher_severity)
+        winner_for_alignment = model_winner
+        source_aligned = teacher_aligned | model_winner.eq(target_action)
+    elif source in {"model", "model_dense", "self"}:
+        critical = model_critical
+        severity = model_severity
+        winner_for_alignment = model_winner
+        source_aligned = model_winner.eq(target_action)
+    else:
+        raise ValueError(f"Unknown exact winner-flip criticality target_source={source!r}")
+
     has_critical = critical.any(dim=1)
-
-    # Severity is the old winner's normalized disadvantage after the atom is
-    # removed.  It is positive exactly when a different action wins.
-    old_winner_cost = loo_cost.gather(
-        2, dense_winner[:, None, None].expand(-1, loo_cost.shape[1], 1)
-    ).squeeze(2)
-    loo_best_cost = loo_cost.min(dim=2).values
-    action_scale = _valid_row_scale(
-        dense_cost,
-        valid,
-        min_scale=float(crit_cfg.get("min_action_scale", 1.0)),
-    ).squeeze(1)
-    severity = ((old_winner_cost - loo_best_cost) / action_scale[:, None].clamp_min(1.0e-6)).clamp_min(0.0)
     safe_cost = atom_costs.float().clamp_min(float(crit_cfg.get("min_atom_cost", 1.0e-3)))
-    utility = critical.float() * (1.0 + float(crit_cfg.get("severity_weight", 1.0)) * severity) / safe_cost
+    utility = critical.float() * (
+        1.0 + float(crit_cfg.get("severity_weight", 1.0)) * severity
+    ) / safe_cost
 
-    teacher_aligned = dense_winner.eq(target_action)
     scene_weight = torch.where(
-        teacher_aligned,
-        torch.full_like(action_scale, float(crit_cfg.get("teacher_aligned_weight", 4.0))),
-        torch.ones_like(action_scale),
+        source_aligned,
+        torch.full_like(
+            target_action,
+            float(crit_cfg.get("teacher_aligned_weight", 4.0)),
+            dtype=J0.dtype,
+        ),
+        torch.ones_like(target_action, dtype=J0.dtype),
     )
     supervised_scene_weight = scene_weight * has_critical.float()
 
-    bce = F.binary_cross_entropy_with_logits(proposal_logits, critical.float(), reduction="none")
+    bce = F.binary_cross_entropy_with_logits(
+        proposal_logits, critical.float(), reduction="none"
+    )
     atom_weight = torch.where(
         critical,
         torch.full_like(bce, float(crit_cfg.get("positive_weight", 12.0))),
@@ -281,21 +364,62 @@ def _exact_winner_flip_critical_proposal_loss(
     bce_mask = active & has_critical[:, None]
     weighted_bce = bce * atom_weight * supervised_scene_weight[:, None]
     L_bce = weighted_bce.masked_select(bce_mask).sum() / (
-        (atom_weight * supervised_scene_weight[:, None]).masked_select(bce_mask).sum().clamp_min(1.0)
+        (atom_weight * supervised_scene_weight[:, None])
+        .masked_select(bce_mask)
+        .sum()
+        .clamp_min(1.0)
     )
 
     target_dist = utility / utility.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
-    logp = F.log_softmax(proposal_logits.masked_fill(~active, _neg_mask_value(proposal_logits)), dim=1)
+    logp = F.log_softmax(
+        proposal_logits.masked_fill(~active, _neg_mask_value(proposal_logits)), dim=1
+    )
     rank_terms = -(target_dist * logp).sum(dim=1)
     L_rank = (rank_terms * supervised_scene_weight).sum() / supervised_scene_weight.sum().clamp_min(1.0)
-    loss = L_bce + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
+
+    # Rare exact positives need a direct separation constraint.  Compare every
+    # critical logit with the hardest active non-critical atom in the scene;
+    # unlike globally increasing proposal loss, this cannot be satisfied by a
+    # scene-wise logit shift and therefore remains compatible with V61's stable
+    # centered proposal surrogate.
+    hard_negative = proposal_logits.masked_fill(
+        ~active | critical, _neg_mask_value(proposal_logits)
+    ).max(dim=1).values
+    has_negative = (active & ~critical).any(dim=1)
+    pair_terms = F.softplus(
+        float(crit_cfg.get("rank_margin", 1.0))
+        - proposal_logits
+        + hard_negative[:, None]
+    )
+    pair_mask = critical & has_negative[:, None]
+    pair_scene = torch.where(
+        pair_mask.any(dim=1),
+        pair_terms.masked_fill(~pair_mask, 0.0).sum(dim=1)
+        / pair_mask.float().sum(dim=1).clamp_min(1.0),
+        torch.zeros_like(supervised_scene_weight),
+    )
+    L_pair_rank = (pair_scene * supervised_scene_weight).sum() / supervised_scene_weight.sum().clamp_min(1.0)
+
+    loss = (
+        L_bce
+        + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
+        + float(crit_cfg.get("pairwise_rank_weight", 0.0)) * L_pair_rank
+    )
 
     critical_count = critical.float().sum()
     recall = (critical & deployment_hard.bool()).float().sum() / critical_count.clamp_min(1.0)
     critical_fraction = critical_count / active.float().sum().clamp_min(1.0)
     critical_scene_fraction = has_critical.float().mean()
-    teacher_aligned_critical_scene_fraction = (has_critical & teacher_aligned).float().mean()
-    return loss, recall, critical_fraction, critical_scene_fraction, teacher_aligned_critical_scene_fraction
+    teacher_aligned_critical_scene_fraction = (
+        has_critical & winner_for_alignment.eq(target_action)
+    ).float().mean()
+    return (
+        loss,
+        recall,
+        critical_fraction,
+        critical_scene_fraction,
+        teacher_aligned_critical_scene_fraction,
+    )
 
 
 def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -3410,6 +3534,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         target_action,
         batch.get("evidence_budget_costs", torch.ones_like(out["proposal_logits"])),
         cfg,
+        teacher_cost=batch.get("teacher_J_T"),
+        teacher_g=batch.get("teacher_g_evid"),
     )
 
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed

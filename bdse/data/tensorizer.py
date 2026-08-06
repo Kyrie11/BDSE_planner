@@ -204,9 +204,53 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
             prop[i, :cols] = proposal_source[i, :cols]
     query = np.zeros((Emax, candidates.K, qfd), dtype=np.float32)
     if include_dense_query:
-        q_src = np.asarray(evidence_bank.query_features, dtype=np.float32)
-        if q_src.ndim != 3 or q_src.shape[0] < E or q_src.shape[1] < candidates.K:
+        # V63 query-contract rule: training/dense diagnostics must be able to use
+        # exactly the same runtime-only feature implementation as sparse
+        # deployment.  Historical caches may contain query tensors produced by a
+        # different code/config revision; shape validity alone is therefore not a
+        # sufficient compatibility check.
+        source = str(
+            (cfg.get("runtime", {}) or {}).get(
+                "dense_query_feature_source",
+                (cfg.get("model", {}) or {}).get("dense_query_feature_source", "cache_or_recompute"),
+            )
+        ).strip().lower()
+        cached = np.asarray(evidence_bank.query_features, dtype=np.float32)
+        cache_shape_ok = (
+            cached.ndim == 3
+            and cached.shape[0] >= E
+            and cached.shape[1] >= candidates.K
+        )
+        if source in {"runtime", "runtime_recompute", "recompute", "canonical_runtime"}:
             q_src = compute_query_features(evidence_bank.atoms[:E], candidates, runtime, cfg)
+        elif source in {"cache_verified", "verified_cache"}:
+            if not cache_shape_ok:
+                raise ValueError(
+                    "dense_query_feature_source=cache_verified requires a complete cached query tensor"
+                )
+            q_runtime = compute_query_features(evidence_bank.atoms[:E], candidates, runtime, cfg)
+            compare_dim = min(qfd, cached.shape[2], q_runtime.shape[2])
+            max_abs = float(
+                np.max(np.abs(cached[:E, : candidates.K, :compare_dim] - q_runtime[:, :, :compare_dim]))
+            ) if E and candidates.K and compare_dim else 0.0
+            tol = float((cfg.get("runtime", {}) or {}).get("dense_query_cache_tolerance", 1.0e-5))
+            if not np.isfinite(max_abs) or max_abs > tol:
+                raise ValueError(
+                    f"Cached/runtime query-feature contract mismatch: max_abs={max_abs:.6g} > tol={tol:.6g}"
+                )
+            q_src = cached
+        elif source in {"cache", "cached", "cache_only"}:
+            if not cache_shape_ok:
+                raise ValueError(
+                    "dense_query_feature_source=cache requires a complete cached query tensor"
+                )
+            q_src = cached
+        elif source in {"cache_or_recompute", "legacy"}:
+            q_src = cached if cache_shape_ok else compute_query_features(
+                evidence_bank.atoms[:E], candidates, runtime, cfg
+            )
+        else:
+            raise ValueError(f"Unknown dense_query_feature_source={source!r}")
         q = q_src[:E, : candidates.K, :qfd]
         query[: q.shape[0], : q.shape[1], : q.shape[2]] = q
     return {

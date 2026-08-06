@@ -1782,6 +1782,8 @@ class BDSEModel(nn.Module):
             "mandatory_hard_atoms": np.flatnonzero(mandatory_hard_mask).astype(np.int64),
             "hab_diagnostics": hab_diag,
             "top_m_atoms": topm,
+            "configured_decision_budget_atom_count": int(budget),
+            "proposal_candidate_atom_count": int(len(topm)),
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
             "action_query_mode": action_query_mode,
             "action_query_mode_all_valid": float(action_query_mode == "all_valid"),
@@ -1856,7 +1858,18 @@ class BDSEModel(nn.Module):
                 q_h_all=q_h_all,
                 compute_variance=self._need_dense_local_variance(),
             )
-        J0 = ctx["J0"][0].detach().cpu().numpy().astype(np.float32)
+        J0_model = ctx["J0"][0].detach().cpu().numpy().astype(np.float32)
+        # Keep two explicit base interfaces.  J0_model is the learned foundation
+        # head used by the immutable-anchor diagnostic; J0_deployment applies the
+        # exact same runtime-only priors as predict_certificate_numpy and is the
+        # only valid base for dense-vs-sparse bridge attribution.
+        flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
+        J0_deployment, base_prior_diag = _apply_runtime_base_prior_np(
+            J0_model.copy(), candidates, flags, cfg
+        )
+        J0_deployment, structural_residual_diag = _apply_structural_safety_residual_prior_np(
+            J0_deployment, runtime, candidates, cfg
+        )
         g = g_t[0].detach().cpu().numpy().astype(np.float32)
         g_var_np = g_var_t[0].detach().cpu().numpy().astype(np.float32)
         valid = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
@@ -1872,13 +1885,21 @@ class BDSEModel(nn.Module):
         g[:, ~valid] = 0.0
         g_var_np[:, ~valid] = 0.0
         return {
-            "J0": J0,
+            "J0": J0_deployment,
+            "J0_deployment": J0_deployment,
+            "J0_model": J0_model,
             "g": g,
             "g_var": g_var_np,
             "active_mask": active,
             "valid_action_mask": valid,
             "dense_atom_count": int(active.sum()),
             "dense_action_count": int(valid.sum()),
+            "dense_query_feature_source_runtime": float(
+                str((cfg.get("runtime", {}) or {}).get("dense_query_feature_source", "cache_or_recompute")).lower()
+                in {"runtime", "runtime_recompute", "recompute", "canonical_runtime"}
+            ),
+            **base_prior_diag,
+            **structural_residual_diag,
         }
 
     def predict_numpy(self, runtime, candidates, evidence_bank):
