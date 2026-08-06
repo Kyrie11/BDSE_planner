@@ -7,6 +7,7 @@ import torch
 
 from bdse.utils import torch_load_any
 from bdse.model.bdse_model import BDSEModel
+from bdse.model.checkpoint_contract import load_bdse_state_with_contract
 from bdse.external_baselines.models import ExternalBaselineModel, is_external_enabled, external_variant
 
 
@@ -58,12 +59,18 @@ def load_model_for_config(checkpoint: str | None, cfg: dict[str, Any], device: t
         else:
             ckpt = torch_load_any(checkpoint, map_location="cpu")
             state = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
-            current = model.state_dict()
-            compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)} if isinstance(state, dict) else {}
-            missing = sorted(set(current) - set(compatible))
-            if missing:
-                print(f"Loaded {len(compatible)}/{len(current)} compatible tensors for {variant}; missing/new tensors include: {missing[:8]}")
-            model.load_state_dict(compatible, strict=False)
+            if not isinstance(state, dict):
+                raise ValueError(f"BDSE checkpoint has no state dictionary: {checkpoint}")
+            report = load_bdse_state_with_contract(
+                model, state, cfg, context=f"BDSE inference load: {checkpoint}"
+            )
+            if report["missing"] or report["unexpected"] or report["shape_mismatch"]:
+                print(
+                    f"Loaded {report['loaded_tensor_count']}/{report['model_tensor_count']} tensors for {variant}; "
+                    f"allowed missing/new={report['missing'][:8]} unexpected={report['unexpected'][:8]} "
+                    f"shape_mismatch={report['shape_mismatch'][:8]}",
+                    flush=True,
+                )
     elif not (external and variant == "pdm_closed"):
         raise ValueError("--checkpoint is required for BDSE and trainable external baselines; PDM-Closed-style can run without one.")
     model.to(device)

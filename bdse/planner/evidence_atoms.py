@@ -847,6 +847,74 @@ def normalize_atom_costs(raw_costs: np.ndarray, atoms: list[EvidenceAtom], cfg: 
     return g.astype(np.float32)
 
 
+def compute_query_feature_extension(
+    atoms: list[EvidenceAtom],
+    candidates: CandidateBank,
+    runtime: RuntimeFeatures,
+    cfg: dict[str, Any],
+    *,
+    start_dim: int = 12,
+    end_dim: int = ATOM_QUERY_DIM,
+) -> np.ndarray:
+    """Compute only the post-legacy runtime query channels.
+
+    V64 uses this for the verified-cache speed path: the stable legacy prefix is
+    read from the preprocessed cache while channels introduced after that cache
+    schema are recomputed online.  The implementation is intentionally kept
+    algebraically identical to channels 12:18 of ``compute_query_features``.
+    """
+    start = max(0, int(start_dim))
+    end = min(max(int(end_dim), start), ATOM_QUERY_DIM)
+    E, K = len(atoms), candidates.K
+    out = np.zeros((E, K, max(end - start, 0)), dtype=np.float32)
+    if start >= end or start >= 18 or end <= 12:
+        return out
+
+    eval_trajs = [_eval_traj(candidates.trajectories[a], cfg) for a in range(K)]
+    for ei, atom in enumerate(atoms):
+        if "current_state" not in atom.anchor:
+            continue
+        cur = np.asarray(atom.anchor["current_state"], dtype=np.float32).reshape(-1)
+        if cur.size < 2:
+            continue
+        vx = float(cur[5]) if cur.shape[0] > 5 else (
+            float(cur[3]) * np.cos(float(cur[2])) if cur.shape[0] > 3 else 0.0
+        )
+        vy = float(cur[6]) if cur.shape[0] > 6 else (
+            float(cur[3]) * np.sin(float(cur[2])) if cur.shape[0] > 3 else 0.0
+        )
+        rel_x = float(cur[0]) if cur.shape[0] > 0 else 0.0
+        for a, traj in enumerate(eval_trajs):
+            times = traj[:, 4]
+            pred_xy = cur[:2][None, :] + times[:, None] * np.asarray([vx, vy], dtype=np.float32)[None, :]
+            dist_cv = np.linalg.norm(traj[:, :2] - pred_xy, axis=1)
+            arg_cv = int(np.argmin(dist_cv))
+            full = np.zeros((6,), dtype=np.float32)
+            full[0] = float(dist_cv[arg_cv])
+            full[1] = float(times[arg_cv])
+            ego_vx = float(traj[arg_cv, 3]) * float(np.cos(float(traj[arg_cv, 2])))
+            ego_vy = float(traj[arg_cv, 3]) * float(np.sin(float(traj[arg_cv, 2])))
+            rel_pos = pred_xy[arg_cv] - traj[arg_cv, :2]
+            rel_norm = max(float(np.linalg.norm(rel_pos)), 1e-3)
+            rel_dir = rel_pos / rel_norm
+            closing = -float(
+                np.dot(np.asarray([vx - ego_vx, vy - ego_vy], dtype=np.float32), rel_dir)
+            )
+            full[2] = max(closing, 0.0)
+            full[3] = float(times[arg_cv])
+            if rel_x >= 0.0:
+                full[4] = max(0.0, rel_x - float(traj[arg_cv, 0]))
+                full[5] = 0.0
+            else:
+                full[4] = 0.0
+                full[5] = max(0.0, float(traj[arg_cv, 0]) - rel_x)
+            lo = max(start, 12) - 12
+            hi = min(end, 18) - 12
+            out[ei, a, max(12 - start, 0) : max(12 - start, 0) + (hi - lo)] = full[lo:hi]
+    out[:, ~candidates.valid_mask, :] = 0.0
+    return out
+
+
 def compute_query_features(atoms: list[EvidenceAtom], candidates: CandidateBank, runtime: RuntimeFeatures, cfg: dict[str, Any]) -> np.ndarray:
     E, K = len(atoms), candidates.K
     q = np.zeros((E, K, ATOM_QUERY_DIM), dtype=np.float32)

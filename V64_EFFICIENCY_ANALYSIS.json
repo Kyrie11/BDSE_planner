@@ -1,0 +1,30 @@
+{
+  "version": "V64_SAQA_BCC",
+  "parameter_accounting": {
+    "query_extension_adapter_parameters": 8684,
+    "model_total_parameters": 7595269,
+    "adapter_fraction": 0.0011433433101579417,
+    "architecture": "LayerNorm(6) -> Linear(6,32) -> SiLU -> Linear(32,256), final layer zero-initialized"
+  },
+  "training_cost": {
+    "budgeted_critical_coverage": "reuses existing teacher exact-critical labels and straight-through HAB mask; no additional teacher/model forward",
+    "adapter": "small residual branch; expected compute overhead negligible relative to scene transformer and atom-action scoring",
+    "strict_checkpoint_contract": "load-time only"
+  },
+  "evaluation_cost": {
+    "raw_score_decision_contract": "adds small queried-feature/value comparison arrays only during evaluation/audit",
+    "support_contract_audit": "one preflight same-checkpoint suite; reusable when checkpoint/config/code fingerprints are fresh"
+  },
+  "cache_strategy": {
+    "legacy_cache": "reuse checkpoint-supported 12-D prefix",
+    "runtime_work": "compute only 6-D extension online for verified-prefix path",
+    "fallback": "automatically use full runtime recompute if prefix audit is not PASS",
+    "correctness_priority": "cache acceleration is never allowed to bypass raw/score/decision contract checks"
+  },
+  "deployment_budget": {
+    "retained_evidence_atoms": 16,
+    "changed": false,
+    "note": "No speedup is obtained by shrinking B, reducing valid action coverage, or deleting safety candidates."
+  },
+  "performance_boundary": "No GPU wall-clock benchmark was available here. The report describes structural overhead only and does not claim a measured speedup."
+}

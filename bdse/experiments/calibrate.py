@@ -11,6 +11,7 @@ from tqdm import tqdm
 from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.model.bdse_model import BDSEModel
+from bdse.model.checkpoint_contract import load_bdse_state_with_contract
 from bdse.planner.nuplan_planner import BDSEPlannerCore
 from bdse.utils import configure_torch_for_device, resolve_torch_device, torch_load_any
 
@@ -23,12 +24,18 @@ def load_model(checkpoint: str, cfg, device: torch.device):
     model = BDSEModel(cfg)
     ckpt = torch_load_any(checkpoint, map_location="cpu")
     state = ckpt.get("model", ckpt)
-    current = model.state_dict()
-    compatible = {k: v for k, v in state.items() if k in current and tuple(v.shape) == tuple(current[k].shape)}
-    missing = sorted(set(current) - set(compatible))
-    if missing:
-        print(f"Loaded {len(compatible)}/{len(current)} compatible tensors; missing/new tensors include: {missing[:8]}")
-    model.load_state_dict(compatible, strict=False)
+    if not isinstance(state, dict):
+        raise ValueError(f"BDSE checkpoint has no state dictionary: {checkpoint}")
+    report = load_bdse_state_with_contract(
+        model, state, cfg, context=f"BDSE calibration load: {checkpoint}"
+    )
+    if report["missing"] or report["unexpected"] or report["shape_mismatch"]:
+        print(
+            f"Loaded {report['loaded_tensor_count']}/{report['model_tensor_count']} tensors; "
+            f"allowed missing/new={report['missing'][:8]} unexpected={report['unexpected'][:8]} "
+            f"shape_mismatch={report['shape_mismatch'][:8]}",
+            flush=True,
+        )
     model.to(device)
     model.eval()
     return model

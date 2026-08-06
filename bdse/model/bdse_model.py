@@ -312,7 +312,42 @@ class BDSEModel(nn.Module):
         # remains 16, which is enough for 7 maneuvers (including safe_fallback).
         self.action_set_summary_dim = int(mcfg.get("action_set_summary_dim", 16))
         self.action_set_proj = nn.Sequential(nn.Linear(self.action_set_summary_dim, h), nn.ReLU(), nn.Linear(h, h))
-        self.query_proj = nn.Sequential(nn.Linear(int(mcfg.get("query_feature_dim", 12)), h), nn.ReLU(), nn.Linear(h, h))
+        self.query_feature_dim = int(mcfg.get("query_feature_dim", 12))
+        self.query_legacy_support_dim = min(
+            max(int(mcfg.get("query_legacy_support_dim", self.query_feature_dim)), 0),
+            self.query_feature_dim,
+        )
+        self.query_proj = nn.Sequential(
+            nn.Linear(self.query_feature_dim, h), nn.ReLU(), nn.Linear(h, h)
+        )
+        # V64 support-aware extension adapter.  Historical V53/V62 checkpoints
+        # were trained with an 18-D tensor whose last six channels were always
+        # zero because the dataset cache stored only the legacy 12-D prefix.
+        # Feeding newly recomputed nonzero channels through the frozen legacy
+        # projection therefore activates untrained columns and destroys the
+        # immutable anchor.  The base projection now receives exactly the
+        # checkpoint-supported prefix; optional new channels enter only through
+        # a zero-initialized residual adapter, so step-zero behavior is identical
+        # to the published anchor while the extension can still be learned.
+        ext_cfg = mcfg.get("query_extension_adapter", {}) or {}
+        self.query_extension_dim = max(0, self.query_feature_dim - self.query_legacy_support_dim)
+        self.query_extension_scale = float(ext_cfg.get("scale", 1.0))
+        if bool(ext_cfg.get("enabled", False)) and self.query_extension_dim > 0:
+            extension_rank = min(
+                max(int(ext_cfg.get("rank", min(32, h))), 1),
+                h,
+            )
+            self.query_extension_proj = nn.Sequential(
+                nn.LayerNorm(self.query_extension_dim),
+                nn.Linear(self.query_extension_dim, extension_rank),
+                nn.SiLU(),
+                nn.Linear(extension_rank, h),
+            )
+            if bool(ext_cfg.get("zero_init", True)):
+                nn.init.zeros_(self.query_extension_proj[-1].weight)
+                nn.init.zeros_(self.query_extension_proj[-1].bias)
+        else:
+            self.query_extension_proj = None
         self.base_head = nn.Sequential(nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.ReLU(), nn.Linear(h, 1))
 
         # g_i(a): non-negative local cost contribution; cost *differences* are
@@ -406,6 +441,37 @@ class BDSEModel(nn.Module):
         if x.shape[-1] > dim:
             return x[..., :dim]
         return F.pad(x, (0, dim - x.shape[-1]))
+
+    def _query_contract_view(self, query_features: torch.Tensor) -> torch.Tensor:
+        """Return exactly the raw query channels that can affect this model.
+
+        Unsupported extension channels are zeroed for immutable legacy anchors;
+        when the V64 residual adapter exists, the extension remains visible.
+        This is the correct object for a raw feature-contract audit.
+        """
+        q = self._fit_last_dim(query_features.float(), self.query_feature_dim)
+        if self.query_extension_proj is None and self.query_legacy_support_dim < self.query_feature_dim:
+            q = F.pad(
+                q[..., : self.query_legacy_support_dim],
+                (0, self.query_feature_dim - self.query_legacy_support_dim),
+            )
+        return q
+
+    def _project_query(self, query_features: torch.Tensor) -> torch.Tensor:
+        """Project query features without activating unsupported checkpoint channels."""
+        q = self._fit_last_dim(query_features.float(), self.query_feature_dim)
+        if self.query_legacy_support_dim < self.query_feature_dim:
+            legacy = F.pad(
+                q[..., : self.query_legacy_support_dim],
+                (0, self.query_feature_dim - self.query_legacy_support_dim),
+            )
+        else:
+            legacy = q
+        out = self.query_proj(legacy)
+        if self.query_extension_proj is not None and self.query_extension_dim > 0:
+            extension = q[..., self.query_legacy_support_dim : self.query_feature_dim]
+            out = out + self.query_extension_scale * self.query_extension_proj(extension)
+        return out
 
     @staticmethod
     def _positive_variance(raw: torch.Tensor, floor: float) -> torch.Tensor:
@@ -625,8 +691,8 @@ class BDSEModel(nn.Module):
         a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, Q, H))
         b_h = torch.gather(action_h, 1, b_idx[..., None].expand(B, Q, H))
         e_h = torch.gather(evid_h, 1, e_idx[..., None].expand(B, Q, H))
-        q_a = self.query_proj(self._fit_last_dim(query_a_features.float(), self.query_proj[0].in_features))
-        q_b = self.query_proj(self._fit_last_dim(query_b_features.float(), self.query_proj[0].in_features))
+        q_a = self._project_query(query_a_features)
+        q_b = self._project_query(query_b_features)
         s_h = scene[:, None, :].expand(B, Q, H)
         return torch.cat([a_h, b_h, e_h, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
 
@@ -656,8 +722,8 @@ class BDSEModel(nn.Module):
         a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, Q, H))
         b_h = torch.gather(action_h, 1, b_idx[..., None].expand(B, Q, H))
         e_h = torch.gather(evid_h, 1, e_idx[..., None].expand(B, Q, H))
-        q_a = self.query_proj(self._fit_last_dim(query_a_features.float(), self.query_proj[0].in_features))
-        q_b = self.query_proj(self._fit_last_dim(query_b_features.float(), self.query_proj[0].in_features))
+        q_a = self._project_query(query_a_features)
+        q_b = self._project_query(query_b_features)
         s_h = scene[:, None, :].expand(B, Q, H)
 
         z_ab = torch.cat([a_h, b_h, e_h, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
@@ -686,7 +752,7 @@ class BDSEModel(nn.Module):
         e_idx = atom_indices.long().clamp_min(0).clamp_max(evid_h.shape[1] - 1)
         a_h = torch.gather(action_h, 1, a_idx[..., None].expand(B, Q, H))
         e_h = torch.gather(evid_h, 1, e_idx[..., None].expand(B, Q, H))
-        q_h = self.query_proj(self._fit_last_dim(query_features.float(), self.query_proj[0].in_features))
+        q_h = self._project_query(query_features)
         s_h = scene[:, None, :].expand(B, Q, H)
         return torch.cat([a_h, e_h, q_h, s_h], dim=-1)
 
@@ -772,7 +838,7 @@ class BDSEModel(nn.Module):
         parts: list[torch.Tensor] = []
         for e0 in range(0, E, chunk_e):
             e1 = min(E, e0 + chunk_e)
-            parts.append(self.query_proj(q_raw_all[:, e0:e1]))
+            parts.append(self._project_query(q_raw_all[:, e0:e1]))
         if not parts:
             return torch.zeros((B, E, K, self.hidden_dim), dtype=batch["evidence_query_features"].dtype, device=batch["evidence_query_features"].device)
         return torch.cat(parts, dim=1)
@@ -802,7 +868,7 @@ class BDSEModel(nn.Module):
         for e0 in range(0, E, chunk_e):
             e1 = min(E, e0 + chunk_e)
             Ce = e1 - e0
-            q_h = q_h_all[:, e0:e1] if q_h_all is not None else self.query_proj(q_raw_all[:, e0:e1])
+            q_h = q_h_all[:, e0:e1] if q_h_all is not None else self._project_query(q_raw_all[:, e0:e1])
             a_exp = action_h[:, None, :, :].expand(B, Ce, K, H)
             e_exp = evid_h[:, e0:e1, None, :].expand(B, Ce, K, H)
             s_exp = scene[:, None, None, :].expand(B, Ce, K, H)
@@ -1479,6 +1545,7 @@ class BDSEModel(nn.Module):
         )
         g_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         g_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
+        q = np.zeros((0, self.query_feature_dim), dtype=np.float32)
         residual_action_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         residual_action_var_sparse = np.zeros((evidence_bank.E, candidates.K), dtype=np.float32)
         if need_action_sparse:
@@ -1785,6 +1852,14 @@ class BDSEModel(nn.Module):
             "configured_decision_budget_atom_count": int(budget),
             "proposal_candidate_atom_count": int(len(topm)),
             "queried_actions": np.asarray(action_ids, dtype=np.int64),
+            "queried_atom_ids": np.asarray(atom_ids, dtype=np.int64),
+            "queried_action_ids": np.asarray(action_ids_rep, dtype=np.int64),
+            "queried_query_features": self._query_contract_view(
+                torch.from_numpy(np.asarray(q, dtype=np.float32))
+            ).cpu().numpy().astype(np.float32),
+            "query_legacy_support_dim": int(self.query_legacy_support_dim),
+            "query_extension_dim": int(self.query_extension_dim),
+            "query_extension_adapter_enabled": float(self.query_extension_proj is not None),
             "action_query_mode": action_query_mode,
             "action_query_mode_all_valid": float(action_query_mode == "all_valid"),
             "valid_action_count": int(np.asarray(candidates.valid_mask, dtype=bool).sum()),
@@ -1890,10 +1965,16 @@ class BDSEModel(nn.Module):
             "J0_model": J0_model,
             "g": g,
             "g_var": g_var_np,
+            "query_features": self._query_contract_view(
+                dense_batch["evidence_query_features"][0]
+            ).detach().cpu().numpy().astype(np.float32),
             "active_mask": active,
             "valid_action_mask": valid,
             "dense_atom_count": int(active.sum()),
             "dense_action_count": int(valid.sum()),
+            "query_legacy_support_dim": int(self.query_legacy_support_dim),
+            "query_extension_dim": int(self.query_extension_dim),
+            "query_extension_adapter_enabled": float(self.query_extension_proj is not None),
             "dense_query_feature_source_runtime": float(
                 str((cfg.get("runtime", {}) or {}).get("dense_query_feature_source", "cache_or_recompute")).lower()
                 in {"runtime", "runtime_recompute", "recompute", "canonical_runtime"}

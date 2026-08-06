@@ -7,7 +7,11 @@ import torch
 
 from bdse.data.cache_schema import CandidateBank, EvidenceBank, RuntimeFeatures, Sample
 from bdse.planner.evidence_queries import FAMILY_NAMES, TYPE_NAMES, PROPOSAL_FEATURE_DIM, compute_proposal_features
-from bdse.planner.evidence_atoms import ATOM_QUERY_DIM, compute_query_features
+from bdse.planner.evidence_atoms import (
+    ATOM_QUERY_DIM,
+    compute_query_feature_extension,
+    compute_query_features,
+)
 from bdse.planner.selector import _greedy_cover_from_pair_delta
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 
@@ -221,18 +225,47 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
             and cached.shape[0] >= E
             and cached.shape[1] >= candidates.K
         )
+        support_dim = min(
+            max(int((cfg.get("model", {}) or {}).get("query_legacy_support_dim", qfd)), 0),
+            qfd,
+        )
+        cache_prefix_ok = cache_shape_ok and cached.shape[2] >= support_dim
+        cache_full_ok = cache_shape_ok and cached.shape[2] >= qfd
         if source in {"runtime", "runtime_recompute", "recompute", "canonical_runtime"}:
             q_src = compute_query_features(evidence_bank.atoms[:E], candidates, runtime, cfg)
-        elif source in {"cache_verified", "verified_cache"}:
-            if not cache_shape_ok:
+        elif source in {
+            "cache_prefix_runtime_extension",
+            "verified_prefix_runtime_extension",
+            "cache_supported_prefix",
+        }:
+            # V64 speed/correctness contract: historical caches are authoritative
+            # only for the checkpoint-supported prefix.  Newly introduced query
+            # channels are recomputed online and enter the network through a
+            # separate zero-initialized adapter.  Requiring an 18-D cache here
+            # would incorrectly reject every valid 12-D legacy cache.
+            if not cache_prefix_ok:
                 raise ValueError(
-                    "dense_query_feature_source=cache_verified requires a complete cached query tensor"
+                    "dense_query_feature_source=cache_prefix_runtime_extension "
+                    f"requires cached query prefix dim >= {support_dim}"
+                )
+            q_src = np.zeros((E, candidates.K, qfd), dtype=np.float32)
+            if support_dim > 0:
+                q_src[:, :, :support_dim] = cached[:E, : candidates.K, :support_dim]
+            if qfd > support_dim:
+                extension = compute_query_feature_extension(
+                    evidence_bank.atoms[:E], candidates, runtime, cfg,
+                    start_dim=support_dim, end_dim=qfd,
+                )
+                q_src[:, :, support_dim:qfd] = extension[:, :, : qfd - support_dim]
+        elif source in {"cache_verified", "verified_cache"}:
+            if not cache_full_ok:
+                raise ValueError(
+                    "dense_query_feature_source=cache_verified requires a full-dimensional cached query tensor"
                 )
             q_runtime = compute_query_features(evidence_bank.atoms[:E], candidates, runtime, cfg)
-            compare_dim = min(qfd, cached.shape[2], q_runtime.shape[2])
             max_abs = float(
-                np.max(np.abs(cached[:E, : candidates.K, :compare_dim] - q_runtime[:, :, :compare_dim]))
-            ) if E and candidates.K and compare_dim else 0.0
+                np.max(np.abs(cached[:E, : candidates.K, :qfd] - q_runtime[:, :, :qfd]))
+            ) if E and candidates.K and qfd else 0.0
             tol = float((cfg.get("runtime", {}) or {}).get("dense_query_cache_tolerance", 1.0e-5))
             if not np.isfinite(max_abs) or max_abs > tol:
                 raise ValueError(
@@ -242,8 +275,11 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
         elif source in {"cache", "cached", "cache_only"}:
             if not cache_shape_ok:
                 raise ValueError(
-                    "dense_query_feature_source=cache requires a complete cached query tensor"
+                    "dense_query_feature_source=cache requires a cached query tensor"
                 )
+            # Backward-compatible immutable-anchor behavior: copy the available
+            # cache dimensions and leave unsupported extension channels exactly
+            # zero.  This reproduces how V53/V62 checkpoints were trained.
             q_src = cached
         elif source in {"cache_or_recompute", "legacy"}:
             q_src = cached if cache_shape_ok else compute_query_features(

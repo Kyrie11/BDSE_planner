@@ -224,6 +224,7 @@ def _exact_winner_flip_critical_proposal_loss(
     *,
     teacher_cost: torch.Tensor | None = None,
     teacher_g: torch.Tensor | None = None,
+    deployment_soft_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Train proposal logits from literal leave-one-atom-out winner flips.
 
@@ -400,10 +401,33 @@ def _exact_winner_flip_critical_proposal_loss(
     )
     L_pair_rank = (pair_scene * supervised_scene_weight).sum() / supervised_scene_weight.sum().clamp_min(1.0)
 
+    # V64 counterfactual critical-coverage objective.  BCE/ranking can improve
+    # individual logits without guaranteeing that the fixed-size acquisition
+    # interface actually retains critical atoms.  The straight-through HAB mask
+    # has the exact deployed Top-M forward set and a smooth backward surrogate,
+    # so minimizing uncovered teacher-critical utility directly trains the
+    # fixed-interface recall objective without changing the deterministic runtime
+    # selector or evidence budget.
+    if deployment_soft_mask is not None:
+        soft_mask = deployment_soft_mask.to(dtype=J0.dtype) * active.float()
+        critical_coverage = (target_dist * soft_mask).sum(dim=1)
+        coverage_terms = 1.0 - critical_coverage
+        L_coverage = (coverage_terms * supervised_scene_weight).sum() / supervised_scene_weight.sum().clamp_min(1.0)
+        critical_soft_coverage = (
+            critical_coverage * supervised_scene_weight
+        ).sum() / supervised_scene_weight.sum().clamp_min(1.0)
+    else:
+        L_coverage = J0.new_tensor(0.0)
+        hard_coverage = (target_dist * deployment_hard.float()).sum(dim=1).clamp(0.0, 1.0)
+        critical_soft_coverage = (
+            hard_coverage * supervised_scene_weight
+        ).sum() / supervised_scene_weight.sum().clamp_min(1.0)
+
     loss = (
         L_bce
         + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
         + float(crit_cfg.get("pairwise_rank_weight", 0.0)) * L_pair_rank
+        + float(crit_cfg.get("coverage_weight", 0.0)) * L_coverage
     )
 
     critical_count = critical.float().sum()
@@ -3536,6 +3560,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         cfg,
         teacher_cost=batch.get("teacher_J_T"),
         teacher_g=batch.get("teacher_g_evid"),
+        deployment_soft_mask=st_topm_mask if "st_topm_mask" in locals() else None,
     )
 
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed

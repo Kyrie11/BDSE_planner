@@ -34,6 +34,10 @@ def _query_config_payload(cfg: dict[str, Any]) -> dict[str, Any]:
         "evidence": cfg.get("evidence", {}),
         "runtime_safety": cfg.get("runtime_safety", {}),
         "model_query_feature_dim": (cfg.get("model", {}) or {}).get("query_feature_dim", ATOM_QUERY_DIM),
+        "query_legacy_support_dim": (cfg.get("model", {}) or {}).get(
+            "query_legacy_support_dim",
+            (cfg.get("model", {}) or {}).get("query_feature_dim", ATOM_QUERY_DIM),
+        ),
     }
     return payload
 
@@ -56,6 +60,17 @@ def _verify_report(path: Path, cfg: dict[str, Any], tolerance: float) -> int:
         failures.append(f"max_abs_error={max_abs} > tolerance={tolerance}")
     if int(report.get("shape_failure_count", 1)) != 0:
         failures.append(f"shape_failure_count={report.get('shape_failure_count')}")
+    expected_support = min(
+        int((cfg.get("model", {}) or {}).get(
+            "query_legacy_support_dim",
+            (cfg.get("model", {}) or {}).get("query_feature_dim", ATOM_QUERY_DIM),
+        )),
+        int((cfg.get("model", {}) or {}).get("query_feature_dim", ATOM_QUERY_DIM)),
+    )
+    if int(report.get("audited_support_dim", -1)) != expected_support:
+        failures.append(
+            f"audited_support_dim={report.get('audited_support_dim')} != expected={expected_support}"
+        )
     if failures:
         print(json.dumps({"verified": False, "failures": failures}, indent=2))
         return 3
@@ -64,7 +79,7 @@ def _verify_report(path: Path, cfg: dict[str, Any], tolerance: float) -> int:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Audit shape-valid cached evidence query features against canonical runtime recomputation")
+    p = argparse.ArgumentParser(description="Audit the checkpoint-supported cached query prefix against canonical runtime recomputation")
     p.add_argument("--config", type=str, required=True)
     p.add_argument("--preprocessed-dir", type=Path)
     p.add_argument("--split", nargs="+", default=["train"])
@@ -92,6 +107,10 @@ def main() -> int:
     shape_failures: list[dict[str, Any]] = []
     worst: list[tuple[float, str]] = []
     qdim = int((cfg.get("model", {}) or {}).get("query_feature_dim", ATOM_QUERY_DIM))
+    support_dim = min(
+        max(int((cfg.get("model", {}) or {}).get("query_legacy_support_dim", qdim)), 0),
+        qdim,
+    )
     for idx in indices.tolist():
         sample = load_sample_npz(
             paths[idx],
@@ -105,11 +124,12 @@ def main() -> int:
         E = sample.evidence_bank.E
         K = sample.candidates.K
         cached = np.asarray(sample.evidence_bank.query_features, dtype=np.float32)
-        if cached.ndim != 3 or cached.shape[0] < E or cached.shape[1] < K or cached.shape[2] < qdim:
+        if cached.ndim != 3 or cached.shape[0] < E or cached.shape[1] < K or cached.shape[2] < support_dim:
             shape_failures.append({
                 "path": str(paths[idx]),
                 "cached_shape": list(cached.shape),
-                "required_shape": [E, K, qdim],
+                "required_supported_prefix_shape": [E, K, support_dim],
+                "full_model_query_dim": qdim,
             })
             continue
         runtime = compute_query_features(
@@ -118,7 +138,7 @@ def main() -> int:
             sample.runtime,
             cfg,
         )
-        d = min(qdim, runtime.shape[2])
+        d = min(support_dim, cached.shape[2], runtime.shape[2])
         err = np.abs(cached[:E, :K, :d] - runtime[:E, :K, :d])
         max_abs = float(err.max()) if err.size else 0.0
         errors.append(max_abs)
@@ -127,7 +147,7 @@ def main() -> int:
     arr = np.asarray(errors, dtype=np.float64)
     tol = float(args.tolerance)
     report = {
-        "audit": "cached_query_features_vs_canonical_runtime",
+        "audit": "cached_supported_query_prefix_vs_canonical_runtime",
         "pass": bool(len(shape_failures) == 0 and arr.size == count and np.isfinite(arr).all() and float(arr.max(initial=0.0)) <= tol),
         "preprocessed_dir": str(args.preprocessed_dir.resolve()),
         "splits": list(args.split),
@@ -137,6 +157,9 @@ def main() -> int:
         "shape_failure_count": len(shape_failures),
         "shape_failures": shape_failures[:20],
         "tolerance": tol,
+        "full_model_query_dim": qdim,
+        "audited_support_dim": support_dim,
+        "runtime_extension_dim": max(qdim - support_dim, 0),
         "max_abs_error": float(arr.max(initial=float("nan"))) if arr.size else float("nan"),
         "mean_scene_max_abs_error": float(arr.mean()) if arr.size else float("nan"),
         "p50_scene_max_abs_error": float(np.quantile(arr, 0.50)) if arr.size else float("nan"),

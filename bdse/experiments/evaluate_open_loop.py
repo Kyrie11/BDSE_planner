@@ -240,6 +240,9 @@ def add_dense_bridge_diagnostics(
             "dense_query_feature_source_runtime": float(
                 dense.get("dense_query_feature_source_runtime", 0.0)
             ),
+            "query_legacy_support_dim": float(dense.get("query_legacy_support_dim", float("nan"))),
+            "query_extension_dim": float(dense.get("query_extension_dim", float("nan"))),
+            "query_extension_adapter_enabled": float(dense.get("query_extension_adapter_enabled", 0.0)),
         }
     )
 
@@ -282,30 +285,121 @@ def add_dense_bridge_diagnostics(
     a_limit = min(dense_g.shape[1], sparse_g.shape[1]) if sparse_g.ndim == 2 else 0
     contract_atoms = topm_atoms[topm_atoms < e_limit]
     contract_actions = queried_actions[queried_actions < a_limit]
+
+    # Layer 1: raw query-feature contract.  V63 incorrectly called the neural g
+    # score comparison a "query contract".  Different CUDA batch shapes can
+    # produce tiny score differences even with identical raw inputs, so this
+    # layer now compares the exact model-consumed query vectors.
+    dense_query = np.asarray(dense.get("query_features", []), dtype=np.float32)
+    sparse_query = np.asarray(pred.get("queried_query_features", []), dtype=np.float32)
+    sparse_atom_ids = np.asarray(pred.get("queried_atom_ids", []), dtype=np.int64).reshape(-1)
+    sparse_action_ids = np.asarray(pred.get("queried_action_ids", []), dtype=np.int64).reshape(-1)
+    raw_ok = (
+        dense_query.ndim == 3
+        and sparse_query.ndim == 2
+        and sparse_atom_ids.shape[0] == sparse_query.shape[0]
+        and sparse_action_ids.shape[0] == sparse_query.shape[0]
+        and sparse_query.shape[0] > 0
+        and sparse_query.shape[1] == dense_query.shape[2]
+    )
+    if raw_ok:
+        ids_ok = (
+            (sparse_atom_ids >= 0)
+            & (sparse_atom_ids < dense_query.shape[0])
+            & (sparse_action_ids >= 0)
+            & (sparse_action_ids < dense_query.shape[1])
+        )
+        if ids_ok.all():
+            dense_query_rows = dense_query[sparse_atom_ids, sparse_action_ids]
+            raw_abs_err = np.abs(dense_query_rows - sparse_query)
+            raw_tol = float((cfg.get("runtime", {}) or {}).get("dense_raw_query_feature_tolerance", 1.0e-6))
+            raw_finite = bool(np.isfinite(raw_abs_err).all())
+            raw_fraction = float((raw_abs_err <= raw_tol).mean()) if raw_abs_err.size else 1.0
+            raw_pass = float(raw_finite and float(raw_abs_err.max(initial=0.0)) <= raw_tol)
+            diag.values.update(
+                {
+                    "dense_runtime_raw_query_feature_mae": float(raw_abs_err.mean()) if raw_abs_err.size else 0.0,
+                    "dense_runtime_raw_query_feature_max_abs": float(raw_abs_err.max(initial=0.0)),
+                    "dense_runtime_raw_query_feature_allclose_fraction": raw_fraction,
+                    "dense_runtime_raw_query_feature_contract_pass": raw_pass,
+                    "dense_runtime_raw_query_feature_contract_available": 1.0,
+                    # Backward-compatible name: from V64 this is a true raw
+                    # feature contract, not a neural-score bitwise test.
+                    "dense_runtime_query_contract_pass": raw_pass,
+                }
+            )
+        else:
+            raw_ok = False
+    if not raw_ok:
+        diag.values.update(
+            {
+                "dense_runtime_raw_query_feature_mae": float("nan"),
+                "dense_runtime_raw_query_feature_max_abs": float("nan"),
+                "dense_runtime_raw_query_feature_allclose_fraction": float("nan"),
+                "dense_runtime_raw_query_feature_contract_pass": 0.0,
+                "dense_runtime_raw_query_feature_contract_available": 0.0,
+                "dense_runtime_query_contract_pass": 0.0,
+            }
+        )
+
+    # Layer 2: neural score numerical parity.  Use mixed absolute/relative
+    # tolerance because dense and sparse paths use different CUDA GEMM batch
+    # shapes.  This remains a Protocol diagnostic, while exact action parity is
+    # the decision-level contract below.
     if contract_atoms.size and contract_actions.size:
         dense_vals = dense_g[np.ix_(contract_atoms, contract_actions)]
         sparse_vals = sparse_g[np.ix_(contract_atoms, contract_actions)]
         abs_err = np.abs(dense_vals - sparse_vals)
-        tol = float((cfg.get("runtime", {}) or {}).get("dense_query_value_tolerance", 1.0e-5))
+        runtime_cfg = cfg.get("runtime", {}) or {}
+        score_atol = float(runtime_cfg.get("dense_query_score_atol", 1.0e-3))
+        score_rtol = float(runtime_cfg.get("dense_query_score_rtol", 1.0e-4))
+        allowed = score_atol + score_rtol * np.abs(dense_vals)
+        score_close = abs_err <= allowed
+        score_finite = bool(np.isfinite(abs_err).all())
+        score_fraction = float(score_close.mean())
+        score_pass_fraction = float(runtime_cfg.get("dense_query_score_pass_fraction", 0.999))
+        score_pass = float(score_finite and score_fraction >= score_pass_fraction)
         diag.values.update(
             {
+                "dense_runtime_query_score_mae": float(abs_err.mean()),
+                "dense_runtime_query_score_max_abs": float(abs_err.max()),
+                "dense_runtime_query_score_allclose_fraction": score_fraction,
+                "dense_runtime_query_score_contract_pass": score_pass,
+                "dense_runtime_query_score_atol": score_atol,
+                "dense_runtime_query_score_rtol": score_rtol,
+                # Historical value keys remain aliases to score parity.
                 "dense_runtime_query_value_mae": float(abs_err.mean()),
                 "dense_runtime_query_value_max_abs": float(abs_err.max()),
-                "dense_runtime_query_value_allclose_fraction": float((abs_err <= tol).mean()),
-                "dense_runtime_query_contract_pass": float(
-                    np.isfinite(abs_err).all() and float(abs_err.max()) <= tol
-                ),
+                "dense_runtime_query_value_allclose_fraction": score_fraction,
             }
         )
     else:
         diag.values.update(
             {
+                "dense_runtime_query_score_mae": float("nan"),
+                "dense_runtime_query_score_max_abs": float("nan"),
+                "dense_runtime_query_score_allclose_fraction": float("nan"),
+                "dense_runtime_query_score_contract_pass": 0.0,
                 "dense_runtime_query_value_mae": float("nan"),
                 "dense_runtime_query_value_max_abs": float("nan"),
                 "dense_runtime_query_value_allclose_fraction": float("nan"),
-                "dense_runtime_query_contract_pass": 0.0,
             }
         )
+
+    # Backward compatibility for old unit fixtures/external adapters that do not
+    # expose raw query rows.  The legacy alias can fall back to score parity, but
+    # V64 Protocol additionally requires the explicit availability flag above.
+    if float(diag.values.get("dense_runtime_raw_query_feature_contract_available", 0.0)) < 0.5:
+        diag.values["dense_runtime_query_contract_pass"] = float(
+            diag.values.get("dense_runtime_query_score_contract_pass", 0.0)
+        )
+
+    # Layer 3: decision parity.  This is the operational invariant that matters
+    # for the planner interface and must not be hidden by sub-milliscale GEMM
+    # differences.
+    diag.values["dense_runtime_query_decision_match"] = float(
+        dense_topm_action == runtime_sparse_full_action
+    )
 
     deployment_critical, deployment_details = _criticality_metrics(
         dense_j0_deployment,
