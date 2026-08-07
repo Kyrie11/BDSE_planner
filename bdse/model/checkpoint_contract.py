@@ -7,6 +7,7 @@ import torch
 
 _DEFAULT_ALLOWED_MISSING_PREFIXES = (
     "query_extension_proj.",
+    "critical_proposal_adapter.",
     "residual_action_head.",
     "residual_action_var_head.",
     "residual_set_atom_head.",

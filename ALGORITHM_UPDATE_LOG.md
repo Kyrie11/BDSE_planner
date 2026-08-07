@@ -3934,3 +3934,133 @@ Teacher-interface criticality previously computed both model-interface and teach
 ## Validation boundary
 
 Static/CPU validation after the changes: all YAML files parse, modified shell scripts pass `bash -n`, and the full unit suite passes **254/254**. No fresh GPU training, calibration, official open-loop gate, or closed-loop simulation was run in this environment, so V64.2 performance and SOTA claims remain unverified.
+
+---
+
+# V64.3 — Calibration-Consistent AOCC + Anchor-Preserving Winner-Conditioned Critical Acquisition (CC-AOCC / AP-WCCA) (2026-08-07)
+
+## Result trigger
+
+V64.2 completed calibration and the official 1000-scene paired candidate/local/foundation open-loop suite. The historical V64.2 checker reported Protocol PASS, Minimum FAIL, Competitive FAIL. Minimum failed only on evidence certificate coverage (`0.048 < 0.40`) and fallback (`0.952 > 0.60`). Competitive additionally failed teacher-match gain (`+0.007 < +0.015`), residual gain (`0`), proposal decisive recall (`0.7558 < 0.80`), literal teacher winner-flip critical Top-M/selected recall (`0.3482/0.3321`), certificate/fallback, and paired-regret regression.
+
+## Newly identified engineering root cause: evidence calibration/deployment contract mismatch
+
+The V64.2 calibration collector was invoked with `beta=0.0`, while the calibrated deployment configs retained `selector.adverse_certificate_beta=1.0` and `adverse_certificate_prior_radius=0.02`. `apply_v61_dual_calibration.py` copied only epsilon and never copied the evidence beta/prior-radius that define the calibrated nonconformity score. The old protocol checker audited residual beta but did not audit evidence AOCC beta/prior-radius.
+
+With `proposal_top_m=24`, the uncalibrated deployment-only prior term can contribute about `24 * 0.02 = 0.48` adverse deficit. This matches the observed AOCC initial deficit (`~0.47–0.48`). B=16 recovered only about `0.32`, leaving most scenes uncertified and producing `fallback_rate=0.952`. Therefore the V64.2 Minimum failure is primarily an engineering/protocol inconsistency, not evidence that fixed B=16 is intrinsically insufficient.
+
+V64.3 adds a calibration-consistent evidence contract:
+
+- raw calibration shards persist `beta` and `prior_radius`;
+- merged calibration verifies every shard used identical values;
+- calibrated deployment configs copy evidence `beta`, `prior_radius`, and epsilon exactly;
+- the formal gate now rejects calibration/deployment evidence-beta or prior-radius mismatch;
+- V64.2's reported Protocol PASS is retained as a historical checker result, but under the corrected paper-grade contract it is flagged with `calibration beta=0, deployment beta=1`.
+
+No gate threshold is relaxed.
+
+## V64.2 model-state diagnosis
+
+What the model learned:
+
+- fixed-budget and query-interface contracts are stable;
+- HAB Top-M preserves its own dense learned winner very well (`~0.981`);
+- selected/effective decisive recall remains useful (`~0.582/~0.747`), with interaction decisive recall `~0.597`;
+- candidate/local teacher match is `0.238`, a small `+0.007` over foundation (`0.231`);
+- pair-full teacher match is `0.249` versus foundation `0.235`, so the learned sparse pair interface contains some beneficial information before final certificate/residual gating.
+
+What it did not learn:
+
+- literal teacher winner-flip critical acquisition did not improve: candidate Top-M/selected `0.348/0.332` versus foundation Top-M/selected about `0.355/0.331`;
+- broad proposal decisive recall regressed from foundation `~0.804` to `~0.756`;
+- the query-extension path caused severe dense-interface drift: candidate full-interface teacher action match `0.182` versus foundation `0.359`;
+- the residual proposes changes in `~51.6%` of scenes but produces zero deployed flips; calibrated residual epsilon is `0.989`, residual raw-error MAE is `1.691`, and the winner-margin signal is orders of magnitude smaller, so this is not a threshold-tuning problem;
+- the primary checkpoint was selected at epoch 1 while residual-curriculum scale was only `0.05`; therefore the formal candidate checkpoint was selected before the residual path had received meaningful full-strength training.
+
+The critical Top-M→B16 drop is small (`0.348 -> 0.332`), so the main critical-evidence bottleneck remains acquisition, not the exact B=16 selector.
+
+## V64.3 algorithm change: AP-WCCA
+
+V64.2 HCBE changed supervision but still fine-tuned the whole legacy proposal/family stack. The resulting run lost broad proposal recall without gaining literal teacher-critical recall. The legacy proposal is therefore restored as an immutable acquisition anchor.
+
+V64.3 adds a small **zero-initialized winner-conditioned critical proposal residual**:
+
+```text
+legacy HAB atom score (frozen)
+  + r_crit(evidence, proposal features, scene, candidate-set summary,
+           evidence family, frozen base-winner action embedding)
+```
+
+Properties:
+
+- final residual layer is zero initialized, so step-zero proposal ranking is exactly the legacy anchor;
+- legacy `proposal_head`, `family_head`, family embedding/activity encoder, proposal feature encoder, and query-extension adapter are frozen;
+- nominal query-extension scale is `0`, because V64.2 showed a large harmful dense-interface drift; the 12-D checkpoint-supported path remains the nominal anchor;
+- teacher labels are used only in training losses; deployment conditioning uses the planner-available frozen base winner, never teacher information;
+- hard forward remains deterministic HAB Top-M;
+- fixed evidence budget remains B=16 and proposal M remains 24;
+- auditable evidence atoms and literal leave-one-atom-out winner-flip criticality are unchanged.
+
+The objective is rebalanced toward the missing quantity rather than adding more global proposal pressure: exact critical loss `8 -> 12`, BCC coverage `2 -> 4`, HCBE exchange `1 -> 2`; dense-winner proposal pressure `20 -> 6`; the old hardest-negative rank remains weak (`0.10`).
+
+## Residual training/checkpoint correction
+
+V64.2 used `proposal_only_epochs=3`, `ramp_epochs=4`, `initial_scale=0.05`, yet primary checkpoint selection was allowed from epoch 0. The selected epoch-1 checkpoint therefore had residual losses scaled to only 5%.
+
+V64.3:
+
+- curriculum: proposal-only `1` epoch, ramp `2` epochs, initial scale `0.10`;
+- adds `--best-min-epoch`; paper pipeline default is zero-based epoch `3`, so no primary/metric-specific best checkpoint can be promoted before residual training reaches full strength;
+- early stopping minimum is moved to epoch 5.
+
+This fixes checkpoint-selection semantics rather than relaxing the residual certificate. Residual epsilon must still come from independent calibration; do not lower it manually.
+
+## Runtime/experiment speed changes
+
+Observed V64.2 wall time after pipeline start was approximately:
+
+- anchor audit: 15.1 min (4.3%);
+- training: 299.2 min (84.8%);
+- calibration: 24.4 min (6.9%);
+- three-system open-loop: 14.3 min (4.0%).
+
+Training profiling showed data wait and loss construction dominate forward/backward. V64.3 therefore changes the default paper launcher to:
+
+- 2 GPUs;
+- per-GPU batch `16` (global batch 32);
+- 8 DataLoader workers/GPU and prefetch factor 3; persistent workers were already correctly enabled;
+- base LR `1.7e-5` (conservative sqrt(2)-style increase from 1.2e-5 for the doubled per-GPU batch);
+- only the small critical adapter + residual heads are trainable, reducing backward/optimizer work;
+- query extension and legacy proposal/family modules are frozen;
+- formal open-loop remains two workers/GPU because it is already only ~4% of the run.
+
+These changes reduce compute without approximating the exact deployed selector or changing B.
+
+## Closed-loop policy after gate failure
+
+A paired diagnostic CL20 is recommended whenever the **corrected Protocol gate passes**, even if Minimum or Competitive fails. It is diagnostic only: it must not waive the formal gate, select hyperparameters on test, or support a SOTA claim. Run candidate/local/foundation on identical val-tune tokens and inspect paired safety/progress/regret/action-change cases. This can distinguish open-loop certificate conservatism from candidate-dynamics/reactive/replan failures.
+
+Do not run CL20 when the corrected Protocol contract fails. For V64.2, first run the calibration-consistent open-loop replay; then run diagnostic CL20 if protocol is valid.
+
+## No-repeat constraints
+
+- do not increase B to hide certificate/acquisition failures;
+- do not redefine criticality using margin deficit or severity proxies;
+- do not unfreeze the legacy proposal stack unless AP-WCCA first demonstrates that a frozen-anchor residual lacks capacity;
+- do not re-enable the query extension in nominal until a controlled ablation shows dense/interface benefit;
+- do not lower residual conformal epsilon or evidence certificate thresholds to manufacture flips;
+- do not select a checkpoint before residual curriculum reaches full strength;
+- do not use the incomplete test set for tuning;
+- do not treat diagnostic CL20 as publication evidence.
+
+## Validation
+
+Static/CPU validation in the delivery environment:
+
+- Python compile: PASS;
+- V64.3 config contract: PASS;
+- shell syntax: PASS;
+- targeted V64.3 tests: 4/4 PASS;
+- full pytest: **258 passed, 0 failed**.
+
+Fresh GPU training/calibration/open-loop/closed-loop were not run in this environment; all V64.3 performance claims remain to be measured.

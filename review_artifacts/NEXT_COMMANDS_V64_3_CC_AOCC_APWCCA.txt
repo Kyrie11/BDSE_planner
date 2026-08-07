@@ -1,0 +1,110 @@
+# ============================================================
+# Phase 0 — engineering-only isolation on the EXISTING V64.2 checkpoint
+# Goal: test whether Minimum was primarily caused by calibration/deployment
+#       evidence-beta mismatch. This does NOT retrain or disable the V64.2
+#       query extension/proposal heads.
+# ============================================================
+cd /home/senzeyu2/code/BDSE_planner
+
+export SOURCE_OUT=outputs_v64_2_saqa_bcc_hcbe_fast_2gpu_v1
+export FOUNDATION_CKPT=/home/senzeyu2/code/BDSE_planner/outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt
+export REPLAY_OUT=outputs_v64_2_calibration_consistent_replay
+export BDSE_SPLIT_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split
+export GPUS=0,1
+export OPEN_LOOP_WORKERS_PER_GPU=2
+
+bash RERUN_V64_2_CALIBRATION_CONSISTENT_OPEN_LOOP_ONLY.sh
+
+# Inspect:
+python - <<'PY'
+import json
+p='outputs_v64_2_calibration_consistent_replay/open_loop/v64_2_calibration_consistent_gate_report.json'
+d=json.load(open(p))
+print('protocol=', d['protocol_pass'])
+print('minimum=', d['minimum_pass'])
+print('competitive=', d['competitive_pass'])
+print('protocol_failures=', d['protocol_failures'])
+print('minimum_failures=', d['minimum_failures'])
+print('competitive_failures=', d['competitive_failures'])
+PY
+
+# Interpretation:
+# - If certificate fraction/fallback improve strongly or Minimum passes, the old
+#   Minimum failure was primarily engineering/protocol, as diagnosed.
+# - Do NOT change B or gate thresholds.
+
+# ============================================================
+# Phase 1 — optional paired diagnostic CL20 on V64.2
+# Run only if the calibration-consistent replay reports corrected Protocol PASS.
+# It is diagnostic, not a paper result. Prefer val_tune / frozen matched tokens.
+# ============================================================
+# Use the calibrated configs/checkpoint from REPLAY_OUT and run the existing
+# paired CL20 wrapper or the corresponding run_v64_saqa_bcc.sh RUN_MODE=cl20
+# candidate/local/foundation commands. Keep candidate/local/foundation token
+# hashes identical. Do not run CL100 yet.
+
+# ============================================================
+# Phase 2 — fresh V64.3 training + calibration + open-loop
+# Algorithm: CC-AOCC + AP-WCCA
+# - B=16 unchanged
+# - M=24 unchanged
+# - legacy proposal/family anchor frozen
+# - query extension nominally disabled/frozen
+# - zero-init winner-conditioned critical proposal residual
+# - residual checkpoint cannot be selected before epoch 3
+# - 2 GPUs, batch 16/GPU
+# ============================================================
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE_ORIGINAL=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_SPLIT_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+export FOUNDATION_CKPT=/home/senzeyu2/code/BDSE_planner/outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt
+export CONTROL_CKPT="$FOUNDATION_CKPT"
+export OUT_ROOT=outputs_v64_3_cc_aocc_apwcca_fast_2gpu_v1
+export GPUS=0,1
+export V64_INIT_MODE=warm_start
+export PIPELINE_DETACH=1
+export PIPELINE_FORCE=0
+export TRAIN_BATCH_SIZE_PER_GPU=16
+export TRAIN_NUM_WORKERS_PER_GPU=8
+export TRAIN_PREFETCH_FACTOR=3
+export VAL_NUM_WORKERS_PER_GPU=4
+export BEST_MIN_EPOCH=3
+export CALIBRATION_BETA=0.0
+export CALIBRATION_PRIOR_RADIUS=0.02
+export OPEN_LOOP_WORKERS_PER_GPU=2
+export RUN_CLOSED_LOOP_AFTER_GATE=0
+
+bash RUN_V64_3_CC_AOCC_APWCCA_PIPELINE_2GPU.sh
+
+# Monitor:
+tail -f "$OUT_ROOT/logs/"pipeline_*.log
+
+# After open-loop/gate, inspect these metrics first:
+# 1. corrected Protocol PASS, including evidence calibration beta/prior consistency
+# 2. evidence certificate fraction >= 0.40 and fallback <= 0.60 (Minimum)
+# 3. proposal decisive recall: recover toward >= 0.80 / foundation ~0.804
+# 4. teacher critical Top-M recall: must clearly exceed V64.2 ~0.348 and anchor ~0.355
+# 5. teacher critical selected recall: must rise with Top-M; otherwise selector is next bottleneck
+# 6. full-interface teacher match: should recover substantially from V64.2 0.182 because query extension is nominally no-op
+# 7. critical_proposal_residual_abs_mean / rms: nonzero confirms AP-WCCA actually learned
+# 8. residual calibration raw-error MAE and epsilon: must drop substantially from 1.691 / 0.989
+# 9. pair-full residual gain and deployed beneficial/harmful flips
+# 10. candidate-vs-foundation paired regret and teacher match
+
+# ============================================================
+# Phase 3 — paired diagnostic CL20 after V64.3 open-loop
+# Recommendation: run when corrected Protocol PASS, even if Minimum/Competitive
+# still fails, but mark it DIAGNOSTIC and do not use it to waive gates.
+# ============================================================
+export PIPELINE_DETACH=0
+export SKIP_V64_TRAINING=1
+export V64_CANDIDATE_CHECKPOINT="$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt"
+export RUN_CLOSED_LOOP_AFTER_GATE=1
+export RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL=1
+export RUN_CL100_AFTER_CL20=0
+export CL_PROCESSES_PER_GPU=2
+
+bash V64_3_CC_AOCC_APWCCA_NEXT_COMMANDS.sh
+
+# Only after Competitive PASS + paired CL20 beneficial/safe should CL100 be run.

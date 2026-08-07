@@ -1,0 +1,43 @@
+{
+  "certificate_contract": {
+    "calibration_beta": 0.0,
+    "calibration_prior_radius": "not_persisted_in_v64_2",
+    "deployment_beta": 1.0,
+    "deployment_epsilon": 3.6137218557996675e-05,
+    "deployment_prior_radius": 0.02
+  },
+  "corrected_protocol_audit": {
+    "failure": "evidence calibration/deployment beta mismatch: calibration=0.0, candidate=1.0",
+    "protocol_pass": false
+  },
+  "historical_gate_checker": {
+    "competitive_failures": [
+      "total teacher-match gain=+0.007000 < +0.015",
+      "residual teacher-match gain=+0.000000 < +0.005",
+      "pair-full residual gain=+0.000000 < +0.005",
+      "residual not net beneficial=0.0/0.0",
+      "certified fraction=0.048 < 0.55",
+      "proposal decisive recall=0.7558170009945073 < 0.80",
+      "fallback rate=0.952 > 0.40",
+      "teacher exact winner-flip critical Top-M recall=0.3481684981684982 < 0.80",
+      "teacher exact winner-flip critical selected recall=0.3321245421245421 < 0.50",
+      "paired regret regressed vs foundation: {'median': 156.53064475537394, 'p90': 50554.908711556935, 'cvar90': 78826.50070333382} / {'median': 152.1239721751772, 'p90': 50542.623216648455, 'cvar90': 79184.82582880232}"
+    ],
+    "competitive_pass": false,
+    "minimum_failures": [
+      "certified fraction=0.048 < 0.40",
+      "fallback rate=0.952 > 0.60"
+    ],
+    "minimum_pass": false,
+    "protocol_pass": true
+  },
+  "root_cause_classification": {
+    "competitive": [
+      "algorithm: critical acquisition flat/regressed",
+      "algorithm: query-extension dense-interface drift",
+      "training/pipeline: best checkpoint selected before residual curriculum matured",
+      "algorithm: residual calibration error too large for deployed flips"
+    ],
+    "minimum": "primarily engineering/protocol mismatch; must replay after correction before claiming B=16 capacity failure"
+  }
+}

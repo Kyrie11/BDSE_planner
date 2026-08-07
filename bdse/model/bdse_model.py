@@ -423,6 +423,33 @@ class BDSEModel(nn.Module):
         self.family_activity_proj = nn.Sequential(nn.Linear(8, h), nn.ReLU(), nn.Linear(h, h))
         self.family_head = nn.Sequential(nn.LayerNorm(h * 4), nn.Linear(h * 4, h), nn.ReLU(), nn.Linear(h, 1))
         self.proposal_head = nn.Sequential(nn.LayerNorm(h * 5), nn.Linear(h * 5, h), nn.ReLU(), nn.Linear(h, 1))
+
+        # V64.3 Anchor-Preserving Winner-Conditioned Critical Acquisition (AP-WCCA).
+        # The V64.2 run showed that freely fine-tuning the legacy HAB proposal/family
+        # stack reduced broad decisive recall while literal teacher-critical recall
+        # stayed flat.  Criticality is action-relative (removing an atom matters only
+        # with respect to a winner/rival decision), whereas the legacy atom proposal
+        # never receives an explicit action embedding.  Add a small residual proposal
+        # adapter conditioned on the frozen base winner action.  Its last layer is
+        # zero-initialized, so a V62/V53 warm start is exactly the legacy HAB ranking
+        # at step zero.  The legacy proposal/family heads can therefore remain frozen
+        # while the residual learns only the missing winner-relative correction.
+        crit_prop_cfg = mcfg.get("critical_proposal_adapter", {}) or {}
+        self.critical_proposal_adapter_scale = float(crit_prop_cfg.get("scale", 1.0))
+        if bool(crit_prop_cfg.get("enabled", False)):
+            critical_rank = min(max(int(crit_prop_cfg.get("rank", min(64, h))), 1), h)
+            self.critical_proposal_adapter = nn.Sequential(
+                nn.LayerNorm(h * 6),
+                nn.Linear(h * 6, critical_rank),
+                nn.SiLU(),
+                nn.Linear(critical_rank, 1),
+            )
+            if bool(crit_prop_cfg.get("zero_init", True)):
+                nn.init.zeros_(self.critical_proposal_adapter[-1].weight)
+                nn.init.zeros_(self.critical_proposal_adapter[-1].bias)
+        else:
+            self.critical_proposal_adapter = None
+
         # Backward-compatible name used by old checkpoints/tests.
         self.selector_head = self.proposal_head
 
@@ -636,10 +663,27 @@ class BDSEModel(nn.Module):
 
         atom_family_h = self.family_embed(fam_ids)
         atom_pi = torch.gather(family_pi, 1, fam_ids).clamp_min(1e-6)
-        proposal_logits = self.proposal_head(torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h], dim=-1)).squeeze(-1)
+        proposal_base_logits = self.proposal_head(
+            torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h], dim=-1)
+        ).squeeze(-1)
+        critical_proposal_residual = torch.zeros_like(proposal_base_logits)
+        if self.critical_proposal_adapter is not None:
+            # Winner conditioning deliberately uses the base/foundation action,
+            # not teacher labels or a dense evidence winner.  Deployment therefore
+            # uses only planner-available state and remains teacher-free.
+            safe_J0 = J0.masked_fill(~valid, float("inf"))
+            base_winner = safe_J0.argmin(dim=1)
+            winner_h = action_h.gather(
+                1, base_winner[:, None, None].expand(-1, 1, action_h.shape[-1])
+            ).squeeze(1)
+            winner_e = winner_h[:, None, :].expand(B, E, -1)
+            critical_proposal_residual = self.critical_proposal_adapter(
+                torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h, winner_e], dim=-1)
+            ).squeeze(-1)
+        atom_logits = proposal_base_logits + self.critical_proposal_adapter_scale * critical_proposal_residual
         # Condition the atom proposal by the learned family gate.  Invalid atoms
         # are masked after adding the log gate so gradients still reach the gate.
-        proposal_logits = proposal_logits.float() + torch.log(atom_pi.clamp_min(1.0e-12))
+        proposal_logits = atom_logits.float() + torch.log(atom_pi.clamp_min(1.0e-12))
         proposal_neg_mask = -1.0e4 if proposal_logits.dtype in (torch.float16, torch.bfloat16) else -1.0e9
         proposal_logits = proposal_logits.masked_fill(~e_valid, proposal_neg_mask)
         return {
@@ -649,6 +693,8 @@ class BDSEModel(nn.Module):
             "J0": J0,
             "proposal_logits": proposal_logits,
             "selector_logits": proposal_logits,
+            "proposal_base_logits": proposal_base_logits,
+            "critical_proposal_residual_logits": critical_proposal_residual,
             "family_logits": family_logits,
             "family_pi": family_pi,
             "family_active": family_active,

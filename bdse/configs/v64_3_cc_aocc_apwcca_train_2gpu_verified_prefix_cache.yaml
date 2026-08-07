@@ -1,0 +1,741 @@
+calibration:
+  epsilon_cal: 0.05
+  independent: false
+  provenance_json: ''
+evidence:
+  budget: 16
+fallback:
+  enabled: false
+  max_additional_stages: 0
+  rule_rerank_top_k: 16
+  rule_switch_margin: 0.0
+  safety_lcb_min: 0.0
+  tau_delta_normalized: 0.004
+  safety_lcb_min_normalized: -0.1
+  trigger_on_low_delta: false
+  accept_low_delta_if_safe: true
+  safe_progress_recovery:
+    progress_weight: 0.62
+    path_length_weight: 0.04
+    lateral_weight: 1.55
+    lateral_final_weight: 0.78
+    low_speed_threshold: 0.25
+    low_speed_penalty: 0.08
+    unsafe_penalty: 950.0
+    hard_risk_weight: 105.0
+    soft_risk_weight: 14.0
+    min_progress: -0.2
+    pareto_min_violation: false
+    min_pareto_pool: 4
+    max_pareto_pool: 18
+    agent_risk_abs_margin: 0.06
+    hard_risk_abs_margin: 24.0
+    hard_risk_rel_margin: 0.1
+    soft_risk_abs_margin: 8.0
+    soft_risk_rel_margin: 0.16
+    progress_quantile_floor: 0.35
+    viability_frontier:
+      enabled: true
+      scale_quantile: 0.9
+      scale_floor: 0.001
+      min_pool: 4
+      max_pool: 16
+      red_tolerance: 1.0e-06
+      agent_epsilon_norm: 0.1
+      offroute_epsilon_norm: 0.18
+      certificate_epsilon_norm: 0.4
+      pareto_agent_epsilon: 0.035
+      pareto_offroute_epsilon: 0.055
+      pareto_soft_epsilon: 0.08
+      pareto_certificate_epsilon: 0.08
+      pareto_progress_epsilon: 0.04
+      progress_weight: 0.9
+      path_length_weight: 0.1
+      certificate_weight: 0.34
+      lateral_weight: 0.18
+      agent_risk_weight: 0.62
+      offroute_risk_weight: 0.34
+      soft_risk_weight: 0.12
+      hard_risk_weight: 0.1
+      certificate_loss_weight: 0.2
+      progress_loss_weight: 0.18
+      reference_action_bonus: 0.025
+      low_speed_threshold: 0.25
+      low_speed_penalty: 0.08
+      joint_agent_scale: 1.0
+      joint_ttc_scale: 1.0
+      joint_offroute_scale: 1.0
+      joint_viability_epsilon_norm: 0.15
+      pareto_ttc_epsilon: 0.04
+      ttc_risk_weight: 0.6
+      absolute_ttc_floor_s: 1.5
+      absolute_agent_overlap_cap: 0.02
+      relative_ttc_slack_s: 0.35
+      certificate_guard_epsilon_norm: 0.35
+runtime_safety:
+  flag_mode: adaptive_dual_tier
+  soft_agent_radius_m: 1.75
+  hard_agent_radius_m: 0.85
+  soft_off_route_margin_m: 0.75
+  hard_off_route_margin_m: 2.2
+  include_speed_in_soft: false
+  include_dynamics_in_soft: false
+  include_speed_in_hard: false
+  include_dynamics_in_hard: false
+  use_soft_for_hard_filter: false
+  adaptive_min_soft_safe_actions: 5
+  adaptive_min_soft_safe_ratio: 0.16
+  adaptive_max_extra_soft_flags: 14
+  risk_hard_agent_weight: 8.0
+  risk_hard_offroute_weight: 1.8
+  risk_soft_agent_weight: 1.4
+  risk_soft_offroute_weight: 0.55
+  rule_hard_penalty: 1400.0
+  rule_soft_penalty: 38.0
+  rule_hard_risk_weight: 160.0
+  rule_soft_risk_weight: 16.0
+  rule_progress_weight: 0.16
+  hard_check_horizon_s: 4.0
+  soft_check_horizon_s: 6.0
+  speed_adaptive_horizon: true
+  min_hard_horizon_s: 4.0
+  max_hard_horizon_s: 6.5
+  reaction_time_s: 0.9
+  comfortable_emergency_decel_mps2: 3.0
+  stopping_horizon_margin_s: 0.55
+  soft_horizon_extra_s: 1.0
+  max_soft_horizon_s: 7.5
+  use_box_agent_risk: true
+  ego_length_m: 4.8
+  ego_width_m: 2.0
+  closing_speed_buffer_s: 0.18
+  max_closing_buffer_m: 2.5
+  hard_longitudinal_clearance_m: 0.15
+  hard_lateral_clearance_m: 0.1
+  soft_longitudinal_extra_m: 0.8
+  soft_lateral_extra_m: 0.5
+  ttc_envelope_gate: 1.35
+  agent_ttc_safe_s: 3.0
+  hard_ttc_flag_threshold: 0.92
+  soft_ttc_flag_threshold: 0.5
+  risk_hard_ttc_weight: 4.0
+  risk_soft_ttc_weight: 1.5
+model:
+  evidence_action_residual: true
+  pair_margin_normalized: true
+  pair_head_residual_over_local: true
+  margin_normalization_min_scale: 20000.0
+  margin_normalization_quantile: 0.9
+  pair_delta_scale: 0.5
+  zero_init_residual_action_head: true
+  set_residual_rank: 8
+  zero_init_set_residual_head: true
+  set_atom_factor_init_std: 0.005
+  set_action_factor_init_std: 0.01
+  query_feature_dim: 18
+  query_legacy_support_dim: 12
+  query_extension_adapter:
+    enabled: true
+    zero_init: true
+    scale: 0.0
+    rank: 32
+  critical_proposal_adapter:
+    enabled: true
+    zero_init: true
+    scale: 1.0
+    rank: 64
+    conditioning: frozen_base_winner_action
+pairs:
+  pair_batch_per_scene: 128
+  target_max: 128
+planner:
+  baseline_mode: bdse
+  replan_interval_ticks: 5
+  replan_cache_max_distance_m: 8.0
+  replan_cache_max_heading_rad: 0.8
+  replan_cache_max_elapsed_s: 2.5
+preprocess:
+  candidate_aware_agent_selection: true
+runtime:
+  skip_stop_line_query_without_red_light: true
+  stop_line_cache_tile_m: 25.0
+  include_drivable_polygons: false
+  skip_candidate_aware_agent_selection: false
+  use_pair_conditioned_margins: true
+  pair_delta_hybrid_local_weight: 0.0
+  pair_score_chunk: 65536
+  shared_pair_margin_scale: true
+  base_prior:
+    enabled: false
+    mode: blend
+    weight: 0.6
+    scale_multiplier: 1.0
+    z_clip: 4.0
+    lateral_mean_weight: 2.25
+    lateral_final_weight: 0.95
+    comfort_weight: 0.5
+    curvature_weight: 0.25
+    progress_weight: 0.16
+    path_length_weight: 0.032
+    low_speed_threshold: 0.3
+    low_speed_penalty: 0.06
+    unsafe_penalty: 1500.0
+  include_route_graph_corridors: true
+  max_route_corridors: 128
+  max_route_corridor_points: 256
+  structural_safety_residual:
+    enabled: false
+    weight: 0.22
+    scale_multiplier: 1.0
+    component_z_clip: 3.0
+    combined_z_clip: 3.0
+    hard_agent_weight: 0.28
+    ttc_weight: 0.3
+    hard_offroute_weight: 0.18
+    soft_agent_weight: 0.12
+    soft_offroute_weight: 0.08
+    red_light_weight: 0.4
+  pair_delta_calibration:
+    enabled: true
+    base_local_weight: 0.2
+    min_local_weight: 0.1
+    max_local_weight: 0.8
+    variance_gain: 0.45
+    disagreement_gain: 0.35
+    variance_tau: 0.2
+    magnitude_tau: 0.15
+  pair_residual_refine_max_pairs: 16
+  pair_residual_refine_boundary_tau: 0.25
+  pair_residual_refine_safety_bonus: 4.0
+  pair_residual_refine_winner_bonus: 2.0
+  pair_residual_trust:
+    max_residual_weight: 0.75
+    min_residual_weight: 0.01
+    variance_tau: 0.2
+    boundary_tau: 0.3
+    min_boundary_trust: 0.08
+    disagreement_penalty: 0.15
+    magnitude_ratio_tau: 2.0
+    aggregate_max_correction_ratio: 1.1
+    aggregate_abs_cap: 0.08
+    aggregate_preserve_sign_ratio: 0.72
+    flip_confidence_beta: 1.0
+    flip_margin: 0.015
+    allow_confident_flips: true
+    confident_flip_cap_ratio: 2.0
+  pair_tournament_anchor_mode: selected_local
+  pair_tournament_pair_delta_includes_local: true
+  pair_action_anchor_guard:
+    enabled: true
+    flip_margin: 0.015
+    score_margin: 0.0
+  pair_tournament_aggregation_mode: evidence_action_potential
+  pair_potential_projection:
+    ridge: 0.02
+    boundary_tau: 0.3
+    boundary_gain: 3.0
+    weight_floor: 0.05
+  skip_pair_head_scoring: true
+  dual_certificate:
+    enabled: true
+    evidence_uncertainty_source: none
+    require_evidence_certificate_before_residual_flip: true
+    min_evidence_certificate_fraction_for_residual_flip: 1.0
+    residual_epsilon_cal: 0.0
+    report_proposal_conditional_rates: true
+    residual_beta_uncertainty: 0.0
+    calibration_method: policy_selected_top_rival_split_conformal
+  disable_pair_residual_intervention: false
+  set_conditioned_residual_scale: 1.0
+  action_query_mode: all_valid
+  dense_query_feature_source: cache_only
+  dense_query_value_tolerance: 1.0e-05
+  dense_query_cache_tolerance: 1.0e-05
+  dense_base_value_tolerance: 1.0e-05
+  dense_raw_query_feature_tolerance: 1.0e-06
+  dense_query_score_atol: 0.002
+  dense_query_score_rtol: 0.0001
+  dense_query_score_pass_fraction: 0.999
+selector:
+  force_fill_budget: true
+  force_hard_topm: false
+  max_forced_hard_topm: 0
+  mandatory_hard_quota: 0
+  prioritize_mandatory_fill: false
+  maneuver_pair_count: 10
+  maneuver_rivals: 10
+  min_selected_atoms: 16
+  normalized_eta_pred: 0.08
+  normalized_gamma_max: 3.0
+  progress_pair_count: 10
+  progress_rivals: 10
+  proposal_top_m: 24
+  runtime_pair_cap_multiplier: 1.0
+  structural_safety_include_feasibility: false
+  proposal_fill_weight: 0.0
+  use_tournament_pair_union: true
+  tournament_pair_weight: 1.5
+  tournament_safety_pair_weight: 2.4
+  tournament_near_pair_weight: 0.7
+  selector_cap_mode: anytime_adverse_certificate
+  boundary_certificate_cap: 0.75
+  base_margin_cap_multiplier: 0.22
+  action_rank_certificate_weight: 1.0
+  action_rank_score_weight: 0.35
+  action_rank_gap_weight: 0.12
+  action_rank_flip_weight: 0.12
+  action_rank_softmin_tau: 0.5
+  certify_margin: 0.0
+  max_selector_pairs: 56
+  force_uncertainty_objective: false
+  action_utility_weight: 0.28
+  decision_family_ids:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  decision_family_quota: 0
+  action_rank_fast_greedy: true
+  action_pair_utility_weight: 0.82
+  hybrid_lcb_cap_mode: legacy_abs
+  hybrid_protect_lcb_seed: true
+  hybrid_lcb_budget_frac: 0.44
+  adaptive_hybrid_lcb_budget: false
+  adaptive_lcb_min_frac: 0.32
+  adaptive_lcb_max_frac: 0.54
+  adaptive_lcb_safety_weight: 0.05
+  adaptive_lcb_fallback_weight: 0.02
+  adaptive_lcb_uncertainty_weight: 0.02
+  adaptive_lcb_boundary_action_weight: 0.5
+  adaptive_lcb_boundary_tau: 0.45
+  decision_family_boost: 0.0
+  hybrid_min_action_budget_frac: 0.56
+  hybrid_max_lcb_seed_atoms: 8
+  force_decisive_hard_topm: false
+  canonicalize_reciprocal_queries: true
+  collapse_reciprocal_pairs: true
+  max_runtime_pair_queries: 96
+  interaction_family_ids:
+  - 2
+  - 3
+  interaction_family_quota: 0
+  soft_interaction_quota: 0
+  min_soft_interaction_topm_slots: 2
+  direction_invariant_interaction_weight: 0.0
+  direction_invariant_boundary_tau: 0.35
+  direction_invariant_flip_bonus: 0.55
+  decision_budget_excludes_structural_safety: true
+  decision_pairs_within_viability_frontier: false
+  all_flagged_frontier_size: 8
+  single_safe_anchor_rivals: 8
+  decision_pair_viability_mode: soft_weight
+  viability_safe_safe_weight: 1.0
+  viability_cross_safety_weight: 0.35
+  viability_unsafe_unsafe_weight: 0.1
+  viability_outside_frontier_weight: 0.2
+  margin_coreset_residual_weight: 1.0
+  margin_coreset_sign_weight: 1.0
+  margin_coreset_winner_weight: 2.2
+  margin_coreset_action_weight: 0.8
+  margin_coreset_boundary_tau: 0.3
+  margin_coreset_huber_delta: 0.25
+  margin_coreset_target_clip: 3.0
+  margin_coreset_swap_passes: 2
+  adverse_certificate_beta: 0.0
+  adverse_certificate_epsilon: 0.0
+  adverse_certificate_prior_radius: 0.02
+  adverse_certificate_margin: 0.02
+  adverse_certificate_stop_when_certified: true
+  adverse_certificate_max_target_rivals: 6
+  adverse_certificate_calibrated: false
+  adverse_certificate_fill_to_budget_after_certified: true
+  adverse_certificate_max_interaction_prefix_fraction: 0.75
+tournament:
+  L_infer: 8
+  epsilon_cal: 0.05
+  unsafe_action_score_penalty: 3.0
+  prefer_unflagged_action_margin: 999.0
+  beta_uncertainty: 1.0
+  utility_refinement:
+    enabled: true
+    score_slack: 0.4
+    pair_certificate_enabled: true
+    pair_margin_tolerance: 0.04
+    top_k: 4
+    require_unflagged: true
+    min_utility_improvement: 0.0
+    lateral_mean_weight: 1.45
+    lateral_final_weight: 0.78
+    comfort_weight: 0.3
+    curvature_weight: 0.2
+    progress_weight: 0.52
+    path_length_weight: 0.038
+    speed_weight: 0.035
+    low_speed_threshold: 0.35
+    low_speed_penalty: 0.08
+    unsafe_penalty: 1500.0
+  hard_filter_unsafe_actions: true
+  all_flagged_risk_guard:
+    enabled: true
+    red_tolerance: 1.0e-06
+    hard_risk_abs_slack: 0.1
+    hard_risk_rel_slack: 0.08
+training:
+  action_conditioned_action_loss_weight: 0.0
+  shared_dense_query_projection: true
+  compute_local_variance: false
+  freeze_unused_local_variance_head: true
+  ddp_find_unused_parameters: false
+  local_forward_atom_chunk: 128
+  pair_forward_atom_chunk: 32
+  pair_forward_pair_chunk: 128
+  query_projection_atom_chunk: 128
+  action_loss_start_epoch: 0
+  decision_weight_hard_crossing_pair: 2.0
+  decision_weight_near_margin: 0.8
+  decision_weight_near_pair: 4.0
+  decision_weight_safety_pairs: true
+  decision_weight_teacher_pair: 6.0
+  epsilon_cal_normalized: 0.5
+  exclude_hard_action_pairs_from_pair_regression: false
+  exclude_safety_atoms_from_pair_regression: false
+  interaction_atom_pair_weight: 8.0
+  loss_weights:
+    action: 0.0
+    atom_cost: 0.0
+    base: 0.0
+    full_action: 0.0
+    full_interface_rank_aux: 0.0
+    full_margin: 0.0
+    hard_feasibility: 0.0
+    pair: 0.0
+    proposal: 1.5
+    residual: 0.0
+    uncertainty: 0.0
+    critical_pair: 0.0
+    critical_proposal: 0.0
+    certificate_gap: 2.0
+    certificate_safety: 2.0
+    certificate_safe_frontier: 1.5
+    deployment_selection: 5.0
+    online_hard_rival: 0.0
+    cycle_consistency: 0.0
+    calibration: 1.0
+    counterfactual_critical_pair: 0.0
+    counterfactual_critical_proposal: 2.0
+    anchor_preservation: 0.0
+    anchor_correction: 0.0
+    pair_full_action: 12.0
+    pair_full_winner_margin: 10.0
+    budget_preserve_pair_full: 8.0
+    pair_full_anchor_preserve: 8.0
+    pair_potential_projection: 0.0
+    action_potential_teacher: 4.0
+    residual_action_atom: 1.0
+    residual_action_uncertainty: 1.0
+    residual_winner_correction: 12.0
+    certified_residual_winner: 16.0
+    residual_boundary_margin_distill: 24.0
+    proposal_dense_winner: 6.0
+    proposal_logit_stability: 0.1
+    exact_winner_flip_critical_proposal: 12.0
+  residual_action_uncertainty:
+    variance_floor: 1.0e-05
+    variance_cap: 25.0
+    log_variance_huber_delta: 0.25
+  residual_winner_correction:
+    correction_margin: 0.04
+    preserve_margin: 0.025
+    tau: 0.04
+    anchor_wrong_scene_weight: 4.0
+  residual_action_atom_distillation:
+    target_clip: 4.0
+    huber_delta: 0.15
+    winner_weight: 8.0
+    anchor_action_weight: 4.0
+    anchor_wrong_scene_weight: 2.0
+    interaction_weight: 2.0
+    magnitude_weight: 1.0
+  normalize_atom_cost_loss: true
+  normalize_calibration_loss: true
+  normalize_pair_losses: true
+  normalized_huber_delta: 0.25
+  pair_action_loss_weight: 3.0
+  pair_margin_min_scale: 20000.0
+  predicted_selector_start_epoch: 0
+  proposal_decisive_hard_gain_boost: 3.0
+  proposal_decisive_hard_weight: 2.2
+  proposal_focus_interaction_only: false
+  proposal_include_decisive_hard: true
+  proposal_interaction_gain_boost: 1.0
+  proposal_positive_weight: 10.0
+  proposal_rank_weight: 1.0
+  upweight_interaction_atoms: false
+  exclude_safety_atoms_from_pair_action_loss: false
+  pair_target_clip_normalized: 3.0
+  residual_target_clip_normalized: 4.0
+  full_pair_margin_clip_normalized: 4.0
+  pair_margin_reg_weight: 2.0
+  epochs: 8
+  batch_size: 16
+  lr: 1.7e-05
+  weight_decay: 0.01
+  grad_clip: 1.0
+  num_workers: 8
+  online_hard_rival:
+    top_k: 4
+    margin: 0.1
+    tau: 0.1
+  cycle_consistency:
+    max_triangles_per_scene: 32
+    huber_delta: 0.15
+    every_n_steps: 8
+    full_last_n_steps: 32
+  critical_evidence:
+    enabled: false
+    interaction_only: false
+    include_safety_atoms: true
+    near_margin_tau: 0.75
+    teacher_pair_weight: 4.0
+    near_pair_weight: 2.0
+    hard_crossing_weight: 6.0
+    interaction_gain_boost: 3.0
+    safety_gain_boost: 3.0
+    positive_support_threshold: 0.0001
+    atom_margin: 0.08
+    negative_weight: 0.1
+    proposal_positive_weight: 12.0
+    proposal_rank_weight: 0.6
+  certificate_gap:
+    margin: 0.06
+    safety_margin: 0.14
+    tau: 0.07
+    safe_frontier_margin: 0.16
+  safety_atom_cost_weight: 1.6
+  deployment_budgets:
+  - 8
+  - 16
+  - 24
+  deployment_budget_weights:
+  - 0.75
+  - 1.5
+  - 0.75
+  deployment_regret_weight: 1.0
+  deployment_regret_clip: 3.0
+  deployment_regret_min_scale: 100.0
+  allow_oracle_only_selector_training: false
+  compute_pair_uncertainty: false
+  freeze_unused_pair_variance_head: true
+  deployment_budget_strategy: primary_plus_aux
+  deployment_budget_schedule_slots: 8
+  deployment_selector_swap_passes: 0
+  prefetch_factor: 3
+  pin_memory: true
+  deployment_selector_scenes_per_rank: 1
+  deployment_selector_every_n_steps: 4
+  deployment_selector_full_start_epoch: 1000000
+  allow_tf32: true
+  ddp_broadcast_buffers: false
+  ddp_gradient_as_bucket_view: true
+  deployment_selector_full_last_n_steps: 48
+  deployment_selection_positive_weight: 5.0
+  deployment_primary_budget: 16
+  min_deployment_exact_fraction: 0.015
+  normalize_base_loss: true
+  base_loss_min_scale: 100.0
+  base_target_clip_normalized: 4.0
+  deployment_selector_backend: exact_cpu
+  deployment_exact_distill_scenes_per_rank: 0
+  deployment_exact_distill_every_n_steps: 1
+  deployment_exact_distill_full_last_n_steps: 0
+  aocc_teacher_target_training: false
+  counterfactual_critical_evidence:
+    top_k_rivals: 4
+    rival_temperature: 0.1
+    atom_temperature: 0.15
+    proposal_temperature: 0.25
+    cost_power: 1.0
+    min_gain: 1.0e-06
+    boundary_margin: 0.08
+    positive_support_floor: 0.0
+    teacher_rival_mix: 0.65
+    target_top_k_atoms: 8
+    min_relative_gain: 0.05
+  early_stopping_patience_validations: 2
+  early_stopping_min_epoch: 5
+  residual_correction_focus:
+    enabled: true
+    default_weight: 0.05
+    wrong_sign_weight: 5.0
+    near_boundary_weight: 2.5
+    boundary_tau: 0.35
+    max_weight: 7.0
+  deployment_selector_cpu_threads: 4
+  deployment_selector_cpu_workers: 4
+  deployment_selector_cpu_backend: process
+  optimizer_fused: true
+  grad_clip_foreach: true
+  ddp_static_graph: false
+  trainable_modules:
+  - critical_proposal_adapter
+  - residual_action_head
+  - residual_action_var_head
+  - residual_set_atom_head
+  - residual_set_action_head
+  reinitialize_modules_after_warm_start:
+  - residual_action_head
+  - residual_action_var_head
+  - residual_set_atom_head
+  - residual_set_action_head
+  foundation_anchor_objective:
+    enabled: true
+    boundary_tau: 0.35
+    preserve_ratio: 0.95
+    preserve_min_margin: 0.03
+    correction_margin: 0.06
+    teacher_margin_cap: 0.75
+    far_preserve_weight: 1.0
+    wrong_weight: 5.0
+    near_weight: 2.5
+  boundary_pair_sampler:
+    enabled: true
+    max_pairs: 48
+    full_every_n_steps: 8
+    full_last_n_steps: 32
+    winner_bonus: 16.0
+    hard_cross_bonus: 10.0
+    near_tie_bonus: 6.0
+    pair_weight_bonus: 3.0
+    near_tie_tau: 0.5
+    min_margin_scale: 1.0
+    winner_quota: 12
+    hard_cross_quota: 8
+    near_tie_quota: 20
+  foundation_stage: v64_support_aware_query_adapter_budgeted_critical_coverage
+  deployment_aux_every_n_exact_steps: 4
+  pair_full_winner_margin: 0.08
+  pair_full_winner_tau: 0.08
+  pair_full_regret_weight: 1.0
+  warm_start_safe_initialization:
+    enabled: true
+    pair_variance_raw_bias: 0.0
+    residual_action_variance_raw_bias: -6.0
+    set_action_factor_init_std: 0.01
+  anchor_wrong_action_weight: 1.5
+  pair_action_aggregation_mode: evidence_action_potential
+  pair_potential_projection:
+    ridge: 0.02
+    boundary_tau: 0.3
+    boundary_gain: 3.0
+    weight_floor: 0.05
+  potential_action_min_scale: 1.0
+  aocc_integrable_target_training: true
+  action_potential_distillation:
+    target_clip: 4.0
+    boundary_tau: 0.3
+    boundary_weight: 4.0
+    winner_weight: 8.0
+    strongest_rival_weight: 5.0
+    anchor_wrong_weight: 3.0
+    huber_delta: 0.1
+  skip_pair_head_forward: true
+  lr_multipliers:
+    critical_proposal_adapter: 2.0
+    residual_action_head: 5.0
+    residual_action_var_head: 2.0
+    residual_set_atom_head: 5.0
+    residual_set_action_head: 5.0
+  certified_residual_winner:
+    min_teacher_margin: 0.01
+    flip_margin: 0.015
+    preserve_margin: 0.012
+    tau: 0.04
+    beta_uncertainty: 0.0
+    anchor_wrong_weight: 4.0
+    correctable_bonus: 2.0
+    train_uncorrectable_anchor_wrong: false
+    residual_epsilon_reserve: 0.15
+  set_conditioned_residual_scale: 1.0
+  residual_boundary_margin_distill:
+    huber_delta: 0.05
+    target_clip: 1.5
+    teacher_margin_weight: 2.0
+  proposal_dense_winner:
+    enabled: true
+    top_m: 24
+    straight_through_tau: 0.15
+    teacher_aligned_weight: 5.0
+    preserve_margin: 0.02
+    margin_tau: 0.05
+    margin_weight: 1.5
+    min_action_scale: 1.0
+    mode: deployment_complete_hab_all_valid_actions_exact_sampled
+    family_surrogate_weight: 1.0
+    exact_runtime_scenes_per_rank: 2
+    exact_runtime_every_n_steps: 2
+    exact_runtime_full_last_n_steps: 32
+    logit_center_limit: 2.0
+    logit_rms_limit: 8.0
+  residual_curriculum:
+    enabled: true
+    proposal_only_epochs: 1
+    ramp_epochs: 2
+    initial_scale: 0.1
+  residual_stage_routing:
+    enabled: true
+    proposal_failure_residual_weight: 0.1
+    intrinsic_correction_weight: 1.0
+  warm_start_safe_init:
+    set_atom_factor_init_std: 0.005
+    set_action_factor_init_std: 0.01
+  exact_winner_flip_criticality:
+    enabled: true
+    positive_weight: 16.0
+    negative_weight: 0.25
+    rank_weight: 1.0
+    severity_weight: 1.0
+    teacher_aligned_weight: 6.0
+    min_action_scale: 1.0
+    min_atom_cost: 0.001
+    target_source: teacher_interface
+    pairwise_rank_weight: 0.1
+    rank_margin: 1.0
+    coverage_weight: 4.0
+    exchange_rank_weight: 2.0
+    exchange_margin: 0.15
+    exchange_temperature: 0.2
+    coverage_objective: teacher_critical_utility_retained_by_exact_hab_topm_forward
+    adapter_objective: winner-conditioned residual over immutable legacy HAB proposal
+      anchor
+experiment:
+  name: v64_3_cc_aocc_apwcca_train_2gpu_verified_prefix_cache
+  algorithm: Calibration-Consistent AOCC + Anchor-Preserving Winner-Conditioned Critical
+    Acquisition under fixed-budget SAQA-BCC (V64.3 CC-AOCC/AP-WCCA)
+  warm_start_recommended: use V62 only for rapid continuation diagnosis; use the immutable
+    V53 foundation with matched compute for final paper results
+  calibration_protocol: group-disjoint split-conformal evidence/residual calibration
+    with calibration beta and prior-radius copied exactly into deployment certificate
+  proposal_training_protocol: frozen legacy HAB anchor plus zero-initialized winner-conditioned
+    critical acquisition residual; hard forward remains deterministic HAB Top-M and
+    literal teacher winner-flip criticality; fixed B unchanged; verified speed path
+    uses the audited 12-D cache and zero-pads the nominally disabled 6-D extension
+    instead of recomputing it
+  interface_budget_accounting: retained certificate uses exactly B evidence atoms;
+    acquisition M and pair-score compute are reported separately and are not hidden
+    as B*K
+metadata:
+  algorithm_version: V64_2_SAQA_BCC_HCBE
+  fixed_planner_interface_evidence_budget: 16
+  query_contract: legacy_12d_prefix_plus_zero_init_residual_extension
+checkpoint_loading:
+  strict_core: true
+  allowed_missing_prefixes:
+  - critical_proposal_adapter.
+  - query_extension_proj.
+  - residual_action_head.
+  - residual_action_var_head.
+  - residual_set_action_head.
+  - residual_set_atom_head.
+provenance:
+  algorithm_version: V64.3-CC-AOCC-AP-WCCA

@@ -40,7 +40,9 @@ def _check(path: Path, role: str) -> dict[str, Any]:
     evidence = cfg.get("evidence", {}) or {}
     runtime = cfg.get("runtime", {}) or {}
     adapter = model.get("query_extension_adapter", {}) or {}
-    crit = (cfg.get("training", {}) or {}).get("exact_winner_flip_criticality", {}) or {}
+    critical_adapter = model.get("critical_proposal_adapter", {}) or {}
+    training_cfg = cfg.get("training", {}) or {}
+    crit = training_cfg.get("exact_winner_flip_criticality", {}) or {}
     source = str(runtime.get("dense_query_feature_source", "cache_or_recompute")).strip().lower()
 
     checks: dict[str, bool] = {
@@ -60,6 +62,26 @@ def _check(path: Path, role: str) -> dict[str, Any]:
                 in {"teacher", "teacher_interface", "teacher_exact"},
             }
         )
+    if str(exp.get("name", "")).startswith("v64_3_"):
+        trainable = [str(x) for x in training_cfg.get("trainable_modules", [])]
+        checks.update(
+            {
+                "v64_3_query_extension_nominally_noop": abs(float(adapter.get("scale", 1.0))) <= 1.0e-12,
+                "v64_3_critical_proposal_adapter_enabled": bool(critical_adapter.get("enabled", False)),
+                "v64_3_critical_proposal_adapter_zero_init": bool(critical_adapter.get("zero_init", False)),
+            }
+        )
+        if role == "train":
+            checks.update(
+                {
+                    "v64_3_critical_adapter_trainable": "critical_proposal_adapter" in trainable,
+                    "v64_3_legacy_proposal_frozen": not any(
+                        x in trainable
+                        for x in ("proposal_head", "family_head", "family_embed", "family_activity_proj", "proposal_feature_proj")
+                    ),
+                    "v64_3_query_extension_frozen": "query_extension_proj" not in trainable,
+                }
+            )
     failures = [name for name, ok in checks.items() if not ok]
     return {
         "path": str(path),

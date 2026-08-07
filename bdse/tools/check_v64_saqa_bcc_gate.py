@@ -281,6 +281,8 @@ def _evaluation_config_health(
 
     systems = {"candidate": cand, "local": local, "foundation": foundation}
     evidence_eps: dict[str, float] = {}
+    evidence_beta: dict[str, float] = {}
+    evidence_prior_radius: dict[str, float] = {}
     tournament_eps: dict[str, float] = {}
     residual_eps: dict[str, float] = {}
     beta: dict[str, float] = {}
@@ -294,6 +296,8 @@ def _evaluation_config_health(
         dual = runtime.get("dual_certificate", {}) or {}
         tournament = cfg.get("tournament", {}) or {}
         evidence_eps[label] = float(selector.get("adverse_certificate_epsilon", float("nan")))
+        evidence_beta[label] = float(selector.get("adverse_certificate_beta", float("nan")))
+        evidence_prior_radius[label] = float(selector.get("adverse_certificate_prior_radius", float("nan")))
         tournament_eps[label] = float(tournament.get("epsilon_cal", float("nan")))
         residual_eps[label] = float(dual.get("residual_epsilon_cal", float("nan")))
         beta[label] = float(dual.get("residual_beta_uncertainty", tournament.get("beta_uncertainty", float("nan"))))
@@ -304,6 +308,10 @@ def _evaluation_config_health(
             failures.append(f"{label} evidence certificate is not marked independently calibrated")
         if not math.isfinite(evidence_eps[label]) or evidence_eps[label] < 0.0:
             failures.append(f"{label} evidence epsilon is invalid: {evidence_eps[label]}")
+        if not math.isfinite(evidence_beta[label]) or evidence_beta[label] < 0.0:
+            failures.append(f"{label} evidence beta is invalid: {evidence_beta[label]}")
+        if not math.isfinite(evidence_prior_radius[label]) or evidence_prior_radius[label] < 0.0:
+            failures.append(f"{label} evidence prior radius is invalid: {evidence_prior_radius[label]}")
         if not math.isfinite(residual_eps[label]) or residual_eps[label] < 0.0:
             failures.append(f"{label} residual epsilon is invalid: {residual_eps[label]}")
         if not math.isfinite(beta[label]) or beta[label] < 0.0:
@@ -311,6 +319,10 @@ def _evaluation_config_health(
 
     if max(evidence_eps.values()) - min(evidence_eps.values()) > 1.0e-9:
         failures.append(f"shared evidence calibration differs across systems: {evidence_eps}")
+    if max(evidence_beta.values()) - min(evidence_beta.values()) > 1.0e-9:
+        failures.append(f"shared evidence beta differs across systems: {evidence_beta}")
+    if max(evidence_prior_radius.values()) - min(evidence_prior_radius.values()) > 1.0e-9:
+        failures.append(f"shared evidence prior radius differs across systems: {evidence_prior_radius}")
     if max(tournament_eps.values()) - min(tournament_eps.values()) > 1.0e-9:
         failures.append(f"tournament action-rule epsilon differs across systems: {tournament_eps}")
     if residual_disabled["candidate"]:
@@ -337,6 +349,8 @@ def _evaluation_config_health(
     return failures, {
         "checked": True,
         "evidence_epsilon": evidence_eps,
+        "evidence_beta": evidence_beta,
+        "evidence_prior_radius": evidence_prior_radius,
         "tournament_epsilon": tournament_eps,
         "residual_epsilon": residual_eps,
         "beta_uncertainty": beta,
@@ -507,6 +521,19 @@ def main() -> int:
             )
         if not math.isfinite(residual_eps_value) or residual_eps_value < 0.0:
             protocol_failures.append(f"invalid residual calibration epsilon={residual_eps_value}")
+        calibration_beta = float(calibration_stats.get("beta", float("nan")))
+        configured_evidence_beta = float((config_stats.get("evidence_beta", {}) or {}).get("candidate", float("nan")))
+        if math.isfinite(calibration_beta) and math.isfinite(configured_evidence_beta) and abs(calibration_beta - configured_evidence_beta) > 1.0e-9:
+            protocol_failures.append(
+                f"evidence calibration/deployment beta mismatch: calibration={calibration_beta}, candidate={configured_evidence_beta}"
+            )
+        if "prior_radius" in calibration_stats:
+            calibration_prior = float(calibration_stats.get("prior_radius", float("nan")))
+            configured_prior = float((config_stats.get("evidence_prior_radius", {}) or {}).get("candidate", float("nan")))
+            if math.isfinite(calibration_prior) and math.isfinite(configured_prior) and abs(calibration_prior - configured_prior) > 1.0e-9:
+                protocol_failures.append(
+                    f"evidence calibration/deployment prior-radius mismatch: calibration={calibration_prior}, candidate={configured_prior}"
+                )
     except Exception as exc:
         protocol_failures.append(f"failed to audit dual calibration: {type(exc).__name__}: {exc}")
     train_stats["configured_min_exact_fraction"] = float(configured_exact_floor)

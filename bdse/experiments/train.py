@@ -1262,7 +1262,9 @@ def _save_training_checkpoints(
     # Backward-compatible primary best: the first requested metric also controls
     # <stem>.best.pt and the historical best_metric/best_epoch fields.
     primary_label, primary_metric_name, primary_value, primary_mode = current_specs[0]
-    primary_improved = np.isfinite(primary_value) and _is_better(primary_value, best_metric, primary_mode)
+    best_min_epoch = max(int(getattr(args, "best_min_epoch", 0)), 0)
+    checkpoint_eligible = int(epoch) >= best_min_epoch
+    primary_improved = checkpoint_eligible and np.isfinite(primary_value) and _is_better(primary_value, best_metric, primary_mode)
     new_best_metric = primary_value if primary_improved else best_metric
     new_best_epoch = int(epoch) if primary_improved else best_epoch
 
@@ -1274,7 +1276,7 @@ def _save_training_checkpoints(
         rec = new_trackers.get(label, {})
         prev = rec.get("best_value", None)
         prev_float = None if prev is None else float(prev)
-        improved = np.isfinite(value) and _is_better(float(value), prev_float, mode)
+        improved = checkpoint_eligible and np.isfinite(value) and _is_better(float(value), prev_float, mode)
         if improved:
             new_trackers[label] = {
                 "request": label,
@@ -1699,6 +1701,7 @@ def main() -> None:
     parser.add_argument("--best-metric", type=str, default="auto", help="Primary metric used for backward-compatible <output_stem>.best.pt. 'auto' prefers val_bdse_score, then val_teacher_regret, then val_loss, then loss.")
     parser.add_argument("--best-metrics", type=str, nargs="*", default=None, help="Save additional metric-specific best checkpoints in one run, e.g. auto teacher_action_match full_interface_action_match teacher_regret.")
     parser.add_argument("--best-mode", type=str, default="auto", choices=["auto", "min", "max"], help="Whether lower or higher --best-metric/--best-metrics is better. Use auto for validation-aware defaults.")
+    parser.add_argument("--best-min-epoch", type=int, default=0, help="Do not promote any metric-specific or primary best checkpoint before this zero-based epoch. Useful when early curriculum epochs intentionally undertrain residual modules.")
     parser.add_argument("--val-split", type=str, nargs="+", default=None, help="Optional validation split/folder(s), e.g. val or val_vegas. Enables validation-best checkpoints.")
     parser.add_argument("--val-preprocessed-dir", type=str, default=None, help="Validation cache root. Defaults to --preprocessed-dir.")
     parser.add_argument("--val-max-scenarios", type=int, default=None, help="Cap validation samples, e.g. 1000 for fast per-epoch validation.")

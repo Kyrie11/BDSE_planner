@@ -4576,6 +4576,23 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     else:
         residual_curriculum_scale = 1.0
 
+    # V64.3 diagnostics for the zero-initialized winner-conditioned acquisition
+    # residual.  These values are logging-only and never enter the objective;
+    # they make it possible to distinguish "adapter did not learn" from
+    # "adapter learned but the hard HAB boundary still did not move".
+    critical_prop_residual = out.get("critical_proposal_residual_logits")
+    if critical_prop_residual is not None:
+        proposal_active = e_mask.bool()
+        residual_safe = torch.where(
+            proposal_active, critical_prop_residual.float(), torch.zeros_like(critical_prop_residual.float())
+        )
+        residual_count = proposal_active.float().sum().clamp_min(1.0)
+        critical_proposal_residual_abs_mean = residual_safe.abs().sum() / residual_count
+        critical_proposal_residual_rms = torch.sqrt(residual_safe.square().sum() / residual_count + 1.0e-12)
+    else:
+        critical_proposal_residual_abs_mean = J0.new_tensor(0.0)
+        critical_proposal_residual_rms = J0.new_tensor(0.0)
+
     total = (
         float(lw.get("base", 1.0)) * L_base
         + float(lw.get("pair", 1.0)) * L_pair
@@ -4645,6 +4662,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "proposal_dense_correct_scene_fraction": proposal_dense_correct_scene_fraction,
         "proposal_logit_abs_mean": proposal_logit_abs_mean,
         "proposal_logit_rms_mean": proposal_logit_rms_mean,
+        "critical_proposal_residual_abs_mean": critical_proposal_residual_abs_mean,
+        "critical_proposal_residual_rms": critical_proposal_residual_rms,
         "residual_curriculum_scale": J0.new_tensor(float(residual_curriculum_scale)),
         "L_sel": L_prop,
         "L_act": L_act,

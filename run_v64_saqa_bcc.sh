@@ -55,6 +55,7 @@ VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-3}"
 VAL_DENSE_DIAGNOSTIC="${VAL_DENSE_DIAGNOSTIC:-0}"
 SAVE_EVERY_N_EPOCHS="${SAVE_EVERY_N_EPOCHS:-0}"
 SAVE_EVERY_N_STEPS="${SAVE_EVERY_N_STEPS:-2000}"
+BEST_MIN_EPOCH="${BEST_MIN_EPOCH:-0}"
 AUTO_RESUME="${AUTO_RESUME:-1}"
 RESUME_FROM="${RESUME_FROM:-}"
 DETACH="${DETACH:-0}"
@@ -297,6 +298,7 @@ train_2gpu() {
       --save-every-n-epochs "$SAVE_EVERY_N_EPOCHS" \
       --save-every-n-steps "$SAVE_EVERY_N_STEPS" \
       --best-metric competitive_score \
+      --best-min-epoch "$BEST_MIN_EPOCH" \
       --best-metrics competitive_score minimum_gate_feasible fixed_budget_critical_score teacher_action_match teacher_regret full_interface_action_match \
       --log-file "$OUT_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl" \
       --output "$CKPT" \
