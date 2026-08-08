@@ -1,0 +1,78 @@
+# V64.3.2 recommended execution order
+# Run from the extracted bdse_v64_3_2_screenfix code root.
+
+set -euo pipefail
+
+export FOUNDATION_CKPT=/absolute/path/to/immutable_v62_or_v53_foundation_checkpoint.pt
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+export GPUS=0,1
+
+# -----------------------------------------------------------------------------
+# Phase 0: corrected AP-WCCA screen. DO THIS FIRST.
+# 2 GPUs, batch/GPU=16. No calibration, formal gate, test, or closed loop.
+# -----------------------------------------------------------------------------
+rm -rf outputs_v64_3_2_apwcca_activation_screen_2gpu_v1
+OUT_ROOT=outputs_v64_3_2_apwcca_activation_screen_2gpu_v1 \
+BATCH_SIZE_PER_GPU=16 \
+NUM_WORKERS_PER_GPU=12 \
+VAL_NUM_WORKERS_PER_GPU=4 \
+bash RUN_V64_3_2_APWCCA_ACTIVATION_SCREEN_2GPU.sh
+
+cat outputs_v64_3_2_apwcca_activation_screen_2gpu_v1/provenance/apwcca_activation_screen.json
+
+# Required interpretation:
+#   screen_instrumentation_valid == true
+#   apwcca_activated             == true
+#   critical_adapter_parameter_delta_rms_max > 1e-9
+#   delta_val_critical_topm_recall > 0
+#   delta_val_proposal_decisive_recall >= -0.02
+# If continue_to_full_run == true, go to Phase 2A.
+# If instrumentation is valid and adapter activated, but critical Top-M delta <= 0,
+# go to Phase 1B instead of changing multiple modules.
+
+# -----------------------------------------------------------------------------
+# Phase 1B: ONLY IF corrected AP-WCCA really activates but does not improve
+# same-subset literal critical Top-M recall. Test winner-rival conditioning.
+# -----------------------------------------------------------------------------
+rm -rf outputs_v64_3_2_apwrcca_activation_screen_2gpu_v1
+OUT_ROOT=outputs_v64_3_2_apwrcca_activation_screen_2gpu_v1 \
+BATCH_SIZE_PER_GPU=16 \
+NUM_WORKERS_PER_GPU=12 \
+VAL_NUM_WORKERS_PER_GPU=4 \
+bash RUN_V64_3_2_APWRCCA_ACTIVATION_SCREEN_2GPU.sh
+
+cat outputs_v64_3_2_apwrcca_activation_screen_2gpu_v1/provenance/apwcca_activation_screen.json
+
+# If AP-WRCCA screen also has critical Top-M delta <= 0, STOP.
+# Do not run a full pipeline yet. The next algorithm target is acquisition/value
+# representation, not selector/B/M or certificate relaxation.
+
+# -----------------------------------------------------------------------------
+# Phase 2A: full AP-WCCA pipeline, ONLY after corrected AP-WCCA screen passes.
+# -----------------------------------------------------------------------------
+rm -rf outputs_v64_3_2_apwcca_daepc_fast_2gpu_v1
+OUT_ROOT=outputs_v64_3_2_apwcca_daepc_fast_2gpu_v1 \
+TRAIN_BATCH_SIZE_PER_GPU=16 \
+PIPELINE_DETACH=0 \
+bash RUN_V64_3_2_APWCCA_FULL_PIPELINE_2GPU.sh
+
+# -----------------------------------------------------------------------------
+# Phase 2B: full AP-WRCCA pipeline, ONLY if AP-WCCA screen fails causally and
+# AP-WRCCA screen passes.
+# -----------------------------------------------------------------------------
+rm -rf outputs_v64_3_2_apwrcca_daepc_fast_2gpu_v1
+OUT_ROOT=outputs_v64_3_2_apwrcca_daepc_fast_2gpu_v1 \
+TRAIN_BATCH_SIZE_PER_GPU=16 \
+PIPELINE_DETACH=0 \
+bash RUN_V64_3_2_APWRCCA_FULL_PIPELINE_2GPU.sh
+
+# -----------------------------------------------------------------------------
+# After a full run:
+# - Protocol must be valid before interpreting Minimum/Competitive.
+# - If Protocol passes but Minimum/Competitive fail, paired CL20 may be run as
+#   diagnostic-only to locate dynamics/interaction/replanning errors.
+# - Do not use bdse_test_2 for checkpoint selection. Use it only after algorithm
+#   and checkpoint are frozen for final/stress evaluation.
+# -----------------------------------------------------------------------------

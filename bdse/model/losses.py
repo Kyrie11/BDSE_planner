@@ -227,6 +227,7 @@ def _exact_winner_flip_critical_proposal_loss(
     deployment_soft_mask: torch.Tensor | None = None,
     deployment_acquisition_logits: torch.Tensor | None = None,
     family_ids: torch.Tensor | None = None,
+    critical_residual_logits: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Train proposal logits from literal leave-one-atom-out winner flips.
 
@@ -490,12 +491,43 @@ def _exact_winner_flip_critical_proposal_loss(
     exchange_scene_weight = supervised_scene_weight * exchange_scene.float()
     L_exchange = (exchange_per_scene * exchange_scene_weight).sum() / exchange_scene_weight.sum().clamp_min(1.0)
 
+    # V64.3.2 Anchor-Centered Residual Alignment (ACRA).  The AP-WCCA branch is
+    # intentionally a residual over an immutable legacy HAB proposal.  Give that
+    # residual an explicit zero-mean literal-critical target so a zero-initialized
+    # final layer has a direct, auditable gradient even when the combined proposal
+    # objectives are dominated by the frozen anchor logits.  This does not redefine
+    # criticality and does not alter the hard forward selector.
+    L_adapter_residual = J0.new_tensor(0.0)
+    adapter_residual_weight = float(crit_cfg.get("adapter_residual_alignment_weight", 0.0))
+    if adapter_residual_weight > 0.0 and critical_residual_logits is not None:
+        residual = critical_residual_logits.to(dtype=J0.dtype)
+        active_f = active.float()
+        active_count = active_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+        residual_center = residual - (residual * active_f).sum(dim=1, keepdim=True) / active_count
+        critical_rate = critical.float().sum(dim=1, keepdim=True) / active_count
+        target_center = (critical.float() - critical_rate) * float(
+            crit_cfg.get("adapter_residual_target_scale", 1.0)
+        )
+        adapter_terms = F.smooth_l1_loss(
+            residual_center, target_center, reduction="none", beta=max(float(crit_cfg.get("adapter_residual_huber_delta", 0.25)), 1.0e-4)
+        )
+        adapter_atom_weight = torch.where(
+            critical,
+            torch.full_like(adapter_terms, float(crit_cfg.get("adapter_residual_positive_weight", 8.0))),
+            torch.ones_like(adapter_terms),
+        )
+        adapter_mask = active & has_critical[:, None]
+        weighted = adapter_terms * adapter_atom_weight * supervised_scene_weight[:, None]
+        denom = (adapter_atom_weight * supervised_scene_weight[:, None]).masked_select(adapter_mask).sum().clamp_min(1.0)
+        L_adapter_residual = weighted.masked_select(adapter_mask).sum() / denom
+
     loss = (
         L_bce
         + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
         + float(crit_cfg.get("pairwise_rank_weight", 0.0)) * L_pair_rank
         + float(crit_cfg.get("coverage_weight", 0.0)) * L_coverage
         + float(crit_cfg.get("exchange_rank_weight", 0.0)) * L_exchange
+        + adapter_residual_weight * L_adapter_residual
     )
 
     critical_count = critical.float().sum()
@@ -3633,6 +3665,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             surrogate_logits if "surrogate_logits" in locals() else out["proposal_logits"]
         ),
         family_ids=batch.get("evidence_family_ids"),
+        critical_residual_logits=out.get("critical_proposal_residual_logits"),
     )
 
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed

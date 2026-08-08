@@ -4247,3 +4247,91 @@ Final static/CPU regression in the delivery environment:
 - synthetic calibration SHA-provenance test: PASS (mixed-checkpoint shards are rejected).
 
 No fresh nuPlan GPU training/calibration/open-loop/closed-loop was run in this delivery environment. Performance claims for AP-WCCA and DA-EPC must therefore come from the next provenance-correct server run.
+
+# V64.3.2 — Auditable AP-WCCA ScreenFix + Anchor-Centered Residual Alignment (ACRA) / optional AP-WRCCA (2026-08-07)
+
+## Uploaded V64.3.1 activation-screen audit
+
+The uploaded screen cannot be interpreted as a clean AP-WCCA algorithm failure.
+Three engineering defects contaminate the decision:
+
+1. `RUN_V64_3_1_APWCCA_ACTIVATION_SCREEN_2GPU.sh` requested
+   `val_teacher_exact_winner_flip_critical_recall_topm/selected`, but the
+   training-time open-loop validation path never emitted these formal-evaluator
+   metrics.  The reported NaNs were therefore instrumentation NaNs, not measured
+   zero/failed critical recall.  Training-side literal teacher-critical Top-M
+   recall was finite (~0.365 -> ~0.368 over four epochs).
+2. The screen declared AP-WCCA inactive from forward residual diagnostics alone.
+   The uploaded current source would report a nonzero RMS floor even for an exact
+   zero residual, while the run logs contain exact `0.0`.  This source/result
+   semantic mismatch makes that scalar unsuitable as an activation contract.
+   V64.3.2 measures adapter parameter delta directly and stores source SHA-256.
+3. The generic launcher unconditionally overrode the screen YAML's intended
+   `deployment_selector_scenes_per_rank=1` and `deployment_selector_every_n_steps=4`
+   with CLI defaults `0/1`, forcing exact CPU selector supervision on the full
+   local batch every step.  In the uploaded screen, loss construction consumed
+   ~280--302 s of ~335--366 s per epoch (~83--85%), so the override materially
+   changed both runtime and optimization schedule.
+
+Other trustworthy uploaded signals: validation proposal decisive recall drifted
+`0.7718 -> 0.7670`; proposal interaction recall `0.7663 -> 0.7618`; selected
+recall stayed ~0.567--0.568; teacher action match stayed ~0.260--0.262.  DA-EPC
+validation certification was already high (~0.962--0.970) with zero fallback and
+budget-vs-pair-full winner preservation ~0.95--0.956.  Therefore the current
+screen does not justify changing B=16 or the hard selector.
+
+## Engineering fixes
+
+- Training open-loop validation now emits the same literal teacher winner-flip
+  Top-M/selected recall metrics as formal open-loop evaluation.
+- Activation is based on `critical_proposal_adapter` parameter delta RMS/max,
+  not a forward scalar.  A step-zero validation row (`epoch=-1`) is run on the
+  exact same validation subset before optimizer updates, so screen decisions use
+  within-subset deltas instead of an absolute historical 0.78 threshold.
+- Frozen top-level foundation modules remain in eval mode during head-only
+  finetuning, preventing dropout from making the claimed immutable anchor
+  stochastic.
+- Generic launcher selector CLI overrides are now opt-in.  When environment
+  variables are unset, the YAML schedule is preserved exactly.
+- Checkpoints and screen provenance carry source SHA-256 for the model/loss/train
+  implementation.
+- A present-but-shape-incompatible optional adapter is now fatal at evaluation;
+  only a genuinely missing newly introduced module may be tolerated when loading
+  an older foundation.
+
+## Minimal algorithm stabilization: ACRA
+
+V64.3.2 keeps AP-WCCA and literal teacher winner-flip criticality.  It adds a
+small Anchor-Centered Residual Alignment objective directly on the AP-WCCA
+residual logits.  The target is the same literal critical mask, centered per
+scene so the residual cannot solve the task with a global logit shift.  This
+provides an explicit gradient to a zero-initialized residual while preserving the
+legacy HAB anchor, fixed M, fixed B=16, and deterministic hard selector.
+
+This is deliberately not another global BCE/ranking rewrite and does not unfreeze
+legacy proposal/family modules, avoiding the V64.2 failure mode where broad
+proposal recall fell without improving literal critical coverage.
+
+## Conditional next algorithm: AP-WRCCA
+
+Do not run AP-WRCCA first.  Only if the corrected AP-WCCA+ACRA screen shows a
+nonzero adapter parameter delta but no positive validation critical-TopM delta,
+run the second screen with deployment-available base winner + strongest base
+rival action embeddings.  This tests the previously identified hypothesis that
+criticality is winner-rival boundary-relative rather than winner-only.  Teacher
+information remains training-label-only; deployment conditioning uses only the
+foundation action set.
+
+## Screen decision policy
+
+Primary screen A (AP-WCCA+ACRA):
+- parameter-delta activation > 0;
+- validation literal teacher-critical Top-M recall improves relative to the exact
+  step-zero anchor on the same 500 rows;
+- proposal decisive recall delta >= -0.02.
+
+If A passes, run the full AP-WCCA V64.3.2 pipeline.  If A is instrument-valid but
+fails specifically because critical Top-M does not improve, run screen B
+(AP-WRCCA).  Do not alter selector/B/atom-action value until acquisition has been
+measured cleanly.  If critical Top-M and selected recall improve but teacher
+match/regret do not, the next bottleneck is atom-to-action value learning.

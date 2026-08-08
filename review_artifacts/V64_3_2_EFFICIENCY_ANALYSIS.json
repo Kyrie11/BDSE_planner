@@ -1,0 +1,18 @@
+{
+  "expected_effect": "substantially lower screen loss-stage CPU time; exact speedup must be measured on target server",
+  "root_cause": "launcher forced exact-selector supervision on full local batch every step, overriding YAML 1 scene/rank every 4 steps",
+  "test_set_effect": "not relevant to this activation screen; screen uses train subset 12k and val subset 500 only",
+  "uploaded_screen": {
+    "backward_wall_s": 31.421078589744866,
+    "data_wait_fraction": 0.029740892362734993,
+    "data_wait_wall_s": 41.47981907892972,
+    "epochs": 4,
+    "forward_wall_s": 43.75026794150472,
+    "h2d_wall_s": 1.0649032201617956,
+    "loss_construction_fraction": 0.8343699639214104,
+    "loss_construction_wall_s": 1163.7013014350086,
+    "pair_sampling_wall_s": 58.42632027063519,
+    "training_wall_s": 1394.7066070856526
+  },
+  "v64_3_2_fix": "respect YAML unless selector CLI env override is explicitly provided"
+}

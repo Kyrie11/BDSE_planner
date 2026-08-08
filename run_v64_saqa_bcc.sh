@@ -53,6 +53,7 @@ VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-2}"
 VAL_BATCH_SIZE_PER_GPU="${VAL_BATCH_SIZE_PER_GPU:-$BATCH_SIZE_PER_GPU}"
 VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-3}"
 VAL_DENSE_DIAGNOSTIC="${VAL_DENSE_DIAGNOSTIC:-0}"
+VAL_BEFORE_TRAINING="${VAL_BEFORE_TRAINING:-0}"
 SAVE_EVERY_N_EPOCHS="${SAVE_EVERY_N_EPOCHS:-0}"
 SAVE_EVERY_N_STEPS="${SAVE_EVERY_N_STEPS:-2000}"
 BEST_MIN_EPOCH="${BEST_MIN_EPOCH:-0}"
@@ -63,11 +64,11 @@ PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
 EXACT_SELECTOR_THREADS_PER_RANK="${EXACT_SELECTOR_THREADS_PER_RANK:-4}" # compatibility alias
 EXACT_SELECTOR_WORKERS_PER_RANK="${EXACT_SELECTOR_WORKERS_PER_RANK:-$EXACT_SELECTOR_THREADS_PER_RANK}"
 EXACT_SELECTOR_CPU_BACKEND="${EXACT_SELECTOR_CPU_BACKEND:-process}"
-SELECTOR_SCENES_PER_RANK="${SELECTOR_SCENES_PER_RANK:-0}"
-SELECTOR_EVERY_N_STEPS="${SELECTOR_EVERY_N_STEPS:-1}"
-SELECTOR_FULL_LAST_N_STEPS="${SELECTOR_FULL_LAST_N_STEPS:-64}"
-EXACT_DISTILL_SCENES_PER_RANK="${EXACT_DISTILL_SCENES_PER_RANK:-0}"
-EXACT_DISTILL_EVERY_N_STEPS="${EXACT_DISTILL_EVERY_N_STEPS:-1}"
+SELECTOR_SCENES_PER_RANK="${SELECTOR_SCENES_PER_RANK:-}"
+SELECTOR_EVERY_N_STEPS="${SELECTOR_EVERY_N_STEPS:-}"
+SELECTOR_FULL_LAST_N_STEPS="${SELECTOR_FULL_LAST_N_STEPS:-}"
+EXACT_DISTILL_SCENES_PER_RANK="${EXACT_DISTILL_SCENES_PER_RANK:-}"
+EXACT_DISTILL_EVERY_N_STEPS="${EXACT_DISTILL_EVERY_N_STEPS:-}"
 CL_PROCESSES_PER_GPU="${CL_PROCESSES_PER_GPU:-2}"
 CL_WORKERS_PER_GPU="${CL_WORKERS_PER_GPU:-1}"  # compatibility; V64 enforces one simulation worker per process
 CL_TOKEN_SCAN_MAX="${CL_TOKEN_SCAN_MAX:-2000}"
@@ -253,12 +254,22 @@ train_2gpu() {
   echo "[v64] batch_per_gpu=$BATCH_SIZE_PER_GPU global_batch=$effective_global_batch workers_per_gpu=$NUM_WORKERS_PER_GPU"
   echo "[v64] train_config=$TRAIN_CONFIG val_split=$VAL_SPLIT val_scenarios=$VAL_SCENARIOS val_every=$VAL_EVERY_N_EPOCHS dense_val=$VAL_DENSE_DIAGNOSTIC"
   echo "[v64] auto_resume=$AUTO_RESUME save_every_n_steps=$SAVE_EVERY_N_STEPS init_mode=$INIT_MODE"
-  echo "[v64] exact_selector_cpu_backend=$EXACT_SELECTOR_CPU_BACKEND workers_per_rank=$EXACT_SELECTOR_WORKERS_PER_RANK"
+  echo "[v64] exact_selector_cpu_backend=$EXACT_SELECTOR_CPU_BACKEND workers_per_rank=$EXACT_SELECTOR_WORKERS_PER_RANK selector_override_scenes=${SELECTOR_SCENES_PER_RANK:-yaml} selector_override_every=${SELECTOR_EVERY_N_STEPS:-yaml}"
   echo "[v64-dcab-ewfc] all-valid action bridge + literal winner-flip critical evidence supervision"
+
+  local selector_override_args=()
+  [[ -n "$SELECTOR_SCENES_PER_RANK" ]] && selector_override_args+=(--selector-scenes-per-rank "$SELECTOR_SCENES_PER_RANK")
+  [[ -n "$SELECTOR_EVERY_N_STEPS" ]] && selector_override_args+=(--selector-every-n-steps "$SELECTOR_EVERY_N_STEPS")
+  [[ -n "$SELECTOR_FULL_LAST_N_STEPS" ]] && selector_override_args+=(--selector-full-last-n-steps "$SELECTOR_FULL_LAST_N_STEPS")
+  [[ -n "$EXACT_DISTILL_SCENES_PER_RANK" ]] && selector_override_args+=(--exact-distill-scenes-per-rank "$EXACT_DISTILL_SCENES_PER_RANK")
+  [[ -n "$EXACT_DISTILL_EVERY_N_STEPS" ]] && selector_override_args+=(--exact-distill-every-n-steps "$EXACT_DISTILL_EVERY_N_STEPS")
 
   local val_dense_args=()
   if [[ "$VAL_DENSE_DIAGNOSTIC" == "1" || "$VAL_DENSE_DIAGNOSTIC" == "true" ]]; then
     val_dense_args+=(--val-dense-diagnostic)
+  fi
+  if [[ "$VAL_BEFORE_TRAINING" == "1" || "$VAL_BEFORE_TRAINING" == "true" ]]; then
+    val_dense_args+=(--val-before-training)
   fi
 
   CUDA_VISIBLE_DEVICES="$GPUS" \
@@ -277,11 +288,7 @@ train_2gpu() {
       --batch-size "$BATCH_SIZE_PER_GPU" \
       --num-workers "$NUM_WORKERS_PER_GPU" \
       --prefetch-factor "$PREFETCH_FACTOR" \
-      --selector-scenes-per-rank "$SELECTOR_SCENES_PER_RANK" \
-      --selector-every-n-steps "$SELECTOR_EVERY_N_STEPS" \
-      --selector-full-last-n-steps "$SELECTOR_FULL_LAST_N_STEPS" \
-      --exact-distill-scenes-per-rank "$EXACT_DISTILL_SCENES_PER_RANK" \
-      --exact-distill-every-n-steps "$EXACT_DISTILL_EVERY_N_STEPS" \
+      "${selector_override_args[@]}" \
       --selector-cpu-workers "$EXACT_SELECTOR_WORKERS_PER_RANK" \
       --selector-cpu-backend "$EXACT_SELECTOR_CPU_BACKEND" \
       --device cuda \

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from contextlib import nullcontext
 import os
 import re
@@ -22,7 +23,7 @@ from bdse.data.cache_schema import Sample, load_sample_npz
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.data.tensorizer import sample_to_model_inputs
 from bdse.data.quality import quality_decision
-from bdse.experiments.evaluate_open_loop import add_dense_bridge_diagnostics
+from bdse.experiments.evaluate_open_loop import add_dense_bridge_diagnostics, _criticality_metrics
 from bdse.metrics.bdse_metrics import compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import compute_bdse_losses
@@ -437,6 +438,21 @@ def _restore_rng_state(state: Any) -> None:
         print(f"[bdse] warning: failed to restore RNG state: {type(exc).__name__}: {exc}", flush=True)
 
 
+def _training_source_sha256() -> dict[str, str]:
+    root = Path(__file__).resolve().parents[2]
+    rels = (
+        "bdse/model/bdse_model.py",
+        "bdse/model/losses.py",
+        "bdse/experiments/train.py",
+    )
+    out: dict[str, str] = {}
+    for rel in rels:
+        path = root / rel
+        if path.is_file():
+            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return out
+
+
 def _make_checkpoint(
     *,
     model: torch.nn.Module,
@@ -468,6 +484,7 @@ def _make_checkpoint(
         "best_trackers": best_trackers or {},
         "world_size": int(world_size),
         "rng_state": _rng_state(),
+        "source_sha256": _training_source_sha256(),
     }
 
 
@@ -1064,6 +1081,33 @@ def _run_validation_open_loop(
                     qdiag[f"selector_{key}"] = float(value)
             qdiag["top_m_atoms"] = list(map(int, np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1).tolist()))
 
+            # Screen/formal-open-loop parity: training-time open-loop validation must
+            # expose the same literal teacher winner-flip criticality metrics used by
+            # the formal evaluator.  Earlier activation screens asked for these keys
+            # even though this validation path never produced them, yielding NaN and
+            # a false screen failure.  This computation is teacher-only and does not
+            # require dense model inference.
+            pred_g = np.asarray(pred["g"], dtype=np.float32)
+            active_atoms = np.asarray(stage_atom_active, dtype=bool).reshape(-1)
+            valid_actions = np.asarray(sample.candidates.valid_mask, dtype=bool).reshape(-1)
+            teacher_g = np.zeros_like(pred_g)
+            source_teacher_g = np.asarray(sample.teacher.g_evid, dtype=np.float32)
+            teacher_g[: min(teacher_g.shape[0], source_teacher_g.shape[0]), : min(teacher_g.shape[1], source_teacher_g.shape[1])] = source_teacher_g[: teacher_g.shape[0], : teacher_g.shape[1]]
+            teacher_cost = np.full((pred_g.shape[1],), np.inf, dtype=np.float32)
+            source_teacher_cost = np.asarray(sample.teacher.J_T, dtype=np.float32).reshape(-1)
+            teacher_cost[: min(teacher_cost.shape[0], source_teacher_cost.shape[0])] = source_teacher_cost[: teacher_cost.shape[0]]
+            teacher_base = teacher_cost - np.where(active_atoms[:, None], teacher_g, 0.0).sum(axis=0)
+            teacher_critical, teacher_critical_details = _criticality_metrics(
+                teacher_base,
+                teacher_g,
+                active_atoms,
+                valid_actions,
+                np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1),
+                np.asarray(sel.selected, dtype=np.int64).reshape(-1),
+                prefix="teacher_exact_winner_flip",
+                forced_winner=int(sample.teacher.a_star),
+            )
+
             pair_full_action = -1
             local_pair_full_action = -1
             if "pair_atom_delta" in pred and "pair_indices" in pred:
@@ -1139,6 +1183,8 @@ def _run_validation_open_loop(
                 dense_predicted_atom_costs=None if dense is None else dense["g"],
                 certificate_margin_matrix=tour.margins,
             )
+            diag.values.update(teacher_critical)
+            diag.details.update(teacher_critical_details)
             if dense is not None:
                 diag.details["deployed_action"] = int(tour.action_index)
                 add_dense_bridge_diagnostics(
@@ -1459,6 +1505,67 @@ def _configure_trainable_modules(model: torch.nn.Module, cfg: dict[str, Any], is
     return selected
 
 
+def _set_frozen_top_level_modules_eval(model: torch.nn.Module, cfg: dict[str, Any]) -> list[str]:
+    """Keep immutable foundation modules in eval mode during head-only finetuning.
+
+    ``model.train()`` recursively enables dropout in frozen scene/action/evidence
+    encoders.  With only AP-WCCA/residual heads trainable this makes the supposedly
+    immutable acquisition anchor stochastic and changes proposal metrics even when
+    adapter parameters do not move.  V64.3.2 restores a literal frozen anchor by
+    leaving only top-level modules that contain trainable parameters in train mode.
+    """
+    if not bool((cfg.get("training", {}) or {}).get("eval_frozen_modules", False)):
+        return []
+    raw_model = model.module if isinstance(model, DDP) else model
+    frozen: list[str] = []
+    for name, child in raw_model.named_children():
+        params = list(child.parameters())
+        if params and not any(p.requires_grad for p in params):
+            child.eval()
+            frozen.append(name)
+    return frozen
+
+
+def _adapter_parameter_snapshot(model: torch.nn.Module, prefix: str = "critical_proposal_adapter") -> dict[str, torch.Tensor]:
+    raw_model = model.module if isinstance(model, DDP) else model
+    return {
+        name: param.detach().clone()
+        for name, param in raw_model.named_parameters()
+        if name == prefix or name.startswith(prefix + ".")
+    }
+
+
+def _adapter_parameter_delta_metrics(model: torch.nn.Module, reference: dict[str, torch.Tensor], prefix: str = "critical_proposal_adapter") -> dict[str, float]:
+    raw_model = model.module if isinstance(model, DDP) else model
+    sq = None
+    count = 0
+    max_abs = None
+    param_sq = None
+    for name, param in raw_model.named_parameters():
+        if name not in reference:
+            continue
+        delta = param.detach().float() - reference[name].to(device=param.device, dtype=torch.float32)
+        cur = param.detach().float()
+        d2 = delta.square().sum()
+        p2 = cur.square().sum()
+        sq = d2 if sq is None else sq + d2
+        param_sq = p2 if param_sq is None else param_sq + p2
+        local_max = delta.abs().max() if delta.numel() else delta.new_tensor(0.0)
+        max_abs = local_max if max_abs is None else torch.maximum(max_abs, local_max)
+        count += int(delta.numel())
+    if sq is None or count == 0:
+        return {
+            "critical_adapter_parameter_delta_rms": float("nan"),
+            "critical_adapter_parameter_delta_max_abs": float("nan"),
+            "critical_adapter_parameter_rms": float("nan"),
+        }
+    return {
+        "critical_adapter_parameter_delta_rms": float(torch.sqrt(sq / max(count, 1)).item()),
+        "critical_adapter_parameter_delta_max_abs": float(max_abs.item()),
+        "critical_adapter_parameter_rms": float(torch.sqrt(param_sq / max(count, 1)).item()),
+    }
+
+
 def _validate_deployment_training_schedule(cfg: dict[str, Any]) -> None:
     """Reject schedules that never train the selector used at deployment.
 
@@ -1711,6 +1818,7 @@ def main() -> None:
     parser.add_argument("--val-every-n-epochs", type=int, default=1, help="Run validation every N epochs. Set 0 to disable validation even when --val-split is provided.")
     parser.add_argument("--val-mode", type=str, default="open_loop", choices=["loss", "open_loop", "both"], help="Validation signal. open_loop computes BDSE decision diagnostics; both also reports val loss.")
     parser.add_argument("--val-dense-diagnostic", action="store_true", help="During open-loop validation, also run dense full-interface scoring so val_full_interface_action_match is a true dense diagnostic. Slower but useful for metric-specific best checkpoints.")
+    parser.add_argument("--val-before-training", action="store_true", help="Run one deterministic validation pass immediately after warm start and before optimizer updates. Used by activation screens to establish an exact step-zero anchor on the same validation rows.")
     parser.add_argument("--val-strict", action="store_true", help="Raise validation exceptions instead of counting failed validation samples.")
     parser.add_argument("--log-file", type=str, default=None, help="Optional JSONL file for per-epoch train/validation metrics. Defaults to <output_stem>.train_log.jsonl.")
     args = parser.parse_args()
@@ -1917,16 +2025,35 @@ def main() -> None:
                 dist.broadcast(param.data, src=0)
             for buffer in raw_model.buffers():
                 dist.broadcast(buffer.data, src=0)
+    frozen_eval_modules = _set_frozen_top_level_modules_eval(model, cfg)
+    if is_main and frozen_eval_modules:
+        print(f"[bdse] frozen top-level modules kept in eval mode={frozen_eval_modules}", flush=True)
+    critical_adapter_reference = _adapter_parameter_snapshot(model)
+
     log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
     if is_main and start_epoch == 0:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         log_file.write_text("", encoding="utf-8")
+    if validation_enabled and bool(args.val_before_training) and start_epoch == 0:
+        initial_metrics: dict[str, float] = {}
+        if args.val_mode in {"loss", "both"}:
+            assert val_loader is not None
+            initial_metrics.update(_run_validation_loss(model=model, loader=val_loader, cfg=cfg, device=device, distributed=distributed, is_main=is_main, epoch=-1))
+        if args.val_mode in {"open_loop", "both"}:
+            assert val_dataset is not None
+            initial_metrics.update(_run_validation_open_loop(model=model, dataset=val_dataset, cfg=cfg, device=device, distributed=distributed, world_size=world_size, global_rank=global_rank, is_main=is_main, epoch=-1, strict=bool(args.val_strict), dense_diagnostic=bool(args.val_dense_diagnostic)))
+        initial_metrics.update(_adapter_parameter_delta_metrics(model, critical_adapter_reference))
+        if is_main:
+            print({"epoch": -1, **initial_metrics}, flush=True)
+            with log_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"epoch": -1, **{str(k): float(v) for k, v in initial_metrics.items()}}, sort_keys=True) + "\n")
     total_epochs = int(cfg["training"]["epochs"])
     for epoch in range(start_epoch, total_epochs):
         cfg["training"]["current_epoch"] = int(epoch)
         if sampler is not None:
             sampler.set_epoch(epoch)
         model.train()
+        _set_frozen_top_level_modules_eval(model, cfg)
         epoch_wall_start = time.perf_counter()
         meters: dict[str, Any] = {}
         resumable_batch_sampler = (
@@ -2060,6 +2187,7 @@ def main() -> None:
         for stage_name, stage_seconds in stage_wall.items():
             epoch_metrics[f"train_{stage_name}_wall_time_s"] = float(stage_seconds)
             epoch_metrics[f"train_{stage_name}_ms_per_step"] = float(1000.0 * stage_seconds / denom_steps)
+        epoch_metrics.update(_adapter_parameter_delta_metrics(model, critical_adapter_reference))
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):
             if val_sampler is not None:
                 val_sampler.set_epoch(epoch)

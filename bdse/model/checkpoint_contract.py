@@ -39,6 +39,13 @@ def load_bdse_state_with_contract(
             "allowed_missing_prefixes", _DEFAULT_ALLOWED_MISSING_PREFIXES
         )
     )
+    # Missing newly introduced heads are acceptable when loading an older
+    # foundation.  A *present but shape-incompatible* head is different: during
+    # evaluation it means the checkpoint and runtime algorithm architectures do
+    # not match and silently dropping it would randomize/zero a claimed module.
+    # Shape mismatch is therefore fatal by default, with a separate explicit
+    # escape hatch for deliberate migrations.
+    allowed_shape_prefixes = tuple(str(x) for x in load_cfg.get("allowed_shape_mismatch_prefixes", ()))
     strict_core = bool(load_cfg.get("strict_core", True))
 
     shared = set(current).intersection(state)
@@ -53,11 +60,14 @@ def load_bdse_state_with_contract(
     missing = sorted(set(current) - set(compatible))
     unexpected = sorted(set(state) - set(current))
 
-    def allowed(key: str) -> bool:
+    def allowed_missing(key: str) -> bool:
         return any(key.startswith(prefix) for prefix in allowed_prefixes)
 
-    fatal_missing = [key for key in missing if not allowed(key)]
-    fatal_shape = [key for key in shape_mismatch if not allowed(key)]
+    def allowed_shape(key: str) -> bool:
+        return any(key.startswith(prefix) for prefix in allowed_shape_prefixes)
+
+    fatal_missing = [key for key in missing if not allowed_missing(key)]
+    fatal_shape = [key for key in shape_mismatch if not allowed_shape(key)]
     if strict_core and (fatal_missing or fatal_shape):
         raise ValueError(
             f"{context}: checkpoint violates the BDSE core-state contract; "
@@ -74,6 +84,7 @@ def load_bdse_state_with_contract(
         "unexpected": unexpected,
         "shape_mismatch": shape_mismatch,
         "allowed_missing_prefixes": list(allowed_prefixes),
+        "allowed_shape_mismatch_prefixes": list(allowed_shape_prefixes),
         "strict_core": strict_core,
         "core_contract_pass": not fatal_missing and not fatal_shape,
     }

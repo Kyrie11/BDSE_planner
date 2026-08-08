@@ -24,11 +24,13 @@ RUNTIME_SOURCES = {
     "cache_verified",
     "verified_cache",
 }
-V64_3_PREFIX = "v64_3_cc_aocc_apwcca"
+V64_3_PREFIXES = ("v64_3_cc_aocc_apwcca", "v64_3_2_cc_aocc_apwcca", "v64_3_2_cc_aocc_apwrcca")
 V64_3_ALGORITHM_VERSIONS = {
     "V64.3-CC-AOCC-AP-WCCA",
     "V64.3.1-CC-AOCC-AP-WCCA",
     "V64.3.1-CC-AOCC-AP-WCCA-DA-EPC",
+    "V64.3.2-CC-AOCC-AP-WCCA-DA-EPC-SCREENFIX",
+    "V64.3.2-CC-AOCC-AP-WRCCA-DA-EPC",
 }
 V64_3_REQUIRED_TRAINABLE = {
     "critical_proposal_adapter",
@@ -92,14 +94,14 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
             }
         )
 
-    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64_3"}
+    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64_3"}
     if strict_v64_3:
         trainable = {str(x) for x in training_cfg.get("trainable_modules", [])}
         checks.update(
             {
                 # Do not merely test "v64 family": the V64.3 wrapper must never
                 # accept a stale V64.2 config inherited through generic shell vars.
-                "v64_3_exact_experiment_family": exp_name.startswith(V64_3_PREFIX),
+                "v64_3_exact_experiment_family": exp_name.startswith(V64_3_PREFIXES),
                 "v64_3_metadata_version": metadata_version in V64_3_ALGORITHM_VERSIONS,
                 "v64_3_provenance_version": provenance_version in V64_3_ALGORITHM_VERSIONS,
                 "v64_3_metadata_provenance_match": metadata_version == provenance_version,
@@ -107,7 +109,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
                 "v64_3_critical_proposal_adapter_enabled": bool(critical_adapter.get("enabled", False)),
                 "v64_3_critical_proposal_adapter_zero_init": bool(critical_adapter.get("zero_init", False)),
                 "v64_3_winner_conditioning": str(critical_adapter.get("conditioning", ""))
-                == "frozen_base_winner_action",
+                in {"frozen_base_winner_action", "frozen_base_winner_rival_actions"},
                 "v64_3_decision_aligned_exact_certificate": str(
                     (cfg.get("selector", {}) or {}).get("evidence_certificate_mode", "")
                 ).strip().lower()
@@ -153,7 +155,7 @@ def main() -> int:
     ap.add_argument("--eval-config", type=Path, required=True)
     ap.add_argument(
         "--expected-family",
-        choices=["v64", "v64.3", "v64.3.1", "v64_3"],
+        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64_3"],
         default="v64",
         help="Use v64.3/v64.3.1 to reject any stale V64.2 config even if generic V64 checks pass.",
     )

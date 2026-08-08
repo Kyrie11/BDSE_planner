@@ -1,0 +1,82 @@
+{
+  "algorithm_interpretation": {
+    "apwcca_status": "NOT VALIDLY EVALUATED BY UPLOADED SCREEN",
+    "conditional_second_experiment": "AP-WRCCA only if adapter parameter delta is positive but critical Top-M delta is non-positive",
+    "credible_negative_signal": "broad proposal decisive/interaction recall drifts down slightly under contaminated training semantics",
+    "fixed_budget_selector_status": "not current screen bottleneck; DA-EPC ~0.96 and B16-vs-pair-full ~0.956",
+    "next_primary_experiment": "corrected same-subset step-zero AP-WCCA activation screen"
+  },
+  "audit": "v64_3_1_apwcca_activation_screen_corrected_interpretation",
+  "engineering_findings": [
+    {
+      "effect": "NaN critical metrics are instrumentation failure, not model NaN",
+      "issue": "training validation did not emit formal literal criticality keys consumed by screen summary",
+      "severity": "blocking"
+    },
+    {
+      "effect": "apwcca_activated=false is not reliable evidence adapter parameters did not update",
+      "issue": "activation used forward scalar rather than parameter delta; runtime scalar conflicts with uploaded-source diagnostic semantics",
+      "severity": "blocking"
+    },
+    {
+      "configured": "scenes_per_rank=1,every_n_steps=4",
+      "effect": "changed training objective cadence and made loss construction dominant",
+      "effective_from_launcher": "scenes_per_rank=0,every_n_steps=1",
+      "issue": "launcher CLI defaults overrode YAML sparse exact-selector cadence",
+      "severity": "high"
+    },
+    {
+      "effect": "dropout can make nominally immutable foundation stochastic during finetune",
+      "issue": "frozen modules returned to train mode after model.train()",
+      "severity": "medium"
+    },
+    {
+      "effect": "subset/protocol variation can be misclassified as algorithm degradation",
+      "issue": "absolute 0.78 proposal recall screen threshold lacked same-subset step-zero baseline",
+      "severity": "medium"
+    }
+  ],
+  "screen_runtime_profile": {
+    "backward_fraction": 0.02252880887644294,
+    "data_wait_fraction": 0.029740892362734993,
+    "forward_fraction": 0.031368796648152605,
+    "loss_fraction": 0.8343699639214104,
+    "loss_wall_s": 1163.7013014350086,
+    "train_wall_s": 1394.7066070856526
+  },
+  "trustworthy_uploaded_metrics": {
+    "train_exact_critical_topm_recall_by_epoch": [
+      0.36482936604817706,
+      0.36779925537109376,
+      0.3683841349283854,
+      0.3679733683268229
+    ],
+    "val_budget_vs_pair_full_match_epoch3": 0.956,
+    "val_da_epc_certificate_epoch3": 0.962,
+    "val_fallback_epoch3": 0.0,
+    "val_interaction_decisive_recall_epoch0": 0.7663098773652978,
+    "val_interaction_decisive_recall_epoch3": 0.7617866116627943,
+    "val_proposal_decisive_recall_epoch0": 0.771837534679293,
+    "val_proposal_decisive_recall_epoch3": 0.76695341458217,
+    "val_selected_decisive_recall_epoch3": 0.5682711285902573,
+    "val_teacher_action_match_epoch3": 0.262
+  },
+  "uploaded_screen": {
+    "continue_to_full_run": false,
+    "reported_apwcca_activated": false,
+    "reported_val_critical_selected_recall_last": null,
+    "reported_val_critical_topm_recall_last": null,
+    "reported_val_proposal_decisive_recall_last": 0.76695341458217
+  },
+  "v64_3_2_changes": [
+    "formal literal criticality metrics in training validation",
+    "step-zero same-subset validation anchor",
+    "adapter parameter-delta activation audit",
+    "source SHA provenance in checkpoint/screen",
+    "frozen modules forced eval during head-only finetune",
+    "YAML selector cadence no longer silently overridden by launcher defaults",
+    "ACRA adapter-local literal-critical residual alignment",
+    "optional AP-WRCCA winner-rival conditioning",
+    "strict present-adapter shape mismatch checkpoint contract"
+  ]
+}

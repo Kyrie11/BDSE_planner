@@ -3879,3 +3879,6 @@ Residual raw proposed flip、beneficial、harmful 均为 0。保持 curriculum/c
 V64 本地验证：Python compile PASS，8/8 V64 YAML PASS，4/4 shell syntax PASS，full pytest **250 passed / 0 failed**。当前环境未执行 fresh V64 GPU training、calibration、open-loop、closed-loop，因此不声明 gate PASS、闭环提升或 SOTA。
 
 V64.3 is documented in the root `ALGORITHM_UPDATE_LOG.md`. Core changes: calibration-consistent AOCC evidence beta/prior-radius contract; frozen legacy proposal/query anchor; zero-init winner-conditioned critical acquisition residual; residual-curriculum-aware best-checkpoint minimum epoch; 2GPU batch16 speed defaults. See root log for full rationale and no-repeat constraints.
+
+# V64.3.2 ScreenFix summary
+See `ALGORITHM_UPDATE_LOG.md`, section "V64.3.2 — Auditable AP-WCCA ScreenFix + Anchor-Centered Residual Alignment (ACRA) / optional AP-WRCCA".  The uploaded V64.3.1 screen was invalidated by missing validation criticality keys, unreliable forward-only activation diagnostics, and launcher overrides that forced full-batch exact selector supervision.  V64.3.2 adds same-subset step-zero validation, direct adapter parameter-delta activation, frozen-anchor eval mode, source SHA provenance, ACRA, and a conditional winner-rival screen only if corrected AP-WCCA fails.

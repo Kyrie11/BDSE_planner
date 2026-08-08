@@ -436,11 +436,17 @@ class BDSEModel(nn.Module):
         # while the residual learns only the missing winner-relative correction.
         crit_prop_cfg = mcfg.get("critical_proposal_adapter", {}) or {}
         self.critical_proposal_adapter_scale = float(crit_prop_cfg.get("scale", 1.0))
+        self.critical_proposal_conditioning = str(
+            crit_prop_cfg.get("conditioning", "frozen_base_winner_action")
+        ).strip().lower()
         if bool(crit_prop_cfg.get("enabled", False)):
             critical_rank = min(max(int(crit_prop_cfg.get("rank", min(64, h))), 1), h)
+            critical_tokens = 7 if self.critical_proposal_conditioning in {
+                "frozen_base_winner_rival_actions", "base_winner_rival", "winner_rival"
+            } else 6
             self.critical_proposal_adapter = nn.Sequential(
-                nn.LayerNorm(h * 6),
-                nn.Linear(h * 6, critical_rank),
+                nn.LayerNorm(h * critical_tokens),
+                nn.Linear(h * critical_tokens, critical_rank),
                 nn.SiLU(),
                 nn.Linear(critical_rank, 1),
             )
@@ -677,8 +683,23 @@ class BDSEModel(nn.Module):
                 1, base_winner[:, None, None].expand(-1, 1, action_h.shape[-1])
             ).squeeze(1)
             winner_e = winner_h[:, None, :].expand(B, E, -1)
+            adapter_tokens = [evid_h, prop_h, scene_e, u_e, atom_family_h, winner_e]
+            if self.critical_proposal_conditioning in {
+                "frozen_base_winner_rival_actions", "base_winner_rival", "winner_rival"
+            }:
+                # Deployment-available boundary context: the strongest base rival
+                # is the second-lowest valid foundation action.  This is not a
+                # teacher signal and therefore preserves the planner interface.
+                safe_for_sort = J0.masked_fill(~valid, float("inf"))
+                order = torch.argsort(safe_for_sort, dim=1)
+                rival_index = order[:, 1] if K > 1 else order[:, 0]
+                rival_h = action_h.gather(
+                    1, rival_index[:, None, None].expand(-1, 1, action_h.shape[-1])
+                ).squeeze(1)
+                rival_e = rival_h[:, None, :].expand(B, E, -1)
+                adapter_tokens.append(rival_e)
             critical_proposal_residual = self.critical_proposal_adapter(
-                torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h, winner_e], dim=-1)
+                torch.cat(adapter_tokens, dim=-1)
             ).squeeze(-1)
         atom_logits = proposal_base_logits + self.critical_proposal_adapter_scale * critical_proposal_residual
         # Condition the atom proposal by the learned family gate.  Invalid atoms

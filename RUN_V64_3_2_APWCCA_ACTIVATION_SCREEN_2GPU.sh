@@ -5,10 +5,10 @@ export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data
 export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
 : "${FOUNDATION_CKPT:?Set FOUNDATION_CKPT to the immutable V62/V53 foundation checkpoint}"
 
-export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_1_apwcca_activation_screen_2gpu_v1}"
+export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_2_apwcca_activation_screen_2gpu_v1}"
 export GPUS="${GPUS:-0,1}"
 export NPROC_PER_NODE=2
-export TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v64_3_1_cc_aocc_apwcca_daepc_screen_2gpu.yaml}"
+export TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v64_3_2_cc_aocc_apwcca_daepc_screen_2gpu.yaml}"
 export EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v64_3_cc_aocc_apwcca_cl.yaml}"
 export MAX_TRAIN_SCENARIOS="${MAX_TRAIN_SCENARIOS:-12000}"
 export VAL_SCENARIOS="${VAL_SCENARIOS:-500}"
@@ -26,7 +26,7 @@ export RUN_MODE=train
 mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
 python -m bdse.tools.validate_v64_pipeline_config \
   --train-config "$TRAIN_CONFIG" --eval-config "$EVAL_CONFIG" \
-  --expected-family v64.3.1 \
+  --expected-family v64.3.2 \
   --output "$OUT_ROOT/provenance/config_contract.json"
 python - "$OUT_ROOT/provenance/screen_code_sha256.json" <<'PY_SHA'
 import hashlib, json, sys
@@ -35,7 +35,7 @@ files=[
   'bdse/model/bdse_model.py',
   'bdse/model/losses.py',
   'bdse/experiments/train.py',
-  'RUN_V64_3_1_APWCCA_ACTIVATION_SCREEN_2GPU.sh',
+  'RUN_V64_3_2_APWCCA_ACTIVATION_SCREEN_2GPU.sh',
 ]
 out={}
 for name in files:
@@ -56,8 +56,8 @@ def finite(row,k):
     try:
         v=float(row[k])
     except Exception:
-        return float('nan')
-    return v if math.isfinite(v) else float('nan')
+        return None
+    return v if math.isfinite(v) else None
 def last_row():
     cand=[r for r in rows if int(r.get('epoch',-999))>=0]
     return cand[-1] if cand else {}
@@ -68,8 +68,8 @@ def mx(k):
     vals=[]
     for r in rows:
         v=finite(r,k)
-        if math.isfinite(v): vals.append(v)
-    return max(vals) if vals else float('nan')
+        if v is not None: vals.append(v)
+    return max(vals) if vals else None
 a=anchor_row(); z=last_row()
 report={
   'screening_only': True,
@@ -89,17 +89,24 @@ report={
   'last_val_teacher_action_match': finite(z,'val_teacher_action_match'),
 }
 for stem in ('critical_topm','critical_selected','proposal_decisive'):
-    av=report.get('anchor_val_'+stem+'_recall',float('nan'))
-    lv=report.get('last_val_'+stem+'_recall',float('nan'))
-    report['delta_val_'+stem+'_recall']=(lv-av) if math.isfinite(av) and math.isfinite(lv) else float('nan')
-report['apwcca_activated']=bool(math.isfinite(report['critical_adapter_parameter_delta_rms_max']) and report['critical_adapter_parameter_delta_rms_max'] > 1e-9)
+    av=report.get('anchor_val_'+stem+'_recall')
+    lv=report.get('last_val_'+stem+'_recall')
+    report['delta_val_'+stem+'_recall']=(lv-av) if av is not None and lv is not None else None
+required=[
+  'critical_adapter_parameter_delta_rms_max',
+  'anchor_val_critical_topm_recall','last_val_critical_topm_recall',
+  'anchor_val_proposal_decisive_recall','last_val_proposal_decisive_recall',
+]
+report['screen_instrumentation_valid']=all(report.get(k) is not None for k in required)
+report['apwcca_activated']=bool(report['critical_adapter_parameter_delta_rms_max'] is not None and report['critical_adapter_parameter_delta_rms_max'] > 1e-9)
 # Relative-to-anchor screen avoids rejecting a healthy proposal solely because a
 # 500-scene subset happens to sit below a historical 1000-scene absolute value.
 report['continue_to_full_run']=bool(
-    report['apwcca_activated']
-    and math.isfinite(report['delta_val_critical_topm_recall'])
+    report['screen_instrumentation_valid']
+    and report['apwcca_activated']
+    and report['delta_val_critical_topm_recall'] is not None
     and report['delta_val_critical_topm_recall'] > 0.0
-    and math.isfinite(report['delta_val_proposal_decisive_recall'])
+    and report['delta_val_proposal_decisive_recall'] is not None
     and report['delta_val_proposal_decisive_recall'] >= -0.02
 )
 Path(sys.argv[2]).write_text(json.dumps(report,indent=2,sort_keys=True,allow_nan=False),encoding='utf-8')
