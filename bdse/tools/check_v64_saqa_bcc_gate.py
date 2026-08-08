@@ -153,6 +153,8 @@ def _training_health(
     winner_loss_by_key: dict[str, list[float]] = {key: [] for key in winner_loss_keys}
     deploy_loss_values: list[float] = []
     uncertainty_loss_values: list[float] = []
+    critical_adapter_abs_values: list[float] = []
+    critical_adapter_rms_values: list[float] = []
     for row in rows:
         for key, value in row.items():
             if key == "epoch" or not isinstance(value, (int, float)):
@@ -175,6 +177,12 @@ def _training_health(
         uncertainty_value = _finite(row, "L_residual_action_uncertainty")
         if math.isfinite(uncertainty_value):
             uncertainty_loss_values.append(abs(uncertainty_value))
+        adapter_abs = _finite(row, "critical_proposal_residual_abs_mean")
+        if math.isfinite(adapter_abs):
+            critical_adapter_abs_values.append(abs(adapter_abs))
+        adapter_rms = _finite(row, "critical_proposal_residual_rms")
+        if math.isfinite(adapter_rms):
+            critical_adapter_rms_values.append(abs(adapter_rms))
         value = _finite(row, "L_deploy_select")
         if math.isfinite(value): deploy_loss_values.append(abs(value))
     last_exact = exact[-1] if exact else float("nan")
@@ -228,6 +236,16 @@ def _training_health(
     if float(loss_weights.get("deployment_selection", 0.0)) > 0.0:
         if not deploy_loss_values or max(deploy_loss_values) <= 1.0e-12:
             failures.append("no non-zero exact deployment-selection distillation observed")
+    critical_cfg = ((train_config or {}).get("model", {}) or {}).get("critical_proposal_adapter", {}) or {}
+    trainable_modules = {str(x) for x in training_cfg.get("trainable_modules", [])}
+    if bool(critical_cfg.get("enabled", False)) and "critical_proposal_adapter" in trainable_modules:
+        if not critical_adapter_abs_values or not critical_adapter_rms_values:
+            failures.append("trainable critical_proposal_adapter is missing activation diagnostics")
+        elif max(critical_adapter_abs_values) <= 1.0e-10 and max(critical_adapter_rms_values) <= 1.0e-10:
+            failures.append(
+                "trainable zero-init critical_proposal_adapter never moved from exact zero; "
+                "the AP-WCCA branch was not effectively trained"
+            )
     route_cfg = training_cfg.get("residual_stage_routing", {}) or {}
     if bool(route_cfg.get("enabled", False)):
         for key in (
@@ -248,6 +266,8 @@ def _training_health(
         "max_winner_level_loss": float(max(winner_loss_values)) if winner_loss_values else float("nan"),
         "max_deployment_selection_loss": float(max(deploy_loss_values)) if deploy_loss_values else float("nan"),
         "max_residual_uncertainty_loss": float(max(uncertainty_loss_values)) if uncertainty_loss_values else float("nan"),
+        "max_critical_proposal_residual_abs_mean": float(max(critical_adapter_abs_values)) if critical_adapter_abs_values else float("nan"),
+        "max_critical_proposal_residual_rms": float(max(critical_adapter_rms_values)) if critical_adapter_rms_values else float("nan"),
         "max_winner_losses_by_key": {
             key: (float(max(values)) if values else float("nan"))
             for key, values in winner_loss_by_key.items()
@@ -600,7 +620,21 @@ def main() -> int:
     retained_budget_pass = val(cand, "retained_interface_atom_budget_pass")
     model_deployment_base_match = val(cand, "model_dense_vs_deployment_dense_full_match")
     acquisition_expansion = val(cand, "proposal_to_certificate_atom_expansion")
+    budget_pair_full_match = val(cand, "budget_vs_pair_full_match")
+    aocc_full_target_certified_pair_fraction = val(cand, "selector_aocc_full_target_certified_pair_fraction")
+    aocc_initial_deficit = val(cand, "selector_aocc_initial_deficit")
+    aocc_deficit_reduction = val(cand, "selector_aocc_deficit_reduction")
+    aocc_final_deficit = val(cand, "selector_aocc_final_deficit")
+    certificate_action_preservation_gap = (
+        budget_pair_full_match - cert
+        if math.isfinite(budget_pair_full_match) and math.isfinite(cert)
+        else float("nan")
+    )
     open_loop_count = val(cand, "open_loop_count")
+    if not math.isfinite(open_loop_count):
+        open_loop_count = val(cand, "num_scenarios")
+    if not math.isfinite(open_loop_count):
+        open_loop_count = float(len(cand_rows)) if cand_rows else float("nan")
     exact_critical_scene_count_estimate = (
         exact_critical_scene_rate * open_loop_count
         if math.isfinite(exact_critical_scene_rate) and math.isfinite(open_loop_count)
@@ -659,6 +693,12 @@ def main() -> int:
         warnings.append(
             f"teacher exact criticality is supported by only about {exact_critical_scene_count_estimate:.1f} scenes; "
             "treat recall thresholds as high-variance and increase the frozen open-loop sample count before a publication claim"
+        )
+    if math.isfinite(certificate_action_preservation_gap) and certificate_action_preservation_gap > 0.25:
+        warnings.append(
+            f"AOCC certificate is much more conservative than exact B-budget winner preservation: "
+            f"budget-vs-pair-full={budget_pair_full_match:.3f}, certified={cert:.3f}, gap={certificate_action_preservation_gap:.3f}. "
+            "Audit certificate/decision alignment before increasing B or relaxing thresholds."
         )
 
     # Minimum-completeness gate: protects against catastrophic algorithm or
@@ -800,6 +840,12 @@ def main() -> int:
             "retained_interface_atom_budget_pass": retained_budget_pass,
             "model_dense_vs_deployment_dense_full_match": model_deployment_base_match,
             "proposal_to_certificate_atom_expansion": acquisition_expansion,
+            "budget_vs_pair_full_match": budget_pair_full_match,
+            "selector_aocc_full_target_certified_pair_fraction": aocc_full_target_certified_pair_fraction,
+            "selector_aocc_initial_deficit": aocc_initial_deficit,
+            "selector_aocc_deficit_reduction": aocc_deficit_reduction,
+            "selector_aocc_final_deficit": aocc_final_deficit,
+            "certificate_action_preservation_gap": certificate_action_preservation_gap,
         },
         "training": train_stats,
         "proposal_training_contract": proposal_contract_stats,

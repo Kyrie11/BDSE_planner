@@ -4064,3 +4064,186 @@ Static/CPU validation in the delivery environment:
 - full pytest: **258 passed, 0 failed**.
 
 Fresh GPU training/calibration/open-loop/closed-loop were not run in this environment; all V64.3 performance claims remain to be measured.
+
+---
+
+# V64.3.1 — Provenance-Correct AP-WCCA + Decision-Aligned Exact Preservation Certificate (DA-EPC) (2026-08-07)
+
+## Uploaded V64.3 result is not a valid AP-WCCA training run
+
+The uploaded output directory is named `outputs_v64_3_cc_aocc_apwcca_fast_2gpu_v1`, but the immutable run evidence shows that the training process actually selected:
+
+```text
+bdse/configs/v64_2_saqa_bcc_hcbe_train_2gpu.yaml
+```
+
+The training log contains 10 epochs and reports the V64.2 trainable module set (`proposal_head`, family modules, `query_extension_proj`, residual heads). The V64.3 `critical_proposal_adapter` activation diagnostics are exactly zero for every epoch. Therefore this run evaluates **V64.2-trained weights through later V64.3 calibration/evaluation code**; it cannot be used to conclude that AP-WCCA succeeded or failed.
+
+A second engineering defect allowed this contamination to survive reruns: `training_complete()` accepted an existing checkpoint by file timestamp and did not bind reuse to the training-config SHA-256 or foundation-checkpoint SHA-256. A later launcher invocation could overwrite the config-contract JSON with a valid V64.3 contract while silently reusing the older V64.2-trained checkpoint.
+
+## Corrected gate interpretation
+
+The historical checker reports Protocol PASS, Minimum FAIL, Competitive FAIL. Under the corrected V64.3.1 training-health contract the uploaded run is **Protocol-invalid for AP-WCCA evaluation**, because a configured zero-init trainable `critical_proposal_adapter` never leaves exact zero.
+
+The historical Minimum failures are:
+
+```text
+evidence certificate fraction = 0.066 < 0.40
+fallback rate                 = 0.934 > 0.60
+```
+
+Competitive additionally fails teacher-match gain, residual gain, proposal decisive recall, teacher literal critical Top-M/selected recall, certificate/fallback, and paired regret.
+
+Unlike V64.2, the V64.3 calibration/deployment beta contract is now consistent (`beta=0`), so the low certificate rate can no longer be blamed on the old calibration beta mismatch.
+
+## New certificate diagnosis
+
+The uploaded 1000-scene paired candidate output shows:
+
+```text
+exact B16 vs pair-full winner preservation = 0.901
+AOCC evidence certificate                  = 0.066
+AOCC initial weighted deficit mean         = 0.019389
+AOCC B16 deficit reduction mean            = 0.000744
+AOCC final deficit mean                    = 0.018695
+full-TopM target pair-certified fraction   = 0.0
+```
+
+The certificate/preservation quadrants are:
+
+```text
+certified + preserved       = 39
+certified + not preserved   = 27
+uncertified + preserved     = 862
+uncertified + not preserved = 72
+```
+
+Thus the current pairwise AOCC certificate is not merely conservative relative to the exact downstream decision. It is also not a sound proxy for the actual winner under the current action-potential + safety + utility-refinement deployment operator: only 59.1% of pairwise-certified scenes preserve the exact full-TopM winner, while 92.3% of uncertified scenes do preserve it. On teacher-critical scenes, exact B16 winner preservation is about 90.5%.
+
+This is a certificate-definition / deployment-semantics mismatch. It is not evidence that B=16 is intrinsically too small.
+
+## V64.3.1 algorithm change: DA-EPC
+
+V40--V43 already tried expensive deployment-aligned combinatorial search/repair. That line eventually reached high target preservation but increased open-loop latency substantially and did not solve upstream planning quality. **Do not repeat that search.**
+
+V64.3.1 keeps the existing AOCC/HAB B=16 selection exactly unchanged and adds a no-search **Decision-Aligned Exact Preservation Certificate (DA-EPC)**:
+
+1. Use the already queried Top-M evidence and the exact residual-disabled downstream deployment evaluator to obtain the full-TopM target action.
+2. Run the same deterministic evaluator once on the selected B=16 evidence atoms.
+3. Certify the planner-interface evidence set iff the two winner actions are literally identical.
+4. Export only B=16 evidence atoms as before; the full-TopM evaluation remains selector-internal and adds no neural evidence query.
+5. Retain the historical one-sided AOCC pair bound as a separate robustness diagnostic (`aocc_pairwise_certified_pair_fraction_raw`); it no longer masquerades as exact winner sufficiency.
+
+DA-EPC changes neither B, M, evidence atoms, HAB hard forward, selected atom identities, nor literal winner-flip criticality. It also does not lower a certificate threshold. The certificate semantics are changed from a surrogate pair-margin condition to the same literal winner-preservation semantics already central to the paper's critical-evidence definition.
+
+This is intentionally distinct from V40--V43 DACC: there is no deletion beam, swap repair, preservation search, or candidate-set expansion. It is one exact post-selection audit over already available model outputs.
+
+## AP-WCCA remains the acquisition experiment to test
+
+Because the uploaded run never trained AP-WCCA, V64.3.1 does **not** replace AP-WCCA with another proposal algorithm. The frozen legacy HAB proposal + zero-init winner-conditioned critical residual remains the next acquisition hypothesis to test.
+
+The uploaded stale run still reinforces why this test matters:
+
+- foundation proposal decisive recall is about `0.804`, uploaded candidate is `0.751`;
+- teacher literal critical Top-M recall remains `0.3548`;
+- teacher literal critical selected recall is `0.2726`;
+- candidate teacher action match `0.224` is essentially foundation `0.225`;
+- residual calibrated epsilon is `1.2259`, residual deployed flips remain zero.
+
+Because AP-WCCA was inactive, none of these numbers can be attributed to the intended frozen-anchor winner-conditioned adapter.
+
+## Training provenance hardening
+
+V64.3.1:
+
+- ignores inherited generic `MAIN_CONFIG` / `SPEED_CONFIG` variables in the V64.3 wrapper;
+- requires version-scoped `V64_3_MAIN_CONFIG`, `V64_3_SPEED_CONFIG`, `V64_3_EVAL_CONFIG` overrides;
+- strictly rejects stale V64.2 train configs even when they satisfy generic V64 budget/query checks;
+- requires metadata/provenance algorithm versions to match;
+- writes the selected train-config SHA-256 into query-path provenance;
+- binds checkpoint reuse to both train-config SHA-256 and foundation-checkpoint SHA-256;
+- refuses to reuse a checkpoint if the training provenance marker does not match;
+- gate training health fails if a configured trainable zero-init AP-WCCA adapter never becomes non-zero.
+
+## Runtime and training speed diagnosis
+
+The uploaded 10-epoch run spent about `19,702.8 s = 5.47 h` in training. Profile attribution:
+
+```text
+DataLoader/data wait   15,195.8 s  = 77.1%
+loss construction       1,775.3 s  =  9.0%
+forward                    435.5 s =  2.2%
+backward/step              457.4 s =  2.3%
+pair sampling              525.9 s =  2.7%
+H2D                         10.7 s =  0.05%
+```
+
+The mean data wait is about `972 ms/step`, while forward is only tens of milliseconds. The GPU is primarily starved by NPZ decode/tensorization/storage supply; more GPU compute alone will not solve the bottleneck.
+
+The current main pipeline does **not** use `bdse_test_2` for training, calibration, or the 1000-scene paired gate. The large test-set size therefore did not cause this run's slowdown. Test should remain untouched until one final frozen evaluation.
+
+V64.3.1 speed changes:
+
+- intended AP-WCCA full training is 8 epochs rather than the accidentally executed V64.2 10 epochs;
+- 2-GPU DDP remains mandatory for the paper pipeline, per-GPU batch is 16;
+- default training workers are 12/GPU with prefetch 2, while a new input-pipeline microbenchmark can compare 8/12/16 on the actual storage server before the long run;
+- foundation quality replay is sharded across both GPUs with two workers/GPU instead of one serial 1000-scene replay;
+- calibration is split into four deterministic shards (two workers/GPU) and merged exactly;
+- three-system paired open-loop stays at two workers/GPU because it is not the dominant wall-time stage;
+- a 12k-scene, 4-epoch AP-WCCA activation screen is added so an inactive or harmful adapter can be rejected before paying for full training/calibration/open-loop.
+
+## Most valuable next experiment
+
+Do **not** go directly to another full version change. First run the V64.3.1 AP-WCCA activation screen on train/val only:
+
+- 12k training scenes;
+- 4 epochs;
+- 2 GPUs, batch 16/GPU;
+- val_tune 500 every epoch;
+- require AP-WCCA residual RMS > 0;
+- require teacher-critical Top-M recall to move above the ~0.355 foundation plateau while proposal decisive recall stays at least ~0.78.
+
+If this screen fails, AP-WCCA capacity/conditioning should be changed before any calibration or closed loop. If it passes, run the full provenance-correct 50k/8-epoch V64.3.1 pipeline and inspect the causal sequence:
+
+1. AP-WCCA activation and critical Top-M recall;
+2. selected critical recall;
+3. DA-EPC exact winner preservation / fallback;
+4. teacher action match and paired regret;
+5. residual raw error / calibrated epsilon / beneficial vs harmful flips;
+6. diagnostic paired CL20 after corrected Protocol PASS, even if Minimum/Competitive still fail.
+
+If true AP-WCCA improves Top-M critical recall but selected recall does not follow, revisit selector tie-breaking. If both improve but teacher action/regret do not, the next algorithmic bottleneck is atom-to-action value learning, not proposal acquisition. If open-loop improves but diagnostic CL20 does not, move to candidate dynamics/reactive interaction/replanning rather than adding more evidence-selection losses.
+
+## Additional no-repeat constraints
+
+- Do not interpret the uploaded V64.3 directory as an AP-WCCA result; its adapter was never trained.
+- Do not reuse an OUT_ROOT across algorithm configs unless the config/foundation SHA contract passes.
+- Do not repeat V40--V43 deployment coreset beam/swap search to manufacture winner preservation.
+- Do not replace DA-EPC with a relaxed pair-margin threshold merely to raise certificate coverage.
+- Do not increase B or M to solve the current certificate mismatch.
+- Do not change AP-WCCA again before a provenance-correct activation screen establishes whether it has capacity.
+- Do not tune on the incomplete/large test set; use test once after model/protocol freeze.
+
+## V64.3.1 final engineering validation and provenance hardening
+
+After the algorithm/code changes above, the long-stage reuse contracts were audited again.
+
+Additional hardening:
+
+- calibration raw shards now persist `source_checkpoint_sha256` and `source_config_sha256`;
+- calibration merge rejects mixed checkpoint/config shards and exports the common source SHA values;
+- the main pipeline treats legacy calibration shards/merged files without source SHA provenance as stale;
+- paired open-loop suite reports now persist config/checkpoint SHA-256 for candidate/local/foundation;
+- open-loop reuse also depends on the current `val_tune/manifest.jsonl`, not only checkpoint/config mtimes;
+- the uploaded V64.3 open-loop artifacts were verified to have been freshly recomputed at 22:32--22:41; the causal contamination was the reused V64.2-trained checkpoint, not stale metrics files.
+
+Final static/CPU regression in the delivery environment:
+
+- Python compile: PASS;
+- strict V64.3.1 train/eval config contract: PASS;
+- shell syntax for main wrapper, main pipeline, and activation-screen launcher: PASS;
+- targeted V64.3/V64 tests: **11 passed, 0 failed**;
+- full test suite executed in two bounded batches: **102 + 158 = 260 passed, 0 failed**;
+- synthetic calibration SHA-provenance test: PASS (mixed-checkpoint shards are rejected).
+
+No fresh nuPlan GPU training/calibration/open-loop/closed-loop was run in this delivery environment. Performance claims for AP-WCCA and DA-EPC must therefore come from the next provenance-correct server run.

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# v64.0 checkpoint-independent pipeline.  Resolve every relative path from the
+# V64.3.1 provenance-correct checkpoint-independent pipeline.  Resolve every relative path from the
 # checked-in script directory so a stale working directory cannot silently run a
 # different config or helper script.
-PIPELINE_VERSION="v64.3-cc-aocc-apwcca"
+PIPELINE_VERSION="v64.3.1-cc-aocc-apwcca-engineering-corrected"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 echo "[v64] pipeline_version=$PIPELINE_VERSION script=$SCRIPT_DIR/$(basename "$0")"
@@ -14,7 +14,7 @@ export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data
 export BDSE_VAL_CACHE_ORIGINAL="${BDSE_VAL_CACHE_ORIGINAL:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
 export BDSE_SPLIT_CACHE="${BDSE_SPLIT_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v53_split}"
 export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2}"
-export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_cc_aocc_apwcca_fast_2gpu_v1}"
+export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_1_cc_aocc_apwcca_fast_2gpu_v1}"
 export FOUNDATION_ROOT="${FOUNDATION_ROOT:-$OUT_ROOT/factorized_anchor}"
 export FOUNDATION_CONFIG="${FOUNDATION_CONFIG:-bdse/configs/v53_factorized_anchor_fast_2gpu.yaml}"
 export FOUNDATION_SOURCE_CONFIG="${FOUNDATION_SOURCE_CONFIG:-$FOUNDATION_CONFIG}"
@@ -53,8 +53,8 @@ export RUN_CL100_AFTER_CL20="${RUN_CL100_AFTER_CL20:-0}"
 # claim. Set to 1 only when CL should be blocked by the real-time target.
 export ENFORCE_LATENCY_BEFORE_CL="${ENFORCE_LATENCY_BEFORE_CL:-0}"
 export TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-16}"
-export TRAIN_NUM_WORKERS_PER_GPU="${TRAIN_NUM_WORKERS_PER_GPU:-8}"
-export TRAIN_PREFETCH_FACTOR="${TRAIN_PREFETCH_FACTOR:-3}"
+export TRAIN_NUM_WORKERS_PER_GPU="${TRAIN_NUM_WORKERS_PER_GPU:-12}"
+export TRAIN_PREFETCH_FACTOR="${TRAIN_PREFETCH_FACTOR:-2}"
 export VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-4}"
 export FAST_SELECTOR_SCENES_PER_RANK="${FAST_SELECTOR_SCENES_PER_RANK:-1}"
 export FAST_SELECTOR_EVERY_N_STEPS="${FAST_SELECTOR_EVERY_N_STEPS:-4}"
@@ -63,6 +63,9 @@ export CALIBRATION_BETA="${CALIBRATION_BETA:-0.0}"
 export CALIBRATION_PRIOR_RADIUS="${CALIBRATION_PRIOR_RADIUS:-0.02}"
 export CL_PROCESSES_PER_GPU="${CL_PROCESSES_PER_GPU:-2}"
 export CL_WORKERS_PER_GPU=1
+export ANCHOR_WORKERS_PER_GPU="${ANCHOR_WORKERS_PER_GPU:-2}"
+export CALIBRATION_WORKERS_PER_GPU="${CALIBRATION_WORKERS_PER_GPU:-2}"
+export MAX_TRAIN_SCENARIOS="${MAX_TRAIN_SCENARIOS:-50000}"
 
 case "$FOUNDATION_POLICY" in
   auto|rebuild|recover|explicit) ;;
@@ -77,6 +80,7 @@ mkdir -p "$OUT_ROOT/logs" "$OUT_ROOT/provenance"
 python -m bdse.tools.validate_v64_pipeline_config \
   --train-config "$TRAIN_CONFIG" \
   --eval-config "$EVAL_CONFIG" \
+  --expected-family v64.3.1 \
   --output "$OUT_ROOT/provenance/v64_pipeline_config_contract.json"
 
 # Detach the complete pipeline, not only the training child.  Detaching only
@@ -117,12 +121,50 @@ is_fresh() {
   done
 }
 
+TRAIN_CONTRACT_JSON="$OUT_ROOT/train/v64_3_training_contract.json"
+
 training_complete() {
   [[ "$PIPELINE_FORCE" != "1" ]] || return 1
-  # The final model is written only after a clean full run or configured early
-  # stop.  Its presence is therefore a stronger completion marker than forcing
-  # the log to reach the nominal epoch count.
-  [[ -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl"      && -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.pt"      && -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt"      && "$OUT_ROOT/train/bdse_v64_saqa_bcc.pt" -nt "$TRAIN_CONFIG" ]]
+  [[ -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl"       && -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.pt"       && -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt"       && -s "$TRAIN_CONTRACT_JSON" ]] || return 1
+  python - "$TRAIN_CONFIG" "$FOUNDATION_CKPT" "$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt" "$TRAIN_CONTRACT_JSON" <<'PY_TRAIN_CONTRACT_CHECK'
+import hashlib,json,sys
+from pathlib import Path
+cfg, ckpt, best, marker = map(Path, sys.argv[1:])
+def sha(p):
+    h=hashlib.sha256()
+    with p.open('rb') as f:
+        for b in iter(lambda:f.read(1024*1024), b''): h.update(b)
+    return h.hexdigest()
+try: d=json.loads(marker.read_text())
+except Exception: raise SystemExit(1)
+if d.get('train_config_sha256') != sha(cfg): raise SystemExit(1)
+if d.get('foundation_checkpoint_sha256') != sha(ckpt): raise SystemExit(1)
+if d.get('best_checkpoint_sha256') != sha(best): raise SystemExit(1)
+if d.get('algorithm_family') != 'V64.3.1-CC-AOCC-AP-WCCA-DA-EPC': raise SystemExit(1)
+PY_TRAIN_CONTRACT_CHECK
+}
+
+write_training_contract() {
+  python - "$TRAIN_CONFIG" "$FOUNDATION_CKPT" "$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt" "$TRAIN_CONTRACT_JSON" <<'PY_TRAIN_CONTRACT_WRITE'
+import hashlib,json,sys
+from datetime import datetime,timezone
+from pathlib import Path
+cfg, foundation, best, out = map(Path, sys.argv[1:])
+def sha(p):
+    h=hashlib.sha256()
+    with p.open('rb') as f:
+        for b in iter(lambda:f.read(1024*1024), b''): h.update(b)
+    return h.hexdigest()
+payload={
+ 'algorithm_family':'V64.3.1-CC-AOCC-AP-WCCA-DA-EPC',
+ 'train_config_path':str(cfg.resolve()), 'train_config_sha256':sha(cfg),
+ 'foundation_checkpoint_path':str(foundation.resolve()), 'foundation_checkpoint_sha256':sha(foundation),
+ 'best_checkpoint_path':str(best.resolve()), 'best_checkpoint_sha256':sha(best),
+ 'created_at_utc':datetime.now(timezone.utc).isoformat(),
+}
+out.parent.mkdir(parents=True,exist_ok=True)
+out.write_text(json.dumps(payload,indent=2,sort_keys=True),encoding='utf-8')
+PY_TRAIN_CONTRACT_WRITE
 }
 
 # ---------------------------------------------------------------------------
@@ -296,19 +338,22 @@ FOUNDATION_QUALITY_ROOT="$FOUNDATION_ROOT/quality"
 FOUNDATION_QUALITY_JSON="$FOUNDATION_QUALITY_ROOT/open_loop.json"
 FOUNDATION_QUALITY_JSONL="$FOUNDATION_QUALITY_ROOT/open_loop.jsonl"
 mkdir -p "$FOUNDATION_QUALITY_ROOT"
-if is_fresh "$FOUNDATION_QUALITY_JSON" "$FOUNDATION_CKPT" "$FOUNDATION_CONTROL_CONFIG" \
-   && is_fresh "$FOUNDATION_QUALITY_JSONL" "$FOUNDATION_CKPT" "$FOUNDATION_CONTROL_CONFIG"; then
+if is_fresh "$FOUNDATION_QUALITY_JSON" "$FOUNDATION_CKPT" "$FOUNDATION_CONTROL_CONFIG" "$BDSE_SPLIT_CACHE/val_tune/manifest.jsonl" \
+   && is_fresh "$FOUNDATION_QUALITY_JSONL" "$FOUNDATION_CKPT" "$FOUNDATION_CONTROL_CONFIG" "$BDSE_SPLIT_CACHE/val_tune/manifest.jsonl"; then
   echo "[v64] foundation quality replay already complete"
 else
-  CUDA_VISIBLE_DEVICES="${GPUS%%,*}" python -m bdse.experiments.evaluate_open_loop \
-    --config "$FOUNDATION_CONTROL_CONFIG" \
-    --checkpoint "$FOUNDATION_CKPT" \
-    --split val_tune \
-    --preprocessed-dir "$BDSE_SPLIT_CACHE" \
-    --max-scenarios 1000 \
-    --device cuda \
-    --output "$FOUNDATION_QUALITY_JSON" \
-    --per-sample-output "$FOUNDATION_QUALITY_JSONL"
+  # The uploaded V64.3 run spent ~55 min on this single-GPU 1000-scene replay.
+  # It is embarrassingly parallel and does not alter evaluation semantics, so
+  # use the same deterministic modulo-shard merger as the paired open-loop suite.
+  ANCHOR_PAR_ROOT="$FOUNDATION_QUALITY_ROOT/parallel_suite"
+  rm -rf "$ANCHOR_PAR_ROOT"
+  python -m bdse.tools.run_parallel_open_loop_suite \
+    --system "foundation::$FOUNDATION_CONTROL_CONFIG::$FOUNDATION_CKPT" \
+    --preprocessed-dir "$BDSE_SPLIT_CACHE" --split val_tune --max-scenarios 1000 \
+    --output-root "$ANCHOR_PAR_ROOT" --gpus "$GPUS" \
+    --workers-per-gpu "$ANCHOR_WORKERS_PER_GPU" --device cuda
+  cp -f "$ANCHOR_PAR_ROOT/foundation/metrics.json" "$FOUNDATION_QUALITY_JSON"
+  cp -f "$ANCHOR_PAR_ROOT/foundation/metrics.jsonl" "$FOUNDATION_QUALITY_JSONL"
 fi
 ANCHOR_GATE_REPORT="$OUT_ROOT/provenance/v64_anchor_gate.json"
 python -m bdse.tools.check_v53_anchor_quality "$FOUNDATION_QUALITY_JSON" \
@@ -323,8 +368,8 @@ python -m bdse.tools.check_v53_anchor_quality "$FOUNDATION_QUALITY_JSON" \
   2>&1 | tee "$OUT_ROOT/logs/v64_anchor_quality_gate.out"
 
 # ---------------------------------------------------------------------------
-# 1. Main v64 training. Base/local encoders are frozen by config; only the
-#    reset residual/uncertainty and proposal-family heads are trainable.
+# 1. Main V64.3.1 training. Foundation + legacy HAB proposal/family/query-extension
+#    are frozen; only AP-WCCA critical adapter + residual uncertainty heads train.
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_V64_TRAINING" == "1" ]]; then
   [[ -n "$V64_CANDIDATE_CHECKPOINT" && -s "$V64_CANDIDATE_CHECKPOINT" ]] || {
@@ -347,6 +392,7 @@ else
   AUTO_RESUME=0 \
   VAL_SPLIT=val_tune \
   OPEN_LOOP_SPLIT=val_tune \
+  MAX_TRAIN_SCENARIOS="$MAX_TRAIN_SCENARIOS" \
   BATCH_SIZE_PER_GPU="$TRAIN_BATCH_SIZE_PER_GPU" \
   NUM_WORKERS_PER_GPU="$TRAIN_NUM_WORKERS_PER_GPU" \
   PREFETCH_FACTOR="$TRAIN_PREFETCH_FACTOR" \
@@ -363,6 +409,14 @@ else
   VAL_DENSE_DIAGNOSTIC=1 \
   OPEN_LOOP_MAX_SCENARIOS=1000 \
   bash run_v64_saqa_bcc.sh
+  write_training_contract
+fi
+
+# Old deliveries did not bind checkpoint reuse to the actual selected config.
+# In checkpoint-evaluation mode we intentionally skip this marker; otherwise it
+# must exist after either a fresh train or a provenance-matched reuse.
+if [[ "$SKIP_V64_TRAINING" != "1" ]]; then
+  training_complete || { echo "V64.3.1 training outputs exist but their config/foundation provenance does not match this run" >&2; exit 2; }
 fi
 
 BEST_CHECKPOINT="${V64_CANDIDATE_CHECKPOINT:-$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt}"
@@ -392,102 +446,160 @@ DUAL_CAL_JSON="$OUT_ROOT/calibration/v64_dual_certificate.json"
 CAL_SHARD_ROOT="$OUT_ROOT/calibration/shards"
 
 prepare_calibration_shards() {
-  if [[ "$PIPELINE_FORCE" != "1" \
-        && -s "$CAL_SHARD_ROOT/metadata.json" \
-        && -s "$CAL_SHARD_ROOT/gpu0/val/manifest.jsonl" \
-        && -s "$CAL_SHARD_ROOT/gpu1/val/manifest.jsonl" ]]; then
-    echo "[v64] reuse calibration shard manifests"
-    return 0
+  IFS=',' read -r -a cal_gpus <<< "$GPUS"
+  local ngpu="${#cal_gpus[@]}"
+  [[ "$ngpu" -ge 2 ]] || { echo "V64 calibration requires at least two GPU ids, got GPUS=$GPUS" >&2; return 2; }
+  local nshards=$(( ngpu * CALIBRATION_WORKERS_PER_GPU ))
+  [[ "$nshards" -ge 2 ]] || nshards=2
+
+  if [[ "$PIPELINE_FORCE" != "1" && -s "$CAL_SHARD_ROOT/metadata.json" ]]; then
+    if python - "$CAL_SHARD_ROOT" "$nshards" <<'PY_CAL_CHECK'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1]); n=int(sys.argv[2])
+try: meta=json.loads((root/'metadata.json').read_text())
+except Exception: raise SystemExit(1)
+if int(meta.get('num_shards',-1)) != n: raise SystemExit(1)
+for sid in range(n):
+    if not (root/f'shard{sid}'/'val'/'manifest.jsonl').is_file(): raise SystemExit(1)
+PY_CAL_CHECK
+    then
+      echo "[v64] reuse $nshards calibration shard manifests"
+      return 0
+    fi
   fi
   rm -rf "$CAL_SHARD_ROOT"
-  mkdir -p "$CAL_SHARD_ROOT/gpu0/val" "$CAL_SHARD_ROOT/gpu1/val"
-  python - "$BDSE_SPLIT_CACHE" "$CAL_SHARD_ROOT" <<'PY_CAL_SHARDS'
+  mkdir -p "$CAL_SHARD_ROOT"
+  python - "$BDSE_SPLIT_CACHE" "$CAL_SHARD_ROOT" "$nshards" <<'PY_CAL_SHARDS'
 import json, sys
 from pathlib import Path
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
-root=Path(sys.argv[1]); out=Path(sys.argv[2])
+root=Path(sys.argv[1]); out=Path(sys.argv[2]); n=int(sys.argv[3])
 paths=PreprocessedBDSEDataset(root, split=['val_calib'], max_scenarios=5000).build_index()
 if not paths: raise SystemExit('No val_calib samples')
-for sid in range(2):
-    rows=[{'split':'val','path':str(p.resolve()),'original_index':i} for i,p in enumerate(paths) if i%2==sid]
-    (out/f'gpu{sid}'/'val'/'manifest.jsonl').write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows),encoding='utf-8')
-(out/'metadata.json').write_text(json.dumps({'num_scenarios':len(paths),'num_shards':2},indent=2),encoding='utf-8')
+for sid in range(n):
+    d=out/f'shard{sid}'/'val'; d.mkdir(parents=True,exist_ok=True)
+    rows=[{'split':'val','path':str(p.resolve()),'original_index':i} for i,p in enumerate(paths) if i%n==sid]
+    (d/'manifest.jsonl').write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows),encoding='utf-8')
+(out/'metadata.json').write_text(json.dumps({'num_scenarios':len(paths),'num_shards':n},indent=2),encoding='utf-8')
 PY_CAL_SHARDS
 }
 
 calibration_shard_fresh() {
-  local raw="$1" manifest="$2"
-  is_fresh "$raw" "$BEST_CHECKPOINT" "$EVAL_CONFIG" "$CALIBRATION_PROVENANCE" "$manifest"
+  local sid="$1"
+  local raw="$OUT_ROOT/calibration/raw/shard${sid}.npz"
+  local manifest="$CAL_SHARD_ROOT/shard${sid}/val/manifest.jsonl"
+  is_fresh "$raw" "$BEST_CHECKPOINT" "$EVAL_CONFIG" "$CALIBRATION_PROVENANCE" "$manifest" || return 1
+  # File timestamps are insufficient when a package is unpacked with preserved
+  # mtimes.  Bind every reusable calibration shard to the exact checkpoint and
+  # config bytes that generated it.  Old V64.3 shards without these hashes are
+  # intentionally treated as stale and recomputed.
+  python - "$raw" "$BEST_CHECKPOINT" "$EVAL_CONFIG" <<'PY_CAL_RAW_SHA'
+import hashlib,sys,numpy as np
+from pathlib import Path
+def sha(p):
+    h=hashlib.sha256()
+    with Path(p).open('rb') as f:
+        for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+    return h.hexdigest()
+try:
+    z=np.load(sys.argv[1],allow_pickle=False)
+    ch=str(z['source_checkpoint_sha256'][0])
+    gh=str(z['source_config_sha256'][0])
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if ch==sha(sys.argv[2]) and gh==sha(sys.argv[3]) else 1)
+PY_CAL_RAW_SHA
+}
+
+dual_calibration_fresh() {
+  is_fresh "$DUAL_CAL_JSON" "$BEST_CHECKPOINT" "$EVAL_CONFIG" "$CALIBRATION_PROVENANCE" || return 1
+  python - "$DUAL_CAL_JSON" "$BEST_CHECKPOINT" "$EVAL_CONFIG" <<'PY_CAL_MERGED_SHA'
+import hashlib,json,sys
+from pathlib import Path
+def sha(p):
+    h=hashlib.sha256()
+    with Path(p).open('rb') as f:
+        for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+    return h.hexdigest()
+try: d=json.loads(Path(sys.argv[1]).read_text())
+except Exception: raise SystemExit(1)
+ok=(d.get('source_checkpoint_sha256')==sha(sys.argv[2]) and d.get('source_config_sha256')==sha(sys.argv[3]))
+raise SystemExit(0 if ok else 1)
+PY_CAL_MERGED_SHA
 }
 
 LAUNCHED_CALIBRATION_PID=""
 launch_calibration_shard() {
   local sid="$1" gpu="$2"
-  local raw="$OUT_ROOT/calibration/raw/gpu${sid}.npz"
-  local manifest="$CAL_SHARD_ROOT/gpu${sid}/val/manifest.jsonl"
-  local log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
-  if calibration_shard_fresh "$raw" "$manifest"; then
-    echo "[v64] calibration shard gpu${sid} already complete"
+  local raw="$OUT_ROOT/calibration/raw/shard${sid}.npz"
+  local manifest="$CAL_SHARD_ROOT/shard${sid}/val/manifest.jsonl"
+  local log="$OUT_ROOT/logs/calibration_shard${sid}_gpu${gpu}.out"
+  if calibration_shard_fresh "$sid"; then
+    echo "[v64] calibration shard $sid already complete"
     return 1
   fi
   rm -f "$raw" "$raw.failed"
-  echo "[v64] launch calibration shard gpu${sid} on CUDA_VISIBLE_DEVICES=$gpu"
-  CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.tools.calibrate_v64_3_dual_certificates \
+  echo "[v64] launch calibration shard $sid on CUDA_VISIBLE_DEVICES=$gpu"
+  CUDA_VISIBLE_DEVICES="$gpu" OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  python -m bdse.tools.calibrate_v64_3_dual_certificates \
     --raw-output "$raw" \
     --config "$EVAL_CONFIG" --checkpoint "$BEST_CHECKPOINT" \
-    --preprocessed-dir "$CAL_SHARD_ROOT/gpu${sid}" --split val --max-scenarios 5000 \
+    --preprocessed-dir "$CAL_SHARD_ROOT/shard${sid}" --split val --max-scenarios 5000 \
     --device cuda --alpha 0.05 --beta "$CALIBRATION_BETA" --prior-radius "$CALIBRATION_PRIOR_RADIUS" \
     > "$log" 2>&1 &
   LAUNCHED_CALIBRATION_PID="$!"
 }
 
 wait_calibration_shard() {
-  local sid="$1" pid="$2"
-  local log="$OUT_ROOT/logs/calibration_gpu${sid}.out"
+  local sid="$1" gpu="$2" pid="$3"
+  local raw="$OUT_ROOT/calibration/raw/shard${sid}.npz"
+  local log="$OUT_ROOT/logs/calibration_shard${sid}_gpu${gpu}.out"
   if wait "$pid"; then
-    [[ -s "$OUT_ROOT/calibration/raw/gpu${sid}.npz" ]] || {
-      echo "[v64] calibration shard gpu${sid} exited 0 but raw output is missing" >&2
+    [[ -s "$raw" ]] || {
+      echo "[v64] calibration shard $sid exited 0 but raw output is missing" >&2
       tail -80 "$log" >&2 || true
       return 1
     }
-    echo "[v64] calibration shard gpu${sid} complete"
+    echo "[v64] calibration shard $sid complete"
     return 0
   fi
-  status=$?
-  printf 'exit_status=%s\n' "$status" > "$OUT_ROOT/calibration/raw/gpu${sid}.npz.failed"
-  echo "[v64] calibration shard gpu${sid} failed with status=$status; tail follows" >&2
+  local status=$?
+  printf 'exit_status=%s\n' "$status" > "$raw.failed"
+  echo "[v64] calibration shard $sid failed with status=$status; tail follows" >&2
   tail -120 "$log" >&2 || true
   return "$status"
 }
 
-if ! is_fresh "$DUAL_CAL_JSON" "$BEST_CHECKPOINT" "$EVAL_CONFIG" "$CALIBRATION_PROVENANCE"; then
+if ! dual_calibration_fresh; then
   prepare_calibration_shards
-  gpu0="${GPUS%%,*}"
-  gpu1="$(echo "$GPUS" | cut -d, -f2)"
-  [[ -n "$gpu0" && -n "$gpu1" && "$gpu0" != "$gpu1" ]] || {
-    echo "V64 calibration requires two distinct GPU ids in GPUS, got GPUS=$GPUS" >&2
-    exit 2
-  }
-  pid_cal0=""; pid_cal1=""
-  if ! calibration_shard_fresh "$OUT_ROOT/calibration/raw/gpu0.npz" "$CAL_SHARD_ROOT/gpu0/val/manifest.jsonl"; then
-    launch_calibration_shard 0 "$gpu0"
-    pid_cal0="$LAUNCHED_CALIBRATION_PID"
-  fi
-  if ! calibration_shard_fresh "$OUT_ROOT/calibration/raw/gpu1.npz" "$CAL_SHARD_ROOT/gpu1/val/manifest.jsonl"; then
-    launch_calibration_shard 1 "$gpu1"
-    pid_cal1="$LAUNCHED_CALIBRATION_PID"
-  fi
+  IFS=',' read -r -a cal_gpus <<< "$GPUS"
+  ngpu="${#cal_gpus[@]}"
+  [[ "$ngpu" -ge 2 ]] || { echo "V64 calibration requires two distinct GPU ids in GPUS=$GPUS" >&2; exit 2; }
+  num_cal_shards=$(( ngpu * CALIBRATION_WORKERS_PER_GPU ))
+  declare -a cal_pids=() cal_pid_sids=() cal_pid_gpus=() raw_paths=()
+  for ((sid=0; sid<num_cal_shards; sid++)); do
+    gpu="${cal_gpus[$((sid % ngpu))]}"
+    raw_paths+=("$OUT_ROOT/calibration/raw/shard${sid}.npz")
+    if ! calibration_shard_fresh "$sid"; then
+      launch_calibration_shard "$sid" "$gpu"
+      cal_pids+=("$LAUNCHED_CALIBRATION_PID")
+      cal_pid_sids+=("$sid")
+      cal_pid_gpus+=("$gpu")
+    fi
+  done
   cal_failed=0
-  if [[ -n "$pid_cal0" ]]; then wait_calibration_shard 0 "$pid_cal0" || cal_failed=1; fi
-  if [[ -n "$pid_cal1" ]]; then wait_calibration_shard 1 "$pid_cal1" || cal_failed=1; fi
+  for ((i=0; i<${#cal_pids[@]}; i++)); do
+    wait_calibration_shard "${cal_pid_sids[$i]}" "${cal_pid_gpus[$i]}" "${cal_pids[$i]}" || cal_failed=1
+  done
   [[ "$cal_failed" == "0" ]] || {
-    echo "[v64] calibration incomplete. Re-run this script with PIPELINE_FORCE=0; completed shards will be reused." >&2
+    echo "[v64] calibration incomplete. Re-run with PIPELINE_FORCE=0; completed shards will be reused." >&2
     exit 4
   }
   tmp_cal="$DUAL_CAL_JSON.tmp"
   rm -f "$tmp_cal"
   python -m bdse.tools.calibrate_v64_3_dual_certificates \
-    --merge-raw "$OUT_ROOT/calibration/raw/gpu0.npz" "$OUT_ROOT/calibration/raw/gpu1.npz" \
+    --merge-raw "${raw_paths[@]}" \
     --alpha 0.05 --beta "$CALIBRATION_BETA" --prior-radius "$CALIBRATION_PRIOR_RADIUS" --residual-epsilon-fallback 0.05 \
     --provenance-json "$CALIBRATION_PROVENANCE" --output "$tmp_cal"
   [[ -s "$tmp_cal" ]] || { echo "[v64] merged calibration JSON missing" >&2; exit 4; }
@@ -511,7 +623,31 @@ python -m bdse.tools.apply_v64_3_dual_calibration --config "$FOUNDATION_CONTROL_
 OPEN_LOOP_WORKERS_PER_GPU="${OPEN_LOOP_WORKERS_PER_GPU:-2}"
 SUITE_ROOT="$OUT_ROOT/open_loop/parallel_suite"
 SUITE_REPORT="$SUITE_ROOT/parallel_open_loop_suite_report.json"
-if ! is_fresh "$SUITE_REPORT" "$BEST_CHECKPOINT" "$FOUNDATION_CKPT" "$CAND_CAL_CFG" "$LOCAL_CAL_CFG" "$FOUND_CAL_CFG"; then
+open_loop_suite_fresh() {
+  is_fresh "$SUITE_REPORT" "$BEST_CHECKPOINT" "$FOUNDATION_CKPT" "$CAND_CAL_CFG" "$LOCAL_CAL_CFG" "$FOUND_CAL_CFG" "$BDSE_SPLIT_CACHE/val_tune/manifest.jsonl" || return 1
+  python - "$SUITE_REPORT" \
+    "$CAND_CAL_CFG" "$BEST_CHECKPOINT" \
+    "$LOCAL_CAL_CFG" "$BEST_CHECKPOINT" \
+    "$FOUND_CAL_CFG" "$FOUNDATION_CKPT" <<'PY_SUITE_SHA'
+import hashlib,json,sys
+from pathlib import Path
+def sha(p):
+    h=hashlib.sha256()
+    with Path(p).open('rb') as f:
+        for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+    return h.hexdigest()
+try: d=json.loads(Path(sys.argv[1]).read_text())
+except Exception: raise SystemExit(1)
+sources=d.get('system_sources') or {}
+items=[('candidate',sys.argv[2],sys.argv[3]),('local',sys.argv[4],sys.argv[5]),('foundation',sys.argv[6],sys.argv[7])]
+for name,cfg,ckpt in items:
+    src=sources.get(name) or {}
+    if src.get('config_sha256') != sha(cfg) or src.get('checkpoint_sha256') != sha(ckpt):
+        raise SystemExit(1)
+raise SystemExit(0)
+PY_SUITE_SHA
+}
+if ! open_loop_suite_fresh; then
   rm -rf "$SUITE_ROOT"
   python -m bdse.tools.run_parallel_open_loop_suite \
     --system "candidate::$CAND_CAL_CFG::$BEST_CHECKPOINT" \
@@ -527,6 +663,15 @@ LOCAL_JSON="$SUITE_ROOT/local/metrics.json"
 LOCAL_JSONL="$SUITE_ROOT/local/metrics.jsonl"
 FOUND_JSON="$SUITE_ROOT/foundation/metrics.json"
 FOUND_JSONL="$SUITE_ROOT/foundation/metrics.jsonl"
+
+# Decision-aligned certificate audit is diagnostic-only.  It measures whether
+# the AOCC pairwise certificate actually tracks the exact fixed-B winner of the
+# downstream deployment operator.  It never changes the gate or certifies an
+# otherwise uncertified scene.
+CERT_ALIGNMENT_JSON="$SUITE_ROOT/candidate/certificate_action_alignment.json"
+python -m bdse.tools.analyze_certificate_action_alignment \
+  --jsonl "$OPEN_LOOP_JSONL" --output "$CERT_ALIGNMENT_JSON" \
+  > "$OUT_ROOT/logs/v64_3_certificate_action_alignment.out"
 
 # ---------------------------------------------------------------------------
 # 4. Three-tier gate with engineering-integrity checks.

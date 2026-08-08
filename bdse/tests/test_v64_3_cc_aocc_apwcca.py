@@ -22,6 +22,7 @@ def test_v64_3_nominal_freezes_query_extension_and_legacy_proposal() -> None:
     assert cfg["model"]["query_extension_adapter"]["scale"] == 0.0
     assert "query_extension_proj" not in trainable
     assert "critical_proposal_adapter" in trainable
+    assert cfg["selector"]["evidence_certificate_mode"] == "exact_downstream_winner_preservation"
     for name in ("proposal_head", "family_head", "family_embed", "family_activity_proj", "proposal_feature_proj"):
         assert name not in trainable
 
@@ -100,6 +101,8 @@ def test_v64_3_config_contract_passes(tmp_path: Path) -> None:
             "bdse/configs/v64_3_cc_aocc_apwcca_train_2gpu.yaml",
             "--eval-config",
             "bdse/configs/v64_3_cc_aocc_apwcca_cl.yaml",
+            "--expected-family",
+            "v64.3.1",
             "--output",
             str(out),
         ],
@@ -107,3 +110,76 @@ def test_v64_3_config_contract_passes(tmp_path: Path) -> None:
         check=True,
     )
     assert json.loads(out.read_text(encoding="utf-8"))["pass"] is True
+
+
+def test_v64_3_strict_contract_rejects_v64_2_train_config(tmp_path: Path) -> None:
+    out = tmp_path / "stale_contract.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bdse.tools.validate_v64_pipeline_config",
+            "--train-config",
+            "bdse/configs/v64_2_saqa_bcc_hcbe_train_2gpu.yaml",
+            "--eval-config",
+            "bdse/configs/v64_3_cc_aocc_apwcca_cl.yaml",
+            "--expected-family",
+            "v64.3.1",
+            "--output",
+            str(out),
+        ],
+        cwd=ROOT,
+        check=False,
+    )
+    assert proc.returncode != 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["pass"] is False
+    assert "v64_3_exact_experiment_family" in report["train"]["failures"]
+
+
+def test_certificate_action_alignment_reports_conservatism() -> None:
+    from bdse.tools.analyze_certificate_action_alignment import analyze_rows
+
+    rows = [
+        {
+            "evidence_certificate_fraction": 1.0,
+            "budget_vs_pair_full_match": 1.0,
+            "teacher_action_match": 1.0,
+            "teacher_exact_winner_flip_critical_scene_rate": 1.0,
+            "selector_aocc_initial_deficit": 0.02,
+            "selector_aocc_deficit_reduction": 0.02,
+            "selector_aocc_final_deficit": 0.0,
+        },
+        {
+            "evidence_certificate_fraction": 0.0,
+            "budget_vs_pair_full_match": 1.0,
+            "teacher_action_match": 0.0,
+            "teacher_exact_winner_flip_critical_scene_rate": 1.0,
+            "selector_aocc_initial_deficit": 0.02,
+            "selector_aocc_deficit_reduction": 0.001,
+            "selector_aocc_final_deficit": 0.019,
+        },
+        {
+            "evidence_certificate_fraction": 0.0,
+            "budget_vs_pair_full_match": 1.0,
+            "teacher_action_match": 1.0,
+            "teacher_exact_winner_flip_critical_scene_rate": 0.0,
+            "selector_aocc_initial_deficit": 0.02,
+            "selector_aocc_deficit_reduction": 0.001,
+            "selector_aocc_final_deficit": 0.019,
+        },
+        {
+            "evidence_certificate_fraction": 0.0,
+            "budget_vs_pair_full_match": 0.0,
+            "teacher_action_match": 0.0,
+            "teacher_exact_winner_flip_critical_scene_rate": 0.0,
+            "selector_aocc_initial_deficit": 0.02,
+            "selector_aocc_deficit_reduction": 0.001,
+            "selector_aocc_final_deficit": 0.019,
+        },
+    ]
+    report = analyze_rows(rows)
+    assert report["evidence_fully_certified_rate"] == 0.25
+    assert report["exact_budget_vs_pair_full_winner_preservation_rate"] == 0.75
+    assert report["certificate_action_preservation_gap"] == 0.5
+    assert report["certificate_conservatism_warning"] is True

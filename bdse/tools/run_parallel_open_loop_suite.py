@@ -37,6 +37,14 @@ class Task:
     log_path: Path
 
 
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _parse_system(text: str) -> SystemSpec:
     # NAME::CONFIG::CHECKPOINT avoids ambiguity with paths containing ':' on
     # mounted filesystems and remains readable in shell commands.
@@ -269,6 +277,15 @@ def main() -> None:
         )
     report = {
         "systems": [system.name for system in systems],
+        "system_sources": {
+            system.name: {
+                "config_path": str(system.config),
+                "config_sha256": _sha256_file(system.config),
+                "checkpoint_path": str(system.checkpoint),
+                "checkpoint_sha256": _sha256_file(system.checkpoint),
+            }
+            for system in systems
+        },
         "num_scenarios_per_system": scenario_count,
         "num_worker_slots": slots,
         "gpus": gpus,

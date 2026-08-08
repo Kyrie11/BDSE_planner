@@ -1,0 +1,97 @@
+
+V64 protocol-integrity gate [FAIL]
+V64 minimum-completeness gate [FAIL]
+V64 competitive gate [FAIL]
+{
+  "action_query_mode_all_valid": 1.0,
+  "beneficial_residual_rate": 0.0,
+  "budget_fill": 1.0,
+  "budget_vs_pair_full_match": 0.901,
+  "certificate_action_preservation_gap": 0.835,
+  "dense_anchor_row_drift": 0.0,
+  "dense_runtime_base_contract_pass": 1.0,
+  "dense_runtime_base_value_allclose_fraction": 1.0,
+  "dense_runtime_query_decision_match": 0.999,
+  "dense_runtime_query_score_allclose_fraction": 1.0,
+  "dense_runtime_query_score_contract_pass": 1.0,
+  "dense_runtime_raw_query_feature_allclose_fraction": 1.0,
+  "dense_runtime_raw_query_feature_contract_available": 1.0,
+  "dense_runtime_raw_query_feature_contract_pass": 1.0,
+  "dense_vs_hab_topm_dense_value_match": 0.969,
+  "dense_vs_selected_budget_dense_value_match": 0.943,
+  "deployed_residual_flip_rate": 0.0,
+  "dual_certificate_deployment_certified": 0.911,
+  "dual_pass_conditional": 0.0,
+  "effective_decisive_recall": 0.754984949046534,
+  "evidence_certified_fraction": 0.066,
+  "exact_winner_flip_critical_recall_selected_legacy_alias": 0.2726007326007326,
+  "exact_winner_flip_critical_recall_topm_legacy_alias": 0.3547619047619048,
+  "fallback_rate": 0.934,
+  "frontier_retained": 0.722400594056479,
+  "hab_topm_dense_value_action_match": 0.184,
+  "hab_topm_dense_value_vs_runtime_sparse_full_match": 0.999,
+  "harmful_residual_rate": 0.0,
+  "interaction_decisive_recall": 0.5686012824710992,
+  "internal_beneficial_pair_potential_rate": 0.0,
+  "internal_harmful_pair_potential_rate": 0.0,
+  "latency_p95_ms": 575.2914825920016,
+  "local_anchor_row_drift": 0.0,
+  "local_control_local_pair_full_match": 0.236,
+  "local_pair_full_match": 0.236,
+  "model_dense_vs_deployment_dense_full_match": 1.0,
+  "open_loop_count": 1000.0,
+  "pair_full_match": 0.236,
+  "pair_residual_gain_vs_local_pair": 0.0,
+  "paired_deployed_flip_stats": {
+    "beneficial_given_flip": 0.0,
+    "beneficial_rate": 0.0,
+    "flip_rate": 0.0,
+    "harmful_given_flip": 0.0,
+    "harmful_rate": 0.0,
+    "n": 1000.0,
+    "unchanged_rate": 1.0
+  },
+  "proposal_decisive_recall": 0.7508415042314827,
+  "proposal_to_certificate_atom_expansion": 1.499875,
+  "queried_valid_action_fraction": 1.0,
+  "query_extension_adapter_enabled": 1.0,
+  "query_extension_dim": 6.0,
+  "query_legacy_support_dim": 12.0,
+  "residual_calibration_epsilon": 1.225876248094552,
+  "residual_flip_certificate_pass": 0.911,
+  "residual_gain_vs_local": 0.0,
+  "residual_margin_pass_conditional": 0.0,
+  "residual_proposal_rate": 0.089,
+  "retained_interface_atom_budget_pass": 1.0,
+  "selected_decisive_recall": 0.5893207646799579,
+  "selector_aocc_deficit_reduction": 0.0007437531314954776,
+  "selector_aocc_final_deficit": 0.01869450894743204,
+  "selector_aocc_full_target_certified_pair_fraction": 0.0,
+  "selector_aocc_initial_deficit": 0.019389174312353135,
+  "selector_gain_vs_foundation": -0.0010000000000000009,
+  "teacher_exact_winner_flip_critical_recall_selected": 0.2726007326007326,
+  "teacher_exact_winner_flip_critical_recall_topm": 0.3547619047619048,
+  "teacher_exact_winner_flip_critical_scene_count_estimate": 465.7113613101331,
+  "teacher_exact_winner_flip_critical_scene_rate": 0.4657113613101331,
+  "teacher_exact_winner_flip_scalar_winner_aligned": 0.977,
+  "teacher_match_candidate": 0.224,
+  "teacher_match_foundation": 0.225,
+  "teacher_match_local": 0.224,
+  "training_residual_epsilon_reserve": 0.15
+}
+  ! WARNING: AOCC certificate is much more conservative than exact B-budget winner preservation: budget-vs-pair-full=0.901, certified=0.066, gap=0.835. Audit certificate/decision alignment before increasing B or relaxing thresholds.
+  ! WARNING: calibrated residual epsilon=1.225876 exceeds training reserve=0.150000; certified flips may be suppressed
+  ! WARNING: latency p95=575.2914825920016 ms > 500.0 ms; CL20 remains allowed, no real-time claim
+  - PROTOCOL: trainable zero-init critical_proposal_adapter never moved from exact zero; the AP-WCCA branch was not effectively trained
+  - MINIMUM: certified fraction=0.066 < 0.40
+  - MINIMUM: fallback rate=0.934 > 0.60
+  - COMPETITIVE: total teacher-match gain=-0.001000 < +0.015
+  - COMPETITIVE: residual teacher-match gain=+0.000000 < +0.005
+  - COMPETITIVE: pair-full residual gain=+0.000000 < +0.005
+  - COMPETITIVE: residual not net beneficial=0.0/0.0
+  - COMPETITIVE: certified fraction=0.066 < 0.55
+  - COMPETITIVE: proposal decisive recall=0.7508415042314827 < 0.80
+  - COMPETITIVE: fallback rate=0.934 > 0.40
+  - COMPETITIVE: teacher exact winner-flip critical Top-M recall=0.3547619047619048 < 0.80
+  - COMPETITIVE: teacher exact winner-flip critical selected recall=0.2726007326007326 < 0.50
+  - COMPETITIVE: paired regret regressed vs foundation: {'median': 157.44405297807316, 'p90': 50751.90394223309, 'cvar90': 79184.34787446725} / {'median': 156.45088699043845, 'p90': 51269.67742280364, 'cvar90': 81097.18756318641}

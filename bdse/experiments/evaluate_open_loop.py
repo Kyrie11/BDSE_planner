@@ -682,7 +682,12 @@ def main() -> None:
                 diag.values["beneficial_residual_intervention_rate"] = float((not local_correct) and pair_full_correct)
                 if dense_action >= 0:
                     diag.values["dense_to_local_pair_full_flip_rate"] = float(dense_action != local_pair_full_action)
-            cert_fraction = float(qdiag.get("selector_aocc_certified_pair_fraction", float("nan")))
+            cert_fraction = float(
+                qdiag.get(
+                    "evidence_certificate_fraction",
+                    qdiag.get("selector_aocc_certified_pair_fraction", float("nan")),
+                )
+            )
             fully_certified = bool(np.isfinite(cert_fraction) and cert_fraction >= 1.0 - 1e-8)
             diag.values["aocc_fully_certified_scene_rate"] = float(fully_certified)
             diag.values["teacher_action_match_fully_certified"] = float(budget_correct) if fully_certified else float("nan")

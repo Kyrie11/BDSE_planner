@@ -1,0 +1,30 @@
+{
+  "aocc_deficit_reduction_mean": 0.0007437531314954776,
+  "aocc_final_deficit_mean": 0.01869450894743204,
+  "aocc_full_target_certified_pair_fraction_mean": 0.0,
+  "aocc_initial_deficit_mean": 0.019389174312353135,
+  "audit": "decision_aligned_certificate_action_alignment",
+  "budget_winner_preservation_on_critical_scenes": 0.9054945054945055,
+  "certificate_action_preservation_gap": 0.835,
+  "certificate_conservatism_warning": true,
+  "certificate_soundness_warning": true,
+  "critical_scene_rate": 0.455,
+  "critical_uncertified_but_preserved_rate_over_critical": 0.8747252747252747,
+  "diagnostic_only": true,
+  "evidence_fully_certified_rate": 0.066,
+  "exact_budget_vs_pair_full_winner_preservation_rate": 0.901,
+  "num_scenarios": 1000,
+  "preservation_given_certified": 0.5909090909090909,
+  "preservation_given_uncertified": 0.9229122055674518,
+  "quadrants": {
+    "certified_and_preserved": 39,
+    "certified_but_not_preserved": 27,
+    "uncertified_and_not_preserved": 72,
+    "uncertified_but_preserved": 862
+  },
+  "recommended_interpretation": "Audit certificate formulation against the exact downstream winner before changing B or gate thresholds.",
+  "teacher_match_given_certified": 0.0,
+  "teacher_match_given_not_preserved": 0.050505050505050504,
+  "teacher_match_given_preserved": 0.24306326304106549,
+  "teacher_match_given_uncertified": 0.2398286937901499
+}

@@ -962,6 +962,63 @@ class BDSEPlannerCore:
             selection.diagnostics["aocc_exact_tournament_target_active"] = bool(
                 cap_mode in adverse_modes and adverse_target_action is not None
             )
+
+            # V64.3.1 Decision-Aligned Exact Preservation Certificate (DA-EPC).
+            #
+            # The historical AOCC certificate is a one-sided pair-margin bound.
+            # With the current exact deployment operator (action-potential
+            # aggregation + hard safety + utility refinement), satisfying that
+            # pair surrogate is neither necessary nor sufficient for preserving
+            # the actual winner.  The planner already evaluates the exact full
+            # Top-M target above using cached model outputs.  For the paper-facing
+            # interface certificate, audit the *same* downstream operator on the
+            # selected B atoms and certify iff the winner is literally identical.
+            # This is a single deterministic audit, not DACC-style combinatorial
+            # search/repair; it changes neither the selected atoms nor B and adds
+            # no neural evidence query.  The pairwise AOCC bound is retained in
+            # diagnostics as a robustness surrogate.
+            certificate_mode = str(
+                sel_cfg.get("evidence_certificate_mode", "pairwise_aocc")
+            ).strip().lower()
+            exact_preservation_modes = {
+                "exact_downstream_winner_preservation",
+                "exact_winner_preservation",
+                "decision_aligned_exact",
+                "da_epc",
+            }
+            exact_selected_anchor_action = None
+            exact_evidence_certificate = None
+            if (
+                certificate_mode in exact_preservation_modes
+                and deployment_evaluator is not None
+                and adverse_target_action is not None
+            ):
+                exact_selected_anchor_action = int(deployment_evaluator(selection.selected)[0])
+                exact_evidence_certificate = float(
+                    exact_selected_anchor_action == int(adverse_target_action)
+                )
+                selection.diagnostics["aocc_pairwise_certified_pair_fraction_raw"] = float(
+                    selection.diagnostics.get("aocc_certified_pair_fraction", float("nan"))
+                )
+                selection.diagnostics["exact_winner_preservation_target_action"] = int(
+                    adverse_target_action
+                )
+                selection.diagnostics["exact_winner_preservation_selected_action"] = int(
+                    exact_selected_anchor_action
+                )
+                selection.diagnostics["exact_winner_preservation_certificate"] = float(
+                    exact_evidence_certificate
+                )
+                selection.diagnostics["evidence_certificate_fraction"] = float(
+                    exact_evidence_certificate
+                )
+                selection.diagnostics["evidence_certificate_mode_exact_winner_preservation"] = 1.0
+            else:
+                selection.diagnostics["evidence_certificate_fraction"] = float(
+                    selection.diagnostics.get("aocc_certified_pair_fraction", 1.0)
+                )
+                selection.diagnostics["evidence_certificate_mode_exact_winner_preservation"] = 0.0
+
             tournament_started = time.perf_counter()
             tournament = run_pair_conditioned_tournament(
                 J0,
@@ -980,7 +1037,8 @@ class BDSEPlannerCore:
                 residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
                 residual_set_action_factors=pred.get("residual_set_action_factors", None),
                 evidence_certificate_fraction=selection.diagnostics.get(
-                    "aocc_certified_pair_fraction", None
+                    "evidence_certificate_fraction",
+                    selection.diagnostics.get("aocc_certified_pair_fraction", None),
                 ),
             )
         else:
@@ -1024,9 +1082,13 @@ class BDSEPlannerCore:
             )
         # Expose selector certificate diagnostics to the fallback controller.
         for key in (
-            "aocc_certified_pair_fraction", "aocc_final_deficit",
-            "aocc_bound_calibrated", "aocc_target_action",
-            "aocc_exact_tournament_target_active",
+            "aocc_certified_pair_fraction", "aocc_pairwise_certified_pair_fraction_raw",
+            "aocc_final_deficit", "aocc_bound_calibrated", "aocc_target_action",
+            "aocc_exact_tournament_target_active", "evidence_certificate_fraction",
+            "evidence_certificate_mode_exact_winner_preservation",
+            "exact_winner_preservation_certificate",
+            "exact_winner_preservation_target_action",
+            "exact_winner_preservation_selected_action",
         ):
             if key in selection.diagnostics:
                 tournament.diagnostics[key] = selection.diagnostics[key]
@@ -1036,7 +1098,12 @@ class BDSEPlannerCore:
         tournament = self._finalize_pair_anchor_after_structural_guard(
             tournament, runtime, candidates, runtime_flags, stage_cfg
         )
-        evidence_cert = float(tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0))
+        evidence_cert = float(
+            tournament.diagnostics.get(
+                "evidence_certificate_fraction",
+                tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0),
+            )
+        )
         raw_anchor_action = int(
             tournament.diagnostics.get(
                 "pair_action_anchor_raw_anchor_action",
@@ -1244,7 +1311,12 @@ class BDSEPlannerCore:
             return "disabled"
         tau_delta, safety_thr = self._fallback_thresholds(cfg)
         if bool(fcfg.get("trigger_on_uncertified_aocc", False)):
-            certified_fraction = float(tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0))
+            certified_fraction = float(
+                tournament.diagnostics.get(
+                    "evidence_certificate_fraction",
+                    tournament.diagnostics.get("aocc_certified_pair_fraction", 1.0),
+                )
+            )
             min_fraction = float(fcfg.get("min_aocc_certified_pair_fraction", 1.0))
             if certified_fraction < min_fraction:
                 return "uncertified_aocc"

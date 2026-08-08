@@ -358,6 +358,8 @@ selector:
   adverse_certificate_calibrated: false
   adverse_certificate_fill_to_budget_after_certified: true
   adverse_certificate_max_interaction_prefix_fraction: 0.75
+  evidence_certificate_mode: exact_downstream_winner_preservation
+  pairwise_aocc_certificate_diagnostic_only: true
 tournament:
   L_infer: 8
   epsilon_cal: 0.05
@@ -621,7 +623,7 @@ experiment:
     acquisition M and pair-score compute are reported separately and are not hidden
     as B*K
 metadata:
-  algorithm_version: V64_SAQA_BCC
+  algorithm_version: V64.3.1-CC-AOCC-AP-WCCA-DA-EPC
   fixed_planner_interface_evidence_budget: 16
   query_contract: legacy_12d_prefix_plus_zero_init_residual_extension
 checkpoint_loading:
@@ -634,4 +636,4 @@ checkpoint_loading:
   - residual_set_action_head.
   - residual_set_atom_head.
 provenance:
-  algorithm_version: V64.3-CC-AOCC-AP-WCCA
+  algorithm_version: V64.3.1-CC-AOCC-AP-WCCA-DA-EPC

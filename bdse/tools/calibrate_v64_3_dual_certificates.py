@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -27,6 +28,12 @@ def _quantile(values: np.ndarray, alpha: float) -> float:
     return float(values[min(max(rank, 1), values.size) - 1])
 
 
+def _sha256_file(path: str | Path) -> str:
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _require_residual_action_variance(pred: dict[str, Any]) -> np.ndarray:
@@ -206,6 +213,8 @@ def _collect(args: argparse.Namespace) -> None:
         family_scores_json=np.asarray([json.dumps({str(k): v for k, v in family_scores.items()})]),
         calibration_beta=np.asarray([float(beta)], dtype=np.float64),
         calibration_prior_radius=np.asarray([float(prior_radius)], dtype=np.float64),
+        source_checkpoint_sha256=np.asarray([_sha256_file(args.checkpoint)]),
+        source_config_sha256=np.asarray([_sha256_file(args.config)]),
     )
     print(json.dumps({"raw_output": str(args.raw_output), "scene_count": scene_count, "residual_policy_scene_count": residual_policy_scene_count, "residual_proposal_count": proposal_count, "evidence_score_count": int(evidence.size)}, indent=2))
 
@@ -221,6 +230,8 @@ def _merge(args: argparse.Namespace) -> None:
     family: dict[str, list[float]] = defaultdict(list)
     raw_betas: list[float] = []
     raw_prior_radii: list[float] = []
+    raw_checkpoint_hashes: list[str] = []
+    raw_config_hashes: list[str] = []
     scenes = proposals = policy_scenes = 0
     for path_text in args.merge_raw:
         data = np.load(path_text, allow_pickle=False)
@@ -240,6 +251,10 @@ def _merge(args: argparse.Namespace) -> None:
             if "calibration_prior_radius" in data.files
             else float(args.prior_radius)
         )
+        if "source_checkpoint_sha256" not in data.files or "source_config_sha256" not in data.files:
+            raise ValueError(f"Calibration shard {path_text} lacks V64.3.1 source SHA provenance; recompute it")
+        raw_checkpoint_hashes.append(str(data["source_checkpoint_sha256"][0]))
+        raw_config_hashes.append(str(data["source_config_sha256"][0]))
         family_json = json.loads(str(data["family_scores_json"][0]))
         for key, values in family_json.items():
             family[key].extend(float(v) for v in values)
@@ -247,6 +262,10 @@ def _merge(args: argparse.Namespace) -> None:
         raise ValueError(f"Calibration shards disagree on beta: {raw_betas}")
     if raw_prior_radii and (max(raw_prior_radii) - min(raw_prior_radii) > 1.0e-12):
         raise ValueError(f"Calibration shards disagree on prior_radius: {raw_prior_radii}")
+    if len(set(raw_checkpoint_hashes)) != 1:
+        raise ValueError(f"Calibration shards were collected from different checkpoints: {raw_checkpoint_hashes}")
+    if len(set(raw_config_hashes)) != 1:
+        raise ValueError(f"Calibration shards were collected from different configs: {raw_config_hashes}")
     effective_beta = float(raw_betas[0]) if raw_betas else float(args.beta)
     effective_prior_radius = float(raw_prior_radii[0]) if raw_prior_radii else float(args.prior_radius)
     evidence = np.concatenate(evidence_parts) if evidence_parts else np.zeros((0,), dtype=np.float64)
@@ -269,6 +288,8 @@ def _merge(args: argparse.Namespace) -> None:
         "alpha": float(args.alpha),
         "beta": effective_beta,
         "prior_radius": effective_prior_radius,
+        "source_checkpoint_sha256": raw_checkpoint_hashes[0] if raw_checkpoint_hashes else None,
+        "source_config_sha256": raw_config_hashes[0] if raw_config_hashes else None,
         "scene_count": int(scenes),
         "evidence_score_count": int(evidence.size),
         "residual_policy_scene_count": int(policy_scenes),
