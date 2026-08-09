@@ -228,7 +228,8 @@ def _exact_winner_flip_critical_proposal_loss(
     deployment_acquisition_logits: torch.Tensor | None = None,
     family_ids: torch.Tensor | None = None,
     critical_residual_logits: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    return_adapter_diagnostic: bool = False,
+) -> tuple[torch.Tensor, ...]:
     """Train proposal logits from literal leave-one-atom-out winner flips.
 
     ``target_source=model_dense`` preserves V62 exactly.  V63 additionally
@@ -244,7 +245,8 @@ def _exact_winner_flip_critical_proposal_loss(
     crit_cfg = train_cfg.get("exact_winner_flip_criticality", {}) or {}
     if not bool(crit_cfg.get("enabled", False)):
         zero = J0.new_tensor(0.0)
-        return zero, zero, zero, zero, zero
+        base = (zero, zero, zero, zero, zero)
+        return (*base, zero) if return_adapter_diagnostic else base
 
     active = active.bool()
     valid = valid.bool()
@@ -504,8 +506,21 @@ def _exact_winner_flip_critical_proposal_loss(
         active_f = active.float()
         active_count = active_f.sum(dim=1, keepdim=True).clamp_min(1.0)
         residual_center = residual - (residual * active_f).sum(dim=1, keepdim=True) / active_count
-        critical_rate = critical.float().sum(dim=1, keepdim=True) / active_count
-        target_center = (critical.float() - critical_rate) * float(
+        target_mode = str(crit_cfg.get("adapter_residual_target_mode", "literal_binary")).strip().lower()
+        if target_mode in {"literal_critical_severity", "critical_severity", "severity"}:
+            # Optional V64.3.3 value-representation probe.  The support stays
+            # *exactly* the literal winner-flip mask: every non-critical atom has
+            # zero target.  Severity only orders already-critical atoms by the
+            # post-removal winner gap, unlike the historical v48 margin-deficit
+            # proxy that could reward non-flipping boundary changes.
+            severity_gain = float(crit_cfg.get("adapter_residual_severity_gain", 1.0))
+            target_raw = critical.float() * (1.0 + severity_gain * severity.detach())
+        elif target_mode in {"literal_binary", "binary", "critical_binary"}:
+            target_raw = critical.float()
+        else:
+            raise ValueError(f"Unknown adapter_residual_target_mode={target_mode!r}")
+        target_mean = (target_raw * active_f).sum(dim=1, keepdim=True) / active_count
+        target_center = (target_raw - target_mean) * float(
             crit_cfg.get("adapter_residual_target_scale", 1.0)
         )
         adapter_terms = F.smooth_l1_loss(
@@ -537,13 +552,14 @@ def _exact_winner_flip_critical_proposal_loss(
     teacher_aligned_critical_scene_fraction = (
         has_critical & winner_for_alignment.eq(target_action)
     ).float().mean()
-    return (
+    base_result = (
         loss,
         recall,
         critical_fraction,
         critical_scene_fraction,
         teacher_aligned_critical_scene_fraction,
     )
+    return (*base_result, L_adapter_residual) if return_adapter_diagnostic else base_result
 
 
 def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -3648,6 +3664,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         exact_winner_flip_critical_atom_fraction,
         exact_winner_flip_critical_scene_fraction,
         exact_winner_flip_teacher_aligned_scene_fraction,
+        L_critical_adapter_residual_alignment,
     ) = _exact_winner_flip_critical_proposal_loss(
         finite_J0,
         g,
@@ -3666,6 +3683,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         ),
         family_ids=batch.get("evidence_family_ids"),
         critical_residual_logits=out.get("critical_proposal_residual_logits"),
+        return_adapter_diagnostic=True,
     )
 
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed

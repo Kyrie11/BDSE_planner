@@ -108,6 +108,9 @@ def _criticality_metrics(
         values[f"{prefix}_critical_recall_selected"] = float("nan")
         values[f"{prefix}_critical_atom_fraction"] = 0.0
         values[f"{prefix}_critical_scene_rate"] = 0.0
+        values[f"{prefix}_critical_count"] = 0.0
+        values[f"{prefix}_critical_topm_hit_count"] = 0.0
+        values[f"{prefix}_critical_selected_hit_count"] = 0.0
         return values, details
 
     scalar_winner = int(np.nanargmin(dense_cost))
@@ -119,6 +122,12 @@ def _criticality_metrics(
         values[f"{prefix}_critical_recall_selected"] = float("nan")
         values[f"{prefix}_critical_atom_fraction"] = float("nan")
         values[f"{prefix}_critical_scene_rate"] = float("nan")
+        # Count diagnostics are NaN on scalar/lexicographic-misaligned scenes so
+        # micro recall can exclude exactly the same ineligible rows as the
+        # formal literal-critical metric.
+        values[f"{prefix}_critical_count"] = float("nan")
+        values[f"{prefix}_critical_topm_hit_count"] = float("nan")
+        values[f"{prefix}_critical_selected_hit_count"] = float("nan")
         details[f"{prefix}_winner"] = winner
         details[f"{prefix}_scalar_winner"] = scalar_winner
         return values, details
@@ -138,10 +147,17 @@ def _criticality_metrics(
     values[f"{prefix}_critical_recall_selected"] = (
         float((critical & selected_mask).sum() / critical_count) if critical_count else float("nan")
     )
+    topm_hits = int((critical & topm_mask).sum())
+    selected_hits = int((critical & selected_mask).sum())
     values[f"{prefix}_critical_atom_fraction"] = float(critical_count / max(int(active.sum()), 1))
     values[f"{prefix}_critical_scene_rate"] = float(critical_count > 0)
+    values[f"{prefix}_critical_count"] = float(critical_count)
+    values[f"{prefix}_critical_topm_hit_count"] = float(topm_hits)
+    values[f"{prefix}_critical_selected_hit_count"] = float(selected_hits)
     details[f"{prefix}_winner"] = winner
     details[f"{prefix}_critical_count"] = critical_count
+    details[f"{prefix}_critical_topm_hit_count"] = topm_hits
+    details[f"{prefix}_critical_selected_hit_count"] = selected_hits
     return values, details
 
 

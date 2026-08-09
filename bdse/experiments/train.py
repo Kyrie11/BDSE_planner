@@ -1008,6 +1008,41 @@ def _iter_distributed_indices(n: int, distributed: bool, world_size: int, global
     return range(n)
 
 
+def _teacher_literal_criticality_full_support(sample, pred: dict[str, Any], selected_atoms) -> tuple[dict[str, float], dict[str, int]]:
+    """Exact teacher winner-flip criticality on the full auditable evidence bank.
+
+    This helper intentionally does *not* use the certificate-stage active mask:
+    that mask is already HAB Top-M.  Using it as the label support makes Top-M
+    recall tautologically 1.0 and cannot diagnose acquisition.
+    """
+    pred_g = np.asarray(pred["g"], dtype=np.float32)
+    active_atoms = np.asarray(sample.evidence_bank.active_mask, dtype=bool).reshape(-1)
+    if active_atoms.shape[0] < pred_g.shape[0]:
+        active_atoms = np.pad(active_atoms, (0, pred_g.shape[0] - active_atoms.shape[0]), constant_values=False)
+    active_atoms = active_atoms[: pred_g.shape[0]]
+    valid_actions = np.asarray(sample.candidates.valid_mask, dtype=bool).reshape(-1)
+    teacher_g = np.zeros_like(pred_g)
+    source_teacher_g = np.asarray(sample.teacher.g_evid, dtype=np.float32)
+    e_lim = min(teacher_g.shape[0], source_teacher_g.shape[0])
+    a_lim = min(teacher_g.shape[1], source_teacher_g.shape[1])
+    teacher_g[:e_lim, :a_lim] = source_teacher_g[:e_lim, :a_lim]
+    teacher_cost = np.full((pred_g.shape[1],), np.inf, dtype=np.float32)
+    source_teacher_cost = np.asarray(sample.teacher.J_T, dtype=np.float32).reshape(-1)
+    k_lim = min(teacher_cost.shape[0], source_teacher_cost.shape[0])
+    teacher_cost[:k_lim] = source_teacher_cost[:k_lim]
+    teacher_base = teacher_cost - np.where(active_atoms[:, None], teacher_g, 0.0).sum(axis=0)
+    return _criticality_metrics(
+        teacher_base,
+        teacher_g,
+        active_atoms,
+        valid_actions,
+        np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1),
+        np.asarray(selected_atoms, dtype=np.int64).reshape(-1),
+        prefix="teacher_exact_winner_flip",
+        forced_winner=int(sample.teacher.a_star),
+    )
+
+
 @torch.no_grad()
 def _run_validation_open_loop(
     *,
@@ -1087,25 +1122,8 @@ def _run_validation_open_loop(
             # even though this validation path never produced them, yielding NaN and
             # a false screen failure.  This computation is teacher-only and does not
             # require dense model inference.
-            pred_g = np.asarray(pred["g"], dtype=np.float32)
-            active_atoms = np.asarray(stage_atom_active, dtype=bool).reshape(-1)
-            valid_actions = np.asarray(sample.candidates.valid_mask, dtype=bool).reshape(-1)
-            teacher_g = np.zeros_like(pred_g)
-            source_teacher_g = np.asarray(sample.teacher.g_evid, dtype=np.float32)
-            teacher_g[: min(teacher_g.shape[0], source_teacher_g.shape[0]), : min(teacher_g.shape[1], source_teacher_g.shape[1])] = source_teacher_g[: teacher_g.shape[0], : teacher_g.shape[1]]
-            teacher_cost = np.full((pred_g.shape[1],), np.inf, dtype=np.float32)
-            source_teacher_cost = np.asarray(sample.teacher.J_T, dtype=np.float32).reshape(-1)
-            teacher_cost[: min(teacher_cost.shape[0], source_teacher_cost.shape[0])] = source_teacher_cost[: teacher_cost.shape[0]]
-            teacher_base = teacher_cost - np.where(active_atoms[:, None], teacher_g, 0.0).sum(axis=0)
-            teacher_critical, teacher_critical_details = _criticality_metrics(
-                teacher_base,
-                teacher_g,
-                active_atoms,
-                valid_actions,
-                np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1),
-                np.asarray(sel.selected, dtype=np.int64).reshape(-1),
-                prefix="teacher_exact_winner_flip",
-                forced_winner=int(sample.teacher.a_star),
+            teacher_critical, teacher_critical_details = _teacher_literal_criticality_full_support(
+                sample, pred, sel.selected
             )
 
             pair_full_action = -1
@@ -1254,6 +1272,20 @@ def _run_validation_open_loop(
             if strict:
                 raise
     metrics = _prefix_metrics(_aggregate_meters(meters, device, distributed), "val_")
+    # Micro-average literal critical recall is a more stable screening statistic
+    # than the mean of per-scene recalls.  Because count/hit metrics are emitted
+    # on every scalar-aligned scene (including zero-critical rows), ratio-of-means
+    # equals total hits / total literal critical atoms over the frozen subset.
+    for prefix in ("teacher_exact_winner_flip", "exact_winner_flip"):
+        count = float(metrics.get(f"val_{prefix}_critical_count", float("nan")))
+        topm_hits = float(metrics.get(f"val_{prefix}_critical_topm_hit_count", float("nan")))
+        selected_hits = float(metrics.get(f"val_{prefix}_critical_selected_hit_count", float("nan")))
+        metrics[f"val_{prefix}_critical_recall_topm_micro"] = (
+            topm_hits / count if np.isfinite(count) and count > 0.0 and np.isfinite(topm_hits) else float("nan")
+        )
+        metrics[f"val_{prefix}_critical_recall_selected_micro"] = (
+            selected_hits / count if np.isfinite(count) and count > 0.0 and np.isfinite(selected_hits) else float("nan")
+        )
     # Aggregate failure counts explicitly; _aggregate_meters would average them.
     fail_t = torch.tensor([float(failed), float(len(indices))], dtype=torch.float64, device=device)
     if distributed and dist.is_initialized():

@@ -1094,6 +1094,12 @@ class BDSEModel(nn.Module):
             "residual_set_action_factors": set_action_factors,
             "proposal_logits": ctx["proposal_logits"],
             "selector_logits": ctx["proposal_logits"],
+            # V64.3.3: keep the explicit acquisition residual in the training
+            # forward contract.  V64.3.2 generated this tensor inside
+            # encode_context(), but omitted it here, silently disabling ACRA and
+            # making the residual diagnostics report zero while the adapter was
+            # still updated indirectly through proposal_logits.
+            "critical_proposal_residual_logits": ctx["critical_proposal_residual_logits"],
             "family_logits": ctx["family_logits"],
             "family_pi": ctx["family_pi"],
             "family_active": ctx["family_active"],

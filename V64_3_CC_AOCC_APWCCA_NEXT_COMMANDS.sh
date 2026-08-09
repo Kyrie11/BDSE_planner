@@ -80,7 +80,7 @@ mkdir -p "$OUT_ROOT/logs" "$OUT_ROOT/provenance"
 python -m bdse.tools.validate_v64_pipeline_config \
   --train-config "$TRAIN_CONFIG" \
   --eval-config "$EVAL_CONFIG" \
-  --expected-family v64.3.1 \
+  --expected-family v64.3.3 \
   --output "$OUT_ROOT/provenance/v64_pipeline_config_contract.json"
 
 # Detach the complete pipeline, not only the training child.  Detaching only

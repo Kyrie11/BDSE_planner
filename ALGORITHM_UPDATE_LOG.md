@@ -4335,3 +4335,80 @@ fails specifically because critical Top-M does not improve, run screen B
 (AP-WRCCA).  Do not alter selector/B/atom-action value until acquisition has been
 measured cleanly.  If critical Top-M and selected recall improve but teacher
 match/regret do not, the next bottleneck is atom-to-action value learning.
+
+# V64.3.3 — Full-Support Criticality Audit + Wired ACRA + Conditional Literal-Critical Value Probe (2026-08-08)
+
+## Trigger: V64.3.2 Phase-1A/1B screens were not valid acquisition tests
+
+Uploaded V64.3.2 AP-WCCA and AP-WRCCA screens both reported an activated adapter but `delta_val_critical_topm_recall=0`. Source SHA-256 provenance matches the uploaded source for both runs, so this is not another code/result version mismatch. Re-audit found three engineering defects:
+
+1. **Training open-loop critical Top-M recall was tautological.** `_run_certificate_stage()` returns `stage_atom_active`, which is already the HAB Top-M mask. V64.3.2 passed this mask as the `active_atoms` universe to `_criticality_metrics()`, then asked what fraction of those critical atoms are in Top-M. Therefore anchor and last `val_teacher_exact_winner_flip_critical_recall_topm` were exactly `1.0` in both Phase-1A and Phase-1B by construction. The resulting `delta=0` contains no information about acquisition quality.
+2. **ACRA was disconnected from the actual training forward contract.** `encode_context()` computed `critical_proposal_residual_logits`, but `BDSEModel.forward()` omitted the tensor from its output dict. `compute_bdse_losses()` therefore received `None`; the ACRA alignment branch and residual diagnostics were disabled. The adapter still moved because BCE/ranking/coverage losses backpropagated through the combined `proposal_logits`, explaining the non-zero parameter delta together with exactly-zero forward diagnostics.
+3. **AP-WRCCA screen had a train/eval conditioning provenance mismatch.** Its train config used `frozen_base_winner_rival_actions`, but the launcher still named the AP-WCCA eval config. `RUN_MODE=train` prevented this from changing the screen weights, but the old config contract failed to reject the mismatch and the same mistake would be unsafe in a full pipeline.
+
+## What the uploaded screens do and do not prove
+
+Phase-1A AP-WCCA:
+- adapter parameter delta RMS max: `0.005239` (real parameter movement);
+- proposal decisive recall: `0.79151 -> 0.77514` (`-0.01637`);
+- teacher action match: `0.264 -> 0.258`;
+- reported validation critical Top-M: `1.0 -> 1.0`, invalid/tautological;
+- training-side literal critical Top-M diagnostic: approximately `0.3653 -> 0.3685 -> 0.3682`, but there is no matching step-zero train diagnostic, so this is not a clean causal gain estimate.
+
+Phase-1B AP-WRCCA:
+- adapter parameter delta RMS max: `0.005010`;
+- proposal decisive recall: `0.79151 -> 0.76280` (`-0.02871`);
+- teacher action match: `0.264 -> 0.258`;
+- reported validation critical Top-M: `1.0 -> 1.0`, invalid/tautological;
+- training-side literal critical Top-M diagnostic peaks near `0.3689`, essentially indistinguishable from AP-WCCA without a step-zero train anchor.
+
+Therefore **neither AP-WCCA nor AP-WRCCA is proven ineffective by these screens**. AP-WRCCA has a provisional negative broad-recall signal, but it must be re-tested only after the full-support metric and ACRA routing are fixed.
+
+## V64.3.3 engineering corrections
+
+1. Training validation now computes literal teacher criticality over `sample.evidence_bank.active_mask`, identical to formal open-loop support semantics. Top-M and selected sets are only evaluated *against* that full support.
+2. `_criticality_metrics()` exports critical counts and Top-M/selected hit counts. Validation additionally reports micro recall (`total hits / total literal critical atoms`) for stable same-subset screening while retaining formal macro recall.
+3. `BDSEModel.forward()` exports `critical_proposal_residual_logits`; ACRA now receives its intended direct residual tensor. The training log exports `L_critical_adapter_residual_alignment`.
+4. Screen activation requires all three: parameter delta, non-zero forward residual, and non-zero ACRA alignment loss. Parameter movement alone is no longer considered evidence that the intended local objective is wired.
+5. V64.3.3 train/eval config contract requires acquisition conditioning to match across train and eval configs.
+6. New regression tests construct a literal critical atom outside Top-M and require measured Top-M recall `0`, preventing the Top-M-as-support bug from returning.
+
+## Algorithm decision hierarchy after the repair
+
+The historical full-support formal results still support **acquisition as the likely upstream bottleneck**: literal critical Top-M recall has remained near ~0.35 while B=16 generally preserves most of what Top-M already acquired. However V64.3.2 Phase-1A/1B do not add evidence for or against a particular acquisition representation.
+
+Run controlled screens in this order:
+
+1. **AP-WCCA + actually wired ACRA**, same frozen 500-row validation anchor.
+2. If valid but non-improving, **AP-WRCCA + actually wired ACRA** on the same protocol.
+3. Only if both binary-target screens are valid and non-improving, run a **Literal-Critical Value (LCV) probe**. LCV does not redefine criticality: all non-critical atoms retain exactly zero target. Among literal winner-flip critical atoms only, the adapter target is scaled by the exact post-removal winner-gap severity. This tests whether acquisition needs a richer value target rather than a binary critical label.
+
+LCV is deliberately distinct from v48 DBCE. v48 could reward a boundary-deficit increase without an actual winner flip; V64.3.3 LCV is gated first by the literal winner-flip mask and is zero on every non-flipping atom.
+
+## Interpretation after clean screens
+
+- Corrected critical Top-M improves and selected recall follows, but teacher action/regret does not: **move to atom-to-action value / pair-margin representation**. Do not add more proposal losses.
+- Corrected critical Top-M improves but selected recall does not: revisit fixed-B allocation/tie-breaking while keeping B=16.
+- AP-WCCA/AP-WRCCA/LCV are all cleanly activated but critical Top-M does not improve: **acquisition representation/conditioning is the bottleneck**. The next representation experiment should expose a richer deployment-available multi-rival boundary state, not alter B/M/certificate.
+- Open-loop teacher match improves but diagnostic closed loop does not: move to candidate dynamics, reactive interaction, and replanning.
+
+## Positive components retained
+
+- fixed planner-interface budget `B=16`;
+- auditable evidence atoms and literal removal-induced winner-flip criticality;
+- strong legacy HAB family-aware proposal as immutable anchor;
+- DA-EPC exact downstream winner-preservation certificate (high screen coverage / zero fallback in the recent branch);
+- strict checkpoint/config/source provenance;
+- sparse exact-selector supervision cadence, which reduced screen loss-stage cost versus the accidental full-batch/every-step V64.3.1 run.
+
+## Do not repeat
+
+- Do not interpret V64.3.2 `critical Top-M = 1.0` or `delta = 0` as an acquisition result.
+- Do not declare ACRA ineffective before a run where `L_critical_adapter_residual_alignment` and residual RMS are non-zero.
+- Do not increase B or M to solve the current acquisition question.
+- Do not relax DA-EPC/certificate thresholds to manufacture a gate pass.
+- Do not unfreeze the complete legacy proposal/family stack; V64.2 lost broad recall without critical-recall gain.
+- Do not simply increase BCC/HCBE/global hardest-negative weights; those objectives have not broken the historical ~0.35 critical-acquisition plateau and can conflict with broad recall.
+- Do not repeat v40-v43 beam/swap/repair coreset search; it raised CPU latency without solving teacher-action quality.
+- Do not re-enable the harmful 6-D query extension or opaque base prior in nominal runs.
+- Do not lower residual conformal epsilon merely to create deployed flips.

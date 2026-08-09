@@ -24,13 +24,20 @@ RUNTIME_SOURCES = {
     "cache_verified",
     "verified_cache",
 }
-V64_3_PREFIXES = ("v64_3_cc_aocc_apwcca", "v64_3_2_cc_aocc_apwcca", "v64_3_2_cc_aocc_apwrcca")
+V64_3_PREFIXES = (
+    "v64_3_cc_aocc_apwcca",
+    "v64_3_2_cc_aocc_apwcca", "v64_3_2_cc_aocc_apwrcca",
+    "v64_3_3_cc_aocc_apwcca", "v64_3_3_cc_aocc_apwrcca",
+)
 V64_3_ALGORITHM_VERSIONS = {
     "V64.3-CC-AOCC-AP-WCCA",
     "V64.3.1-CC-AOCC-AP-WCCA",
     "V64.3.1-CC-AOCC-AP-WCCA-DA-EPC",
     "V64.3.2-CC-AOCC-AP-WCCA-DA-EPC-SCREENFIX",
     "V64.3.2-CC-AOCC-AP-WRCCA-DA-EPC",
+    "V64.3.3-CC-AOCC-AP-WCCA-DA-EPC-FULLSUPPORT",
+    "V64.3.3-CC-AOCC-AP-WRCCA-DA-EPC-FULLSUPPORT",
+    "V64.3.3-CC-AOCC-AP-WRCCA-LCV-DA-EPC",
 }
 V64_3_REQUIRED_TRAINABLE = {
     "critical_proposal_adapter",
@@ -94,7 +101,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
             }
         )
 
-    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64_3"}
+    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64_3"}
     if strict_v64_3:
         trainable = {str(x) for x in training_cfg.get("trainable_modules", [])}
         checks.update(
@@ -143,6 +150,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
         "metadata_algorithm_version": metadata_version,
         "provenance_algorithm_version": provenance_version,
         "dense_query_feature_source": source,
+        "critical_proposal_conditioning": str(critical_adapter.get("conditioning", "")),
         "checks": checks,
         "pass": not failures,
         "failures": failures,
@@ -155,9 +163,9 @@ def main() -> int:
     ap.add_argument("--eval-config", type=Path, required=True)
     ap.add_argument(
         "--expected-family",
-        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64_3"],
+        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64_3"],
         default="v64",
-        help="Use v64.3/v64.3.1 to reject any stale V64.2 config even if generic V64 checks pass.",
+        help="Use v64.3+ to reject any stale V64.2 config even if generic V64 checks pass.",
     )
     ap.add_argument("--output", type=Path)
     args = ap.parse_args()
@@ -168,7 +176,17 @@ def main() -> int:
         "train": _check(args.train_config, "train", args.expected_family),
         "eval": _check(args.eval_config, "eval", args.expected_family),
     }
-    report["pass"] = bool(report["train"]["pass"] and report["eval"]["pass"])
+    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64_3"}
+    train_cond = report["train"].get("critical_proposal_conditioning", "")
+    eval_cond = report["eval"].get("critical_proposal_conditioning", "")
+    report["cross_config_checks"] = {
+        "critical_proposal_conditioning_match": (not strict_v64_3) or train_cond == eval_cond,
+    }
+    report["pass"] = bool(
+        report["train"]["pass"]
+        and report["eval"]["pass"]
+        and all(report["cross_config_checks"].values())
+    )
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
