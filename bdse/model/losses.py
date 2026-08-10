@@ -228,6 +228,8 @@ def _exact_winner_flip_critical_proposal_loss(
     deployment_acquisition_logits: torch.Tensor | None = None,
     family_ids: torch.Tensor | None = None,
     critical_residual_logits: torch.Tensor | None = None,
+    critical_boundary_attention_logits: torch.Tensor | None = None,
+    critical_boundary_pair_indices: torch.Tensor | None = None,
     return_adapter_diagnostic: bool = False,
 ) -> tuple[torch.Tensor, ...]:
     """Train proposal logits from literal leave-one-atom-out winner flips.
@@ -246,7 +248,7 @@ def _exact_winner_flip_critical_proposal_loss(
     if not bool(crit_cfg.get("enabled", False)):
         zero = J0.new_tensor(0.0)
         base = (zero, zero, zero, zero, zero)
-        return (*base, zero) if return_adapter_diagnostic else base
+        return (*base, zero, zero, zero) if return_adapter_diagnostic else base
 
     active = active.bool()
     valid = valid.bool()
@@ -257,7 +259,7 @@ def _exact_winner_flip_critical_proposal_loss(
         atom_values: torch.Tensor,
         *,
         forced_target: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         dense_cost_local = dense_cost_in.detach().masked_fill(~valid, invalid_fill)
         scalar_winner = dense_cost_local.argmin(dim=1)
         aligned = (
@@ -284,7 +286,7 @@ def _exact_winner_flip_critical_proposal_loss(
             (old_winner_cost - loo_best_cost)
             / action_scale_local[:, None].clamp_min(1.0e-6)
         ).clamp_min(0.0)
-        return critical_local, severity_local, scalar_winner, aligned
+        return critical_local, severity_local, scalar_winner, aligned, loo_winner_local
 
     source = str(crit_cfg.get("target_source", "model_dense")).strip().lower()
     model_sources = {"model", "model_dense", "self", "hybrid", "hybrid_union", "teacher_model_union"}
@@ -300,7 +302,7 @@ def _exact_winner_flip_critical_proposal_loss(
     if need_model_labels:
         detached_g = g.detach()
         model_dense_cost = J0.detach() + (detached_g * active[:, :, None].float()).sum(dim=1)
-        model_critical, model_severity, model_winner, model_aligned = exact_labels(
+        model_critical, model_severity, model_winner, model_aligned, model_loo_winner = exact_labels(
             model_dense_cost, detached_g
         )
     else:
@@ -308,6 +310,7 @@ def _exact_winner_flip_critical_proposal_loss(
         model_severity = torch.zeros_like(g[..., 0])
         model_winner = target_action
         model_aligned = torch.zeros_like(target_action, dtype=torch.bool)
+        model_loo_winner = target_action[:, None].expand_as(active)
 
     teacher_available = (
         teacher_cost is not None
@@ -319,7 +322,7 @@ def _exact_winner_flip_critical_proposal_loss(
     if need_teacher_labels and teacher_available:
         teacher_dense_cost = teacher_cost.detach().to(dtype=J0.dtype)
         teacher_atom_values = teacher_g.detach().to(dtype=g.dtype)
-        teacher_critical, teacher_severity, teacher_winner, teacher_aligned = exact_labels(
+        teacher_critical, teacher_severity, teacher_winner, teacher_aligned, teacher_loo_winner = exact_labels(
             teacher_dense_cost,
             teacher_atom_values,
             forced_target=target_action,
@@ -329,6 +332,7 @@ def _exact_winner_flip_critical_proposal_loss(
         teacher_severity = torch.zeros_like(g[..., 0])
         teacher_winner = target_action
         teacher_aligned = torch.zeros_like(target_action, dtype=torch.bool)
+        teacher_loo_winner = target_action[:, None].expand_as(active)
     if source in {"teacher", "teacher_interface", "teacher_exact"}:
         if not teacher_available:
             raise ValueError(
@@ -338,6 +342,7 @@ def _exact_winner_flip_critical_proposal_loss(
         critical = teacher_critical
         severity = teacher_severity
         winner_for_alignment = teacher_winner
+        loo_winner_for_alignment = teacher_loo_winner
         source_aligned = teacher_aligned
     elif source in {"hybrid", "hybrid_union", "teacher_model_union"}:
         if not teacher_available:
@@ -348,11 +353,17 @@ def _exact_winner_flip_critical_proposal_loss(
         critical = model_critical | teacher_critical
         severity = torch.maximum(model_severity, teacher_severity)
         winner_for_alignment = model_winner
+        loo_winner_for_alignment = torch.where(
+            teacher_critical,
+            teacher_loo_winner,
+            model_loo_winner,
+        )
         source_aligned = teacher_aligned | model_winner.eq(target_action)
     elif source in {"model", "model_dense", "self"}:
         critical = model_critical
         severity = model_severity
         winner_for_alignment = model_winner
+        loo_winner_for_alignment = model_loo_winner
         source_aligned = model_winner.eq(target_action)
     else:
         raise ValueError(f"Unknown exact winner-flip criticality target_source={source!r}")
@@ -536,6 +547,60 @@ def _exact_winner_flip_critical_proposal_loss(
         denom = (adapter_atom_weight * supervised_scene_weight[:, None]).masked_select(adapter_mask).sum().clamp_min(1.0)
         L_adapter_residual = weighted.masked_select(adapter_mask).sum() / denom
 
+    # V64.3.4 Literal Boundary Attribution (LBA).  FPCCA exposes a small set of
+    # deployment-available candidate-pair boundary tokens.  For an exact
+    # winner-flip critical atom the offline teacher also identifies the literal
+    # leave-one-out flip action.  When that (winner, flip-target) pair lies in
+    # the base frontier, supervise the atom's attention to the corresponding
+    # boundary.  This is an attribution target, not a new criticality proxy:
+    # non-flipping atoms receive no boundary label and teacher information is
+    # never required at deployment.
+    L_boundary_attribution = J0.new_tensor(0.0)
+    boundary_representable_fraction = J0.new_tensor(0.0)
+    boundary_weight = float(crit_cfg.get("boundary_attribution_weight", 0.0))
+    if (
+        boundary_weight > 0.0
+        and critical_boundary_attention_logits is not None
+        and critical_boundary_pair_indices is not None
+        and critical_boundary_attention_logits.ndim == 3
+        and critical_boundary_pair_indices.ndim == 3
+        and critical_boundary_attention_logits.shape[-1] > 0
+        and critical_boundary_pair_indices.shape[-1] == 2
+    ):
+        attn_logits = critical_boundary_attention_logits.to(dtype=J0.dtype)
+        pair_idx = critical_boundary_pair_indices.long()
+        P = min(int(attn_logits.shape[-1]), int(pair_idx.shape[1]))
+        if P > 0:
+            attn_logits = attn_logits[..., :P]
+            pair_idx = pair_idx[:, :P]
+            pair_a = pair_idx[:, None, :, 0]
+            pair_b = pair_idx[:, None, :, 1]
+            winner_idx = winner_for_alignment[:, None, None].long()
+            flip_idx = loo_winner_for_alignment[:, :, None].long()
+            target_match = (
+                (pair_a.eq(winner_idx) & pair_b.eq(flip_idx))
+                | (pair_b.eq(winner_idx) & pair_a.eq(flip_idx))
+            )
+            target_available = target_match.any(dim=-1)
+            boundary_mask = critical & active & source_aligned[:, None] & target_available
+            critical_denom = (critical & active & source_aligned[:, None]).float().sum().clamp_min(1.0)
+            boundary_representable_fraction = boundary_mask.float().sum() / critical_denom
+            if bool(boundary_mask.any()):
+                target_pair = target_match.float().argmax(dim=-1)
+                ce = F.cross_entropy(
+                    attn_logits.reshape(-1, P),
+                    target_pair.reshape(-1),
+                    reduction="none",
+                ).reshape_as(target_pair)
+                boundary_atom_weight = 1.0 + float(
+                    crit_cfg.get("boundary_attribution_severity_weight", 1.0)
+                ) * severity.detach()
+                weighted_boundary = ce * boundary_atom_weight * supervised_scene_weight[:, None]
+                denom = (
+                    boundary_atom_weight * supervised_scene_weight[:, None]
+                ).masked_select(boundary_mask).sum().clamp_min(1.0)
+                L_boundary_attribution = weighted_boundary.masked_select(boundary_mask).sum() / denom
+
     loss = (
         L_bce
         + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
@@ -543,6 +608,7 @@ def _exact_winner_flip_critical_proposal_loss(
         + float(crit_cfg.get("coverage_weight", 0.0)) * L_coverage
         + float(crit_cfg.get("exchange_rank_weight", 0.0)) * L_exchange
         + adapter_residual_weight * L_adapter_residual
+        + boundary_weight * L_boundary_attribution
     )
 
     critical_count = critical.float().sum()
@@ -559,7 +625,12 @@ def _exact_winner_flip_critical_proposal_loss(
         critical_scene_fraction,
         teacher_aligned_critical_scene_fraction,
     )
-    return (*base_result, L_adapter_residual) if return_adapter_diagnostic else base_result
+    return (
+        *base_result,
+        L_adapter_residual,
+        L_boundary_attribution,
+        boundary_representable_fraction,
+    ) if return_adapter_diagnostic else base_result
 
 
 def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -3665,6 +3736,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         exact_winner_flip_critical_scene_fraction,
         exact_winner_flip_teacher_aligned_scene_fraction,
         L_critical_adapter_residual_alignment,
+        L_critical_boundary_attribution,
+        critical_boundary_representable_fraction,
     ) = _exact_winner_flip_critical_proposal_loss(
         finite_J0,
         g,
@@ -3683,6 +3756,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         ),
         family_ids=batch.get("evidence_family_ids"),
         critical_residual_logits=out.get("critical_proposal_residual_logits"),
+        critical_boundary_attention_logits=out.get("critical_boundary_attention_logits"),
+        critical_boundary_pair_indices=out.get("critical_boundary_pair_indices"),
         return_adapter_diagnostic=True,
     )
 
@@ -4700,6 +4775,13 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_proposal_dense_winner": L_proposal_dense_winner,
         "L_proposal_logit_stability": L_proposal_logit_stability,
         "L_exact_winner_flip_critical_proposal": L_exact_winner_flip_critical_proposal,
+        # V64.3.4 audit fix: ACRA has been part of
+        # L_exact_winner_flip_critical_proposal since V64.3.3, but the standalone
+        # diagnostic was accidentally omitted from the returned loss dictionary.
+        # That made a correctly optimized adapter look "unwired" to the screen.
+        "L_critical_adapter_residual_alignment": L_critical_adapter_residual_alignment,
+        "L_critical_boundary_attribution": L_critical_boundary_attribution,
+        "critical_boundary_representable_fraction": critical_boundary_representable_fraction,
         "exact_winner_flip_critical_recall_topm": exact_winner_flip_critical_recall_topm,
         "exact_winner_flip_critical_atom_fraction": exact_winner_flip_critical_atom_fraction,
         "exact_winner_flip_critical_scene_fraction": exact_winner_flip_critical_scene_fraction,

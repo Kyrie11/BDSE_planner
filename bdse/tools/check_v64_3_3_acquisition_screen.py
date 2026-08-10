@@ -43,6 +43,8 @@ def build_report(rows: list[dict], variant: str) -> dict:
         "critical_proposal_residual_rms_max": _max(rows, "critical_proposal_residual_rms"),
         "critical_proposal_residual_abs_mean_max": _max(rows, "critical_proposal_residual_abs_mean"),
         "acra_alignment_loss_max": _max(rows, "L_critical_adapter_residual_alignment"),
+        "boundary_attribution_loss_max": _max(rows, "L_critical_boundary_attribution"),
+        "boundary_representable_fraction_max": _max(rows, "critical_boundary_representable_fraction"),
         "anchor_val_critical_topm_recall_macro": _finite(anchor, "val_teacher_exact_winner_flip_critical_recall_topm"),
         "last_val_critical_topm_recall_macro": _finite(last, "val_teacher_exact_winner_flip_critical_recall_topm"),
         "anchor_val_critical_topm_recall_micro": _finite(anchor, "val_teacher_exact_winner_flip_critical_recall_topm_micro"),
@@ -53,11 +55,36 @@ def build_report(rows: list[dict], variant: str) -> dict:
         "last_val_critical_scene_rate": _finite(last, "val_teacher_exact_winner_flip_critical_scene_rate"),
         "anchor_val_critical_count_mean": _finite(anchor, "val_teacher_exact_winner_flip_critical_count"),
         "last_val_critical_count_mean": _finite(last, "val_teacher_exact_winner_flip_critical_count"),
+        "anchor_val_critical_boundary_in_base_top5_fraction": _finite(
+            anchor, "val_teacher_exact_winner_flip_critical_boundary_in_base_top5_fraction"
+        ),
+        "last_val_critical_boundary_in_base_top5_fraction": _finite(
+            last, "val_teacher_exact_winner_flip_critical_boundary_in_base_top5_fraction"
+        ),
+        "anchor_val_critical_boundary_in_base_top6_fraction": _finite(
+            anchor, "val_teacher_exact_winner_flip_critical_boundary_in_base_top6_fraction"
+        ),
+        "last_val_critical_boundary_in_base_top6_fraction": _finite(
+            last, "val_teacher_exact_winner_flip_critical_boundary_in_base_top6_fraction"
+        ),
+        "anchor_val_teacher_winner_in_base_top5": _finite(
+            anchor, "val_teacher_exact_winner_flip_winner_in_base_top5"
+        ),
+        "last_val_teacher_winner_in_base_top5": _finite(
+            last, "val_teacher_exact_winner_flip_winner_in_base_top5"
+        ),
+        "anchor_val_teacher_winner_in_base_top6": _finite(
+            anchor, "val_teacher_exact_winner_flip_winner_in_base_top6"
+        ),
+        "last_val_teacher_winner_in_base_top6": _finite(
+            last, "val_teacher_exact_winner_flip_winner_in_base_top6"
+        ),
         "anchor_val_proposal_decisive_recall": _finite(anchor, "val_proposal_decisive_atom_recall"),
         "last_val_proposal_decisive_recall": _finite(last, "val_proposal_decisive_atom_recall"),
+        "anchor_val_teacher_action_match": _finite(anchor, "val_teacher_action_match"),
         "last_val_teacher_action_match": _finite(last, "val_teacher_action_match"),
     }
-    for stem in ("critical_topm_recall_micro", "critical_selected_recall_micro", "proposal_decisive_recall"):
+    for stem in ("critical_topm_recall_micro", "critical_selected_recall_micro", "proposal_decisive_recall", "teacher_action_match"):
         a = report.get("anchor_val_" + stem)
         z = report.get("last_val_" + stem)
         report["delta_val_" + stem] = (z - a) if a is not None and z is not None else None
@@ -85,6 +112,17 @@ def build_report(rows: list[dict], variant: str) -> dict:
         report["acra_alignment_loss_max"] is not None
         and report["acra_alignment_loss_max"] > 1.0e-10
     )
+    requires_lba = "LBA" in str(variant).upper()
+    report["lba_required"] = requires_lba
+    report["lba_wired"] = bool(
+        (not requires_lba)
+        or (
+            report["boundary_attribution_loss_max"] is not None
+            and report["boundary_attribution_loss_max"] > 1.0e-10
+            and report["boundary_representable_fraction_max"] is not None
+            and report["boundary_representable_fraction_max"] > 0.0
+        )
+    )
     report["literal_critical_support_nonempty"] = bool(
         report["anchor_val_critical_count_mean"] is not None
         and report["anchor_val_critical_count_mean"] > 0.0
@@ -94,6 +132,7 @@ def build_report(rows: list[dict], variant: str) -> dict:
         and report["adapter_parameter_activated"]
         and report["adapter_forward_activated"]
         and report["acra_wired"]
+        and report["lba_wired"]
         and report["literal_critical_support_nonempty"]
         and report["delta_val_critical_topm_recall_micro"] is not None
         and report["delta_val_critical_topm_recall_micro"] > 0.0

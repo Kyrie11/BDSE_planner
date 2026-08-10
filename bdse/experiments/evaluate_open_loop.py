@@ -92,6 +92,8 @@ def _criticality_metrics(
     *,
     prefix: str,
     forced_winner: int | None = None,
+    reference_action_cost: np.ndarray | None = None,
+    reference_frontier_rivals: tuple[int, ...] = (1, 2, 4, 5, 8),
 ) -> tuple[dict[str, float], dict[str, int]]:
     """Literal leave-one-atom-out winner-flip diagnostics."""
 
@@ -154,6 +156,40 @@ def _criticality_metrics(
     values[f"{prefix}_critical_count"] = float(critical_count)
     values[f"{prefix}_critical_topm_hit_count"] = float(topm_hits)
     values[f"{prefix}_critical_selected_hit_count"] = float(selected_hits)
+
+    # V64.3.4 diagnostic: how much of the literal critical decision boundary is
+    # even representable by a deployment-available base-action frontier?  This
+    # never changes labels or training targets.  For R rivals, the context is
+    # the top-(R+1) actions under the reference base cost; a critical atom is
+    # covered only when both the literal winner and its leave-one-out flip target
+    # lie inside that context.  It directly distinguishes an insufficient rival
+    # representation from a ranking/target-learning failure.
+    if reference_action_cost is not None:
+        ref = np.asarray(reference_action_cost, dtype=np.float32).reshape(-1)
+        if ref.shape[0] < valid.shape[0]:
+            ref = np.pad(ref, (0, valid.shape[0] - ref.shape[0]), constant_values=np.inf)
+        ref = ref[: valid.shape[0]].copy()
+        ref[~valid] = np.inf
+        order = np.argsort(ref, kind="stable")
+        order = order[np.isfinite(ref[order])]
+        critical_targets = loo_winner[critical]
+        for rivals in reference_frontier_rivals:
+            rivals = max(int(rivals), 0)
+            context_size = min(int(order.shape[0]), rivals + 1)
+            key = f"{prefix}_critical_boundary_in_base_top{rivals + 1}_fraction"
+            winner_key = f"{prefix}_winner_in_base_top{rivals + 1}"
+            if context_size <= 0:
+                values[key] = float("nan")
+                values[winner_key] = 0.0
+                continue
+            context = set(map(int, order[:context_size].tolist()))
+            winner_in = int(winner) in context
+            values[winner_key] = float(winner_in)
+            if critical_count <= 0:
+                values[key] = float("nan")
+            else:
+                target_in = np.asarray([int(x) in context for x in critical_targets], dtype=bool)
+                values[key] = float(target_in.mean()) if winner_in else 0.0
     details[f"{prefix}_winner"] = winner
     details[f"{prefix}_critical_count"] = critical_count
     details[f"{prefix}_critical_topm_hit_count"] = topm_hits
@@ -455,6 +491,7 @@ def add_dense_bridge_diagnostics(
         selected,
         prefix="teacher_exact_winner_flip",
         forced_winner=teacher_action,
+        reference_action_cost=dense_j0_deployment,
     )
     diag.values.update(teacher_critical)
     diag.details.update(teacher_details)

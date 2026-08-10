@@ -39,6 +39,198 @@ EVIDENCE_TYPE_TO_ID = TYPE_NAMES
 FAMILY_TO_ID = FAMILY_NAMES
 
 
+class _MultiRivalBoundaryCriticalProposalAdapter(nn.Module):
+    """Atom-conditioned pooling over a deployment-available rival frontier.
+
+    V64.3.3 AP-WRCCA exposed only one foundation rival to every atom.  That is
+    too restrictive when an evidence atom is decisive for a different nearby
+    action boundary.  This adapter keeps the legacy HAB proposal immutable and
+    learns only a residual correction from the *set* of top foundation rivals.
+
+    The rival set is teacher-free: it is built from ``J0`` and candidate action
+    embeddings already available at deployment.  Per-atom cross-attention makes
+    the pooled boundary context evidence-dependent while remaining permutation
+    invariant over the rival set.  The final projection is zero initialized so
+    enabling the module is an exact step-zero no-op.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        rank: int,
+        *,
+        zero_init: bool = True,
+        gap_bias_scale: float = 0.5,
+    ) -> None:
+        super().__init__()
+        h = int(hidden_dim)
+        r = int(rank)
+        self.gap_bias_scale = float(gap_bias_scale)
+        self.atom_proj = nn.Sequential(
+            nn.LayerNorm(h * 6),
+            nn.Linear(h * 6, r),
+            nn.SiLU(),
+        )
+        # winner, rival, relative action, multiplicative interaction, plus a
+        # normalized base-cost gap.  No positional feature is used, so the
+        # boundary pooling is permutation invariant over the rival set.
+        self.boundary_proj = nn.Sequential(
+            nn.LayerNorm(h * 4 + 1),
+            nn.Linear(h * 4 + 1, r),
+            nn.SiLU(),
+        )
+        self.query_proj = nn.Linear(r, r, bias=False)
+        self.key_proj = nn.Linear(r, r, bias=False)
+        self.value_proj = nn.Linear(r, r, bias=False)
+        self.residual_head = nn.Sequential(
+            nn.LayerNorm(r * 2),
+            nn.Linear(r * 2, r),
+            nn.SiLU(),
+            nn.Linear(r, 1),
+        )
+        if bool(zero_init):
+            nn.init.zeros_(self.residual_head[-1].weight)
+            nn.init.zeros_(self.residual_head[-1].bias)
+
+    def forward(
+        self,
+        atom_tokens: torch.Tensor,
+        winner_h: torch.Tensor,
+        rival_h: torch.Tensor,
+        rival_gap_normalized: torch.Tensor,
+        rival_valid: torch.Tensor,
+    ) -> torch.Tensor:
+        B, E, _ = atom_tokens.shape
+        R = int(rival_h.shape[1])
+        if R <= 0:
+            return atom_tokens.new_zeros((B, E))
+
+        winner_r = winner_h[:, None, :].expand(-1, R, -1)
+        gap = rival_gap_normalized.to(dtype=atom_tokens.dtype).clamp(min=0.0, max=4.0)
+        boundary_input = torch.cat(
+            [
+                winner_r,
+                rival_h,
+                rival_h - winner_r,
+                rival_h * winner_r,
+                gap[..., None],
+            ],
+            dim=-1,
+        )
+
+        atom = self.atom_proj(atom_tokens)
+        boundary = self.boundary_proj(boundary_input)
+        q = self.query_proj(atom)
+        k = self.key_proj(boundary)
+        v = self.value_proj(boundary)
+        scale = max(float(q.shape[-1]), 1.0) ** -0.5
+        # Explicit matmul is easier to audit than a compact einsum here and is
+        # efficient for the intended R<=4 frontier.
+        attention = torch.matmul(q, k.transpose(1, 2)) * scale
+        attention = attention - self.gap_bias_scale * gap[:, None, :]
+        valid = rival_valid.bool()
+        neg = -1.0e4 if attention.dtype in (torch.float16, torch.bfloat16) else -1.0e9
+        attention = attention.masked_fill(~valid[:, None, :], neg)
+        weights = torch.softmax(attention.float(), dim=-1).to(dtype=attention.dtype)
+        # Protect rare scenes with fewer than two valid candidates.  Multiplying
+        # then renormalizing avoids the uniform-softmax artifact of an all-masked
+        # row without introducing a deployment fallback branch.
+        weights = weights * valid[:, None, :].to(dtype=weights.dtype)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
+        pooled = torch.matmul(weights, v)
+        return self.residual_head(torch.cat([atom, pooled], dim=-1)).squeeze(-1)
+
+
+class _FrontierPairCriticalProposalAdapter(nn.Module):
+    """Evidence-conditioned attention over a cheap candidate-boundary set.
+
+    Unlike AP-WCCA/AP-WRCCA, this representation does not assume that the
+    foundation top-1 action is the teacher-relevant winner.  It forms pair
+    tokens among the top-F deployment-available foundation actions and lets
+    every evidence atom attend to the boundary that best explains its decision
+    relevance.  The pair set is unordered/permutation invariant; orientation
+    inside each pair follows ascending foundation cost and the normalized gap is
+    supplied as a feature.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        rank: int,
+        *,
+        zero_init: bool = True,
+        gap_bias_scale: float = 0.25,
+    ) -> None:
+        super().__init__()
+        h = int(hidden_dim)
+        r = int(rank)
+        self.gap_bias_scale = float(gap_bias_scale)
+        self.atom_proj = nn.Sequential(
+            nn.LayerNorm(h * 5),
+            nn.Linear(h * 5, r),
+            nn.SiLU(),
+        )
+        self.boundary_proj = nn.Sequential(
+            nn.LayerNorm(h * 4 + 1),
+            nn.Linear(h * 4 + 1, r),
+            nn.SiLU(),
+        )
+        self.query_proj = nn.Linear(r, r, bias=False)
+        self.key_proj = nn.Linear(r, r, bias=False)
+        self.value_proj = nn.Linear(r, r, bias=False)
+        self.residual_head = nn.Sequential(
+            nn.LayerNorm(r * 2),
+            nn.Linear(r * 2, r),
+            nn.SiLU(),
+            nn.Linear(r, 1),
+        )
+        if bool(zero_init):
+            nn.init.zeros_(self.residual_head[-1].weight)
+            nn.init.zeros_(self.residual_head[-1].bias)
+
+    def forward(
+        self,
+        atom_tokens: torch.Tensor,
+        pair_a_h: torch.Tensor,
+        pair_b_h: torch.Tensor,
+        pair_gap_normalized: torch.Tensor,
+        pair_valid: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        B, E, _ = atom_tokens.shape
+        P = int(pair_a_h.shape[1])
+        if P <= 0:
+            return atom_tokens.new_zeros((B, E)), atom_tokens.new_zeros((B, E, 0))
+
+        gap = pair_gap_normalized.to(dtype=atom_tokens.dtype).clamp(min=0.0, max=4.0)
+        boundary_input = torch.cat(
+            [
+                pair_a_h,
+                pair_b_h,
+                pair_b_h - pair_a_h,
+                pair_a_h * pair_b_h,
+                gap[..., None],
+            ],
+            dim=-1,
+        )
+        atom = self.atom_proj(atom_tokens)
+        boundary = self.boundary_proj(boundary_input)
+        q = self.query_proj(atom)
+        k = self.key_proj(boundary)
+        v = self.value_proj(boundary)
+        scale = max(float(q.shape[-1]), 1.0) ** -0.5
+        attention = torch.matmul(q, k.transpose(1, 2)) * scale
+        attention = attention - self.gap_bias_scale * gap[:, None, :]
+        valid = pair_valid.bool()
+        neg = -1.0e4 if attention.dtype in (torch.float16, torch.bfloat16) else -1.0e9
+        masked_attention = attention.masked_fill(~valid[:, None, :], neg)
+        weights = torch.softmax(masked_attention.float(), dim=-1).to(dtype=attention.dtype)
+        weights = weights * valid[:, None, :].to(dtype=weights.dtype)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
+        pooled = torch.matmul(weights, v)
+        residual = self.residual_head(torch.cat([atom, pooled], dim=-1)).squeeze(-1)
+        return residual, masked_attention
+
+
 def _confidence_shrunk_residual_pair_delta_np(
     local: np.ndarray,
     residual: np.ndarray,
@@ -439,20 +631,47 @@ class BDSEModel(nn.Module):
         self.critical_proposal_conditioning = str(
             crit_prop_cfg.get("conditioning", "frozen_base_winner_action")
         ).strip().lower()
+        self.critical_proposal_frontier_size = max(int(crit_prop_cfg.get("frontier_size", 4)), 1)
+        self.critical_proposal_frontier_action_count = max(
+            int(crit_prop_cfg.get("frontier_action_count", 6)), 2
+        )
         if bool(crit_prop_cfg.get("enabled", False)):
             critical_rank = min(max(int(crit_prop_cfg.get("rank", min(64, h))), 1), h)
-            critical_tokens = 7 if self.critical_proposal_conditioning in {
-                "frozen_base_winner_rival_actions", "base_winner_rival", "winner_rival"
-            } else 6
-            self.critical_proposal_adapter = nn.Sequential(
-                nn.LayerNorm(h * critical_tokens),
-                nn.Linear(h * critical_tokens, critical_rank),
-                nn.SiLU(),
-                nn.Linear(critical_rank, 1),
-            )
-            if bool(crit_prop_cfg.get("zero_init", True)):
-                nn.init.zeros_(self.critical_proposal_adapter[-1].weight)
-                nn.init.zeros_(self.critical_proposal_adapter[-1].bias)
+            if self.critical_proposal_conditioning in {
+                "frozen_base_frontier_pair_set",
+                "frontier_pair_set",
+                "fpcca",
+            }:
+                self.critical_proposal_adapter = _FrontierPairCriticalProposalAdapter(
+                    h,
+                    critical_rank,
+                    zero_init=bool(crit_prop_cfg.get("zero_init", True)),
+                    gap_bias_scale=float(crit_prop_cfg.get("frontier_gap_bias_scale", 0.25)),
+                )
+            elif self.critical_proposal_conditioning in {
+                "frozen_base_multi_rival_frontier",
+                "multi_rival_frontier",
+                "mrbcca",
+            }:
+                self.critical_proposal_adapter = _MultiRivalBoundaryCriticalProposalAdapter(
+                    h,
+                    critical_rank,
+                    zero_init=bool(crit_prop_cfg.get("zero_init", True)),
+                    gap_bias_scale=float(crit_prop_cfg.get("frontier_gap_bias_scale", 0.5)),
+                )
+            else:
+                critical_tokens = 7 if self.critical_proposal_conditioning in {
+                    "frozen_base_winner_rival_actions", "base_winner_rival", "winner_rival"
+                } else 6
+                self.critical_proposal_adapter = nn.Sequential(
+                    nn.LayerNorm(h * critical_tokens),
+                    nn.Linear(h * critical_tokens, critical_rank),
+                    nn.SiLU(),
+                    nn.Linear(critical_rank, 1),
+                )
+                if bool(crit_prop_cfg.get("zero_init", True)):
+                    nn.init.zeros_(self.critical_proposal_adapter[-1].weight)
+                    nn.init.zeros_(self.critical_proposal_adapter[-1].bias)
         else:
             self.critical_proposal_adapter = None
 
@@ -673,6 +892,8 @@ class BDSEModel(nn.Module):
             torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h], dim=-1)
         ).squeeze(-1)
         critical_proposal_residual = torch.zeros_like(proposal_base_logits)
+        critical_boundary_attention_logits = proposal_base_logits.new_zeros((B, E, 0))
+        critical_boundary_pair_indices = torch.empty((B, 0, 2), dtype=torch.long, device=traj.device)
         if self.critical_proposal_adapter is not None:
             # Winner conditioning deliberately uses the base/foundation action,
             # not teacher labels or a dense evidence winner.  Deployment therefore
@@ -685,22 +906,148 @@ class BDSEModel(nn.Module):
             winner_e = winner_h[:, None, :].expand(B, E, -1)
             adapter_tokens = [evid_h, prop_h, scene_e, u_e, atom_family_h, winner_e]
             if self.critical_proposal_conditioning in {
+                "frozen_base_frontier_pair_set",
+                "frontier_pair_set",
+                "fpcca",
+            }:
+                # V64.3.4 Frontier Pair-Conditioned Critical Acquisition (FPCCA).
+                # The V64.3.3 full runs showed that conditioning on the foundation
+                # winner (plus at most one rival) can strongly move proposal logits
+                # without improving literal critical Top-M recall.  Build a small
+                # set of pair boundaries among the best deployment-available base
+                # actions instead, so the acquisition representation does not rely
+                # on a mostly-wrong top-1 action being the correct semantic anchor.
+                frontier_actions = min(int(self.critical_proposal_frontier_action_count), K)
+                if frontier_actions >= 2:
+                    safe_frontier_cost = J0.float().masked_fill(~valid, float("inf"))
+                    frontier_cost, frontier_idx = torch.topk(
+                        safe_frontier_cost,
+                        k=frontier_actions,
+                        dim=1,
+                        largest=False,
+                        sorted=True,
+                    )
+                    frontier_valid = torch.gather(valid, 1, frontier_idx) & torch.isfinite(frontier_cost)
+                    frontier_h = action_h.gather(
+                        1,
+                        frontier_idx[:, :, None].expand(-1, -1, action_h.shape[-1]),
+                    )
+                    pair_pos = torch.triu_indices(
+                        frontier_actions,
+                        frontier_actions,
+                        offset=1,
+                        device=traj.device,
+                    )
+                    pa, pb = pair_pos[0], pair_pos[1]
+                    pair_a_h = frontier_h[:, pa, :]
+                    pair_b_h = frontier_h[:, pb, :]
+                    pair_valid = frontier_valid[:, pa] & frontier_valid[:, pb]
+                    pair_a_idx = frontier_idx[:, pa]
+                    pair_b_idx = frontier_idx[:, pb]
+                    critical_boundary_pair_indices = torch.stack([pair_a_idx, pair_b_idx], dim=-1)
+                    raw_gap = torch.where(
+                        pair_valid,
+                        (frontier_cost[:, pb] - frontier_cost[:, pa]).clamp_min(0.0),
+                        torch.zeros_like(frontier_cost[:, pa]),
+                    )
+                    gap_sum = (raw_gap * pair_valid.float()).sum(dim=1, keepdim=True)
+                    gap_count = pair_valid.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+                    gap_scale = (gap_sum / gap_count).detach().clamp_min(1.0e-3)
+                    gap_normalized = (raw_gap / gap_scale).clamp(max=4.0)
+                    critical_proposal_residual, critical_boundary_attention_logits = self.critical_proposal_adapter(
+                        torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h], dim=-1),
+                        pair_a_h,
+                        pair_b_h,
+                        gap_normalized,
+                        pair_valid,
+                    )
+                else:
+                    critical_proposal_residual = torch.zeros_like(proposal_base_logits)
+            elif self.critical_proposal_conditioning in {
+                "frozen_base_multi_rival_frontier",
+                "multi_rival_frontier",
+                "mrbcca",
+            }:
+                # V64.3.4 Multi-Rival Boundary-Conditioned Critical Acquisition
+                # (MR-BCCA).  A single strongest rival cannot represent atoms
+                # whose removal flips the winner toward a different near-frontier
+                # action.  Build a small teacher-free foundation frontier and let
+                # each atom attend to the boundary most relevant to itself.
+                frontier_size = min(int(self.critical_proposal_frontier_size), max(K - 1, 0))
+                if frontier_size > 0:
+                    safe_for_topk = J0.float().masked_fill(~valid, float("inf"))
+                    top_count = min(K, frontier_size + 1)
+                    frontier_cost, frontier_idx = torch.topk(
+                        safe_for_topk,
+                        k=top_count,
+                        dim=1,
+                        largest=False,
+                        sorted=True,
+                    )
+                    rival_index = frontier_idx[:, 1:]
+                    rival_cost = frontier_cost[:, 1:]
+                    rival_valid = torch.gather(valid, 1, rival_index) & torch.isfinite(rival_cost)
+                    # Pad only when K itself is smaller than the requested
+                    # frontier.  Padding uses the winner index but is masked out.
+                    if rival_index.shape[1] < frontier_size:
+                        pad = frontier_size - int(rival_index.shape[1])
+                        rival_index = torch.cat(
+                            [rival_index, base_winner[:, None].expand(-1, pad)], dim=1
+                        )
+                        rival_cost = torch.cat(
+                            [rival_cost, J0.new_zeros((B, pad), dtype=J0.dtype)], dim=1
+                        )
+                        rival_valid = torch.cat(
+                            [rival_valid, torch.zeros((B, pad), dtype=torch.bool, device=valid.device)], dim=1
+                        )
+                    rival_h = action_h.gather(
+                        1,
+                        rival_index[:, :, None].expand(-1, -1, action_h.shape[-1]),
+                    )
+                    winner_cost = safe_for_topk.gather(1, base_winner[:, None])
+                    raw_gap = torch.where(
+                        rival_valid,
+                        (rival_cost.float() - winner_cost.float()).clamp_min(0.0),
+                        torch.zeros_like(rival_cost, dtype=torch.float32),
+                    )
+                    # Scene-relative normalization removes arbitrary J0 units.
+                    # The detached scale is a conditioning statistic, not a path
+                    # for acquisition losses to modify the frozen foundation.
+                    gap_sum = (raw_gap * rival_valid.float()).sum(dim=1, keepdim=True)
+                    gap_count = rival_valid.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+                    gap_scale = (gap_sum / gap_count).detach().clamp_min(1.0e-3)
+                    gap_normalized = (raw_gap / gap_scale).clamp(max=4.0)
+                    critical_proposal_residual = self.critical_proposal_adapter(
+                        torch.cat(adapter_tokens, dim=-1),
+                        winner_h,
+                        rival_h,
+                        gap_normalized,
+                        rival_valid,
+                    )
+                else:
+                    critical_proposal_residual = torch.zeros_like(proposal_base_logits)
+            elif self.critical_proposal_conditioning in {
                 "frozen_base_winner_rival_actions", "base_winner_rival", "winner_rival"
             }:
                 # Deployment-available boundary context: the strongest base rival
                 # is the second-lowest valid foundation action.  This is not a
                 # teacher signal and therefore preserves the planner interface.
                 safe_for_sort = J0.masked_fill(~valid, float("inf"))
-                order = torch.argsort(safe_for_sort, dim=1)
+                top_count = min(K, 2)
+                order = torch.topk(safe_for_sort, k=top_count, dim=1, largest=False, sorted=True).indices
                 rival_index = order[:, 1] if K > 1 else order[:, 0]
                 rival_h = action_h.gather(
                     1, rival_index[:, None, None].expand(-1, 1, action_h.shape[-1])
                 ).squeeze(1)
                 rival_e = rival_h[:, None, :].expand(B, E, -1)
                 adapter_tokens.append(rival_e)
-            critical_proposal_residual = self.critical_proposal_adapter(
-                torch.cat(adapter_tokens, dim=-1)
-            ).squeeze(-1)
+                critical_proposal_residual = self.critical_proposal_adapter(
+                    torch.cat(adapter_tokens, dim=-1)
+                ).squeeze(-1)
+            else:
+                critical_proposal_residual = self.critical_proposal_adapter(
+                    torch.cat(adapter_tokens, dim=-1)
+                ).squeeze(-1)
         atom_logits = proposal_base_logits + self.critical_proposal_adapter_scale * critical_proposal_residual
         # Condition the atom proposal by the learned family gate.  Invalid atoms
         # are masked after adding the log gate so gradients still reach the gate.
@@ -716,6 +1063,8 @@ class BDSEModel(nn.Module):
             "selector_logits": proposal_logits,
             "proposal_base_logits": proposal_base_logits,
             "critical_proposal_residual_logits": critical_proposal_residual,
+            "critical_boundary_attention_logits": critical_boundary_attention_logits,
+            "critical_boundary_pair_indices": critical_boundary_pair_indices,
             "family_logits": family_logits,
             "family_pi": family_pi,
             "family_active": family_active,
@@ -1100,6 +1449,16 @@ class BDSEModel(nn.Module):
             # making the residual diagnostics report zero while the adapter was
             # still updated indirectly through proposal_logits.
             "critical_proposal_residual_logits": ctx["critical_proposal_residual_logits"],
+            # Optional V64.3.4 FPCCA diagnostics.  Keep forward compatible with
+            # older/mocked encode_context contracts used by V64.3.3 tests.
+            "critical_boundary_attention_logits": ctx.get(
+                "critical_boundary_attention_logits",
+                J0.new_zeros((B, E, 0)),
+            ),
+            "critical_boundary_pair_indices": ctx.get(
+                "critical_boundary_pair_indices",
+                torch.empty((B, 0, 2), dtype=torch.long, device=J0.device),
+            ),
             "family_logits": ctx["family_logits"],
             "family_pi": ctx["family_pi"],
             "family_active": ctx["family_active"],

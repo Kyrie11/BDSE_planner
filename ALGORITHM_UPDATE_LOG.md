@@ -4412,3 +4412,216 @@ LCV is deliberately distinct from v48 DBCE. v48 could reward a boundary-deficit 
 - Do not repeat v40-v43 beam/swap/repair coreset search; it raised CPU latency without solving teacher-action quality.
 - Do not re-enable the harmful 6-D query extension or opaque base prior in nominal runs.
 - Do not lower residual conformal epsilon merely to create deployed flips.
+
+# V64.3.4 — Frontier-Pair Conditioned Critical Acquisition (FPCCA) + Literal Boundary Attribution (LBA) (2026-08-10)
+
+## Trigger: V64.3.3 corrected experiments make the acquisition negative result real
+
+The uploaded V64.3.3 source SHA-256 values exactly match the source used by both
+AP-WCCA and AP-WRCCA activation screens. Re-audit found one remaining
+instrumentation defect, but unlike V64.3.2 it does **not** invalidate the
+optimization itself:
+
+- `_exact_winner_flip_critical_proposal_loss()` computes ACRA and includes
+  `adapter_residual_alignment_weight * L_adapter_residual` in
+  `L_exact_winner_flip_critical_proposal`;
+- `compute_bdse_losses()` omitted only the standalone
+  `L_critical_adapter_residual_alignment` key from the returned logging dict.
+
+Therefore `acra_wired=false` in the uploaded V64.3.3 screen JSON is a false
+negative caused by missing logging. The AP-WCCA/AP-WRCCA residuals were actually
+optimized with ACRA, and their flat literal-critical acquisition is valid
+algorithmic evidence. V64.3.4 restores the standalone diagnostic key.
+
+Corrected same-subset screens:
+
+- AP-WCCA: critical Top-M micro `0.360153 -> 0.360153` (delta `0.000000`),
+  selected critical micro `0.260536 -> 0.252874` (delta `-0.007663`), proposal
+  decisive `0.791509 -> 0.767043` (delta `-0.024466`), adapter parameter delta
+  RMS `0.005158`, residual RMS max `0.96157`.
+- AP-WRCCA: critical Top-M micro `0.360153 -> 0.360153` (delta `0.000000`),
+  selected critical micro `0.260536 -> 0.256705` (delta `-0.003831`), proposal
+  decisive `0.791509 -> 0.773034` (delta `-0.018475`), adapter parameter delta
+  RMS `0.004834`, residual RMS max `1.02724`.
+
+Formal 1000-scene full-support open-loop confirms the plateau:
+
+- teacher literal-critical Top-M recall: AP-WCCA `0.354762`, AP-WRCCA `0.354762`;
+- teacher literal-critical selected recall: `0.280476` / `0.282015`;
+- candidate teacher action match: both `0.224`, below matched foundation `0.227`;
+- pair-full teacher action match: both `0.236`;
+- proposal decisive recall: `0.784096` / `0.780520`;
+- dense->HAB Top-M dense-value action preservation: `0.970` / `0.968`;
+- budget-vs-pair-full winner preservation: `0.899` / `0.902`;
+- deployed residual flips: `0` / `0`.
+
+Thus neither AP-WCCA nor AP-WRCCA should be promoted to the main algorithm.
+DA-EPC, fixed B=16, literal criticality, auditable atoms, immutable legacy HAB,
+and sparse exact-selector supervision remain retained components.
+
+## New mechanism diagnosis: the conditioning anchor is semantically wrong in most scenes
+
+AP-WCCA conditions every atom on the foundation/base top-1 action. AP-WRCCA adds
+only the second-lowest foundation action as one rival. But the matched foundation
+teacher-action match is only `0.227`. Consequently, in most scenes the
+winner-conditioned acquisition residual is centered on an action that is not the
+teacher-relevant winner used by the literal winner-flip label. A large residual
+can therefore move proposal logits substantially while never exposing the actual
+decision boundary associated with a literal critical atom.
+
+This explains the otherwise contradictory V64.3.3 pattern:
+
+- adapter/residual activation is large;
+- broad proposal ranking moves/degrades;
+- literal critical Top-M recall is exactly flat;
+- strongest-rival conditioning does not recover the lost semantic boundary.
+
+This is a representation/conditioning failure, not evidence for increasing M/B,
+relaxing the certificate, or stacking larger global ranking weights.
+
+## FPCCA: deployment-available frontier-pair representation
+
+V64.3.4 adds **Frontier-Pair Conditioned Critical Acquisition (FPCCA)** as an
+optional residual over the same immutable HAB proposal anchor.
+
+Instead of privileging foundation top-1, FPCCA:
+
+1. obtains the top-F valid actions under deployment-available frozen `J0`;
+2. constructs every unordered action pair in this frontier (`F=6` -> 15 pair
+   tokens in the default screen);
+3. represents a pair with action embeddings, relative/product interaction, and a
+   normalized foundation-cost gap;
+4. lets each evidence atom attend to this boundary set;
+5. maps the atom-specific boundary context to a zero-initialized proposal
+   residual.
+
+The forward deployment path remains teacher-free. B=16, evidence M, auditable
+atoms, HAB hard selection, candidate bank, and DA-EPC are unchanged.
+
+The representation is aligned with the paper's decisive-rival framing: the
+proposal no longer has to guess a single universal winner/rival pair before it
+can decide which evidence is decision-sufficient.
+
+## LBA: literal boundary identity supervision without redefining criticality
+
+FPCCA additionally supports **Literal Boundary Attribution (LBA)**. For a literal
+winner-flip critical atom only, leave-one-atom-out evaluation provides the exact
+flip target action. If `(teacher winner, leave-one-out flip target)` lies inside
+the deployment base frontier, LBA supervises the atom's boundary attention to
+that pair.
+
+Important invariants:
+
+- non-critical atoms receive **no** LBA target;
+- the definition of critical remains exactly “removing this atom changes the
+  winner”;
+- LBA is not margin-deficit, soft-criticality, or severity-as-criticality;
+- teacher boundary identity is training-only and is not required at deployment;
+- main LBA weight is conservative (`0.25` inside the exact-critical objective).
+
+This creates a clean CCF-A-style ablation:
+
+1. AP-WRCCA + binary ACRA (uploaded negative control);
+2. AP-WRCCA + LCV (target/value granularity probe);
+3. FPCCA without LBA (representation-only);
+4. FPCCA + LBA (representation + literal boundary attribution).
+
+## Frontier representability diagnostic
+
+Training/open-loop criticality metrics now report whether the literal critical
+boundary is representable inside foundation top-2/top-3/top-5/top-6/top-9 action
+frontiers. The default FPCCA uses F=6. If the same-subset top-6 critical-boundary
+representability is low, a prepared F=8 screen is allowed as a *representation
+support* experiment. This does not increase evidence M or B.
+
+Do not expand F when top-6 representability is already high but critical Top-M
+remains flat; that outcome means the representation/learning rule failed rather
+than the frontier support being too small.
+
+## Efficiency and engineering corrections
+
+1. The missing standalone ACRA diagnostic is restored. New FPCCA training also
+   exports `L_critical_boundary_attribution` and
+   `critical_boundary_representable_fraction`.
+2. Train/eval provenance now binds the complete critical-proposal adapter
+   signature (conditioning, rank, scale, frontier size/count, gap-bias setting),
+   not only the conditioning string. A silent F6/F8 train/eval mismatch is a
+   hard configuration error.
+3. The generic V64.3 pipeline writes the current YAML `metadata.algorithm_version`
+   into the training contract instead of a stale hard-coded V64.3.1 string.
+4. MR/FPCCA frontier extraction uses `torch.topk` rather than sorting all K
+   actions. FPCCA pair construction is vectorized with `torch.triu_indices`.
+5. The boundary-focused training pair sampler was a major avoidable execution
+   cost: V64.3.3 averaged about `251 s/epoch` in pair sampling on AP-WCCA and
+   `250 s/epoch` on AP-WRCCA. Its row-wise CUDA `.item()/nonzero/topk` loop is
+   replaced by batched quota-preserving top-k selection with no host-device
+   scalar synchronization. A regression test requires exactly the same selected
+   pair tensors as the V64.3.3 row-wise rule on a deterministic fixture. CPU
+   microbenchmark for B=16/P=112 is ~`1.2 ms` per call; the server-side CUDA gain
+   must be measured in the next run rather than assumed.
+6. Two-GPU launchers keep 12 training workers/GPU, 4 validation workers/GPU,
+   sparse exact-selector cadence, and screen-before-full execution. No loss,
+   supervision source, pair quota, evidence budget, or selector objective is
+   removed for speed.
+
+## Remaining protocol/closed-loop engineering blocker
+
+Both uploaded full runs have `dense_runtime_query_decision_match=0.997`, below the
+existing Protocol requirement `0.999`, so their formal pipeline correctly blocks
+closed loop. Re-audit of the three AP-WCCA mismatched scenes shows:
+
+- dense/runtime raw query-feature max absolute error = `0.0`;
+- neural-score max absolute difference < `0.001`;
+- the action difference is therefore a near-tie dense-vs-sparse CUDA batch-shape
+  numerical sensitivity, not query-feature provenance drift.
+
+Do **not** lower the 0.999 threshold. The next full run should retain the strict
+raw-feature/score/action audit. If 0.997 repeats after the algorithm winner is
+chosen, isolate strict-matmul / near-tie numerical reproducibility as an
+engineering protocol experiment; do not mix that change into the acquisition
+ablation.
+
+## V64.3.4 promotion policy
+
+Run short 2-GPU screens before any new full pipeline. A screen is considered a
+meaningful acquisition improvement only if, on the exact same validation anchor:
+
+- instrumentation/adapter/ACRA (and LBA when applicable) are wired;
+- literal critical Top-M micro gain >= `+0.01` absolute;
+- literal critical selected gain >= `-0.005`;
+- broad proposal decisive delta >= `-0.02`;
+- teacher action-match delta >= `-0.005`.
+
+Among eligible screens, prioritize literal-critical Top-M gain, then selected
+critical gain and teacher action stability. Only the winning configuration gets a
+50k/8-epoch full pipeline.
+
+If FPCCA raises critical Top-M and selected recall but pair-full/candidate teacher
+match remains flat, acquisition has finally been fixed and the next main problem
+becomes **atom-to-action / pair-boundary value representation**. Do not add more
+acquisition losses at that point.
+
+If full open-loop teacher match improves but diagnostic CL20 still does not,
+move the research direction to candidate dynamics, interactive prediction, and
+replanning rather than evidence-budget relaxation.
+
+## V64.3.4 no-repeat constraints
+
+- Do not retry AP-WCCA or AP-WRCCA binary as candidate main algorithms; V64.3.3
+  now provides valid negative evidence.
+- Do not declare LCV positive before its dedicated screen; it is still an
+  untested value-target probe.
+- Do not unfreeze the complete legacy proposal/family stack.
+- Do not increase B or evidence M to hide acquisition failure.
+- Do not relax DA-EPC or conformal residual epsilon to manufacture winner flips.
+- Do not re-run V40--V43 beam/swap/repair coreset search.
+- Do not stack larger BCC/HCBE/hardest-negative weights without a new causal
+  diagnosis.
+- Do not expand FPCCA from F=6 to F=8 unless the new frontier-representability
+  diagnostic shows that F=6 is actually missing literal boundaries.
+- Do not mix numerical protocol fixes with algorithm ablations; isolate them.
+
+### V64.3.4 delivery hardening amendment
+
+- Added V64.3.4-specific AP-WRCCA+LCV candidate, anchor-control, and local-control closed-loop configs instead of reusing V64.3.2 metadata. The model semantics are unchanged, but train/eval provenance now reports the same `V64.3.4-CC-AOCC-AP-WRCCA-LCV-DA-EPC` version end-to-end.
+- Final repository regression status after FPCCA/LBA, pair-sampler vectorization, diagnostics, and provenance hardening: `280 passed, 0 failed`.

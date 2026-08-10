@@ -232,59 +232,68 @@ def _boundary_focused_pair_subsample(
         + float(sampler_cfg.get("pair_weight_bonus", 3.0)) * weight_score
     )
     # Weighted top-k alone can let one abundant category (typically hard-crossing
-    # pairs) evict all near-boundary pairs.  BFAR instead reserves small,
-    # overlapping quotas for the three decision-critical categories, then fills
-    # the remaining slots by the joint score.  The loop is over the small local
-    # batch only and is negligible compared with pair-head/selector compute.
+    # pairs) evict all near-boundary pairs.  BFAR reserves overlapping quotas for
+    # winner, hard-crossing, and near-tie pairs, then fills by the joint score.
+    #
+    # V64.3.4 execution optimization: the previous implementation looped over
+    # every local-batch row and repeatedly called .item()/nonzero/topk *after*
+    # H2D.  On CUDA those scalar reads serialize the stream and pair sampling was
+    # 15--23% of epoch time in V64.3.3.  The batched quota updates below are the
+    # same deterministic selection rule, but require only four small batched
+    # top-k operations and no host-device synchronization.  Training targets,
+    # quotas, full-graph cadence, and deployment behavior are unchanged.
     index_preference = (P - torch.arange(P, device=score.device, dtype=score.dtype)) * 1e-7
-    chosen_rows: list[torch.Tensor] = []
-    category_specs = (
-        (winner_pair, int(sampler_cfg.get("winner_quota", max_pairs // 4))),
-        (hard_cross, int(sampler_cfg.get("hard_cross_quota", max_pairs // 4))),
-        (near_score, int(sampler_cfg.get("near_tie_quota", max_pairs // 3))),
-    )
-    for row in range(B):
-        selected = torch.zeros(P, dtype=torch.bool, device=score.device)
-        valid_row = pair_valid[row]
-        for category, raw_quota in category_specs:
-            quota = min(max(0, raw_quota), max_pairs - int(selected.sum().item()))
-            if quota <= 0:
-                continue
-            if category.dtype == torch.bool:
-                category_mask = category[row] & valid_row & ~selected
-                category_rank = score[row]
-            else:
-                # For the near-tie quota, rank directly by boundary proximity
-                # while using the joint score as a small semantic tie-breaker.
-                category_mask = valid_row & ~selected
-                category_rank = category[row] + 1e-3 * score[row]
-            candidate_ids = torch.nonzero(category_mask, as_tuple=False).flatten()
-            if candidate_ids.numel() == 0:
-                continue
-            rank_values = category_rank[candidate_ids] + index_preference[candidate_ids]
-            take = min(quota, int(candidate_ids.numel()))
-            ids = candidate_ids[torch.topk(rank_values, k=take, largest=True, sorted=False).indices]
-            selected[ids] = True
+    selected = torch.zeros((B, P), dtype=torch.bool, device=score.device)
+    neg_rank = torch.finfo(score.dtype).min
 
-        remaining = max_pairs - int(selected.sum().item())
-        if remaining > 0:
-            candidate_mask = valid_row & ~selected
-            candidate_ids = torch.nonzero(candidate_mask, as_tuple=False).flatten()
-            if candidate_ids.numel() > 0:
-                rank_values = score[row, candidate_ids] + index_preference[candidate_ids]
-                take = min(remaining, int(candidate_ids.numel()))
-                ids = candidate_ids[torch.topk(rank_values, k=take, largest=True, sorted=False).indices]
-                selected[ids] = True
-                remaining -= take
-        # Keep a fixed tensor shape even for rare caches with fewer valid pairs.
-        # Invalid padded slots remain invalid after gathering and contribute zero.
-        if remaining > 0:
-            pad_ids = torch.nonzero(~selected, as_tuple=False).flatten()[:remaining]
-            selected[pad_ids] = True
-        chosen_rows.append(torch.nonzero(selected, as_tuple=False).flatten()[:max_pairs])
-    chosen = torch.stack(chosen_rows, dim=0)
-    # Restore source order so repeated full/subsampled steps see a stable pair layout.
-    chosen = torch.sort(chosen, dim=1).values
+    def _batched_take(candidate_mask: torch.Tensor, rank_values: torch.Tensor, raw_quota: int) -> None:
+        nonlocal selected
+        quota = min(max(int(raw_quota), 0), max_pairs, P)
+        if quota <= 0:
+            return
+        available_capacity = (max_pairs - selected.sum(dim=1)).clamp_min(0)
+        candidate_count = candidate_mask.sum(dim=1)
+        take_count = torch.minimum(
+            available_capacity,
+            torch.minimum(candidate_count, torch.full_like(candidate_count, quota)),
+        )
+        ranked = (rank_values + index_preference[None, :]).masked_fill(~candidate_mask, neg_rank)
+        ids = torch.topk(ranked, k=quota, dim=1, largest=True, sorted=True).indices
+        slots = torch.arange(quota, device=score.device)[None, :] < take_count[:, None]
+        selected.scatter_(1, ids, selected.gather(1, ids) | slots)
+
+    _batched_take(
+        winner_pair & pair_valid & ~selected,
+        score,
+        int(sampler_cfg.get("winner_quota", max_pairs // 4)),
+    )
+    _batched_take(
+        hard_cross & pair_valid & ~selected,
+        score,
+        int(sampler_cfg.get("hard_cross_quota", max_pairs // 4)),
+    )
+    # Near-tie quota ranks all remaining valid pairs by boundary proximity, just
+    # like the row-wise implementation; joint score is only a semantic tie-break.
+    _batched_take(
+        pair_valid & ~selected,
+        near_score + 1e-3 * score,
+        int(sampler_cfg.get("near_tie_quota", max_pairs // 3)),
+    )
+    # Fill the remaining valid capacity by the joint score.
+    _batched_take(pair_valid & ~selected, score, max_pairs)
+    # Rare caches can contain fewer than max_pairs valid pairs.  Preserve the
+    # fixed gathered tensor shape by padding with the earliest unused source
+    # slots; their gathered pair_valid remains false and contributes zero.
+    pad_count = (max_pairs - selected.sum(dim=1)).clamp_min(0)
+    if bool((pad_count > 0).any()):
+        pad_rank = index_preference[None, :].expand(B, -1).masked_fill(selected, neg_rank)
+        pad_ids = torch.topk(pad_rank, k=max_pairs, dim=1, largest=True, sorted=True).indices
+        pad_slots = torch.arange(max_pairs, device=score.device)[None, :] < pad_count[:, None]
+        selected.scatter_(1, pad_ids, selected.gather(1, pad_ids) | pad_slots)
+
+    source_ids = torch.arange(P, device=score.device, dtype=torch.long)[None, :].expand(B, -1)
+    chosen = torch.where(selected, source_ids, torch.full_like(source_ids, P))
+    chosen = torch.sort(chosen, dim=1).values[:, :max_pairs]
 
     for key in _PAIR_ALIGNED_BATCH_KEYS:
         value = batch.get(key)
@@ -1040,6 +1049,7 @@ def _teacher_literal_criticality_full_support(sample, pred: dict[str, Any], sele
         np.asarray(selected_atoms, dtype=np.int64).reshape(-1),
         prefix="teacher_exact_winner_flip",
         forced_winner=int(sample.teacher.a_star),
+        reference_action_cost=np.asarray(pred.get("J0", []), dtype=np.float32).reshape(-1),
     )
 
 

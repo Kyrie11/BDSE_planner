@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# V64.3.1 provenance-correct checkpoint-independent pipeline.  Resolve every relative path from the
+# V64.3.x provenance-correct checkpoint-independent pipeline.  Resolve every relative path from the
 # checked-in script directory so a stale working directory cannot silently run a
 # different config or helper script.
-PIPELINE_VERSION="v64.3.1-cc-aocc-apwcca-engineering-corrected"
+PIPELINE_VERSION="v64.3.x-cc-aocc-acquisition-engineering-corrected"
+EXPECTED_V64_FAMILY="${EXPECTED_V64_FAMILY:-v64.3.3}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 echo "[v64] pipeline_version=$PIPELINE_VERSION script=$SCRIPT_DIR/$(basename "$0")"
@@ -80,7 +81,7 @@ mkdir -p "$OUT_ROOT/logs" "$OUT_ROOT/provenance"
 python -m bdse.tools.validate_v64_pipeline_config \
   --train-config "$TRAIN_CONFIG" \
   --eval-config "$EVAL_CONFIG" \
-  --expected-family v64.3.3 \
+  --expected-family "$EXPECTED_V64_FAMILY" \
   --output "$OUT_ROOT/provenance/v64_pipeline_config_contract.json"
 
 # Detach the complete pipeline, not only the training child.  Detaching only
@@ -127,7 +128,7 @@ training_complete() {
   [[ "$PIPELINE_FORCE" != "1" ]] || return 1
   [[ -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl"       && -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.pt"       && -s "$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt"       && -s "$TRAIN_CONTRACT_JSON" ]] || return 1
   python - "$TRAIN_CONFIG" "$FOUNDATION_CKPT" "$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt" "$TRAIN_CONTRACT_JSON" <<'PY_TRAIN_CONTRACT_CHECK'
-import hashlib,json,sys
+import hashlib,json,sys,yaml
 from pathlib import Path
 cfg, ckpt, best, marker = map(Path, sys.argv[1:])
 def sha(p):
@@ -137,16 +138,19 @@ def sha(p):
     return h.hexdigest()
 try: d=json.loads(marker.read_text())
 except Exception: raise SystemExit(1)
+cfg_obj=yaml.safe_load(cfg.read_text()) or {}
+expected=str((cfg_obj.get('metadata',{}) or {}).get('algorithm_version','')).strip()
+if not expected: raise SystemExit(1)
 if d.get('train_config_sha256') != sha(cfg): raise SystemExit(1)
 if d.get('foundation_checkpoint_sha256') != sha(ckpt): raise SystemExit(1)
 if d.get('best_checkpoint_sha256') != sha(best): raise SystemExit(1)
-if d.get('algorithm_family') != 'V64.3.1-CC-AOCC-AP-WCCA-DA-EPC': raise SystemExit(1)
+if d.get('algorithm_family') != expected: raise SystemExit(1)
 PY_TRAIN_CONTRACT_CHECK
 }
 
 write_training_contract() {
   python - "$TRAIN_CONFIG" "$FOUNDATION_CKPT" "$OUT_ROOT/train/bdse_v64_saqa_bcc.best.pt" "$TRAIN_CONTRACT_JSON" <<'PY_TRAIN_CONTRACT_WRITE'
-import hashlib,json,sys
+import hashlib,json,sys,yaml
 from datetime import datetime,timezone
 from pathlib import Path
 cfg, foundation, best, out = map(Path, sys.argv[1:])
@@ -155,8 +159,11 @@ def sha(p):
     with p.open('rb') as f:
         for b in iter(lambda:f.read(1024*1024), b''): h.update(b)
     return h.hexdigest()
+cfg_obj=yaml.safe_load(cfg.read_text()) or {}
+algorithm_family=str((cfg_obj.get('metadata',{}) or {}).get('algorithm_version','')).strip()
+if not algorithm_family: raise SystemExit('TRAIN_CONFIG is missing metadata.algorithm_version')
 payload={
- 'algorithm_family':'V64.3.1-CC-AOCC-AP-WCCA-DA-EPC',
+ 'algorithm_family':algorithm_family,
  'train_config_path':str(cfg.resolve()), 'train_config_sha256':sha(cfg),
  'foundation_checkpoint_path':str(foundation.resolve()), 'foundation_checkpoint_sha256':sha(foundation),
  'best_checkpoint_path':str(best.resolve()), 'best_checkpoint_sha256':sha(best),

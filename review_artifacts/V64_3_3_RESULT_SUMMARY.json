@@ -1,0 +1,263 @@
+{
+  "audit": "V64.3.3 uploaded result audit",
+  "conclusions": {
+    "acra_logging_audit": "V64.3.3 exact-critical loss source includes adapter_residual_weight * L_adapter_residual, but compute_bdse_losses omitted the standalone diagnostic key from its return dict. Therefore acra_wired=false is an instrumentation false negative, not evidence that ACRA was absent.",
+    "apwcca_apwrcca_result": "Both genuinely activated ACRA/residual variants leave literal critical Top-M micro flat in screens and formal teacher critical Top-M at 0.3547619; AP-WRCCA does not improve teacher action match or pair-full action match.",
+    "main_bottleneck": "acquisition conditioning/representation, with a specific semantic mismatch: acquisition is conditioned on the foundation winner while matched foundation teacher action match is only 0.227. A single foundation rival cannot repair the missing teacher-relevant boundary in most scenes.",
+    "not_current_bottleneck": "fixed B=16 selector/certificate: dense->TopM dense-value preservation ~0.97 and TopM->B16 remains much stronger than literal critical acquisition; DA-EPC evidence certificate ~0.90. Do not increase B/M or relax certificate.",
+    "protocol_blocker": "dense/runtime raw query features are exactly equal in the three mismatched scenes, while neural scores differ by <0.001 due dense-vs-sparse CUDA batch numerics; decision match 0.997 blocks formal closed loop under the existing 0.999 protocol threshold. Do not lower the threshold; keep this as a numerical-contract audit item.",
+    "secondary_bottleneck_after_acquisition": "atom-to-action/pair value is still weak (pair-full interface teacher match 0.236), but causal priority should switch there only after critical Top-M/selected evidence improve."
+  },
+  "formal_open_loop": {
+    "apwcca": {
+      "candidate": {
+        "budget_vs_pair_full_match": 0.899,
+        "dense_runtime_query_decision_match": 0.997,
+        "dense_vs_hab_topm_dense_value_match": 0.97,
+        "dense_vs_selected_budget_dense_value_match": 0.936,
+        "evidence_certificate_fraction": 0.899,
+        "fallback_would_trigger_rate": 0.122,
+        "local_pair_full_interface_action_match": 0.236,
+        "pair_full_interface_action_match": 0.236,
+        "planner_latency_ms_mean": 404.80068712867796,
+        "planner_latency_ms_p95": 557.7319264877588,
+        "proposal_decisive_atom_recall": 0.7840958455754625,
+        "residual_flip_deployed": 0.0,
+        "selected_decisive_atom_recall": 0.6060680188285076,
+        "teacher_action_match": 0.224,
+        "teacher_exact_winner_flip_critical_recall_selected": 0.2804761904761905,
+        "teacher_exact_winner_flip_critical_recall_topm": 0.3547619047619048
+      },
+      "competitive_failures": [
+        "total teacher-match gain=-0.003000 < +0.015",
+        "residual teacher-match gain=+0.000000 < +0.005",
+        "pair-full residual gain=+0.000000 < +0.005",
+        "residual not net beneficial=0.0/0.0",
+        "proposal decisive recall=0.7840958455754625 < 0.80",
+        "teacher exact winner-flip critical Top-M recall=0.3547619047619048 < 0.80",
+        "teacher exact winner-flip critical selected recall=0.2804761904761905 < 0.50",
+        "paired regret regressed vs foundation: {'median': 157.0215945724667, 'p90': 50554.908711556935, 'cvar90': 78896.10468094843} / {'median': 152.1239721751772, 'p90': 50751.90394223309, 'cvar90': 80799.36332278336}"
+      ],
+      "foundation": {
+        "budget_vs_pair_full_match": 0.916,
+        "dense_runtime_query_decision_match": 0.207,
+        "dense_vs_hab_topm_dense_value_match": 0.983,
+        "dense_vs_selected_budget_dense_value_match": 0.966,
+        "evidence_certificate_fraction": 0.916,
+        "fallback_would_trigger_rate": 0.105,
+        "local_pair_full_interface_action_match": 0.235,
+        "pair_full_interface_action_match": 0.235,
+        "planner_latency_ms_mean": 409.211352895014,
+        "planner_latency_ms_p95": 560.5470659676939,
+        "proposal_decisive_atom_recall": 0.8035826220760641,
+        "residual_flip_deployed": 0.0,
+        "selected_decisive_atom_recall": 0.6128570289624694,
+        "teacher_action_match": 0.227,
+        "teacher_exact_winner_flip_critical_recall_selected": 0.2812087912087912,
+        "teacher_exact_winner_flip_critical_recall_topm": 0.3547619047619048
+      },
+      "local": {
+        "budget_vs_pair_full_match": 0.899,
+        "dense_runtime_query_decision_match": 0.997,
+        "dense_vs_hab_topm_dense_value_match": 0.97,
+        "dense_vs_selected_budget_dense_value_match": 0.936,
+        "evidence_certificate_fraction": 0.899,
+        "fallback_would_trigger_rate": 0.122,
+        "local_pair_full_interface_action_match": 0.236,
+        "pair_full_interface_action_match": 0.236,
+        "planner_latency_ms_mean": 403.26691423822194,
+        "planner_latency_ms_p95": 553.7139175459743,
+        "proposal_decisive_atom_recall": 0.7840958455754625,
+        "residual_flip_deployed": 0.0,
+        "selected_decisive_atom_recall": 0.6060680188285076,
+        "teacher_action_match": 0.224,
+        "teacher_exact_winner_flip_critical_recall_selected": 0.2804761904761905,
+        "teacher_exact_winner_flip_critical_recall_topm": 0.3547619047619048
+      },
+      "minimum_metrics_pass": true,
+      "protocol_failures": [
+        "dense/runtime query decision match=0.997 < 0.999"
+      ],
+      "protocol_integrity_pass": false,
+      "teacher_match_gain_vs_foundation": -0.0030000000000000027
+    },
+    "apwrcca": {
+      "candidate": {
+        "budget_vs_pair_full_match": 0.902,
+        "dense_runtime_query_decision_match": 0.997,
+        "dense_vs_hab_topm_dense_value_match": 0.968,
+        "dense_vs_selected_budget_dense_value_match": 0.934,
+        "evidence_certificate_fraction": 0.902,
+        "fallback_would_trigger_rate": 0.119,
+        "local_pair_full_interface_action_match": 0.236,
+        "pair_full_interface_action_match": 0.236,
+        "planner_latency_ms_mean": 402.64310485776514,
+        "planner_latency_ms_p95": 557.8264752868563,
+        "proposal_decisive_atom_recall": 0.7805202750306346,
+        "residual_flip_deployed": 0.0,
+        "selected_decisive_atom_recall": 0.6021147598500796,
+        "teacher_action_match": 0.224,
+        "teacher_exact_winner_flip_critical_recall_selected": 0.282014652014652,
+        "teacher_exact_winner_flip_critical_recall_topm": 0.3547619047619048
+      },
+      "competitive_failures": [
+        "total teacher-match gain=-0.003000 < +0.015",
+        "residual teacher-match gain=+0.000000 < +0.005",
+        "pair-full residual gain=+0.000000 < +0.005",
+        "residual not net beneficial=0.0/0.0",
+        "proposal decisive recall=0.7805202750306346 < 0.80",
+        "teacher exact winner-flip critical Top-M recall=0.3547619047619048 < 0.80",
+        "teacher exact winner-flip critical selected recall=0.282014652014652 < 0.50",
+        "paired regret regressed vs foundation: {'median': 158.11940301954746, 'p90': 50650.567408351555, 'cvar90': 78657.14750347045} / {'median': 155.38049803866306, 'p90': 51269.67742280364, 'cvar90': 81197.63575153486}"
+      ],
+      "foundation": {
+        "budget_vs_pair_full_match": 0.928,
+        "dense_runtime_query_decision_match": 0.207,
+        "dense_vs_hab_topm_dense_value_match": 0.983,
+        "dense_vs_selected_budget_dense_value_match": 0.969,
+        "evidence_certificate_fraction": 0.928,
+        "fallback_would_trigger_rate": 0.093,
+        "local_pair_full_interface_action_match": 0.235,
+        "pair_full_interface_action_match": 0.235,
+        "planner_latency_ms_mean": 406.53464394807816,
+        "planner_latency_ms_p95": 558.1083131022751,
+        "proposal_decisive_atom_recall": 0.8035826220760641,
+        "residual_flip_deployed": 0.0,
+        "selected_decisive_atom_recall": 0.6092701706891027,
+        "teacher_action_match": 0.227,
+        "teacher_exact_winner_flip_critical_recall_selected": 0.28018315018315015,
+        "teacher_exact_winner_flip_critical_recall_topm": 0.3547619047619048
+      },
+      "local": {
+        "budget_vs_pair_full_match": 0.902,
+        "dense_runtime_query_decision_match": 0.997,
+        "dense_vs_hab_topm_dense_value_match": 0.968,
+        "dense_vs_selected_budget_dense_value_match": 0.934,
+        "evidence_certificate_fraction": 0.902,
+        "fallback_would_trigger_rate": 0.119,
+        "local_pair_full_interface_action_match": 0.236,
+        "pair_full_interface_action_match": 0.236,
+        "planner_latency_ms_mean": 427.8004503957927,
+        "planner_latency_ms_p95": 599.578660633415,
+        "proposal_decisive_atom_recall": 0.7805202750306346,
+        "residual_flip_deployed": 0.0,
+        "selected_decisive_atom_recall": 0.6021147598500796,
+        "teacher_action_match": 0.224,
+        "teacher_exact_winner_flip_critical_recall_selected": 0.282014652014652,
+        "teacher_exact_winner_flip_critical_recall_topm": 0.3547619047619048
+      },
+      "minimum_metrics_pass": true,
+      "protocol_failures": [
+        "dense/runtime query decision match=0.997 < 0.999"
+      ],
+      "protocol_integrity_pass": false,
+      "teacher_match_gain_vs_foundation": -0.0030000000000000027
+    }
+  },
+  "screens": {
+    "apwcca": {
+      "acra_wired": false,
+      "adapter_forward_activated": true,
+      "adapter_parameter_activated": true,
+      "anchor_val_critical_selected_recall_micro": 0.26053639846743293,
+      "anchor_val_critical_topm_recall_micro": 0.36015325670498083,
+      "anchor_val_proposal_decisive_recall": 0.7915091362101949,
+      "critical_adapter_parameter_delta_rms_max": 0.005157664883881807,
+      "critical_proposal_residual_rms_max": 0.9615698649088542,
+      "delta_val_critical_selected_recall_micro": -0.007662835249042155,
+      "delta_val_critical_topm_recall_micro": 0.0,
+      "delta_val_proposal_decisive_recall": -0.02446602624004912,
+      "last_val_critical_selected_recall_micro": 0.2528735632183908,
+      "last_val_critical_topm_recall_micro": 0.36015325670498083,
+      "last_val_proposal_decisive_recall": 0.7670431099701458,
+      "last_val_teacher_action_match": 0.258,
+      "screen_instrumentation_valid": false
+    },
+    "apwrcca": {
+      "acra_wired": false,
+      "adapter_forward_activated": true,
+      "adapter_parameter_activated": true,
+      "anchor_val_critical_selected_recall_micro": 0.26053639846743293,
+      "anchor_val_critical_topm_recall_micro": 0.36015325670498083,
+      "anchor_val_proposal_decisive_recall": 0.7915091362101949,
+      "critical_adapter_parameter_delta_rms_max": 0.004833902232348919,
+      "critical_proposal_residual_rms_max": 1.027241943359375,
+      "delta_val_critical_selected_recall_micro": -0.0038314176245210496,
+      "delta_val_critical_topm_recall_micro": 0.0,
+      "delta_val_proposal_decisive_recall": -0.018475120557859936,
+      "last_val_critical_selected_recall_micro": 0.2567049808429119,
+      "last_val_critical_topm_recall_micro": 0.36015325670498083,
+      "last_val_proposal_decisive_recall": 0.773034015652335,
+      "last_val_teacher_action_match": 0.26,
+      "screen_instrumentation_valid": false
+    }
+  },
+  "source_code_sha_provenance_matches_uploaded_code": {
+    "apwcca": {
+      "RUN_V64_3_3_APWCCA_ACTIVATION_SCREEN_2GPU.sh": {
+        "actual": "07d711cdcdee0554a245ad3be5cefd96c7b0b8b7121fdb17d9eb52c637047eab",
+        "expected": "07d711cdcdee0554a245ad3be5cefd96c7b0b8b7121fdb17d9eb52c637047eab",
+        "match": true
+      },
+      "bdse/experiments/train.py": {
+        "actual": "8a78fd634f5441a9cca63718aca30a376c0d6124267451aca123e612aef20e08",
+        "expected": "8a78fd634f5441a9cca63718aca30a376c0d6124267451aca123e612aef20e08",
+        "match": true
+      },
+      "bdse/model/bdse_model.py": {
+        "actual": "2f2cdee63ec9121e2f38d18494fc3ebaa5e7cacbae13e346faa2841d520211a5",
+        "expected": "2f2cdee63ec9121e2f38d18494fc3ebaa5e7cacbae13e346faa2841d520211a5",
+        "match": true
+      },
+      "bdse/model/losses.py": {
+        "actual": "84e8a908e0723cded6c0582d8484f550f5beda2c87e55ae89ce9120280b58164",
+        "expected": "84e8a908e0723cded6c0582d8484f550f5beda2c87e55ae89ce9120280b58164",
+        "match": true
+      }
+    },
+    "apwrcca": {
+      "RUN_V64_3_3_APWRCCA_ACTIVATION_SCREEN_2GPU.sh": {
+        "actual": "d8b9797f673f5297dc049997c6644149e5ebcf60dbb8b2c43375b84e1ac67281",
+        "expected": "d8b9797f673f5297dc049997c6644149e5ebcf60dbb8b2c43375b84e1ac67281",
+        "match": true
+      },
+      "bdse/experiments/train.py": {
+        "actual": "8a78fd634f5441a9cca63718aca30a376c0d6124267451aca123e612aef20e08",
+        "expected": "8a78fd634f5441a9cca63718aca30a376c0d6124267451aca123e612aef20e08",
+        "match": true
+      },
+      "bdse/model/bdse_model.py": {
+        "actual": "2f2cdee63ec9121e2f38d18494fc3ebaa5e7cacbae13e346faa2841d520211a5",
+        "expected": "2f2cdee63ec9121e2f38d18494fc3ebaa5e7cacbae13e346faa2841d520211a5",
+        "match": true
+      },
+      "bdse/model/losses.py": {
+        "actual": "84e8a908e0723cded6c0582d8484f550f5beda2c87e55ae89ce9120280b58164",
+        "expected": "84e8a908e0723cded6c0582d8484f550f5beda2c87e55ae89ce9120280b58164",
+        "match": true
+      }
+    }
+  },
+  "training_efficiency": {
+    "apwcca": {
+      "selector_exact_wall_time_s": 0.10004570143999234,
+      "train_backward_step_wall_time_s": 42.62877492187545,
+      "train_data_wait_wall_time_s": 283.7496849580202,
+      "train_epoch_wall_time_s": 1564.2023982453393,
+      "train_forward_wall_time_s": 58.91311393678188,
+      "train_loss_wall_time_s": 394.05646792287007,
+      "train_pair_sample_wall_time_s": 251.13283827179112,
+      "train_samples_per_second": 32.082203245537215
+    },
+    "apwrcca": {
+      "selector_exact_wall_time_s": 0.1005359467831622,
+      "train_backward_step_wall_time_s": 42.2667518875096,
+      "train_data_wait_wall_time_s": 265.1841655476019,
+      "train_epoch_wall_time_s": 1553.6435662433505,
+      "train_forward_wall_time_s": 59.57790335651953,
+      "train_loss_wall_time_s": 393.5039915369125,
+      "train_pair_sample_wall_time_s": 250.41275752801448,
+      "train_samples_per_second": 32.36203842148805
+    }
+  }
+}
