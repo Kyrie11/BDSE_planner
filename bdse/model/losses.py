@@ -3492,6 +3492,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_residual_action_atom = J0.new_tensor(0.0)
         L_residual_action_uncertainty = J0.new_tensor(0.0)
 
+    literal_boundary_atom_pair = None
     if teacher_g is not None:
         tg_a, tg_b = pair_gather(teacher_g.float(), pairs)
         true_atom_delta_raw = tg_b - tg_a
@@ -3502,6 +3503,37 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         nonzero = true_atom_delta.abs() > 1e-6
         zero_w = float(train_cfg.get("pair_zero_weight", 0.1))
         atom_weights = (decision_w * correction_focus)[:, None, :] * (zero_w + (1.0 - zero_w) * nonzero.float())
+
+        # V64.3.6 LBPR literal-boundary supervision.  Broad pair regression was
+        # insufficient in V46/V49.  Upweight only atom/pair entries for which
+        # removing this exact auditable teacher atom changes the teacher winner
+        # to the other endpoint of the cached pair.  This preserves the strict
+        # winner-flip definition and never creates a runtime teacher feature.
+        literal_boundary_atom_pair = torch.zeros_like(true_atom_delta, dtype=torch.bool)
+        literal_pair_weight = max(float(train_cfg.get("literal_boundary_pair_atom_weight", 1.0)), 1.0)
+        teacher_cost_literal = batch.get("teacher_J_T")
+        if literal_pair_weight > 1.0 and teacher_cost_literal is not None:
+            invalid_literal = J0.new_tensor(1.0e9)
+            dense_teacher_literal = teacher_cost_literal.float().masked_fill(~valid, invalid_literal)
+            scalar_teacher_literal = dense_teacher_literal.argmin(dim=1)
+            aligned_literal = scalar_teacher_literal.eq(target_action)
+            safe_teacher_atom = torch.where(
+                e_mask[:, :, None] & torch.isfinite(teacher_g.float()),
+                teacher_g.float(),
+                torch.zeros_like(teacher_g.float()),
+            )
+            loo_literal = dense_teacher_literal[:, None, :] - safe_teacher_atom
+            loo_literal = loo_literal.masked_fill(~valid[:, None, :], invalid_literal)
+            flip_literal = loo_literal.argmin(dim=2)
+            critical_literal = e_mask & aligned_literal[:, None] & flip_literal.ne(target_action[:, None])
+            pa = pairs[..., 0].long()
+            pb = pairs[..., 1].long()
+            match_ab = pa[:, None, :].eq(target_action[:, None, None]) & pb[:, None, :].eq(flip_literal[:, :, None])
+            match_ba = pb[:, None, :].eq(target_action[:, None, None]) & pa[:, None, :].eq(flip_literal[:, :, None])
+            literal_boundary_atom_pair = critical_literal[:, :, None] & (match_ab | match_ba) & pair_train_mask[:, None, :]
+            atom_weights = torch.where(
+                literal_boundary_atom_pair, atom_weights * literal_pair_weight, atom_weights
+            )
         if bool(train_cfg.get("upweight_interaction_atoms", True)):
             atom_weights = torch.where(
                 interaction_atom_mask[:, :, None],
@@ -4827,6 +4859,16 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "loss": total,
         "L_base": L_base,
         "L_pair": L_pair,
+        "literal_boundary_pair_atom_fraction": (
+            literal_boundary_atom_pair.float().mean()
+            if literal_boundary_atom_pair is not None
+            else J0.new_tensor(0.0)
+        ),
+        "literal_boundary_pair_residual_rms": (
+            out["pair_atom_delta"].float().square().mean().sqrt()
+            if out.get("pair_atom_delta") is not None
+            else J0.new_tensor(0.0)
+        ),
         "L_res": L_res,
         "L_anchor_preserve": L_anchor_preserve,
         "L_anchor_correct": L_anchor_correct,
@@ -4847,6 +4889,16 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "critical_boundary_representable_fraction": critical_boundary_representable_fraction,
         "L_critical_endpoint_attribution": L_critical_endpoint_attribution,
         "critical_endpoint_representable_fraction": critical_endpoint_representable_fraction,
+        "critical_family_residual_rms": (
+            out["critical_family_residual_logits"].float().square().mean().sqrt()
+            if out.get("critical_family_residual_logits") is not None
+            else J0.new_tensor(0.0)
+        ),
+        "critical_family_residual_active_fraction": (
+            out["critical_family_residual_logits"].float().abs().gt(1.0e-6).float().mean()
+            if out.get("critical_family_residual_logits") is not None
+            else J0.new_tensor(0.0)
+        ),
         "exact_winner_flip_critical_recall_topm": exact_winner_flip_critical_recall_topm,
         "exact_winner_flip_critical_atom_fraction": exact_winner_flip_critical_atom_fraction,
         "exact_winner_flip_critical_scene_fraction": exact_winner_flip_critical_scene_fraction,

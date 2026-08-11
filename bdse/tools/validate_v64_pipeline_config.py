@@ -32,6 +32,7 @@ V64_3_PREFIXES = (
     "v64_3_4_cc_aocc_fpcca",
     "v64_3_4_cc_aocc_apwrcca",
     "v64_3_5_cc_aocc_ccbr",
+    "v64_3_6_cc_aocc_ccbr",
 )
 V64_3_ALGORITHM_VERSIONS = {
     "V64.3-CC-AOCC-AP-WCCA",
@@ -49,6 +50,10 @@ V64_3_ALGORITHM_VERSIONS = {
     "V64.3.4-CC-AOCC-AP-WRCCA-LCV-DA-EPC",
     "V64.3.5-CC-AOCC-CCBR-DA-EPC",
     "V64.3.5-CC-AOCC-CCBR-LEA-DA-EPC",
+    "V64.3.6-CC-AOCC-CCBR-LEA-LOCAL-DA-EPC",
+    "V64.3.6-CC-AOCC-CCBR-BCHA-LEA-DA-EPC",
+    "V64.3.6-CC-AOCC-CCBR-LBPR-LEA-DA-EPC",
+    "V64.3.6-CC-AOCC-CCBR-BCHA-LBPR-LEA-DA-EPC",
 }
 V64_3_REQUIRED_TRAINABLE = {
     "critical_proposal_adapter",
@@ -87,6 +92,8 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
     runtime = cfg.get("runtime", {}) or {}
     adapter = model.get("query_extension_adapter", {}) or {}
     critical_adapter = model.get("critical_proposal_adapter", {}) or {}
+    lbpr = model.get("literal_boundary_pair_adapter", {}) or {}
+    family_coupling = critical_adapter.get("family_coupling", {}) or {}
     training_cfg = cfg.get("training", {}) or {}
     crit = training_cfg.get("exact_winner_flip_criticality", {}) or {}
     source = str(runtime.get("dense_query_feature_source", "cache_or_recompute")).strip().lower()
@@ -112,7 +119,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
             }
         )
 
-    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64_3"}
+    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64_3"}
     if strict_v64_3:
         trainable = {str(x) for x in training_cfg.get("trainable_modules", [])}
         checks.update(
@@ -148,9 +155,19 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
         if role == "train":
             checks.update(
                 {
-                    "v64_3_required_trainable_exact": V64_3_REQUIRED_TRAINABLE.issubset(trainable),
+                    "v64_3_required_trainable_exact": (
+                        ({"critical_proposal_adapter"}.issubset(trainable) and
+                         ((not bool(lbpr.get("enabled", False))) or "literal_boundary_pair_adapter" in trainable))
+                        if metadata_version.startswith("V64.3.6-")
+                        else V64_3_REQUIRED_TRAINABLE.issubset(trainable)
+                    ),
                     "v64_3_forbidden_legacy_trainables_absent": not bool(trainable & V64_3_FORBIDDEN_TRAINABLE),
                     "v64_3_critical_adapter_trainable": "critical_proposal_adapter" in trainable,
+                    "v64_3_6_lbpr_trainable_when_enabled": (
+                        (not metadata_version.startswith("V64.3.6-"))
+                        or (not bool(lbpr.get("enabled", False)))
+                        or ("literal_boundary_pair_adapter" in trainable)
+                    ),
                     "v64_3_legacy_proposal_frozen": not bool(
                         trainable
                         & {"proposal_head", "family_head", "family_embed", "family_activity_proj", "proposal_feature_proj"}
@@ -169,6 +186,14 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
         "frontier_action_count": int(critical_adapter.get("frontier_action_count", 0)),
         "frontier_gap_bias_scale": float(critical_adapter.get("frontier_gap_bias_scale", 0.0)),
         "endpoint_cost_bias_scale": float(critical_adapter.get("endpoint_cost_bias_scale", 0.0)),
+        "family_coupling_enabled": bool(family_coupling.get("enabled", False)),
+        "family_coupling_scale": float(family_coupling.get("scale", 0.0)),
+        "family_coupling_clip": float(family_coupling.get("clip", 0.0)),
+        "lbpr_enabled": bool(lbpr.get("enabled", False)),
+        "lbpr_rank": int(lbpr.get("rank", 0)),
+        "lbpr_scale": float(lbpr.get("scale", 0.0)),
+        "lbpr_endpoint_gate_floor": float(lbpr.get("endpoint_gate_floor", 0.0)),
+        "lbpr_endpoint_gate_temperature": float(lbpr.get("endpoint_gate_temperature", 1.0)),
     }
     failures = [name for name, ok in checks.items() if not ok]
     return {
@@ -192,7 +217,7 @@ def main() -> int:
     ap.add_argument("--eval-config", type=Path, required=True)
     ap.add_argument(
         "--expected-family",
-        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64_3"],
+        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64_3"],
         default="v64",
         help="Use v64.3+ to reject any stale V64.2 config even if generic V64 checks pass.",
     )
@@ -205,7 +230,7 @@ def main() -> int:
         "train": _check(args.train_config, "train", args.expected_family),
         "eval": _check(args.eval_config, "eval", args.expected_family),
     }
-    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64_3"}
+    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64_3"}
     train_cond = report["train"].get("critical_proposal_conditioning", "")
     eval_cond = report["eval"].get("critical_proposal_conditioning", "")
     train_signature = report["train"].get("critical_proposal_signature", {})

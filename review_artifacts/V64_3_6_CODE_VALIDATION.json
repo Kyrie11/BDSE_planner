@@ -1,0 +1,18 @@
+{
+  "version": "V64.3.6 BCHA+LBPR",
+  "status": "pass",
+  "pytest": {"passed": 290, "failed": 0, "warnings": 31},
+  "python_compileall": "pass",
+  "v64_3_6_yaml_parse_count": 12,
+  "new_launcher_bash_n": {"count": 6, "status": "pass"},
+  "config_contracts": {"screen_pairs": 4, "full_train_pairs": 4, "status": "pass"},
+  "patch_dry_run": "pass",
+  "key_regressions": [
+    "LBPR zero-init exact no-op",
+    "LBPR exact antisymmetry after non-zero output weights",
+    "literal winner->LOO-flip pair quota reservation",
+    "V64.3.6 train/eval provenance contract",
+    "teacher-only frozen/global family oracle emission",
+    "V64.3.5 CCBR and V64.3.4 vectorized pair sampler compatibility"
+  ]
+}

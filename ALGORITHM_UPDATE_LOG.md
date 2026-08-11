@@ -4710,3 +4710,123 @@ If CCBR improves Top-M/selected but pair-full/candidate teacher match remains fl
 7. CCBR complexity is O(EK) and reuses existing action embeddings/J0, avoiding complete O(K^2) pair materialization.
 
 Final repository regression after V64.3.5: **285 passed, 0 failed, 30 warnings**. No nuPlan GPU training was performed in the delivery environment; CCBR/LEA performance claims require the next two-GPU screen.
+
+# V64.3.6 — Boundary-Coupled Hierarchical Admission (BCHA) + Literal Boundary Pair Residual (LBPR) (2026-08-11)
+
+## Trigger: V64.3.5 proves complete boundary support is necessary but not sufficient
+
+The uploaded V64.3.5 causal screen used the same V62 DCAB-EWFC warm-start anchor and correctly blocked full training because neither CCBR arm met the acquisition promotion gate.  The result is informative rather than an instrumentation failure:
+
+- common anchor literal critical Top-M micro recall: `0.3601532567`;
+- CCBR-noLEA final/best Top-M gain: `+0.0000`;
+- CCBR+LEA final/best Top-M gain: `+0.0000`;
+- CCBR+LEA endpoint representability: `1.000` at activation and `0.9973` at the last epoch;
+- LEA loss is active (`max 3.2463`) and CCBR residual RMS reaches `0.4676`;
+- CCBR adapter parameter delta RMS reaches `0.00418`;
+- selected-critical recall drops from `0.26054` to `0.25287` (`-0.00766`);
+- proposal decisive recall drops from `0.79151` to `0.77632` (`-0.01519`);
+- teacher action match drops from `0.264` to `0.260` (`-0.004`).
+
+Therefore CCBR **did solve FPCCA's representation-support ceiling** (F6/F8 had only about 12%/20% literal boundary support), and LEA demonstrably learns exact winner/flip endpoint identity, but that semantic support does not by itself change HAB Top-M admission.  CCBR+LEA is retained as a useful representation primitive, not promoted as a completed main algorithm.
+
+## The previously potential downstream value bottleneck is now confirmed
+
+V64.3.5 also makes the downstream ceiling explicit on the same validation anchor.  Across CCBR-noLEA and CCBR+LEA epochs:
+
+- `pair_full_interface_action_match` remains only about `0.256--0.262`;
+- `local_pair_full_interface_action_match` remains about `0.258--0.264`;
+- `budget_vs_pair_full_match` is much higher, about `0.928--0.948`;
+- `pair_full_to_budget_flip_rate` is only about `0.052--0.072`.
+
+Thus the B=16 compression is **not** the dominant source of the roughly 74% teacher mismatch. Even giving the pair pathway full active evidence leaves teacher match near 26%. The atom/action-to-pair-boundary value representation is a real performance bottleneck, not merely a hypothetical second stage.
+
+This changes the optimization regime from "acquisition first, value later" to a **verified dual bottleneck**. Both must eventually improve, but they must remain separately switchable so the paper can attribute gains to evidence admission versus evidence value.
+
+## V64.3.5 family-oracle metric was not evidence either way
+
+`teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall` was `null` in the uploaded V64.3.5 screens. Audit shows the function existed only in the optional dense open-loop diagnostic, while short training screens used the teacher-only validation path. This was an instrumentation-placement bug. It does **not** prove that frozen HAB family slots are or are not a bottleneck.
+
+V64.3.6 computes two oracle diagnostics on every screen validation:
+
+1. `teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall`: critical atoms get oracle-dominant atom logits while the frozen family gate/slots remain intact;
+2. `teacher_exact_winner_flip_global_oracle_topm_recall`: the same oracle atom scores with HAB family allocation disabled.
+
+Their gap is the direct family-admission ceiling. BCHA is justified only if frozen-family oracle `<0.90` and the global-vs-frozen gap is at least `0.05`. Otherwise BCHA must be dropped rather than tuned repeatedly.
+
+## Algorithm A: Boundary-Coupled Hierarchical Admission (BCHA)
+
+CCBR currently changes atom proposal logits **after** the immutable family gate has allocated family support. A correct literal-boundary atom signal can therefore be invisible if its family receives too little Top-M capacity.
+
+BCHA reuses the same CCBR atom residual, centers it over active atoms, max-pools it within each semantic family, centers the active-family vector, clips it, and adds only a bounded residual to the frozen family logits before HAB computes family probabilities. It is parameter-free beyond CCBR itself.
+
+Important invariants:
+
+- legacy family/proposal heads remain frozen;
+- CCBR final layer is zero initialized, so BCHA is an exact step-zero no-op;
+- B=16 and proposal M are unchanged;
+- auditable evidence atoms and exact winner-flip criticality are unchanged;
+- no extra atom-action evidence query is introduced;
+- BCHA is O(E+F), not a larger selector or beam/swap search.
+
+This module directly serves the paper's hierarchical budget interface: exact decision-boundary evidence can influence **where the fixed proposal capacity is allocated**, not only ranking inside an already-allocated family.
+
+## Algorithm B: Literal Boundary Pair Residual (LBPR)
+
+LBPR addresses the now-proven downstream pair-value ceiling without repeating V46/V49 broad arbitrary pair fields or V55/V56/V59 global/integrable action potentials.
+
+For evidence atom `i` and ordered candidate pair `(a,b)`, LBPR computes a low-rank atom factor and multiplies it by an action/query **difference** factor. The residual therefore satisfies exact antisymmetry by construction:
+
+`r_i(a,b) = -r_i(b,a)`.
+
+The output linear layer has **no bias**; a regression test explicitly swaps the pair after non-zero output weights are installed and requires exact sign reversal. The final output weights are zero initialized, so step zero is exactly the frozen local pair interface.
+
+LBPR is additionally gated by CCBR/LEA endpoint compatibility. The gate uses only the deployment-available CCBR endpoint distributions and is detached from value gradients, so downstream value learning cannot corrupt the literal endpoint-attribution mechanism.
+
+Training reserves a bounded pair-batch quota for exact teacher winner -> leave-one-atom-out flip edges and upweights only the matching literal atom/pair labels. Runtime still evaluates only the existing rival graph and selected evidence. It does not build an O(K^2) evidence lattice and does not alter the evidence budget.
+
+## Clean causal design
+
+V64.3.6 exposes four independently interpretable arms:
+
+1. `LOCAL`: CCBR+LEA, no BCHA, no LBPR — causal control with frozen local pair value;
+2. `BCHA`: admission-only intervention;
+3. `LBPR`: literal pair-value intervention only;
+4. `BCHA_LBPR`: joint intervention, run only when family oracle and/or individual screens justify it.
+
+The adaptive matrix always runs LOCAL and LBPR. BCHA runs only when the frozen-family oracle indicates an admission ceiling (or the user explicitly forces the 2x2). The joint arm runs only when BCHA is justified and an individual mechanism has a meaningful signal, unless `RUN_FULL_2X2=1` is requested for the paper ablation.
+
+## Warm-start policy
+
+Keep the user's existing immutable warm-start for the next causal screens:
+
+`outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt`.
+
+Do **not** scratch-retrain the full foundation yet. The current question is whether the new admission/value residuals can correct a fixed representation, and historical broad unfreezing/retraining has not provided a reliable positive result. A scratch/full encoder retrain would confound this diagnosis.
+
+Only reconsider selective foundation retraining if LBPR has verified non-zero gradients/parameter movement and literal-pair coverage but cannot raise pair-full match. At that point the next hypothesis would be frozen action/evidence embedding capacity, and the preferred experiment is a **small selective encoder unfreeze**, not an indiscriminate full-model restart. A final paper can later include scratch-vs-warm-start robustness after the winning mechanism is fixed.
+
+## Runtime/training efficiency changes
+
+- V64.3.4 vectorized pair sampling remains; no quota reduction is used for speed.
+- In V64.3.6 causal configs, the historically negative residual-action and set-conditioned potential branches are disabled (`evidence_action_residual=false`, `set_residual_rank=0`) and their loss weights are zero. They are not consumed by the legacy direct pair tournament in this phase, so this removes unused forward/loss work without changing the tested mechanism.
+- LBPR rank is 32; training keeps max 48 cached pairs/scene with 12 literal-boundary reserved slots. Runtime refines at most 32 existing rival pairs.
+- BCHA adds only O(E+F) pooling.
+- Two-GPU defaults remain batch 16/GPU, 12 train workers/GPU, 4 validation workers/GPU, prefetch 2.
+
+## V64.3.6 promotion rules
+
+Acquisition signal remains strict: literal critical Top-M gain >= `+0.01`, selected-critical delta >= `-0.005`, proposal-decisive delta >= `-0.02`, teacher-match delta >= `-0.005`.
+
+Value signal requires pair-full teacher-match gain >= `+0.01`, pair-full advantage over the same-epoch local pair-full control >= `+0.005`, budget-vs-pair-full delta >= `-0.02`, and teacher-match stability >= `-0.005`.
+
+Automatic full training is even stricter: the selected row must improve final teacher action match by at least `+0.005` and have either a meaningful acquisition or value gain. This prevents a diagnostic-only pair-full gain from being promoted as a planner result.
+
+## V64.3.6 no-repeat constraints
+
+- Do not retry AP-WCCA/AP-WRCCA/LCV/FPCCA F6/F8 as candidate main algorithms.
+- Do not increase B or M to hide admission failure.
+- Do not unfreeze the complete legacy family/proposal stack; BCHA is the only permitted family intervention unless its oracle-conditioned experiment fails for a new reason.
+- Do not repeat V46/V49 broad arbitrary pair residuals.
+- Do not repeat V55 Hodge/global action potential, V56 generic per-evidence action potential, or V59 generic set-conditioned potential.
+- Do not relax DA-EPC, residual confidence gates, or protocol thresholds to manufacture flips.
+- Do not scratch-retrain the full foundation before the targeted V64.3.6 causal screens resolve whether frozen representation capacity is actually limiting.

@@ -23,11 +23,16 @@ from bdse.data.cache_schema import Sample, load_sample_npz
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.data.tensorizer import sample_to_model_inputs
 from bdse.data.quality import quality_decision
-from bdse.experiments.evaluate_open_loop import add_dense_bridge_diagnostics, _criticality_metrics
+from bdse.experiments.evaluate_open_loop import (
+    add_dense_bridge_diagnostics,
+    _criticality_metrics,
+    _frozen_family_slot_oracle_critical_recall,
+)
 from bdse.metrics.bdse_metrics import compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
 from bdse.model.losses import compute_bdse_losses
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
+from bdse.planner.hab import select_topm_atoms_hab
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.tournament import run_pair_conditioned_tournament
 
@@ -186,9 +191,35 @@ def _boundary_focused_pair_subsample(
     target = batch.get("teacher_a_star")
     if target is None:
         winner_pair = torch.zeros_like(pair_valid)
+        target = torch.zeros((B, 1), dtype=torch.long, device=pairs.device)
     else:
         target = target.long().reshape(B, 1)
         winner_pair = (a == target) | (b == target)
+
+    # V64.3.6 LBPR pair curriculum: reserve pair-batch capacity for the exact
+    # teacher winner -> leave-one-atom-out flip boundaries.  This uses labels
+    # only while constructing the offline training batch; runtime pair graphs
+    # remain deployment-available and unchanged.
+    literal_boundary_pair = torch.zeros_like(pair_valid)
+    if int(sampler_cfg.get("literal_boundary_quota", 0)) > 0:
+        teacher_cost = batch.get("teacher_J_T")
+        teacher_g = batch.get("teacher_g_evid")
+        evidence_active = batch.get("evidence_active")
+        candidate_valid = batch.get("candidate_valid")
+        if teacher_cost is not None and teacher_g is not None and evidence_active is not None and candidate_valid is not None:
+            valid_action = candidate_valid.bool()
+            invalid = teacher_cost.new_tensor(1.0e9)
+            dense_teacher = teacher_cost.float().masked_fill(~valid_action, invalid)
+            scalar_winner = dense_teacher.argmin(dim=1)
+            aligned = scalar_winner[:, None].eq(target)
+            active_e = evidence_active.bool()
+            loo = dense_teacher[:, None, :] - teacher_g.float() * active_e[:, :, None].float()
+            loo = loo.masked_fill(~valid_action[:, None, :], invalid)
+            loo_winner = loo.argmin(dim=2)
+            critical = active_e & aligned & loo_winner.ne(target)
+            match_ab = (a == target) & (critical[:, :, None] & loo_winner[:, :, None].eq(b[:, None, :])).any(dim=1)
+            match_ba = (b == target) & (critical[:, :, None] & loo_winner[:, :, None].eq(a[:, None, :])).any(dim=1)
+            literal_boundary_pair = pair_valid & (match_ab | match_ba)
 
     hard = batch.get("teacher_hard_violation")
     if hard is None:
@@ -226,7 +257,8 @@ def _boundary_focused_pair_subsample(
         weight_score = w / wmax
 
     score = (
-        float(sampler_cfg.get("winner_bonus", 16.0)) * winner_pair.float()
+        float(sampler_cfg.get("literal_boundary_bonus", 32.0)) * literal_boundary_pair.float()
+        + float(sampler_cfg.get("winner_bonus", 16.0)) * winner_pair.float()
         + float(sampler_cfg.get("hard_cross_bonus", 10.0)) * hard_cross.float()
         + float(sampler_cfg.get("near_tie_bonus", 6.0)) * near_score
         + float(sampler_cfg.get("pair_weight_bonus", 3.0)) * weight_score
@@ -262,6 +294,11 @@ def _boundary_focused_pair_subsample(
         slots = torch.arange(quota, device=score.device)[None, :] < take_count[:, None]
         selected.scatter_(1, ids, selected.gather(1, ids) | slots)
 
+    _batched_take(
+        literal_boundary_pair & pair_valid & ~selected,
+        score,
+        int(sampler_cfg.get("literal_boundary_quota", 0)),
+    )
     _batched_take(
         winner_pair & pair_valid & ~selected,
         score,
@@ -1017,7 +1054,9 @@ def _iter_distributed_indices(n: int, distributed: bool, world_size: int, global
     return range(n)
 
 
-def _teacher_literal_criticality_full_support(sample, pred: dict[str, Any], selected_atoms) -> tuple[dict[str, float], dict[str, int]]:
+def _teacher_literal_criticality_full_support(
+    sample, pred: dict[str, Any], selected_atoms, cfg: dict[str, Any] | None = None
+) -> tuple[dict[str, float], dict[str, int]]:
     """Exact teacher winner-flip criticality on the full auditable evidence bank.
 
     This helper intentionally does *not* use the certificate-stage active mask:
@@ -1040,7 +1079,7 @@ def _teacher_literal_criticality_full_support(sample, pred: dict[str, Any], sele
     k_lim = min(teacher_cost.shape[0], source_teacher_cost.shape[0])
     teacher_cost[:k_lim] = source_teacher_cost[:k_lim]
     teacher_base = teacher_cost - np.where(active_atoms[:, None], teacher_g, 0.0).sum(axis=0)
-    return _criticality_metrics(
+    values, details = _criticality_metrics(
         teacher_base,
         teacher_g,
         active_atoms,
@@ -1051,6 +1090,62 @@ def _teacher_literal_criticality_full_support(sample, pred: dict[str, Any], sele
         forced_winner=int(sample.teacher.a_star),
         reference_action_cost=np.asarray(pred.get("J0", []), dtype=np.float32).reshape(-1),
     )
+
+    cfg = cfg or {}
+
+    # V64.3.6 instrumentation fix.  V64.3.5 implemented the frozen-family-slot
+    # oracle only inside the optional dense-diagnostic evaluator; short training
+    # screens therefore logged null even though this is precisely the diagnostic
+    # needed to decide whether atom ranking or HAB family admission is limiting.
+    # Compute it on the teacher-only validation path so every screen reports it.
+    budget_costs_fn = getattr(sample.evidence_bank, "budget_costs", None)
+    if callable(budget_costs_fn):
+        values["teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall"] = (
+            _frozen_family_slot_oracle_critical_recall(
+                teacher_base, teacher_g, active_atoms, valid_actions,
+                int(sample.teacher.a_star), pred, sample, cfg
+            )
+        )
+    else:
+        values["teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall"] = float("nan")
+
+    dense_teacher = teacher_base + np.where(active_atoms[:, None], teacher_g, 0.0).sum(axis=0)
+    dense_teacher = np.where(valid_actions, dense_teacher, np.inf)
+    if np.isfinite(dense_teacher).any() and int(np.argmin(dense_teacher)) == int(sample.teacher.a_star):
+        loo = dense_teacher[None, :] - np.where(active_atoms[:, None], teacher_g, 0.0)
+        loo[:, ~valid_actions] = np.inf
+        critical = active_atoms & (np.argmin(loo, axis=1) != int(sample.teacher.a_star))
+        ncrit = int(critical.sum())
+        if ncrit > 0 and callable(budget_costs_fn):
+            selector = cfg.get("selector", {}) or {}
+            budget = float((cfg.get("evidence", {}) or {}).get("budget", 16))
+            M = int(selector.get("proposal_top_m", max(int(2 * budget), int(budget) + 1)))
+            costs = np.asarray(sample.evidence_bank.budget_costs(), dtype=np.float32).reshape(-1)
+            if costs.shape[0] < teacher_g.shape[0]:
+                costs = np.pad(costs, (0, teacher_g.shape[0] - costs.shape[0]), constant_values=np.inf)
+            oracle_logits = np.where(active_atoms, critical.astype(np.float32) * 1000.0, -1.0e9)
+            fam = np.asarray(pred.get("family_ids", np.zeros((teacher_g.shape[0],), dtype=np.int64)), dtype=np.int64).reshape(-1)
+            if fam.shape[0] < teacher_g.shape[0]:
+                fam = np.pad(fam, (0, teacher_g.shape[0] - fam.shape[0]))
+            top_global, _, _ = select_topm_atoms_hab(
+                oracle_logits, fam[: teacher_g.shape[0]], active_atoms, costs[: teacher_g.shape[0]],
+                budget, M, enabled=False
+            )
+            hit_mask = np.zeros_like(active_atoms, dtype=bool)
+            hit_mask[np.asarray(top_global, dtype=np.int64)] = True
+            global_recall = float((critical & hit_mask).sum() / ncrit)
+            values["teacher_exact_winner_flip_global_oracle_topm_recall"] = global_recall
+            frozen = values["teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall"]
+            values["teacher_exact_winner_flip_family_slot_oracle_gap"] = (
+                float(global_recall - frozen) if np.isfinite(frozen) else float("nan")
+            )
+        else:
+            values["teacher_exact_winner_flip_global_oracle_topm_recall"] = float("nan")
+            values["teacher_exact_winner_flip_family_slot_oracle_gap"] = float("nan")
+    else:
+        values["teacher_exact_winner_flip_global_oracle_topm_recall"] = float("nan")
+        values["teacher_exact_winner_flip_family_slot_oracle_gap"] = float("nan")
+    return values, details
 
 
 @torch.no_grad()
@@ -1133,7 +1228,7 @@ def _run_validation_open_loop(
             # a false screen failure.  This computation is teacher-only and does not
             # require dense model inference.
             teacher_critical, teacher_critical_details = _teacher_literal_criticality_full_support(
-                sample, pred, sel.selected
+                sample, pred, sel.selected, cfg
             )
 
             pair_full_action = -1
@@ -1577,7 +1672,12 @@ def _adapter_parameter_snapshot(model: torch.nn.Module, prefix: str = "critical_
     }
 
 
-def _adapter_parameter_delta_metrics(model: torch.nn.Module, reference: dict[str, torch.Tensor], prefix: str = "critical_proposal_adapter") -> dict[str, float]:
+def _adapter_parameter_delta_metrics(
+    model: torch.nn.Module,
+    reference: dict[str, torch.Tensor],
+    prefix: str = "critical_proposal_adapter",
+    metric_prefix: str = "critical_adapter",
+) -> dict[str, float]:
     raw_model = model.module if isinstance(model, DDP) else model
     sq = None
     count = 0
@@ -1597,14 +1697,14 @@ def _adapter_parameter_delta_metrics(model: torch.nn.Module, reference: dict[str
         count += int(delta.numel())
     if sq is None or count == 0:
         return {
-            "critical_adapter_parameter_delta_rms": float("nan"),
-            "critical_adapter_parameter_delta_max_abs": float("nan"),
-            "critical_adapter_parameter_rms": float("nan"),
+            f"{metric_prefix}_parameter_delta_rms": float("nan"),
+            f"{metric_prefix}_parameter_delta_max_abs": float("nan"),
+            f"{metric_prefix}_parameter_rms": float("nan"),
         }
     return {
-        "critical_adapter_parameter_delta_rms": float(torch.sqrt(sq / max(count, 1)).item()),
-        "critical_adapter_parameter_delta_max_abs": float(max_abs.item()),
-        "critical_adapter_parameter_rms": float(torch.sqrt(param_sq / max(count, 1)).item()),
+        f"{metric_prefix}_parameter_delta_rms": float(torch.sqrt(sq / max(count, 1)).item()),
+        f"{metric_prefix}_parameter_delta_max_abs": float(max_abs.item()),
+        f"{metric_prefix}_parameter_rms": float(torch.sqrt(param_sq / max(count, 1)).item()),
     }
 
 
@@ -2071,6 +2171,9 @@ def main() -> None:
     if is_main and frozen_eval_modules:
         print(f"[bdse] frozen top-level modules kept in eval mode={frozen_eval_modules}", flush=True)
     critical_adapter_reference = _adapter_parameter_snapshot(model)
+    literal_pair_adapter_reference = _adapter_parameter_snapshot(
+        model, prefix="literal_boundary_pair_adapter"
+    )
 
     log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
     if is_main and start_epoch == 0:
@@ -2085,6 +2188,12 @@ def main() -> None:
             assert val_dataset is not None
             initial_metrics.update(_run_validation_open_loop(model=model, dataset=val_dataset, cfg=cfg, device=device, distributed=distributed, world_size=world_size, global_rank=global_rank, is_main=is_main, epoch=-1, strict=bool(args.val_strict), dense_diagnostic=bool(args.val_dense_diagnostic)))
         initial_metrics.update(_adapter_parameter_delta_metrics(model, critical_adapter_reference))
+        initial_metrics.update(
+            _adapter_parameter_delta_metrics(
+                model, literal_pair_adapter_reference,
+                prefix="literal_boundary_pair_adapter", metric_prefix="literal_pair_adapter"
+            )
+        )
         if is_main:
             print({"epoch": -1, **initial_metrics}, flush=True)
             with log_file.open("a", encoding="utf-8") as f:
@@ -2230,6 +2339,12 @@ def main() -> None:
             epoch_metrics[f"train_{stage_name}_wall_time_s"] = float(stage_seconds)
             epoch_metrics[f"train_{stage_name}_ms_per_step"] = float(1000.0 * stage_seconds / denom_steps)
         epoch_metrics.update(_adapter_parameter_delta_metrics(model, critical_adapter_reference))
+        epoch_metrics.update(
+            _adapter_parameter_delta_metrics(
+                model, literal_pair_adapter_reference,
+                prefix="literal_boundary_pair_adapter", metric_prefix="literal_pair_adapter"
+            )
+        )
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):
             if val_sampler is not None:
                 val_sampler.set_epoch(epoch)

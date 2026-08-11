@@ -350,6 +350,50 @@ class _CompleteCandidateBoundaryRouter(nn.Module):
         return residual, winner_masked, flip_masked
 
 
+class _LiteralBoundaryPairResidual(nn.Module):
+    """Low-rank antisymmetric residual for literal decision boundaries.
+
+    V46/V49 learned a broad arbitrary pair field, while V56/V59 projected value
+    corrections into generic action potentials.  This adapter instead remains
+    pair-conditioned and evidence-attributable: an atom embedding modulates the
+    *difference* between two action/query endpoint embeddings.  Antisymmetry is
+    exact by construction and a zero-initialized output layer preserves the
+    pretrained local pair margin at step zero.  Training can upweight only exact
+    teacher winner -> leave-one-atom-out flip boundaries without changing the
+    runtime evidence budget.
+    """
+
+    def __init__(self, hidden_dim: int, rank: int, *, zero_init: bool = True, query_gain: float = 1.0) -> None:
+        super().__init__()
+        h = int(hidden_dim)
+        r = max(1, int(rank))
+        self.rank = r
+        self.query_gain = float(query_gain)
+        self.atom_proj = nn.Sequential(nn.LayerNorm(h * 2), nn.Linear(h * 2, r), nn.SiLU())
+        self.action_proj = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, r), nn.SiLU())
+        self.query_pair_proj = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, r), nn.SiLU())
+        self.output = nn.Linear(r, 1, bias=False)
+        if bool(zero_init):
+            nn.init.zeros_(self.output.weight)
+
+    def from_embeddings(
+        self,
+        evidence_h: torch.Tensor,
+        scene_h: torch.Tensor,
+        action_a_h: torch.Tensor,
+        action_b_h: torch.Tensor,
+        query_a_h: torch.Tensor,
+        query_b_h: torch.Tensor,
+    ) -> torch.Tensor:
+        atom = self.atom_proj(torch.cat([evidence_h, scene_h], dim=-1))
+        action_diff = self.action_proj(action_b_h) - self.action_proj(action_a_h)
+        query_diff = self.query_pair_proj(query_b_h) - self.query_pair_proj(query_a_h)
+        pair = action_diff + self.query_gain * query_diff
+        # Product is symmetric in the evidence identity and antisymmetric in the
+        # ordered pair because ``pair`` changes sign under a<->b.
+        return self.output(atom * pair).squeeze(-1)
+
+
 def _confidence_shrunk_residual_pair_delta_np(
     local: np.ndarray,
     residual: np.ndarray,
@@ -679,6 +723,24 @@ class BDSEModel(nn.Module):
         self.pair_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
         self.pair_var_head = nn.Sequential(nn.LayerNorm(h * self.pair_feature_blocks), nn.Linear(h * self.pair_feature_blocks, h), nn.ReLU(), nn.Linear(h, 1))
 
+        # V64.3.6 Literal Boundary Pair Residual (LBPR).  Keep the legacy pair
+        # MLP frozen for historical compatibility; the new residual is smaller,
+        # exactly antisymmetric and can be supervised on literal winner-flip
+        # boundaries without constructing an arbitrary global pair field.
+        lbpr_cfg = mcfg.get("literal_boundary_pair_adapter", {}) or {}
+        self.literal_boundary_pair_adapter_scale = float(lbpr_cfg.get("scale", 1.0))
+        self.literal_boundary_pair_endpoint_gate_floor = float(lbpr_cfg.get("endpoint_gate_floor", 0.25))
+        self.literal_boundary_pair_endpoint_gate_temperature = max(float(lbpr_cfg.get("endpoint_gate_temperature", 1.0)), 1.0e-3)
+        if bool(lbpr_cfg.get("enabled", False)):
+            self.literal_boundary_pair_adapter = _LiteralBoundaryPairResidual(
+                h,
+                int(lbpr_cfg.get("rank", min(32, h))),
+                zero_init=bool(lbpr_cfg.get("zero_init", True)),
+                query_gain=float(lbpr_cfg.get("query_gain", 1.0)),
+            )
+        else:
+            self.literal_boundary_pair_adapter = None
+
         # V56 DCIP: evidence-attributable, globally integrable residual action
         # potential.  Each queried atom contributes a signed correction h_i(a)
         # to an action cost; pair corrections are derived as h_i(b)-h_i(a), so
@@ -754,6 +816,13 @@ class BDSEModel(nn.Module):
         self.critical_proposal_frontier_action_count = max(
             int(crit_prop_cfg.get("frontier_action_count", 6)), 2
         )
+        # V64.3.6 Boundary-Coupled Hierarchical Admission (BCHA).  The same
+        # CCBR residual that ranks atoms may optionally supply a bounded residual
+        # to the frozen family gate.  No legacy family parameter is unfrozen.
+        family_coupling_cfg = crit_prop_cfg.get("family_coupling", {}) or {}
+        self.critical_family_coupling_enabled = bool(family_coupling_cfg.get("enabled", False))
+        self.critical_family_coupling_scale = float(family_coupling_cfg.get("scale", 0.5))
+        self.critical_family_coupling_clip = max(float(family_coupling_cfg.get("clip", 1.0)), 1.0e-6)
         if bool(crit_prop_cfg.get("enabled", False)):
             critical_rank = min(max(int(crit_prop_cfg.get("rank", min(64, h))), 1), h)
             if self.critical_proposal_conditioning in {
@@ -1213,6 +1282,39 @@ class BDSEModel(nn.Module):
                 critical_proposal_residual = self.critical_proposal_adapter(
                     torch.cat(adapter_tokens, dim=-1)
                 ).squeeze(-1)
+        # V64.3.6 BCHA: CCBR can learn a correct atom-level boundary signal and
+        # still be unable to enter HAB Top-M because family slots were allocated
+        # from the immutable family gate *before* the residual existed.  Pool the
+        # centered positive boundary residual within each family and add only a
+        # bounded residual to family logits.  The legacy gate stays frozen and
+        # zero-init CCBR makes this path an exact step-zero no-op.
+        critical_family_residual = torch.zeros_like(family_logits_raw)
+        if self.critical_family_coupling_enabled and self.critical_proposal_adapter is not None:
+            active_f = e_valid.float()
+            active_count = active_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+            centered_residual = critical_proposal_residual - (
+                critical_proposal_residual * active_f
+            ).sum(dim=1, keepdim=True) / active_count
+            neg_pool = -1.0e4 if centered_residual.dtype in (torch.float16, torch.bfloat16) else -1.0e9
+            for fid in range(self.num_families):
+                member = e_valid & fam_ids.eq(fid)
+                pooled = centered_residual.masked_fill(~member, neg_pool).amax(dim=1)
+                pooled = torch.where(member.any(dim=1), pooled, torch.zeros_like(pooled))
+                critical_family_residual[:, fid] = pooled
+            fam_count = family_active.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+            critical_family_residual = critical_family_residual - (
+                critical_family_residual * family_active.float()
+            ).sum(dim=1, keepdim=True) / fam_count
+            critical_family_residual = critical_family_residual.clamp(
+                min=-self.critical_family_coupling_clip, max=self.critical_family_coupling_clip
+            )
+            family_logits = (
+                family_logits_raw + self.critical_family_coupling_scale * critical_family_residual
+            ).masked_fill(~family_active, neg_mask)
+            family_pi = torch.softmax(family_logits.float(), dim=1) * family_active.float()
+            family_pi = family_pi / family_pi.sum(dim=1, keepdim=True).clamp_min(1.0e-6)
+            atom_pi = torch.gather(family_pi, 1, fam_ids).clamp_min(1.0e-6)
+
         atom_logits = proposal_base_logits + self.critical_proposal_adapter_scale * critical_proposal_residual
         # Condition the atom proposal by the learned family gate.  Invalid atoms
         # are masked after adding the log gate so gradients still reach the gate.
@@ -1232,6 +1334,7 @@ class BDSEModel(nn.Module):
             "critical_boundary_pair_indices": critical_boundary_pair_indices,
             "critical_winner_endpoint_logits": critical_winner_endpoint_logits,
             "critical_flip_endpoint_logits": critical_flip_endpoint_logits,
+            "critical_family_residual_logits": critical_family_residual,
             "family_logits": family_logits,
             "family_pi": family_pi,
             "family_active": family_active,
@@ -1279,6 +1382,57 @@ class BDSEModel(nn.Module):
         s_h = scene[:, None, :].expand(B, Q, H)
         return torch.cat([a_h, b_h, e_h, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
 
+    def _literal_boundary_pair_gate_sparse(
+        self,
+        context: dict[str, torch.Tensor],
+        atom_indices: torch.Tensor,
+        action_a_indices: torch.Tensor,
+        action_b_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        winner = context.get("critical_winner_endpoint_logits")
+        flip = context.get("critical_flip_endpoint_logits")
+        if winner is None or flip is None or winner.ndim != 3 or flip.ndim != 3 or winner.shape[-1] <= 0:
+            return torch.ones_like(atom_indices, dtype=context["action_h"].dtype)
+        B, Q = atom_indices.shape
+        K = winner.shape[-1]
+        e = atom_indices.long().clamp(0, winner.shape[1] - 1)
+        a = action_a_indices.long().clamp(0, K - 1)
+        b = action_b_indices.long().clamp(0, K - 1)
+        row = torch.arange(B, device=winner.device)[:, None].expand(B, Q)
+        w = winner[row, e]
+        f = flip[row, e]
+        logw = F.log_softmax(w.float() / self.literal_boundary_pair_endpoint_gate_temperature, dim=-1)
+        logf = F.log_softmax(f.float() / self.literal_boundary_pair_endpoint_gate_temperature, dim=-1)
+        ab = torch.gather(logw, 2, a[..., None]).squeeze(-1) + torch.gather(logf, 2, b[..., None]).squeeze(-1)
+        ba = torch.gather(logw, 2, b[..., None]).squeeze(-1) + torch.gather(logf, 2, a[..., None]).squeeze(-1)
+        score = torch.maximum(ab, ba)
+        best = logw.max(dim=-1).values + logf.max(dim=-1).values
+        compat = torch.exp(0.5 * (score - best).clamp(max=0.0)).clamp(0.0, 1.0)
+        floor = min(max(self.literal_boundary_pair_endpoint_gate_floor, 0.0), 1.0)
+        return (floor + (1.0 - floor) * compat).to(dtype=context["action_h"].dtype).detach()
+
+    def _literal_boundary_pair_gate_dense(
+        self, context: dict[str, torch.Tensor], action_a_indices: torch.Tensor, action_b_indices: torch.Tensor
+    ) -> torch.Tensor:
+        winner = context.get("critical_winner_endpoint_logits")
+        flip = context.get("critical_flip_endpoint_logits")
+        B, P = action_a_indices.shape
+        E = int(context["evidence_h"].shape[1])
+        if winner is None or flip is None or winner.ndim != 3 or winner.shape[-1] <= 0:
+            return context["action_h"].new_ones((B, E, P))
+        K = winner.shape[-1]
+        a = action_a_indices.long().clamp(0, K - 1)[:, None, :].expand(B, E, P)
+        b = action_b_indices.long().clamp(0, K - 1)[:, None, :].expand(B, E, P)
+        logw = F.log_softmax(winner.float() / self.literal_boundary_pair_endpoint_gate_temperature, dim=-1)
+        logf = F.log_softmax(flip.float() / self.literal_boundary_pair_endpoint_gate_temperature, dim=-1)
+        ab = torch.gather(logw, 2, a) + torch.gather(logf, 2, b)
+        ba = torch.gather(logw, 2, b) + torch.gather(logf, 2, a)
+        score = torch.maximum(ab, ba)
+        best = logw.max(dim=-1).values + logf.max(dim=-1).values
+        compat = torch.exp(0.5 * (score - best[..., None]).clamp(max=0.0)).clamp(0.0, 1.0)
+        floor = min(max(self.literal_boundary_pair_endpoint_gate_floor, 0.0), 1.0)
+        return (floor + (1.0 - floor) * compat).to(dtype=context["action_h"].dtype).detach()
+
     def score_sparse_pairs(
         self,
         context: dict[str, torch.Tensor],
@@ -1308,6 +1462,20 @@ class BDSEModel(nn.Module):
         q_a = self._project_query(query_a_features)
         q_b = self._project_query(query_b_features)
         s_h = scene[:, None, :].expand(B, Q, H)
+
+        if self.literal_boundary_pair_adapter is not None:
+            gate = self._literal_boundary_pair_gate_sparse(
+                context, atom_indices, action_a_indices, action_b_indices
+            )
+            delta = self.literal_boundary_pair_adapter.from_embeddings(
+                e_h, s_h, a_h, b_h, q_a, q_b
+            ) * float(self.literal_boundary_pair_adapter_scale) * gate
+            if not return_uncertainty:
+                return delta
+            # LBPR is a deterministic correction over the frozen local pair
+            # interface.  Keep residual variance zero so the existing DA-EPC
+            # certificate is not weakened by an uncalibrated new uncertainty head.
+            return delta, torch.zeros_like(delta)
 
         z_ab = torch.cat([a_h, b_h, e_h, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
         z_ba = torch.cat([b_h, a_h, e_h, q_b, q_a, s_h, a_h - b_h, a_h * b_h, q_a - q_b, q_a * q_b], dim=-1)
@@ -1511,6 +1679,11 @@ class BDSEModel(nn.Module):
         b_pair_h_all = torch.gather(action_h, 1, b_idx_all[..., None].expand(B, P, H))
         chunk_e = min(E, self._training_chunk_size("pair_forward_atom_chunk", 16))
         chunk_p = min(P, self._training_chunk_size("pair_forward_pair_chunk", 32))
+        lbpr_gate_all = (
+            self._literal_boundary_pair_gate_dense(context, a_idx_all, b_idx_all)
+            if self.literal_boundary_pair_adapter is not None
+            else None
+        )
         delta_chunks: list[torch.Tensor] = []
         var_chunks: list[torch.Tensor] = []
         pair_valid_all = batch.get("pair_valid")
@@ -1535,13 +1708,20 @@ class BDSEModel(nn.Module):
                 q_b = torch.gather(q_h_e, 2, idx_b_q)
                 e_hp = e_h.expand(B, Ce, Cp, H)
                 s_h = scene[:, None, None, :].expand(B, Ce, Cp, H)
-                z_ab = torch.cat([a_h, b_h, e_hp, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
-                z_ba = torch.cat([b_h, a_h, e_hp, q_b, q_a, s_h, a_h - b_h, a_h * b_h, q_a - q_b, q_a * q_b], dim=-1)
-                delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
-                var = None
-                if return_uncertainty:
-                    var = self._positive_variance(self.pair_var_head(z_ab).squeeze(-1), self.var_floor)
-                    var = var + self._positive_variance(self.pair_var_head(z_ba).squeeze(-1), self.var_floor)
+                if self.literal_boundary_pair_adapter is not None:
+                    gate = lbpr_gate_all[:, e0:e1, p0:p1] if lbpr_gate_all is not None else 1.0
+                    delta = self.literal_boundary_pair_adapter.from_embeddings(
+                        e_hp, s_h, a_h, b_h, q_a, q_b
+                    ) * float(self.literal_boundary_pair_adapter_scale) * gate
+                    var = torch.zeros_like(delta) if return_uncertainty else None
+                else:
+                    z_ab = torch.cat([a_h, b_h, e_hp, q_a, q_b, s_h, b_h - a_h, a_h * b_h, q_b - q_a, q_a * q_b], dim=-1)
+                    z_ba = torch.cat([b_h, a_h, e_hp, q_b, q_a, s_h, a_h - b_h, a_h * b_h, q_a - q_b, q_a * q_b], dim=-1)
+                    delta = (self.pair_head(z_ab) - self.pair_head(z_ba)).squeeze(-1) * float(self.pair_delta_scale)
+                    var = None
+                    if return_uncertainty:
+                        var = self._positive_variance(self.pair_var_head(z_ab).squeeze(-1), self.var_floor)
+                        var = var + self._positive_variance(self.pair_var_head(z_ba).squeeze(-1), self.var_floor)
                 if pair_valid_all is not None:
                     p_mask = pair_valid_all[:, p0:p1].bool()
                     delta = delta.masked_fill(~p_mask[:, None, :], 0.0)
@@ -1580,11 +1760,12 @@ class BDSEModel(nn.Module):
                 q_h_all=q_h_all,
                 compute_variance=self._need_dense_local_variance(),
             )
-            if bool((self.cfg.get("training", {}) or {}).get("skip_pair_head_forward", False)):
+            if bool((self.cfg.get("training", {}) or {}).get("skip_pair_head_forward", False)) and self.literal_boundary_pair_adapter is None:
                 # DCIP trains a per-evidence action potential and derives every
                 # pair correction from potential differences.  The legacy pair
                 # MLP is therefore outside the deployed computation graph and
-                # can be skipped entirely during training.
+                # can be skipped entirely during training.  V64.3.6 LBPR is an
+                # independent pair residual and must still run when enabled.
                 pair_out = None
             else:
                 pair_out = self._dense_pair_delta_from_batch(
@@ -1631,6 +1812,9 @@ class BDSEModel(nn.Module):
             ),
             "critical_flip_endpoint_logits": ctx.get(
                 "critical_flip_endpoint_logits", J0.new_zeros((B, E, 0))
+            ),
+            "critical_family_residual_logits": ctx.get(
+                "critical_family_residual_logits", J0.new_zeros((B, self.num_families))
             ),
             "family_logits": ctx["family_logits"],
             "family_pi": ctx["family_pi"],

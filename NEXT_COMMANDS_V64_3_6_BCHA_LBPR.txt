@@ -1,0 +1,39 @@
+# V64.3.6 — recommended next commands
+
+cd /path/to/bdse_v64_3_6_bcha_lbpr
+
+# Keep the same immutable anchor for the causal screen.
+export FOUNDATION_CKPT=outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt
+
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+
+export GPUS=0,1
+export BATCH_SIZE_PER_GPU=16
+export NUM_WORKERS_PER_GPU=12
+export VAL_NUM_WORKERS_PER_GPU=4
+export PREFETCH_FACTOR=2
+
+# Recommended adaptive screen:
+# 1) LOCAL control (also repairs/measures family-slot oracle)
+# 2) LBPR always
+# 3) BCHA only if the oracle proves a family admission ceiling
+# 4) joint only if justified by individual signals
+bash RUN_V64_3_6_DUAL_BOTTLENECK_SCREEN_MATRIX_2GPU.sh
+
+# For a publication-grade complete 2x2 screen instead of adaptive saving:
+# RUN_FULL_2X2=1 bash RUN_V64_3_6_DUAL_BOTTLENECK_SCREEN_MATRIX_2GPU.sh
+
+# Inspect:
+cat outputs_v64_3_6_dual_bottleneck_screen_matrix_2gpu_v1/dual_screen_comparison.json
+
+# Full training is deliberately blocked unless a screen improves final teacher
+# action match by >=0.5pp and has a meaningful acquisition or value gain.
+# If winner is non-null:
+export PROMOTED_SCREEN_REPORT=outputs_v64_3_6_dual_bottleneck_screen_matrix_2gpu_v1/dual_screen_comparison.json
+bash RUN_V64_3_6_PROMOTED_FULL_TRAIN_2GPU.sh
+
+# Do not switch to INIT_MODE=scratch for this screen.  If LBPR is demonstrably
+# active but pair-full remains flat, return the screen package first; the next
+# experiment should test selective representation capacity, not a full restart.

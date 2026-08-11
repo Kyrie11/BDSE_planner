@@ -1,0 +1,44 @@
+{
+  "v64_3_5": {
+    "anchor_critical_topm_micro": 0.36015325670498083,
+    "anchor_selected_critical_micro": 0.26053639846743293,
+    "anchor_proposal_decisive": 0.7915091362101949,
+    "anchor_teacher_action_match": 0.264,
+    "ccbr_nolea": {
+      "delta_critical_topm": 0.0,
+      "delta_selected_critical": -0.007662835249042155,
+      "delta_proposal_decisive": -0.012928651797038282,
+      "delta_teacher_action_match": -0.004,
+      "max_proposal_residual_rms": 0.4182540283203125
+    },
+    "ccbr_lea": {
+      "delta_critical_topm": 0.0,
+      "delta_selected_critical": -0.007662835249042155,
+      "delta_proposal_decisive": -0.015191950751427985,
+      "delta_teacher_action_match": -0.004,
+      "max_endpoint_representability": 1.0,
+      "max_endpoint_attribution_loss": 3.24628662109375,
+      "max_proposal_residual_rms": 0.46763826497395833,
+      "max_adapter_parameter_delta_rms": 0.0041800690814852715
+    },
+    "pair_value_range": {
+      "pair_full_interface_action_match": [0.256, 0.262],
+      "local_pair_full_interface_action_match": [0.258, 0.264],
+      "budget_vs_pair_full_match": [0.928, 0.948],
+      "pair_full_to_budget_flip_rate": [0.052, 0.072]
+    },
+    "frozen_family_oracle": null,
+    "frozen_family_oracle_status": "instrumentation placement bug; no causal conclusion"
+  },
+  "v64_3_6": {
+    "primary_value_module": "LBPR",
+    "conditional_admission_module": "BCHA",
+    "warm_start": "outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt",
+    "fixed_evidence_budget": 16,
+    "screen_order": ["LOCAL", "LBPR", "BCHA_if_oracle_requires", "BCHA_LBPR_if_justified"],
+    "family_oracle_gate": {"frozen_recall_lt": 0.9, "global_minus_frozen_ge": 0.05},
+    "acquisition_gate": {"critical_topm_gain_ge": 0.01, "selected_delta_ge": -0.005, "proposal_delta_ge": -0.02, "teacher_delta_ge": -0.005},
+    "value_gate": {"pair_full_gain_ge": 0.01, "pair_full_over_local_ge": 0.005, "budget_vs_pair_full_delta_ge": -0.02, "teacher_delta_ge": -0.005},
+    "full_promotion_requires_teacher_gain_ge": 0.005
+  }
+}
