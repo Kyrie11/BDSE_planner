@@ -2092,6 +2092,67 @@ def _fast_pair_margin_surrogate_masks(
     return out_masks
 
 
+def _decisive_anchor_margin_scores(
+    anchor_cost: torch.Tensor,
+    pair_delta: torch.Tensor,
+    pairs: torch.Tensor,
+    pair_valid: torch.Tensor,
+    selected_mask: torch.Tensor,
+    valid: torch.Tensor,
+    *,
+    local_pair_delta: torch.Tensor | None = None,
+    pair_delta_includes_local: bool = False,
+    pair_scale: torch.Tensor | None = None,
+    normalize_margins: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Differentiable selected-local anchor-star refinement used by DARM."""
+    B, K = anchor_cost.shape
+    if normalize_margins:
+        scale = anchor_cost.new_full((B, 1), 100.0) if pair_scale is None else pair_scale.reshape(B, 1).clamp_min(1e-6)
+    else:
+        scale = anchor_cost.new_ones((B, 1))
+    finite = torch.where(torch.isfinite(anchor_cost), anchor_cost, torch.zeros_like(anchor_cost))
+    valid_f = valid.float()
+    center = (finite * valid_f).sum(dim=1, keepdim=True) / valid_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+    base_scores = -(finite - center.detach()) / scale
+    mask_value = -1.0e4 if base_scores.dtype in (torch.float16, torch.bfloat16) else -1.0e30
+    base_scores = base_scores.masked_fill(~valid, mask_value)
+
+    support = (pair_delta * selected_mask[:, :, None].float()).sum(dim=1)
+    if pair_delta_includes_local and local_pair_delta is not None:
+        support = support - (local_pair_delta * selected_mask[:, :, None].float()).sum(dim=1)
+    a = pairs[..., 0].long().clamp(0, K - 1)
+    b = pairs[..., 1].long().clamp(0, K - 1)
+    pvalid = pair_valid.bool() & valid.gather(1, a) & valid.gather(1, b) & a.ne(b)
+    val = support.masked_fill(~pvalid, 0.0)
+    flat = torch.zeros((B, K * K), dtype=anchor_cost.dtype, device=anchor_cost.device)
+    cnt = torch.zeros_like(flat)
+    lin_ab = a * K + b
+    lin_ba = b * K + a
+    one = pvalid.to(anchor_cost.dtype)
+    flat.scatter_add_(1, lin_ab, val)
+    flat.scatter_add_(1, lin_ba, -val)
+    cnt.scatter_add_(1, lin_ab, one)
+    cnt.scatter_add_(1, lin_ba, one)
+    correction = (flat / cnt.clamp_min(1.0)).view(B, K, K)
+    margin = (finite[:, None, :] - finite[:, :, None]) / scale[:, None, :] + correction
+
+    with torch.no_grad():
+        anchor = finite.masked_fill(~valid, float('inf')).argmin(dim=1)
+    row = torch.arange(B, device=anchor_cost.device)
+    star_margin = margin[row, anchor, :]
+    anchor_score = base_scores[row, anchor][:, None]
+    scores = (anchor_score - star_margin).masked_fill(~valid, mask_value)
+    scores = scores.scatter(1, anchor[:, None], base_scores.gather(1, anchor[:, None]))
+
+    edge_count = cnt.view(B, K, K)[row, anchor, :]
+    challengers = valid.clone()
+    challengers[row, anchor] = False
+    denom = challengers.float().sum(dim=1).clamp_min(1.0)
+    coverage = ((edge_count > 0) & challengers).float().sum(dim=1) / denom
+    return scores, coverage
+
+
 def _pair_conditioned_tournament_scores(
     J0: torch.Tensor,
     pair_delta: torch.Tensor,
@@ -3955,10 +4016,14 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     selector_surrogate_exact_agreement = J0.new_tensor(0.0)
     selector_fast_wall_time_s = J0.new_tensor(0.0)
     selector_exact_wall_time_s = J0.new_tensor(0.0)
-    use_potential_action = str(train_cfg.get(
+    pair_action_mode = str(train_cfg.get(
         "pair_action_aggregation_mode",
         (cfg.get("runtime", {}) or {}).get("pair_tournament_aggregation_mode", "legacy_tournament"),
-    )).strip().lower() in {"integrable_potential", "potential", "hodge_potential", "evidence_action_potential", "direct_evidence_potential", "dcip"}
+    )).strip().lower()
+    use_potential_action = pair_action_mode in {"integrable_potential", "potential", "hodge_potential", "evidence_action_potential", "direct_evidence_potential", "dcip"}
+    use_decisive_anchor_action = pair_action_mode in {"decisive_anchor_margin", "darm", "anchor_challenger_margin"}
+    decisive_anchor_full_pair_coverage = J0.new_tensor(0.0)
+    decisive_anchor_budget_pair_coverage = J0.new_tensor(0.0)
     potential_projection_terms: list[torch.Tensor] = []
     potential_cycle_terms: list[torch.Tensor] = []
     potential_teacher_terms: list[torch.Tensor] = []
@@ -3992,10 +4057,19 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         full_anchor_cost = finite_J0 + (g * pair_action_atom_mask[:, :, None].float()).sum(dim=1)
         logits_pair_full_anchor = _negative_cost_logits(
             full_anchor_cost, valid, min_scale=float(train_cfg.get("potential_action_min_scale", 1.0))
-        ) if use_potential_action else _budgeted_tournament_scores(
+        ) if (use_potential_action or use_decisive_anchor_action) else _budgeted_tournament_scores(
             full_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
         )
-        if use_potential_action:
+        if use_decisive_anchor_action:
+            logits_pair_full, full_cov = _decisive_anchor_margin_scores(
+                full_anchor_cost, pred_atom_delta, pairs, pair_valid, pair_action_atom_mask, valid,
+                local_pair_delta=local_atom_delta,
+                pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
+                pair_scale=pair_scale,
+                normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+            )
+            decisive_anchor_full_pair_coverage = full_cov.mean()
+        elif use_potential_action:
             logits_pair_full, projection_loss, cycle_fraction, full_corrected_cost = _action_potential_logits_dispatch(
                 full_anchor_cost,
                 pred_atom_delta,
@@ -4044,10 +4118,19 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             selected_anchor_cost = finite_J0 + (g * pair_selected_mask[:, :, None].float()).sum(dim=1)
             logits_pair_anchor = _negative_cost_logits(
                 selected_anchor_cost, valid, min_scale=float(train_cfg.get("potential_action_min_scale", 1.0))
-            ) if use_potential_action else _budgeted_tournament_scores(
+            ) if (use_potential_action or use_decisive_anchor_action) else _budgeted_tournament_scores(
                 selected_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
             )
-            if use_potential_action:
+            if use_decisive_anchor_action:
+                logits_pair, budget_cov = _decisive_anchor_margin_scores(
+                    selected_anchor_cost, pred_atom_delta, pairs, pair_valid, pair_selected_mask, valid,
+                    local_pair_delta=local_atom_delta,
+                    pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
+                    pair_scale=pair_scale,
+                    normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+                )
+                decisive_anchor_budget_pair_coverage = budget_cov.mean()
+            elif use_potential_action:
                 logits_pair, projection_loss, cycle_fraction, selected_corrected_cost = _action_potential_logits_dispatch(
                     selected_anchor_cost,
                     pred_atom_delta,
@@ -4210,10 +4293,21 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 budget_anchor_cost = finite_J0 + (g * pair_selected_mask[:, :, None].float()).sum(dim=1)
                 budget_anchor_logits = _negative_cost_logits(
                     budget_anchor_cost, valid, min_scale=float(train_cfg.get("potential_action_min_scale", 1.0))
-                ) if use_potential_action else _budgeted_tournament_scores(
+                ) if (use_potential_action or use_decisive_anchor_action) else _budgeted_tournament_scores(
                     budget_anchor_cost, valid, tau_q, eps_cal, sigma=None, beta_uncertainty=0.0
                 )
-                if use_potential_action:
+                if use_decisive_anchor_action:
+                    budget_logits, budget_cov = _decisive_anchor_margin_scores(
+                        budget_anchor_cost, pred_atom_delta, pairs, pair_valid, pair_selected_mask, valid,
+                        local_pair_delta=local_atom_delta,
+                        pair_delta_includes_local=bool(cfg.get("model", {}).get("pair_head_residual_over_local", False)),
+                        pair_scale=pair_scale,
+                        normalize_margins=bool(cfg.get("model", {}).get("pair_margin_normalized", True)),
+                    )
+                    decisive_anchor_budget_pair_coverage = torch.maximum(
+                        decisive_anchor_budget_pair_coverage, budget_cov.mean()
+                    )
+                elif use_potential_action:
                     budget_logits, projection_loss, cycle_fraction, budget_corrected_cost = _action_potential_logits_dispatch(
                         budget_anchor_cost,
                         pred_atom_delta,
@@ -4869,6 +4963,13 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
             if out.get("pair_atom_delta") is not None
             else J0.new_tensor(0.0)
         ),
+        "decisive_boundary_pair_residual_rms": (
+            out["pair_atom_delta"].float().square().mean().sqrt()
+            if out.get("pair_atom_delta") is not None
+            else J0.new_tensor(0.0)
+        ),
+        "decisive_anchor_full_pair_coverage": decisive_anchor_full_pair_coverage,
+        "decisive_anchor_budget_pair_coverage": decisive_anchor_budget_pair_coverage,
         "L_res": L_res,
         "L_anchor_preserve": L_anchor_preserve,
         "L_anchor_correct": L_anchor_correct,

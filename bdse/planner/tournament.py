@@ -601,6 +601,34 @@ def _direct_action_scores_from_cost(cost: np.ndarray, valid_mask: np.ndarray, sc
     return scores
 
 
+def _decisive_anchor_margin_scores(
+    anchor_cost: np.ndarray,
+    margin_matrix: np.ndarray,
+    valid_mask: np.ndarray,
+    scale: float,
+) -> tuple[np.ndarray, int]:
+    """Convert only the selected-local anchor star into direct action scores.
+
+    V64.3.7 DARM never traverses a global learned pair tournament.  It keeps the
+    direct selected-local argmin as the immutable anchor and lets queried pair
+    residuals refine only anchor-vs-challenger margins.  Missing edges inherit
+    the selected-local margin, so a zero residual is exactly a no-op.
+    """
+    scores = _direct_action_scores_from_cost(anchor_cost, valid_mask, scale)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)[: scores.shape[0]]
+    if not bool(valid.any()):
+        return scores, -1
+    anchor = int(np.argmax(np.where(valid, scores, -1e30)))
+    M = np.asarray(margin_matrix, dtype=np.float32)
+    if M.shape != (scores.shape[0], scores.shape[0]):
+        raise ValueError(f"margin_matrix shape mismatch: {M.shape} vs {(scores.shape[0], scores.shape[0])}")
+    refined = scores.copy()
+    idx = np.flatnonzero(valid)
+    refined[idx] = scores[anchor] - M[anchor, idx]
+    refined[anchor] = scores[anchor]
+    return refined.astype(np.float32), anchor
+
+
 def _integrable_potential_cost(
     predicted_base_cost: np.ndarray,
     pair_indices: np.ndarray,
@@ -772,6 +800,7 @@ def run_pair_conditioned_tournament(
     aggregation_mode = str(runtime_cfg.get("pair_tournament_aggregation_mode", "legacy_tournament")).strip().lower()
     use_integrable_potential = aggregation_mode in {"integrable_potential", "potential", "hodge_potential"} and use_selected_local_anchor
     use_evidence_action_potential = aggregation_mode in {"evidence_action_potential", "direct_evidence_potential", "dcip"} and use_selected_local_anchor
+    use_decisive_anchor_margin = aggregation_mode in {"decisive_anchor_margin", "darm", "anchor_challenger_margin"} and use_selected_local_anchor
     epsilon_cal = float(tc.get("epsilon_cal", cfg.get("calibration", {}).get("epsilon_cal", 0.0)))
     sigma = _pair_sigma_matrix(
         pair_indices,
@@ -779,7 +808,12 @@ def run_pair_conditioned_tournament(
         selected_atoms,
         int(np.asarray(predicted_base_cost).reshape(-1).shape[0]),
     )
-    potential_diag: dict[str, Any] = {"pair_potential_active": 0.0, "direct_evidence_action_potential_active": 0.0}
+    potential_diag: dict[str, Any] = {
+        "pair_potential_active": 0.0,
+        "direct_evidence_action_potential_active": 0.0,
+        "decisive_anchor_margin_active": 0.0,
+        "decisive_anchor_margin_anchor_action": -1.0,
+    }
     if use_evidence_action_potential:
         J_anchor, J_corrected, residual_sigma, potential_diag = _evidence_action_potential_cost(
             predicted_base_cost,
@@ -818,6 +852,26 @@ def run_pair_conditioned_tournament(
         # Pair uncertainty must not perturb the selected-local action anchor.  It
         # is used only by the certified flip guard below.
         scores = _direct_action_scores_from_cost(J_corrected, valid_mask, scale)
+    elif use_decisive_anchor_margin:
+        J_anchor = _selected_local_anchor_cost(predicted_base_cost, predicted_atom_costs, selected_atoms)
+        M_B = _pair_delta_margin_matrix(
+            predicted_base_cost,
+            pair_indices,
+            pair_atom_delta,
+            selected_atoms,
+            valid_mask,
+            normalize_margins=normalize_margins,
+            margin_scale=pair_margin_scale,
+            norm_min_scale=norm_min_scale,
+            norm_quantile=norm_quantile,
+            predicted_atom_costs=predicted_atom_costs,
+            pair_delta_includes_local=bool(runtime_cfg.get("pair_tournament_pair_delta_includes_local", True)),
+        )
+        scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
+        M_eval = M_B - epsilon_cal
+        scores, darm_anchor = _decisive_anchor_margin_scores(J_anchor, M_B, valid_mask, scale)
+        potential_diag["decisive_anchor_margin_active"] = 1.0
+        potential_diag["decisive_anchor_margin_anchor_action"] = float(darm_anchor)
     else:
         M_B = _pair_delta_margin_matrix(
             predicted_base_cost,
@@ -859,7 +913,7 @@ def run_pair_conditioned_tournament(
     }
     guard_cfg = runtime_cfg.get("pair_action_anchor_guard", {}) if isinstance(runtime_cfg, dict) else {}
     if use_selected_local_anchor and bool(guard_cfg.get("enabled", True)):
-        if use_integrable_potential or use_evidence_action_potential:
+        if use_integrable_potential or use_evidence_action_potential or use_decisive_anchor_margin:
             J_anchor = _selected_local_anchor_cost(predicted_base_cost, predicted_atom_costs, selected_atoms)
             scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
             anchor_M = (J_anchor[None, :] - J_anchor[:, None]) / scale - epsilon_cal

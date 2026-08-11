@@ -1,0 +1,57 @@
+# V64.3.7 DARM + DBR — next two-GPU commands
+# Goal: isolate decisive pair-value correction on the strong selected-local V62 anchor.
+# Do not run full training unless darm_dbr_screen_comparison.json has a non-null winner.
+
+cd /path/to/bdse_v64_3_7_darm_dbr
+
+export FOUNDATION_CKPT=outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt
+
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+
+export GPUS=0,1
+export BATCH_SIZE_PER_GPU=16
+export NUM_WORKERS_PER_GPU=12
+export VAL_NUM_WORKERS_PER_GPU=4
+export PREFETCH_FACTOR=2
+
+# Recommended causal screen. Runs BROAD then LITERAL on the same immutable foundation.
+bash RUN_V64_3_7_DARM_DBR_SCREEN_MATRIX_2GPU.sh
+
+# Inspect:
+cat outputs_v64_3_7_darm_dbr_screen_matrix_2gpu_v1/darm_dbr_screen_comparison.json
+
+# Interpretation / stop rules:
+# 1) valid=false because strong_selected_local_anchor_restored=false:
+#    STOP. This is an aggregation/protocol regression, not a DBR negative result.
+#    V64.3.7 requires epoch -1 teacher_action_match >= 0.24.
+#
+# 2) DBR parameter/residual activation is zero:
+#    STOP. Treat as wiring/optimization failure before changing the algorithm.
+#
+# 3) pair-full gain < +1pp or pair-full-over-local < +0.5pp despite non-zero DBR
+#    and adequate anchor-pair coverage:
+#    do NOT increase DBR scale, loosen certificates, or scratch-train everything.
+#    This supports the next hypothesis: frozen pair feature / action-evidence
+#    representation capacity. The next test should be a small selective adapter.
+#
+# 4) BROAD succeeds and LITERAL does not:
+#    keep DARM+DBR, but do not overweight extremely sparse literal winner-flip
+#    atom-pairs in value regression. Literal criticality remains an acquisition/
+#    diagnostic definition rather than the sole value target.
+#
+# 5) LITERAL clearly exceeds BROAD:
+#    promote the bounded literal winner->LOO-flip pair quota as a main DBR training
+#    component; this is a clean exact-boundary value result.
+#
+# 6) pair-full improves but final teacher action does not reach +0.5pp:
+#    mechanism is positive, but full training stays blocked. Audit budget compression
+#    / residual certificate deployment before running expensive full training.
+#
+# 7) winner is BROAD or LITERAL:
+export PROMOTED_SCREEN_REPORT=outputs_v64_3_7_darm_dbr_screen_matrix_2gpu_v1/darm_dbr_screen_comparison.json
+bash RUN_V64_3_7_PROMOTED_FULL_TRAIN_2GPU.sh
+
+# The guarded wrapper automatically selects the matching full train/eval config.
+# Defaults: 50k train scenarios, 1k validation scenarios, two GPUs, warm-start V62.

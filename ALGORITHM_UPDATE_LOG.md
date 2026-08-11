@@ -4830,3 +4830,114 @@ Automatic full training is even stricter: the selected row must improve final te
 - Do not repeat V55 Hodge/global action potential, V56 generic per-evidence action potential, or V59 generic set-conditioned potential.
 - Do not relax DA-EPC, residual confidence gates, or protocol thresholds to manufacture flips.
 - Do not scratch-retrain the full foundation before the targeted V64.3.6 causal screens resolve whether frozen representation capacity is actually limiting.
+
+# V64.3.7 — Decisive Anchor-Relative Margin Refinement (DARM) + Decisive Boundary Residual (DBR) (2026-08-11)
+
+## Trigger: V64.3.6 rules out family admission and exposes a value/aggregation confound
+
+The uploaded V64.3.6 dual-bottleneck screen correctly returned `winner=null`. This is not an activation failure.
+
+**BCHA is now a definitive negative.** The teacher exact winner-flip oracle diagnostics are
+
+- frozen-family-slot oracle Top-M recall = `1.000`;
+- global oracle Top-M recall = `1.000`;
+- oracle gap = `0.000`.
+
+Therefore the frozen HAB family allocation is not limiting literal-critical Top-M admission on this validation subset. Do not tune BCHA, do not unfreeze the family stack, and do not reinterpret the unchanged learned Top-M as a family-quota problem.
+
+**LBPR has a real but weak positive value signal.** In the LBPR arm the adapter trains (`parameter delta RMS=0.005838`, residual RMS=`0.030978`). At epoch 3, pair-full teacher match is `0.176` versus the same-epoch local pair-full control `0.174`; pair-full teacher regret improves from the local control `11286.84` to `11030.27`; beneficial residual intervention is `0.002` and harmful residual intervention is `0.000`. However the +0.2 percentage-point action-match advantage is far below the +1pp value promotion threshold and final deployed teacher match remains `0.178`. LBPR is therefore not promoted as a completed main module.
+
+The weak LBPR gain is mechanistically informative. CCBR endpoint support is complete, but the LEA endpoint CE is still diffuse (`3.1849` at activation, `2.9401` at the final epoch). With about 27 valid candidates, a uniform endpoint CE is roughly `log(27)=3.30`; representability=1 means the correct endpoint exists in support, not that the endpoint posterior is sufficiently sharp. Multiplying LBPR by this immature endpoint posterior suppresses an already sparse residual.
+
+A second confound is more important: V64.3.6 used `legacy_tournament` to carry LBPR. The same V62 warm-start had a much stronger direct selected-local/evidence-action-potential anchor in V64.3.5 (`teacher action match≈0.264`, local pair-full≈`0.264` at epoch -1), whereas the V64.3.6 zero-residual legacy-tournament anchor is only `0.180/0.172`. Thus V64.3.6 tested a new residual on top of a historically weaker aggregation operator. This does not invalidate the tiny LBPR positive signal, but it prevents a clean conclusion about whether pair residuals can correct the strongest fixed evidence-value anchor.
+
+## Updated bottleneck diagnosis
+
+The optimization priority is now:
+
+1. **First: decisive pair-value / final aggregation.** Pair-full remains extremely low even with full evidence, and V64.3.6 introduced an avoidable weak-aggregator confound. Establish whether a pair residual can improve a strong selected-local anchor before changing the foundation representation.
+2. **Second: learned proposal-score generalization.** Literal critical Top-M remains `0.360153`, but the family/global oracle both equal 1.0 and CCBR already removed the representation-support ceiling. The remaining acquisition problem is learned atom ranking/generalization under rare literal-critical supervision, not family capacity and not top-F boundary support.
+
+Do not optimize these two bottlenecks jointly in V64.3.7. Freeze acquisition while isolating value. If the value mechanism succeeds, its realized decisive-margin correction becomes a better future acquisition target than another critical-atom classification loss.
+
+## Algorithm: Decisive Anchor-Relative Margin Refinement (DARM)
+
+DARM replaces the global soft-min pair tournament used in V64.3.6 with a theorem-aligned star refinement around the already strong budgeted selected-local action.
+
+For selected evidence `S_B`, define the immutable local anchor cost
+
+`J_B^L(a) = J0(a) + sum_{i in S_B} g_i(a)`
+
+and anchor
+
+`a0 = argmin_a J_B^L(a)`.
+
+For each challenger `b`, DARM uses only the anchor-relative margin
+
+`M_DARM(a0,b) = J_B^L(b)-J_B^L(a0) + sum_{i in S_B} r_i(a0,b)`.
+
+The challenger score is `score(a0)-M_DARM(a0,b)`. Missing learned pair edges fall back exactly to the local margin. Residuals on non-anchor pairs cannot change the final action. With zero residual, DARM is exactly the direct selected-local planner (before the same existing safety/utility post-processing), rather than a different global tournament.
+
+This is closer to the paper's one-sided preservation theorem: final decision preservation requires protecting the teacher-relevant winner-versus-decisive-rival margins, not constructing a globally consistent all-pairs utility field.
+
+## Algorithm: Decisive Boundary Residual (DBR)
+
+DBR retains only the useful core of LBPR: a low-rank evidence-attributable signed pair correction with exact antisymmetry by construction. It removes the LEA/CCBR endpoint posterior gate.
+
+For evidence atom `i` and runtime ordered pair `(a,b)`, DBR uses an atom factor multiplied by an action/query **difference** factor and a bias-free output. Consequently
+
+`r_i(a,b) = -r_i(b,a)`
+
+holds after training, not merely at zero initialization. The output layer is zero initialized, so the V62 selected-local anchor is an exact step-zero no-op.
+
+DBR is trained directly against teacher atom-pair residual labels on the existing sampled decision pairs. It does not require endpoint identity to be confident before value learning can act. Two causal pair-sampling arms are provided:
+
+- `BROAD`: existing decision-weighted winner / hard / near-margin pairs;
+- `LITERAL`: the same broad support plus a bounded exact teacher-winner -> leave-one-atom-out-flip pair quota and matching literal atom weight.
+
+The comparison tests whether literal-critical emphasis is useful **after** endpoint gating is removed. It does not redefine criticality and does not make teacher futures runtime inputs.
+
+## Fixed-interface and no-repeat invariants
+
+- Keep `B=16`, proposal M, auditable evidence atoms, DA-EPC, exact selector and runtime rival construction unchanged.
+- Freeze the V62 foundation, proposal/family stack, CCBR/BCHA and legacy residual-action/set-potential branches.
+- Do not retry BCHA: the family oracle is 1.0/1.0 with zero gap.
+- Do not retry AP-WCCA/AP-WRCCA/LCV/FPCCA-F6/F8 or proposal-only CCBR/LEA as main acquisition algorithms.
+- Do not increase B/M, relax certificate thresholds, or rerun beam/swap/brute-force selector search.
+- Do not repeat V46/V49 broad arbitrary global pair tournaments, V55 Hodge/global potential, V56 generic evidence action potential, or V59 generic set-conditioned potential. DARM only consumes anchor-challenger margins.
+- Do not scratch-retrain the complete foundation in this screen. Keep `outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt` to preserve causal attribution.
+
+## V64.3.7 screen / promotion rules
+
+A V64.3.7 run is invalid unless the zero-residual epoch restores a strong selected-local anchor: `val_teacher_action_match >= 0.24`. This explicitly catches accidental regression back to the weak V64.3.6 legacy tournament.
+
+DBR activation additionally requires non-zero adapter parameter movement and residual RMS. When emitted, DARM runtime activation must be >0.99 and training anchor-pair coverage must be at least 0.20.
+
+A meaningful value signal requires:
+
+- pair-full teacher-match gain >= `+0.01` absolute versus the same run's epoch -1 anchor;
+- pair-full advantage over same-epoch local pair-full >= `+0.005`;
+- teacher action match delta >= `-0.005`;
+- budget-vs-pair-full delta >= `-0.02`;
+- beneficial residual intervention minus harmful residual intervention >= 0.
+
+Automatic full promotion is stricter: the same row must also improve deployed teacher action match by >= `+0.005`. A pair-full-only gain is a mechanism result, not a full-planner winner.
+
+## Warm-start / next decision rule
+
+Continue the immutable V62 warm start for V64.3.7. If DBR has adequate pair coverage, non-zero parameter/residual activation and a restored strong selected-local anchor but cannot improve pair-full, then the next hypothesis is frozen action/evidence pair-feature capacity. The next experiment should be a **small selective pair-feature/action-evidence adapter or selective encoder unfreeze**, not full scratch training.
+
+If DARM+DBR materially improves pair-full and final teacher action, freeze the value mechanism and return to acquisition. The preferred future acquisition target is then the learned/realized **decisive-margin utility** of an atom under DARM, not another generic literal-critical classifier. This preserves the paper chain: fixed budget -> auditable atoms -> decisive margins -> budgeted evidence -> decision preservation.
+
+## Engineering hardening
+
+1. DBR output is bias-free; a non-zero-weight regression test enforces exact pair antisymmetry.
+2. Training DARM averages duplicated directed observations of the same anchor edge before action scoring, avoiding accidental double counting when both directions are sampled.
+3. Non-anchor residual edges are tested to have zero effect on the DARM action; anchor margin crossing is tested to change it.
+4. Safety atoms are included consistently in DBR pair regression and pair-action loss (`exclude_safety_atoms_from_pair_regression=false`, `exclude_safety_atoms_from_pair_action_loss=false`) so train and deployment do not silently use different evidence supports.
+5. V62 checkpoint loading explicitly permits the newly introduced `decisive_boundary_pair_adapter.*` to be absent while still rejecting a missing/shape-mismatched foundation tensor.
+6. Fixed a copied provenance error where full-train YAMLs still said `screening_only=true`; the validator now binds metadata/provenance screening flags.
+7. Fixed the V64.3.7 config validator's cross-config strict-family set to include `v64.3.7` rather than silently skipping V64.3.7 signature matching.
+8. CCBR/LEA/BCHA are disabled in V64.3.7 value-isolation configs; only DBR is trainable. This removes unused loss/forward work without weakening the tested value supervision.
+
+Final static/regression status: all **299 collected tests passed, 0 failed** when executed in bounded chunks (the monolithic command exceeded the execution harness time limit without reporting a test failure); 33 warnings are pre-existing Transformer nested-tensor warnings. Six V64.3.7 YAMLs parse, four launchers pass `bash -n`, broad/literal screen and full train/eval config contracts pass, and `compileall` passes. No nuPlan GPU training is claimed in the delivery environment.

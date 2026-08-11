@@ -2174,6 +2174,9 @@ def main() -> None:
     literal_pair_adapter_reference = _adapter_parameter_snapshot(
         model, prefix="literal_boundary_pair_adapter"
     )
+    decisive_pair_adapter_reference = _adapter_parameter_snapshot(
+        model, prefix="decisive_boundary_pair_adapter"
+    )
 
     log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
     if is_main and start_epoch == 0:
@@ -2192,6 +2195,12 @@ def main() -> None:
             _adapter_parameter_delta_metrics(
                 model, literal_pair_adapter_reference,
                 prefix="literal_boundary_pair_adapter", metric_prefix="literal_pair_adapter"
+            )
+        )
+        initial_metrics.update(
+            _adapter_parameter_delta_metrics(
+                model, decisive_pair_adapter_reference,
+                prefix="decisive_boundary_pair_adapter", metric_prefix="decisive_pair_adapter"
             )
         )
         if is_main:
@@ -2343,6 +2352,12 @@ def main() -> None:
             _adapter_parameter_delta_metrics(
                 model, literal_pair_adapter_reference,
                 prefix="literal_boundary_pair_adapter", metric_prefix="literal_pair_adapter"
+            )
+        )
+        epoch_metrics.update(
+            _adapter_parameter_delta_metrics(
+                model, decisive_pair_adapter_reference,
+                prefix="decisive_boundary_pair_adapter", metric_prefix="decisive_pair_adapter"
             )
         )
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):

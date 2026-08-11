@@ -394,6 +394,15 @@ class _LiteralBoundaryPairResidual(nn.Module):
         return self.output(atom * pair).squeeze(-1)
 
 
+class _DecisiveBoundaryPairResidual(_LiteralBoundaryPairResidual):
+    """V64.3.7 decisive-boundary residual without endpoint-posterior gating.
+
+    The runtime pair itself supplies the boundary identity.  This keeps the
+    residual auditable and exactly antisymmetric while avoiding multiplication
+    by the still-diffuse CCBR/LEA endpoint posterior observed in V64.3.6.
+    """
+
+
 def _confidence_shrunk_residual_pair_delta_np(
     local: np.ndarray,
     residual: np.ndarray,
@@ -740,6 +749,24 @@ class BDSEModel(nn.Module):
             )
         else:
             self.literal_boundary_pair_adapter = None
+
+        # V64.3.7 Decisive Boundary Residual (DBR).  Unlike LBPR it is not gated
+        # by CCBR/LEA endpoint posteriors: the already-screened runtime pair is
+        # the boundary.  The old LBPR remains available only for ablation and the
+        # two adapters are mutually exclusive.
+        dbr_cfg = mcfg.get("decisive_boundary_pair_adapter", {}) or {}
+        self.decisive_boundary_pair_adapter_scale = float(dbr_cfg.get("scale", 1.0))
+        if bool(dbr_cfg.get("enabled", False)):
+            if self.literal_boundary_pair_adapter is not None:
+                raise ValueError("literal_boundary_pair_adapter and decisive_boundary_pair_adapter are mutually exclusive")
+            self.decisive_boundary_pair_adapter = _DecisiveBoundaryPairResidual(
+                h,
+                int(dbr_cfg.get("rank", min(32, h))),
+                zero_init=bool(dbr_cfg.get("zero_init", True)),
+                query_gain=float(dbr_cfg.get("query_gain", 1.0)),
+            )
+        else:
+            self.decisive_boundary_pair_adapter = None
 
         # V56 DCIP: evidence-attributable, globally integrable residual action
         # potential.  Each queried atom contributes a signed correction h_i(a)
@@ -1463,6 +1490,14 @@ class BDSEModel(nn.Module):
         q_b = self._project_query(query_b_features)
         s_h = scene[:, None, :].expand(B, Q, H)
 
+        if self.decisive_boundary_pair_adapter is not None:
+            delta = self.decisive_boundary_pair_adapter.from_embeddings(
+                e_h, s_h, a_h, b_h, q_a, q_b
+            ) * float(self.decisive_boundary_pair_adapter_scale)
+            if not return_uncertainty:
+                return delta
+            return delta, torch.zeros_like(delta)
+
         if self.literal_boundary_pair_adapter is not None:
             gate = self._literal_boundary_pair_gate_sparse(
                 context, atom_indices, action_a_indices, action_b_indices
@@ -1708,7 +1743,12 @@ class BDSEModel(nn.Module):
                 q_b = torch.gather(q_h_e, 2, idx_b_q)
                 e_hp = e_h.expand(B, Ce, Cp, H)
                 s_h = scene[:, None, None, :].expand(B, Ce, Cp, H)
-                if self.literal_boundary_pair_adapter is not None:
+                if self.decisive_boundary_pair_adapter is not None:
+                    delta = self.decisive_boundary_pair_adapter.from_embeddings(
+                        e_hp, s_h, a_h, b_h, q_a, q_b
+                    ) * float(self.decisive_boundary_pair_adapter_scale)
+                    var = torch.zeros_like(delta) if return_uncertainty else None
+                elif self.literal_boundary_pair_adapter is not None:
                     gate = lbpr_gate_all[:, e0:e1, p0:p1] if lbpr_gate_all is not None else 1.0
                     delta = self.literal_boundary_pair_adapter.from_embeddings(
                         e_hp, s_h, a_h, b_h, q_a, q_b
@@ -1760,7 +1800,11 @@ class BDSEModel(nn.Module):
                 q_h_all=q_h_all,
                 compute_variance=self._need_dense_local_variance(),
             )
-            if bool((self.cfg.get("training", {}) or {}).get("skip_pair_head_forward", False)) and self.literal_boundary_pair_adapter is None:
+            if (
+                bool((self.cfg.get("training", {}) or {}).get("skip_pair_head_forward", False))
+                and self.literal_boundary_pair_adapter is None
+                and self.decisive_boundary_pair_adapter is None
+            ):
                 # DCIP trains a per-evidence action potential and derives every
                 # pair correction from potential differences.  The legacy pair
                 # MLP is therefore outside the deployed computation graph and
