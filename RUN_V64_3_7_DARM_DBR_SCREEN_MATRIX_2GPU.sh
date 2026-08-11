@@ -8,11 +8,33 @@ export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cac
 export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2}"
 export GPUS="${GPUS:-0,1}" BATCH_SIZE_PER_GPU="${BATCH_SIZE_PER_GPU:-16}" NUM_WORKERS_PER_GPU="${NUM_WORKERS_PER_GPU:-12}" VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-4}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
 ROOT="${MATRIX_ROOT:-outputs_v64_3_7_darm_dbr_screen_matrix_2gpu_v1}"; mkdir -p "$ROOT"
-run_one(){ local tag="$1" script="$2"; local out="$ROOT/$tag"; if [[ -s "$out/provenance/v64_3_7_darm_dbr_screen.json" ]]; then echo "[v64.3.7] reuse $tag"; else OUT_ROOT="$out" bash "$script"; fi; }
-run_one broad RUN_V64_3_7_DARM_DBR_BROAD_SCREEN_2GPU.sh
-run_one literal RUN_V64_3_7_DARM_DBR_LITERAL_SCREEN_2GPU.sh
+
+# V64.3.7.1 protocol hotfix:
+# - a negative/non-promoted arm is a result, not a shell failure;
+# - if an old train log already exists, re-audit it with the corrected checker
+#   instead of trusting a stale valid=false provenance JSON;
+# - all requested causal arms are run before comparison.
+run_one(){
+  local tag="$1" script="$2" variant="$3"
+  local out="$ROOT/$tag"
+  local train_log="$out/train/bdse_v64_saqa_bcc.train_log.jsonl"
+  if [[ -s "$train_log" ]]; then
+    echo "[v64.3.7.1] reuse training log for $tag and re-audit with corrected protocol"
+  else
+    echo "[v64.3.7.1] run $tag"
+    OUT_ROOT="$out" bash "$script"
+  fi
+  [[ -s "$train_log" ]] || { echo "missing train log after $tag: $train_log" >&2; return 21; }
+  mkdir -p "$out/provenance"
+  python -m bdse.tools.check_v64_3_7_darm_dbr_screen \
+    --train-log "$train_log" --variant "$variant" \
+    --output "$out/provenance/v64_3_7_darm_dbr_screen.json"
+}
+
+run_one broad RUN_V64_3_7_DARM_DBR_BROAD_SCREEN_2GPU.sh 'DARM+DBR-BROAD'
+run_one literal RUN_V64_3_7_DARM_DBR_LITERAL_SCREEN_2GPU.sh 'DARM+DBR-LITERAL'
 python -m bdse.tools.compare_v64_3_7_darm_dbr_screens \
   --screen "BROAD=$ROOT/broad/provenance/v64_3_7_darm_dbr_screen.json" \
   --screen "LITERAL=$ROOT/literal/provenance/v64_3_7_darm_dbr_screen.json" \
   --output "$ROOT/darm_dbr_screen_comparison.json"
-echo "[v64.3.7] done: $ROOT/darm_dbr_screen_comparison.json"
+echo "[v64.3.7.1] done: $ROOT/darm_dbr_screen_comparison.json"

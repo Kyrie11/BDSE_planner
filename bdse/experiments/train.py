@@ -1196,6 +1196,7 @@ def _run_validation_open_loop(
                 if (
                     key.startswith("pair_potential_")
                     or key.startswith("pair_action_anchor_")
+                    or key.startswith("decisive_anchor_margin_")
                     or key.startswith("evidence_certificate_")
                     or key.startswith("residual_flip_")
                     or key.startswith("dual_certificate_")

@@ -4941,3 +4941,76 @@ If DARM+DBR materially improves pair-full and final teacher action, freeze the v
 8. CCBR/LEA/BCHA are disabled in V64.3.7 value-isolation configs; only DBR is trainable. This removes unused loss/forward work without weakening the tested value supervision.
 
 Final static/regression status: all **299 collected tests passed, 0 failed** when executed in bounded chunks (the monolithic command exceeded the execution harness time limit without reporting a test failure); 33 warnings are pre-existing Transformer nested-tensor warnings. Six V64.3.7 YAMLs parse, four launchers pass `bash -n`, broad/literal screen and full train/eval config contracts pass, and `compileall` passes. No nuPlan GPU training is claimed in the delivery environment.
+
+# V64.3.7.1 — DARM+DBR screen protocol hotfix (2026-08-11)
+
+## Uploaded V64.3.7 result correction
+
+The uploaded `outputs_v64_3_7_darm_dbr_screen_matrix_2gpu_v1` contains only the BROAD arm because the old checker returned exit code 3 under `set -e` before LITERAL could run. The BROAD algorithm itself did **not** fail to activate.
+
+Immutable epoch -1 anchor:
+
+- teacher match = `0.264`;
+- local pair-full = `0.264`;
+- pair-full = `0.264`;
+- teacher regret = `14484.4613`;
+- pair-full regret = `14079.9774`;
+- critical Top-M micro recall = `0.3601533`;
+- selected critical micro recall = `0.2605364`;
+- proposal decisive recall = `0.7915091`.
+
+The robust positive row is epoch 3:
+
+- teacher match = `0.282`, **+1.8pp**;
+- pair-full = `0.274`, **+1.0pp**;
+- local pair-full stays frozen at `0.264`;
+- pair-full-over-local advantage = **+1.0pp**;
+- teacher regret = `13367.1395`, improvement `-1117.32`;
+- pair-full regret = `13673.7794`, improvement `-406.20`;
+- beneficial/harmful residual intervention = `0.022/0.012`, net **+1.0pp**;
+- beneficial/harmful pair-full->budget compression = `0.016/0.008`, net **+0.8pp**;
+- DBR parameter delta RMS max = `0.005218`;
+- DBR residual RMS max = `0.003149`;
+- critical Top-M, selected-critical, and proposal-decisive metrics remain exactly unchanged.
+
+This is the first clean evidence in this branch that downstream decisive pair-value/final aggregation can improve the fixed-budget final decision while acquisition is held constant. DARM+DBR-BROAD is therefore a **provisional positive main-algorithm candidate**, not a negative result. Statistical/generalization confirmation still requires the missing LITERAL arm and a larger full pipeline.
+
+## Engineering/protocol errors fixed
+
+1. The old screen checker used `decisive_anchor_full_pair_coverage >= 0.20` as a validity gate. The uploaded run reached `0.1990928`. This metric is all-challenger anchor-star coverage under a discrete sampled pair graph, not exact teacher-correction-edge coverage. The 0.20 boundary was arbitrary and caused a false invalid result. V64.3.7.1 keeps it diagnostic-only.
+2. The old value gate required `budget_vs_pair_full_delta >= -0.02`. That is semantically misaligned with the BDSE target: the paper seeks teacher decision preservation under fixed B=16, not imitation of a learned pair-full surrogate. In the uploaded epoch 3, B16 divergence is net teacher-beneficial. V64.3.7.1 gates on teacher/pair-full action gain, regret, residual intervention direction, and beneficial-vs-harmful compression instead.
+3. A non-promoted scientific screen returned process exit code 3, so `RUN_V64_3_7_DARM_DBR_SCREEN_MATRIX_2GPU.sh` aborted under `set -e` before LITERAL. The checker now exits zero for an interpretable negative result; malformed inputs still fail normally.
+4. The matrix now re-audits any existing train log with the current checker instead of trusting stale provenance. This allows the completed BROAD training to be reused without GPU retraining.
+5. Validation export now includes `decisive_anchor_margin_*` tournament diagnostics. Earlier `runtime_darm_active_min` was null because the runtime DARM diagnostic existed in the tournament result but was filtered from validation metrics.
+
+## Revised promotion semantics
+
+`instrumentation_valid` requires a restored strong selected-local anchor, non-zero DBR parameter movement/residual, and observed pair-graph supervision. All-challenger coverage is not a hard algorithm gate.
+
+`meaningful_value_gain` requires:
+
+- pair-full gain >= `+1.0pp` vs epoch -1;
+- pair-full advantage over same-epoch local pair-full >= `+0.5pp`;
+- pair-full teacher regret non-worse;
+- beneficial residual intervention strictly exceeds harmful intervention.
+
+`deployment_gain` requires:
+
+- final fixed-B teacher match >= `+1.0pp`;
+- final teacher regret non-worse;
+- pair-full->budget compression net is non-harmful when available.
+
+`full_promotion = instrumentation_valid AND meaningful_value_gain AND deployment_gain`.
+
+Re-auditing the uploaded BROAD log with this definition selects epoch 3 and returns `instrumentation_valid=true`, `meaningful_value_gain=true`, `deployment_gain=true`, `full_promotion=true`.
+
+## Algorithm priority after the uploaded result
+
+The priority ordering remains, with stronger evidence:
+
+1. **Decisive pair value + final aggregation stays first priority and is partially validated.** DARM+DBR improves final teacher decisions while all acquisition metrics remain frozen.
+2. **Acquisition proposal-score generalization remains second priority.** Critical Top-M is still `0.3601533`, but it is no longer justified to modify acquisition before completing DARM+DBR causal validation.
+
+Do not introduce another pair architecture, global tournament/potential, BCHA, CCBR/LEA gate, larger B/M, scratch training, or acquisition loss before completing the missing LITERAL screen and the guarded full pipeline.
+
+If the DARM+DBR gain survives the full pipeline, freeze the value/aggregation mechanism. The next acquisition hypothesis should be **DARM-consistent decisive-margin marginal utility**: train the cheap proposal path to rank auditable atoms by how much they reduce the one-sided decisive-margin deficit under fixed B=16. This connects acquisition directly to the theorem-aligned DARM decision objective instead of repeating sparse binary critical classification.

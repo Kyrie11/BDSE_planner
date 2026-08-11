@@ -167,29 +167,51 @@ def test_v64_3_7_v62_warm_start_may_omit_only_new_dbr_head() -> None:
         raise AssertionError('missing core foundation tensor must be rejected')
 
 
-def _screen_row(epoch: int, teacher: float, pairfull: float, localpair: float, *, dbr: float = 0.0) -> dict:
+def _screen_row(
+    epoch: int,
+    teacher: float,
+    pairfull: float,
+    localpair: float,
+    *,
+    dbr: float = 0.0,
+    teacher_regret: float = 100.0,
+    pairfull_regret: float = 100.0,
+    budgetpair: float = 0.95,
+    beneficial_compression: float = 0.0,
+    harmful_compression: float = 0.0,
+    coverage: float = 0.5,
+) -> dict:
     return {
         'epoch': epoch,
         'val_teacher_action_match': teacher,
         'val_pair_full_interface_action_match': pairfull,
         'val_local_pair_full_interface_action_match': localpair,
-        'val_budget_vs_pair_full_match': 0.95,
-        'val_pair_full_to_budget_flip_rate': 0.05,
+        'val_budget_vs_pair_full_match': budgetpair,
+        'val_pair_full_to_budget_flip_rate': 1.0 - budgetpair,
         'val_teacher_exact_winner_flip_critical_recall_topm_micro': 0.36,
         'val_teacher_exact_winner_flip_critical_recall_selected_micro': 0.25,
         'val_proposal_decisive_atom_recall': 0.78,
-        'val_beneficial_residual_intervention_rate': 0.01 if epoch >= 0 else 0.0,
-        'val_harmful_residual_intervention_rate': 0.0,
+        'val_beneficial_residual_intervention_rate': 0.02 if epoch >= 0 else 0.0,
+        'val_harmful_residual_intervention_rate': 0.005 if epoch >= 0 else 0.0,
+        'val_teacher_regret': teacher_regret,
+        'val_pair_full_teacher_regret': pairfull_regret,
+        'val_local_pair_full_teacher_regret': 100.0,
+        'val_beneficial_pair_compression_rate': beneficial_compression,
+        'val_harmful_pair_compression_rate': harmful_compression,
         'decisive_pair_adapter_parameter_delta_rms': dbr,
         'decisive_boundary_pair_residual_rms': dbr,
-        'decisive_anchor_full_pair_coverage': 0.5,
-        'decisive_anchor_budget_pair_coverage': 0.5,
+        'decisive_anchor_full_pair_coverage': coverage,
+        'decisive_anchor_budget_pair_coverage': coverage,
+        'training_pair_full_graph_fraction': 0.125,
         'val_decisive_anchor_margin_active': 1.0,
     }
 
 
 def test_v64_3_7_screen_gate_rejects_weak_anchor_even_if_pairfull_moves() -> None:
-    rows = [_screen_row(-1, 0.18, 0.17, 0.17), _screen_row(0, 0.19, 0.20, 0.18, dbr=0.01)]
+    rows = [
+        _screen_row(-1, 0.18, 0.17, 0.17, teacher_regret=120.0, pairfull_regret=110.0),
+        _screen_row(0, 0.19, 0.20, 0.18, dbr=0.01, teacher_regret=100.0, pairfull_regret=90.0),
+    ]
     report = build_darm_screen(rows, 'synthetic')
     assert report['meaningful_value_gain']
     assert report['strong_selected_local_anchor_restored'] is False
@@ -197,9 +219,28 @@ def test_v64_3_7_screen_gate_rejects_weak_anchor_even_if_pairfull_moves() -> Non
     assert report['valid'] is False
 
 
-def test_v64_3_7_screen_gate_accepts_pairfull_plus_teacher_on_strong_anchor() -> None:
-    rows = [_screen_row(-1, 0.264, 0.26, 0.26), _screen_row(0, 0.272, 0.275, 0.265, dbr=0.01)]
-    report = build_darm_screen(rows, 'synthetic')
+def test_v64_3_7_1_screen_accepts_teacher_aligned_budget_divergence_and_discrete_coverage() -> None:
+    # Mirrors the uploaded BROAD pattern: pair/full and deployed teacher improve,
+    # budget-vs-pair-full agreement falls, but that divergence is net beneficial.
+    rows = [
+        _screen_row(
+            -1, 0.264, 0.264, 0.264,
+            teacher_regret=14484.0, pairfull_regret=14080.0,
+            budgetpair=0.962, coverage=0.19909,
+        ),
+        _screen_row(
+            3, 0.282, 0.274, 0.264, dbr=0.005,
+            teacher_regret=13367.0, pairfull_regret=13674.0,
+            budgetpair=0.886, beneficial_compression=0.016,
+            harmful_compression=0.008, coverage=0.19909,
+        ),
+    ]
+    report = build_darm_screen(rows, 'synthetic-broad')
     assert report['valid']
     assert report['meaningful_value_gain']
+    assert report['deployment_gain']
     assert report['full_promotion']
+    assert report['budget_compression_net'] > 0
+    assert report['activation']['decisive_anchor_full_pair_coverage_max'] < 0.20
+    assert report['thresholds']['all_challenger_pair_coverage_is_gate'] is False
+    assert report['thresholds']['budget_vs_pair_full_agreement_is_gate'] is False

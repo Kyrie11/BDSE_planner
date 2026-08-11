@@ -1,0 +1,66 @@
+# V64.3.7.1 DARM+DBR protocol hotfix — next commands
+# This hotfix does NOT change DARM/DBR model semantics. It repairs the screen audit and matrix control flow.
+
+cd /path/to/bdse_v64_3_7_1_darm_dbr_protocolfix
+
+export FOUNDATION_CKPT=outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+export GPUS=0,1
+export BATCH_SIZE_PER_GPU=16
+export NUM_WORKERS_PER_GPU=12
+export VAL_NUM_WORKERS_PER_GPU=4
+export PREFETCH_FACTOR=2
+
+# IMPORTANT: point MATRIX_ROOT at the existing V64.3.7 matrix directory that already contains broad/train/...
+# The new script will RE-AUDIT the existing BROAD train log and will NOT retrain BROAD.
+export MATRIX_ROOT=/absolute/path/to/outputs_v64_3_7_darm_dbr_screen_matrix_2gpu_v1
+
+# Optional zero-GPU sanity check: re-audit the already completed BROAD log first.
+python -m bdse.tools.check_v64_3_7_darm_dbr_screen \
+  --train-log "$MATRIX_ROOT/broad/train/bdse_v64_saqa_bcc.train_log.jsonl" \
+  --variant DARM+DBR-BROAD \
+  --output "$MATRIX_ROOT/broad/provenance/v64_3_7_darm_dbr_screen.json"
+cat "$MATRIX_ROOT/broad/provenance/v64_3_7_darm_dbr_screen.json"
+# With the uploaded result, the corrected audit should select epoch 3 and report:
+#   instrumentation_valid=true
+#   meaningful_value_gain=true
+#   full_promotion=true
+#   teacher: 0.264 -> 0.282
+#   pairfull: 0.264 -> 0.274
+#   teacher_regret delta ~ -1117
+#   pairfull_regret delta ~ -406
+
+# Resume the causal matrix. BROAD is reused/re-audited; only the missing LITERAL arm should consume GPUs.
+bash RUN_V64_3_7_DARM_DBR_SCREEN_MATRIX_2GPU.sh
+
+cat "$MATRIX_ROOT/darm_dbr_screen_comparison.json"
+
+# Interpretation:
+# A) BROAD wins or LITERAL does not beat it materially:
+#    Promote DARM+DBR-BROAD as the provisional main value/aggregation mechanism.
+#    Do not add literal-boundary quota to the main value regression.
+#
+# B) LITERAL clearly beats BROAD while retaining positive teacher/pair-full regret deltas:
+#    Promote the bounded literal winner->LOO-flip quota as a DBR training component.
+#
+# C) Both are instrumentation-valid but only BROAD is full_promotion:
+#    Treat literal oversampling as a negative ablation; BROAD remains the main candidate.
+#
+# D) Neither reproduces the BROAD positive signal:
+#    Do NOT switch to acquisition or scratch training. First audit seed/data-order/checkpoint provenance and
+#    DBR checkpoint selection because the uploaded BROAD run already contains a paired +1.8pp teacher gain.
+
+# Full pipeline only after the completed two-arm comparison returns a non-null winner.
+export PROMOTED_SCREEN_REPORT="$MATRIX_ROOT/darm_dbr_screen_comparison.json"
+bash RUN_V64_3_7_PROMOTED_FULL_TRAIN_2GPU.sh
+
+# Research decision after full pipeline:
+# 1) If DARM+DBR gain survives larger validation/full training:
+#    freeze the value/aggregation mechanism; acquisition becomes the next priority.
+#    The next acquisition target should be DARM-consistent decisive-margin marginal utility under fixed B=16,
+#    not another binary literal-critical classifier, larger M/B, BCHA, CCBR, or AP-WCCA derivative.
+# 2) If the gain disappears despite verified DBR activation and same strong anchor:
+#    stay on downstream value generalization; next test is a small pair-feature/action-evidence adapter,
+#    not full scratch and not a global pair tournament/potential.

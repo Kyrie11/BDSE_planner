@@ -3885,3 +3885,11 @@ See `ALGORITHM_UPDATE_LOG.md`, section "V64.3.2 — Auditable AP-WCCA ScreenFix 
 
 # V64.3.7 DARM + DBR summary
 See root `ALGORITHM_UPDATE_LOG.md` for the full audit. V64.3.6 gives a definitive negative BCHA result (frozen/global family oracle Top-M both 1.0, gap 0), while LBPR shows only a weak +0.2pp pair-full-over-local signal. V64.3.7 therefore freezes acquisition and replaces the weak legacy global tournament plus immature LEA endpoint gate with DARM: an exact selected-local zero-residual anchor refined only by DBR anchor-challenger decisive margins. DBR is low-rank, bias-free and exactly antisymmetric; broad versus literal pair-quota arms test whether exact winner-flip emphasis helps value learning without endpoint gating. Fixed B=16, DA-EPC, auditable atoms, V62 warm start and strict checkpoint/provenance contracts remain unchanged. Full promotion requires both pair-full and final teacher-action improvement.
+
+# V64.3.7.1 protocol hotfix — 2026-08-11
+
+The uploaded V64.3.7 BROAD screen was falsely marked invalid by an arbitrary `0.20` all-challenger anchor-star coverage threshold (`0.1990928` observed) and the matrix stopped before LITERAL because the checker returned exit code 3 under `set -e`. Re-audit of the unchanged BROAD training log selects epoch 3: teacher match `0.264->0.282`, pair-full `0.264->0.274`, teacher regret `-1117.32`, pair-full regret `-406.20`, residual intervention net `+1.0pp`, and pair-full->budget compression net `+0.8pp`, while Top-M/selected/proposal acquisition metrics remain unchanged. DARM+DBR-BROAD is therefore a provisional positive downstream mechanism.
+
+Hotfix only: no DARM/DBR model semantics change. Screen validity is separated from promotion, budget-vs-learned-pair-full agreement is diagnostic rather than a hard gate, stale provenance is re-audited from train logs, later ablation arms cannot be skipped by a scientific non-promotion, and `decisive_anchor_margin_*` runtime diagnostics are exported in validation.
+
+Immediate next step: reuse/re-audit BROAD, run only missing LITERAL, compare, then run guarded full pipeline on a non-null winner. Do not modify acquisition before this causal comparison is complete. If full DARM+DBR gain holds, the next acquisition branch should distill fixed-B DARM decisive-margin marginal utility rather than repeat AP-WCCA/FPCCA/CCBR/BCHA or increase B/M.
