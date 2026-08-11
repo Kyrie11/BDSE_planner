@@ -1,0 +1,29 @@
+{
+  "version": "V64.3.5-CCBR-LEA",
+  "timestamp_local": "2026-08-10T17:26-07:00",
+  "full_pytest": {
+    "passed": 285,
+    "failed": 0,
+    "warnings": 30,
+    "elapsed_seconds": 14.58
+  },
+  "targeted_tests": {
+    "passed": 10,
+    "failed": 0,
+    "warnings": 5,
+    "elapsed_seconds": 1.41
+  },
+  "yaml_parse_count": 7,
+  "launcher_bash_syntax_count": 5,
+  "config_contracts_passed": 4,
+  "py_compile_files": [
+    "bdse/model/bdse_model.py",
+    "bdse/model/losses.py",
+    "bdse/experiments/evaluate_open_loop.py",
+    "bdse/tools/check_v64_3_3_acquisition_screen.py",
+    "bdse/tools/validate_v64_pipeline_config.py",
+    "bdse/tools/compare_v64_3_5_ccbr_screens.py"
+  ],
+  "gpu_training_performed_in_delivery_environment": false,
+  "note": "Static/unit/integration regressions only; CCBR/LEA performance must be established by the provided 2-GPU screen on the user nuPlan caches and an explicit immutable matched foundation checkpoint."
+}

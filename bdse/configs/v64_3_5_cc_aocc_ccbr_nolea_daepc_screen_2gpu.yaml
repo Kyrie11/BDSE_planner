@@ -144,9 +144,8 @@ model:
     zero_init: true
     scale: 1.0
     rank: 64
-    frontier_gap_bias_scale: 0.25
-    conditioning: frozen_base_frontier_pair_set
-    frontier_action_count: 6
+    conditioning: complete_candidate_boundary_routing
+    endpoint_cost_bias_scale: 0.15
 pairs:
   pair_batch_per_scene: 128
   target_max: 128
@@ -710,30 +709,33 @@ training:
     exchange_margin: 0.15
     exchange_temperature: 0.2
     coverage_objective: teacher_critical_utility_retained_by_exact_hab_topm_forward
-    adapter_objective: frontier-pair conditioned residual over immutable legacy HAB proposal anchor
+    adapter_objective: complete-candidate factorized boundary-routing residual over immutable legacy HAB proposal anchor
     adapter_residual_alignment_weight: 0.25
     adapter_residual_target_scale: 1.0
     adapter_residual_target_mode: literal_binary
     adapter_residual_huber_delta: 0.25
     adapter_residual_positive_weight: 8.0
-    boundary_attribution_weight: 0.25
+    boundary_attribution_weight: 0.0
     boundary_attribution_severity_weight: 1.0
-    boundary_attribution_objective: literal winner-flip (winner, leave-one-out flip-target) pair attribution within deployment
-      base frontier
+    boundary_attribution_objective: disabled representation-only ablation
+    endpoint_attribution_weight: 0.0
+    endpoint_attribution_severity_weight: 1.0
+    endpoint_attribution_objective: literal winner-flip winner/leave-one-out-flip endpoint attribution over the complete valid
+      candidate bank
   eval_frozen_modules: true
 experiment:
-  name: v64_3_4_cc_aocc_fpcca_lba_daepc_screen_2gpu
-  algorithm: V64.3.4 FPCCA frontier-pair conditioned acquisition + LBA + DA-EPC screening
+  name: v64_3_5_cc_aocc_ccbr_nolea_daepc_screen_2gpu
+  algorithm: V64.3.5 CCBR full-candidate factorized literal-boundary acquisition + DA-EPC (no LEA)
   warm_start_recommended: use V62 only for rapid continuation diagnosis; use the immutable V53 foundation with matched compute
     for final paper results
   calibration_protocol: group-disjoint split-conformal evidence/residual calibration with calibration beta and prior-radius
     copied exactly into deployment certificate
-  proposal_training_protocol: frozen legacy HAB anchor plus zero-initialized frontier-pair conditioned critical acquisition
-    residual; hard forward remains deterministic HAB Top-M and literal teacher winner-flip criticality; fixed B unchanged
-  interface_budget_accounting: retained certificate uses exactly B evidence atoms; acquisition M and pair-score compute are
-    reported separately and are not hidden as B*K
+  proposal_training_protocol: frozen legacy HAB anchor plus zero-initialized O(EK) complete-candidate boundary-routing residual;
+    hard forward remains deterministic HAB Top-M, exact literal winner-flip criticality, fixed M/B unchanged
+  interface_budget_accounting: retained certificate uses exactly B=16 evidence atoms; CCBR reuses already-computed candidate
+    embeddings/J0 and adds no atom-action evidence query; acquisition M and cheap O(EK) routing compute are reported separately
 metadata:
-  algorithm_version: V64.3.4-CC-AOCC-FPCCA-LBA-DA-EPC
+  algorithm_version: V64.3.5-CC-AOCC-CCBR-DA-EPC
   fixed_planner_interface_evidence_budget: 16
   query_contract: legacy_12d_prefix_plus_zero_init_residual_extension
   screening_only: true
@@ -747,5 +749,5 @@ checkpoint_loading:
   - residual_set_action_head.
   - residual_set_atom_head.
 provenance:
-  algorithm_version: V64.3.4-CC-AOCC-FPCCA-LBA-DA-EPC
+  algorithm_version: V64.3.5-CC-AOCC-CCBR-DA-EPC
   screening_only: true

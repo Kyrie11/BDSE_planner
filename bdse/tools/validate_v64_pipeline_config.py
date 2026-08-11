@@ -31,6 +31,7 @@ V64_3_PREFIXES = (
     "v64_3_4_cc_aocc_mrbcca",
     "v64_3_4_cc_aocc_fpcca",
     "v64_3_4_cc_aocc_apwrcca",
+    "v64_3_5_cc_aocc_ccbr",
 )
 V64_3_ALGORITHM_VERSIONS = {
     "V64.3-CC-AOCC-AP-WCCA",
@@ -46,6 +47,8 @@ V64_3_ALGORITHM_VERSIONS = {
     "V64.3.4-CC-AOCC-FPCCA-DA-EPC",
     "V64.3.4-CC-AOCC-FPCCA-LBA-DA-EPC",
     "V64.3.4-CC-AOCC-AP-WRCCA-LCV-DA-EPC",
+    "V64.3.5-CC-AOCC-CCBR-DA-EPC",
+    "V64.3.5-CC-AOCC-CCBR-LEA-DA-EPC",
 }
 V64_3_REQUIRED_TRAINABLE = {
     "critical_proposal_adapter",
@@ -109,7 +112,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
             }
         )
 
-    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64_3"}
+    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64_3"}
     if strict_v64_3:
         trainable = {str(x) for x in training_cfg.get("trainable_modules", [])}
         checks.update(
@@ -129,6 +132,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
                     "frozen_base_winner_rival_actions",
                     "frozen_base_multi_rival_frontier",
                     "frozen_base_frontier_pair_set",
+                    "complete_candidate_boundary_routing",
                 },
                 "v64_3_decision_aligned_exact_certificate": str(
                     (cfg.get("selector", {}) or {}).get("evidence_certificate_mode", "")
@@ -164,6 +168,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
         "frontier_size": int(critical_adapter.get("frontier_size", 0)),
         "frontier_action_count": int(critical_adapter.get("frontier_action_count", 0)),
         "frontier_gap_bias_scale": float(critical_adapter.get("frontier_gap_bias_scale", 0.0)),
+        "endpoint_cost_bias_scale": float(critical_adapter.get("endpoint_cost_bias_scale", 0.0)),
     }
     failures = [name for name, ok in checks.items() if not ok]
     return {
@@ -187,7 +192,7 @@ def main() -> int:
     ap.add_argument("--eval-config", type=Path, required=True)
     ap.add_argument(
         "--expected-family",
-        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64_3"],
+        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64_3"],
         default="v64",
         help="Use v64.3+ to reject any stale V64.2 config even if generic V64 checks pass.",
     )
@@ -200,7 +205,7 @@ def main() -> int:
         "train": _check(args.train_config, "train", args.expected_family),
         "eval": _check(args.eval_config, "eval", args.expected_family),
     }
-    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64_3"}
+    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64_3"}
     train_cond = report["train"].get("critical_proposal_conditioning", "")
     eval_cond = report["eval"].get("critical_proposal_conditioning", "")
     train_signature = report["train"].get("critical_proposal_signature", {})

@@ -231,6 +231,125 @@ class _FrontierPairCriticalProposalAdapter(nn.Module):
         return residual, masked_attention
 
 
+class _CompleteCandidateBoundaryRouter(nn.Module):
+    """Factorized full-candidate routing for literal decision boundaries.
+
+    FPCCA can supervise a literal winner/flip boundary only when both endpoints
+    happen to lie in a small foundation top-F frontier.  V64.3.5 removes that
+    representation ceiling without constructing O(K^2) pair tokens: every atom
+    independently routes to two endpoints over the already-available K action
+    embeddings, then composes the routed endpoints into a boundary token.
+
+    This is still a *cheap acquisition representation*: it does not evaluate any
+    extra atom-action evidence query and therefore does not change B, M, or the
+    planner-interface query budget.  The final residual projection is zero
+    initialized, preserving the immutable HAB anchor exactly at step zero.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        rank: int,
+        *,
+        zero_init: bool = True,
+        cost_bias_scale: float = 0.15,
+    ) -> None:
+        super().__init__()
+        h = int(hidden_dim)
+        r = int(rank)
+        self.cost_bias_scale = float(cost_bias_scale)
+        self.atom_proj = nn.Sequential(
+            nn.LayerNorm(h * 5),
+            nn.Linear(h * 5, r),
+            nn.SiLU(),
+        )
+        # Two deployment-available scalars are appended to each action token:
+        # robust normalized J0 cost and normalized J0 rank.
+        self.action_proj = nn.Sequential(
+            nn.LayerNorm(h + 2),
+            nn.Linear(h + 2, r),
+            nn.SiLU(),
+        )
+        self.winner_query = nn.Linear(r, r, bias=False)
+        self.flip_query = nn.Linear(r, r, bias=False)
+        self.action_key = nn.Linear(r, r, bias=False)
+        self.action_value = nn.Linear(r, r, bias=False)
+        self.boundary_proj = nn.Sequential(
+            nn.LayerNorm(r * 4),
+            nn.Linear(r * 4, r),
+            nn.SiLU(),
+        )
+        self.residual_head = nn.Sequential(
+            nn.LayerNorm(r * 2),
+            nn.Linear(r * 2, r),
+            nn.SiLU(),
+            nn.Linear(r, 1),
+        )
+        if bool(zero_init):
+            nn.init.zeros_(self.residual_head[-1].weight)
+            nn.init.zeros_(self.residual_head[-1].bias)
+
+    @staticmethod
+    def _masked_attention(
+        logits: torch.Tensor, valid: torch.Tensor, values: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        neg = -1.0e4 if logits.dtype in (torch.float16, torch.bfloat16) else -1.0e9
+        masked = logits.masked_fill(~valid[:, None, :], neg)
+        weights = torch.softmax(masked.float(), dim=-1).to(dtype=logits.dtype)
+        weights = weights * valid[:, None, :].to(dtype=weights.dtype)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
+        return torch.matmul(weights, values), masked
+
+    def forward(
+        self,
+        atom_tokens: torch.Tensor,
+        action_h: torch.Tensor,
+        action_valid: torch.Tensor,
+        action_cost_normalized: torch.Tensor,
+        action_rank_normalized: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, E, _ = atom_tokens.shape
+        K = int(action_h.shape[1])
+        if K <= 0:
+            empty = atom_tokens.new_zeros((B, E, 0))
+            return atom_tokens.new_zeros((B, E)), empty, empty
+
+        action_input = torch.cat(
+            [
+                action_h,
+                action_cost_normalized.to(dtype=action_h.dtype)[..., None],
+                action_rank_normalized.to(dtype=action_h.dtype)[..., None],
+            ],
+            dim=-1,
+        )
+        atom = self.atom_proj(atom_tokens)
+        action = self.action_proj(action_input)
+        keys = self.action_key(action)
+        values = self.action_value(action)
+        scale = max(float(atom.shape[-1]), 1.0) ** -0.5
+        winner_logits = torch.matmul(self.winner_query(atom), keys.transpose(1, 2)) * scale
+        flip_logits = torch.matmul(self.flip_query(atom), keys.transpose(1, 2)) * scale
+        # A weak deployment prior favors low-J0 endpoints while remaining fully
+        # learnable and, crucially, never removes any valid candidate from support.
+        bias = self.cost_bias_scale * action_cost_normalized.clamp(min=-4.0, max=4.0)
+        winner_logits = winner_logits - bias[:, None, :]
+        flip_logits = flip_logits - 0.5 * bias[:, None, :]
+        winner_ctx, winner_masked = self._masked_attention(
+            winner_logits, action_valid.bool(), values
+        )
+        flip_ctx, flip_masked = self._masked_attention(
+            flip_logits, action_valid.bool(), values
+        )
+        boundary = self.boundary_proj(
+            torch.cat(
+                [winner_ctx, flip_ctx, flip_ctx - winner_ctx, winner_ctx * flip_ctx],
+                dim=-1,
+            )
+        )
+        residual = self.residual_head(torch.cat([atom, boundary], dim=-1)).squeeze(-1)
+        return residual, winner_masked, flip_masked
+
+
 def _confidence_shrunk_residual_pair_delta_np(
     local: np.ndarray,
     residual: np.ndarray,
@@ -638,6 +757,17 @@ class BDSEModel(nn.Module):
         if bool(crit_prop_cfg.get("enabled", False)):
             critical_rank = min(max(int(crit_prop_cfg.get("rank", min(64, h))), 1), h)
             if self.critical_proposal_conditioning in {
+                "complete_candidate_boundary_routing",
+                "full_candidate_endpoint_routing",
+                "ccbr",
+            }:
+                self.critical_proposal_adapter = _CompleteCandidateBoundaryRouter(
+                    h,
+                    critical_rank,
+                    zero_init=bool(crit_prop_cfg.get("zero_init", True)),
+                    cost_bias_scale=float(crit_prop_cfg.get("endpoint_cost_bias_scale", 0.15)),
+                )
+            elif self.critical_proposal_conditioning in {
                 "frozen_base_frontier_pair_set",
                 "frontier_pair_set",
                 "fpcca",
@@ -894,6 +1024,8 @@ class BDSEModel(nn.Module):
         critical_proposal_residual = torch.zeros_like(proposal_base_logits)
         critical_boundary_attention_logits = proposal_base_logits.new_zeros((B, E, 0))
         critical_boundary_pair_indices = torch.empty((B, 0, 2), dtype=torch.long, device=traj.device)
+        critical_winner_endpoint_logits = proposal_base_logits.new_zeros((B, E, 0))
+        critical_flip_endpoint_logits = proposal_base_logits.new_zeros((B, E, 0))
         if self.critical_proposal_adapter is not None:
             # Winner conditioning deliberately uses the base/foundation action,
             # not teacher labels or a dense evidence winner.  Deployment therefore
@@ -906,6 +1038,39 @@ class BDSEModel(nn.Module):
             winner_e = winner_h[:, None, :].expand(B, E, -1)
             adapter_tokens = [evid_h, prop_h, scene_e, u_e, atom_family_h, winner_e]
             if self.critical_proposal_conditioning in {
+                "complete_candidate_boundary_routing",
+                "full_candidate_endpoint_routing",
+                "ccbr",
+            }:
+                # V64.3.5 Complete-Candidate Boundary Routing (CCBR).  Unlike
+                # FPCCA, support is all valid candidate endpoints.  Complexity is
+                # O(EK) rather than O(EK^2), and no expensive atom-action query is
+                # added: action_h/J0 are already computed for the frozen anchor.
+                routing_valid = valid & torch.isfinite(J0)
+                safe_cost = J0.float().masked_fill(~routing_valid, float("inf"))
+                finite_cost = torch.where(routing_valid, safe_cost, torch.zeros_like(safe_cost))
+                count = routing_valid.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+                mean = finite_cost.sum(dim=1, keepdim=True) / count
+                centered = torch.where(valid, safe_cost - mean, torch.zeros_like(safe_cost))
+                scale_cost = (centered.abs().sum(dim=1, keepdim=True) / count).detach().clamp_min(1.0e-3)
+                cost_normalized = torch.where(
+                    routing_valid, (safe_cost - mean) / scale_cost, torch.zeros_like(safe_cost)
+                ).clamp(min=-4.0, max=4.0)
+                order = torch.argsort(safe_cost, dim=1, stable=True)
+                rank = torch.empty_like(order)
+                rank_values = torch.arange(K, device=traj.device, dtype=order.dtype)[None, :].expand(B, -1)
+                rank.scatter_(1, order, rank_values)
+                rank_normalized = rank.float() / max(float(K - 1), 1.0)
+                critical_proposal_residual, critical_winner_endpoint_logits, critical_flip_endpoint_logits = (
+                    self.critical_proposal_adapter(
+                        torch.cat([evid_h, prop_h, scene_e, u_e, atom_family_h], dim=-1),
+                        action_h,
+                        routing_valid,
+                        cost_normalized,
+                        rank_normalized,
+                    )
+                )
+            elif self.critical_proposal_conditioning in {
                 "frozen_base_frontier_pair_set",
                 "frontier_pair_set",
                 "fpcca",
@@ -1065,6 +1230,8 @@ class BDSEModel(nn.Module):
             "critical_proposal_residual_logits": critical_proposal_residual,
             "critical_boundary_attention_logits": critical_boundary_attention_logits,
             "critical_boundary_pair_indices": critical_boundary_pair_indices,
+            "critical_winner_endpoint_logits": critical_winner_endpoint_logits,
+            "critical_flip_endpoint_logits": critical_flip_endpoint_logits,
             "family_logits": family_logits,
             "family_pi": family_pi,
             "family_active": family_active,
@@ -1458,6 +1625,12 @@ class BDSEModel(nn.Module):
             "critical_boundary_pair_indices": ctx.get(
                 "critical_boundary_pair_indices",
                 torch.empty((B, 0, 2), dtype=torch.long, device=J0.device),
+            ),
+            "critical_winner_endpoint_logits": ctx.get(
+                "critical_winner_endpoint_logits", J0.new_zeros((B, E, 0))
+            ),
+            "critical_flip_endpoint_logits": ctx.get(
+                "critical_flip_endpoint_logits", J0.new_zeros((B, E, 0))
             ),
             "family_logits": ctx["family_logits"],
             "family_pi": ctx["family_pi"],

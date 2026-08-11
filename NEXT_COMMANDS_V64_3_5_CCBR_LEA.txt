@@ -1,0 +1,50 @@
+# V64.3.5 CCBR + LEA next commands (2 GPUs)
+# Required: use the SAME immutable matched foundation checkpoint used for causal comparison.
+
+cd /path/to/bdse_v64_3_5_ccbr_lea
+
+export FOUNDATION_CKPT=/absolute/path/to/immutable_matched_foundation_checkpoint.pt
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+
+export GPUS=0,1
+export BATCH_SIZE_PER_GPU=16
+export NUM_WORKERS_PER_GPU=12
+export VAL_NUM_WORKERS_PER_GPU=4
+export PREFETCH_FACTOR=2
+
+# Phase 1: only two causal acquisition screens. No AP-WCCA/AP-WRCCA/FPCCA reruns.
+bash RUN_V64_3_5_CCBR_SCREEN_MATRIX_2GPU.sh
+
+# Inspect:
+cat outputs_v64_3_5_ccbr_screen_matrix_2gpu_v1/acquisition_screen_comparison.json
+cat outputs_v64_3_5_ccbr_screen_matrix_2gpu_v1/ccbr_lea/provenance/critical_acquisition_screen.json
+
+# Important new diagnostic in validation rows/report:
+#   val_teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall
+# Interpretation:
+#   >=0.90: frozen family slots are not the main acquisition ceiling.
+#   <0.90 : only then consider ONE zero-init boundary-aware family-residual screen.
+# CCBR+LEA endpoint_representable_fraction should be >0.95; otherwise treat as engineering/config failure.
+
+# Optional automatic promotion to full pipeline. The script runs full only when a screen passes
+# the >=+1pp critical Top-M gate and safeguards; full wrapper also requires explicit foundation.
+AUTO_RUN_FULL=1 bash RUN_V64_3_5_CCBR_SCREEN_MATRIX_2GPU.sh
+
+# Or run manually after promotion (example for LEA):
+export PROMOTED_SCREEN_REPORT=$PWD/outputs_v64_3_5_ccbr_screen_matrix_2gpu_v1/acquisition_screen_comparison.json
+bash RUN_V64_3_5_CCBR_LEA_FULL_PIPELINE_2GPU.sh
+
+# Do NOT:
+# - increase B or M;
+# - relax DA-EPC/certificate thresholds;
+# - rerun AP-WCCA/AP-WRCCA binary, FPCCA F6/F8, beam/swap/repair, full proposal/family unfreeze;
+# - blindly increase critical/proposal loss weights;
+# - allow a full run to auto-rebuild a fresh foundation.
+#
+# Decision after V64.3.5:
+# 1) Top-M unchanged + family oracle high -> stop acquisition architecture changes; audit critical-label feature separability.
+# 2) Top-M improves, selected does not -> selector/family/exchange bridge diagnosis.
+# 3) Top-M + selected improve, teacher/pair-full action match flat -> move to explicit literal/decisive pair-boundary VALUE modeling.
+# 4) open-loop improves, CL20 flat -> interactive prediction/candidate dynamics/replanning.

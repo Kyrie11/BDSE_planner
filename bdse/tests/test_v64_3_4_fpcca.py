@@ -123,7 +123,7 @@ def test_literal_boundary_attribution_uses_only_exact_flip_pair() -> None:
         critical_boundary_pair_indices=pair_indices,
         return_adapter_diagnostic=True,
     )
-    loss, recall, critical_fraction, scene_fraction, aligned_fraction, acra, lba, representable = result
+    loss, recall, critical_fraction, scene_fraction, aligned_fraction, acra, lba, representable, endpoint_loss, endpoint_rep = result
     assert torch.isfinite(loss)
     assert float(recall) == 1.0
     assert float(critical_fraction) == 0.5
@@ -132,6 +132,8 @@ def test_literal_boundary_attribution_uses_only_exact_flip_pair() -> None:
     assert float(acra) == 0.0
     assert float(lba) > 0.0
     assert float(representable) == 1.0
+    assert float(endpoint_loss) == 0.0
+    assert float(endpoint_rep) == 0.0
 
 
 def test_v64_3_4_fpcca_train_and_eval_contracts_pass() -> None:

@@ -5,8 +5,8 @@ calibration:
 evidence:
   budget: 16
 fallback:
-  enabled: false
-  max_additional_stages: 0
+  enabled: true
+  max_additional_stages: 1
   rule_rerank_top_k: 16
   rule_switch_margin: 0.0
   safety_lcb_min: 0.0
@@ -72,6 +72,13 @@ fallback:
       absolute_agent_overlap_cap: 0.02
       relative_ttc_slack_s: 0.35
       certificate_guard_epsilon_norm: 0.35
+  trigger_on_uncertified_aocc: true
+  min_aocc_certified_pair_fraction: 0.5
+  rival_stages:
+  - 24
+  budget_stages:
+  - 16
+  proposal_multiplier: 4.0
 runtime_safety:
   flag_mode: adaptive_dual_tier
   soft_agent_radius_m: 1.75
@@ -144,9 +151,8 @@ model:
     zero_init: true
     scale: 1.0
     rank: 64
-    frontier_gap_bias_scale: 0.25
-    conditioning: frozen_base_frontier_pair_set
-    frontier_action_count: 6
+    conditioning: complete_candidate_boundary_routing
+    endpoint_cost_bias_scale: 0.15
 pairs:
   pair_batch_per_scene: 128
   target_max: 128
@@ -225,6 +231,7 @@ runtime:
     flip_margin: 0.015
     allow_confident_flips: true
     confident_flip_cap_ratio: 2.0
+  disable_pair_residual_intervention: true
   pair_tournament_anchor_mode: selected_local
   pair_tournament_pair_delta_includes_local: true
   pair_action_anchor_guard:
@@ -247,10 +254,9 @@ runtime:
     report_proposal_conditional_rates: true
     residual_beta_uncertainty: 0.0
     calibration_method: policy_selected_top_rival_split_conformal
-  disable_pair_residual_intervention: false
   set_conditioned_residual_scale: 1.0
   action_query_mode: all_valid
-  dense_query_feature_source: runtime_recompute
+  dense_query_feature_source: cache
   dense_query_value_tolerance: 1.0e-05
   dense_query_cache_tolerance: 1.0e-05
   dense_base_value_tolerance: 1.0e-05
@@ -391,13 +397,13 @@ training:
   compute_local_variance: false
   freeze_unused_local_variance_head: true
   ddp_find_unused_parameters: false
-  local_forward_atom_chunk: 128
-  pair_forward_atom_chunk: 32
-  pair_forward_pair_chunk: 128
-  query_projection_atom_chunk: 128
+  local_forward_atom_chunk: 64
+  pair_forward_atom_chunk: 16
+  pair_forward_pair_chunk: 64
+  query_projection_atom_chunk: 64
   action_loss_start_epoch: 0
   decision_weight_hard_crossing_pair: 2.0
-  decision_weight_near_margin: 0.8
+  decision_weight_near_margin: 0.2
   decision_weight_near_pair: 4.0
   decision_weight_safety_pairs: true
   decision_weight_teacher_pair: 6.0
@@ -414,60 +420,39 @@ training:
     full_margin: 0.0
     hard_feasibility: 0.0
     pair: 0.0
-    proposal: 1.5
+    proposal: 3.0
     residual: 0.0
     uncertainty: 0.0
     critical_pair: 0.0
     critical_proposal: 0.0
-    certificate_gap: 2.0
-    certificate_safety: 2.0
-    certificate_safe_frontier: 1.5
-    deployment_selection: 5.0
+    certificate_gap: 4.0
+    certificate_safety: 3.5
+    certificate_safe_frontier: 2.5
+    deployment_selection: 6.0
     online_hard_rival: 0.0
-    cycle_consistency: 0.0
-    calibration: 1.0
     counterfactual_critical_pair: 0.0
-    counterfactual_critical_proposal: 2.0
+    counterfactual_critical_proposal: 4.0
     anchor_preservation: 0.0
     anchor_correction: 0.0
+    pair_potential_projection: 0.0
+    cycle_consistency: 0.0
     pair_full_action: 12.0
     pair_full_winner_margin: 10.0
     budget_preserve_pair_full: 8.0
     pair_full_anchor_preserve: 8.0
-    pair_potential_projection: 0.0
     action_potential_teacher: 4.0
     residual_action_atom: 1.0
-    residual_action_uncertainty: 1.0
-    residual_winner_correction: 12.0
     certified_residual_winner: 16.0
     residual_boundary_margin_distill: 24.0
-    proposal_dense_winner: 6.0
-    proposal_logit_stability: 0.1
-    exact_winner_flip_critical_proposal: 12.0
-  residual_action_uncertainty:
-    variance_floor: 1.0e-05
-    variance_cap: 25.0
-    log_variance_huber_delta: 0.25
-  residual_winner_correction:
-    correction_margin: 0.04
-    preserve_margin: 0.025
-    tau: 0.04
-    anchor_wrong_scene_weight: 4.0
-  residual_action_atom_distillation:
-    target_clip: 4.0
-    huber_delta: 0.15
-    winner_weight: 8.0
-    anchor_action_weight: 4.0
-    anchor_wrong_scene_weight: 2.0
-    interaction_weight: 2.0
-    magnitude_weight: 1.0
+    proposal_dense_winner: 0.0
+    exact_winner_flip_critical_proposal: 8.0
   normalize_atom_cost_loss: true
   normalize_calibration_loss: true
   normalize_pair_losses: true
   normalized_huber_delta: 0.25
   pair_action_loss_weight: 3.0
   pair_margin_min_scale: 20000.0
-  predicted_selector_start_epoch: 0
+  predicted_selector_start_epoch: 1
   proposal_decisive_hard_gain_boost: 3.0
   proposal_decisive_hard_weight: 2.2
   proposal_focus_interaction_only: false
@@ -481,21 +466,12 @@ training:
   residual_target_clip_normalized: 4.0
   full_pair_margin_clip_normalized: 4.0
   pair_margin_reg_weight: 2.0
-  epochs: 4
-  batch_size: 16
-  lr: 1.7e-05
+  epochs: 12
+  batch_size: 8
+  lr: 6.0e-06
   weight_decay: 0.01
   grad_clip: 1.0
-  num_workers: 8
-  online_hard_rival:
-    top_k: 4
-    margin: 0.1
-    tau: 0.1
-  cycle_consistency:
-    max_triangles_per_scene: 32
-    huber_delta: 0.15
-    every_n_steps: 8
-    full_last_n_steps: 32
+  num_workers: 4
   critical_evidence:
     enabled: false
     interaction_only: false
@@ -529,71 +505,30 @@ training:
   deployment_regret_clip: 3.0
   deployment_regret_min_scale: 100.0
   allow_oracle_only_selector_training: false
-  compute_pair_uncertainty: false
-  freeze_unused_pair_variance_head: true
-  deployment_budget_strategy: primary_plus_aux
-  deployment_budget_schedule_slots: 8
-  deployment_selector_swap_passes: 0
-  prefetch_factor: 3
-  pin_memory: true
-  deployment_selector_scenes_per_rank: 1
-  deployment_selector_every_n_steps: 4
-  deployment_selector_full_start_epoch: 1000000
-  allow_tf32: true
-  ddp_broadcast_buffers: false
-  ddp_gradient_as_bucket_view: true
-  deployment_selector_full_last_n_steps: 48
-  deployment_selection_positive_weight: 5.0
-  deployment_primary_budget: 16
-  min_deployment_exact_fraction: 0.015
   normalize_base_loss: true
-  base_loss_min_scale: 100.0
-  base_target_clip_normalized: 4.0
-  deployment_selector_backend: exact_cpu
-  deployment_exact_distill_scenes_per_rank: 0
-  deployment_exact_distill_every_n_steps: 1
-  deployment_exact_distill_full_last_n_steps: 0
   aocc_teacher_target_training: false
   counterfactual_critical_evidence:
-    top_k_rivals: 4
-    rival_temperature: 0.1
-    atom_temperature: 0.15
-    proposal_temperature: 0.25
+    top_k_rivals: 3
+    rival_temperature: 0.12
+    atom_temperature: 0.2
+    proposal_temperature: 0.35
     cost_power: 1.0
-    min_gain: 1.0e-06
-    boundary_margin: 0.08
+    min_gain: 1.0e-05
     positive_support_floor: 0.0
-    teacher_rival_mix: 0.65
     target_top_k_atoms: 8
     min_relative_gain: 0.05
+    teacher_rival_mix: 0.65
   early_stopping_patience_validations: 2
-  early_stopping_min_epoch: 5
+  early_stopping_min_epoch: 4
   residual_correction_focus:
     enabled: true
-    default_weight: 0.05
-    wrong_sign_weight: 5.0
-    near_boundary_weight: 2.5
+    default_weight: 0.1
+    wrong_sign_weight: 4.0
+    near_boundary_weight: 2.0
     boundary_tau: 0.35
-    max_weight: 7.0
-  deployment_selector_cpu_threads: 4
-  deployment_selector_cpu_workers: 4
-  deployment_selector_cpu_backend: process
-  optimizer_fused: true
-  grad_clip_foreach: true
-  ddp_static_graph: false
-  trainable_modules:
-  - critical_proposal_adapter
-  - residual_action_head
-  - residual_action_var_head
-  - residual_set_atom_head
-  - residual_set_action_head
-  reinitialize_modules_after_warm_start:
-  - residual_action_head
-  - residual_action_var_head
-  - residual_set_atom_head
-  - residual_set_action_head
+    max_weight: 6.0
   foundation_anchor_objective:
-    enabled: true
+    enabled: false
     boundary_tau: 0.35
     preserve_ratio: 0.95
     preserve_min_margin: 0.03
@@ -602,31 +537,20 @@ training:
     far_preserve_weight: 1.0
     wrong_weight: 5.0
     near_weight: 2.5
-  boundary_pair_sampler:
-    enabled: true
-    max_pairs: 48
-    full_every_n_steps: 8
-    full_last_n_steps: 32
-    winner_bonus: 16.0
-    hard_cross_bonus: 10.0
-    near_tie_bonus: 6.0
-    pair_weight_bonus: 3.0
-    near_tie_tau: 0.5
-    min_margin_scale: 1.0
-    winner_quota: 12
-    hard_cross_quota: 8
-    near_tie_quota: 20
-  foundation_stage: v64_support_aware_query_adapter_budgeted_critical_coverage
-  deployment_aux_every_n_exact_steps: 4
-  pair_full_winner_margin: 0.08
-  pair_full_winner_tau: 0.08
-  pair_full_regret_weight: 1.0
-  warm_start_safe_initialization:
-    enabled: true
-    pair_variance_raw_bias: 0.0
-    residual_action_variance_raw_bias: -6.0
-    set_action_factor_init_std: 0.01
-  anchor_wrong_action_weight: 1.5
+  reinitialize_modules_after_warm_start:
+  - residual_action_head
+  - residual_action_var_head
+  - residual_set_atom_head
+  - residual_set_action_head
+  trainable_modules:
+  - residual_action_head
+  - proposal_feature_proj
+  - family_embed
+  - family_activity_proj
+  - family_head
+  - proposal_head
+  - residual_set_atom_head
+  - residual_set_action_head
   pair_action_aggregation_mode: evidence_action_potential
   pair_potential_projection:
     ridge: 0.02
@@ -635,6 +559,8 @@ training:
     weight_floor: 0.05
   potential_action_min_scale: 1.0
   aocc_integrable_target_training: true
+  min_deployment_exact_fraction: 0.015
+  foundation_stage: v63_deployment_consistent_query_contract_teacher_flip_criticality_ranking
   action_potential_distillation:
     target_clip: 4.0
     boundary_tau: 0.3
@@ -642,31 +568,27 @@ training:
     winner_weight: 8.0
     strongest_rival_weight: 5.0
     anchor_wrong_weight: 3.0
-    huber_delta: 0.1
+    huber_delta: 0.12
   skip_pair_head_forward: true
-  lr_multipliers:
-    critical_proposal_adapter: 2.0
-    residual_action_head: 5.0
-    residual_action_var_head: 2.0
-    residual_set_atom_head: 5.0
-    residual_set_action_head: 5.0
-  certified_residual_winner:
-    min_teacher_margin: 0.01
-    flip_margin: 0.015
-    preserve_margin: 0.012
-    tau: 0.04
-    beta_uncertainty: 0.0
-    anchor_wrong_weight: 4.0
-    correctable_bonus: 2.0
-    train_uncorrectable_anchor_wrong: false
-    residual_epsilon_reserve: 0.15
+  compute_pair_uncertainty: false
+  freeze_unused_pair_variance_head: true
+  warm_start_safe_initialization:
+    enabled: true
+    residual_action_variance_raw_bias: -6.0
+    set_action_factor_init_std: 0.01
   set_conditioned_residual_scale: 1.0
   residual_boundary_margin_distill:
     huber_delta: 0.05
     target_clip: 1.5
     teacher_margin_weight: 2.0
+  certified_residual_winner:
+    residual_epsilon_reserve: 0.15
+    beta_uncertainty: 0.0
+  lr_multipliers:
+    residual_set_atom_head: 5.0
+    residual_set_action_head: 5.0
   proposal_dense_winner:
-    enabled: true
+    enabled: false
     top_m: 24
     straight_through_tau: 0.15
     teacher_aligned_weight: 5.0
@@ -674,69 +596,36 @@ training:
     margin_tau: 0.05
     margin_weight: 1.5
     min_action_scale: 1.0
-    mode: deployment_complete_hab_all_valid_actions_exact_sampled
-    family_surrogate_weight: 1.0
-    exact_runtime_scenes_per_rank: 2
-    exact_runtime_every_n_steps: 2
-    exact_runtime_full_last_n_steps: 32
-    logit_center_limit: 2.0
-    logit_rms_limit: 8.0
   residual_curriculum:
-    enabled: true
-    proposal_only_epochs: 1
-    ramp_epochs: 2
+    enabled: false
+    proposal_only_epochs: 2
+    ramp_epochs: 4
     initial_scale: 0.1
-  residual_stage_routing:
-    enabled: true
-    proposal_failure_residual_weight: 0.1
-    intrinsic_correction_weight: 1.0
   warm_start_safe_init:
     set_atom_factor_init_std: 0.005
     set_action_factor_init_std: 0.01
   exact_winner_flip_criticality:
-    enabled: true
-    positive_weight: 16.0
-    negative_weight: 0.25
-    rank_weight: 1.0
-    severity_weight: 1.0
-    teacher_aligned_weight: 6.0
-    min_action_scale: 1.0
-    min_atom_cost: 0.001
     target_source: teacher_interface
-    pairwise_rank_weight: 0.1
+    positive_weight: 16.0
+    teacher_aligned_weight: 6.0
+    pairwise_rank_weight: 1.0
     rank_margin: 1.0
-    coverage_weight: 4.0
-    exchange_rank_weight: 2.0
-    exchange_margin: 0.15
-    exchange_temperature: 0.2
-    coverage_objective: teacher_critical_utility_retained_by_exact_hab_topm_forward
     adapter_objective: frontier-pair conditioned residual over immutable legacy HAB proposal anchor
-    adapter_residual_alignment_weight: 0.25
-    adapter_residual_target_scale: 1.0
-    adapter_residual_target_mode: literal_binary
-    adapter_residual_huber_delta: 0.25
-    adapter_residual_positive_weight: 8.0
-    boundary_attribution_weight: 0.25
-    boundary_attribution_severity_weight: 1.0
-    boundary_attribution_objective: literal winner-flip (winner, leave-one-out flip-target) pair attribution within deployment
-      base frontier
-  eval_frozen_modules: true
 experiment:
-  name: v64_3_4_cc_aocc_fpcca_lba_daepc_screen_2gpu
-  algorithm: V64.3.4 FPCCA frontier-pair conditioned acquisition + LBA + DA-EPC screening
-  warm_start_recommended: use V62 only for rapid continuation diagnosis; use the immutable V53 foundation with matched compute
-    for final paper results
-  calibration_protocol: group-disjoint split-conformal evidence/residual calibration with calibration beta and prior-radius
-    copied exactly into deployment certificate
-  proposal_training_protocol: frozen legacy HAB anchor plus zero-initialized frontier-pair conditioned critical acquisition
-    residual; hard forward remains deterministic HAB Top-M and literal teacher winner-flip criticality; fixed B unchanged
+  name: v64_3_5_cc_aocc_ccbr_anchor_control_cl
+  algorithm: V64.3.5 CCBR matched control configuration
+  calibration_protocol: group-disjoint split-conformal with calibration beta/prior-radius copied exactly into deployment AOCC
+  evaluation_role: foundation_control
+  proposal_training_protocol: fixed-budget deterministic HAB forward with auditable atoms, teacher-interface literal leave-one-out
+    winner-flip labels, a differentiable teacher-critical coverage objective, and a zero-initialized residual adapter for
+    query channels outside the checkpoint-supported 12-D prefix
   interface_budget_accounting: retained certificate uses exactly B evidence atoms; acquisition M and pair-score compute are
     reported separately and are not hidden as B*K
 metadata:
-  algorithm_version: V64.3.4-CC-AOCC-FPCCA-LBA-DA-EPC
+  algorithm_version: V64.3.5-CC-AOCC-CCBR-LEA-DA-EPC
   fixed_planner_interface_evidence_budget: 16
   query_contract: legacy_12d_prefix_plus_zero_init_residual_extension
-  screening_only: true
+  immutable_anchor_mode: legacy_supported_prefix_only_extension_zeroed
 checkpoint_loading:
   strict_core: true
   allowed_missing_prefixes:
@@ -747,5 +636,4 @@ checkpoint_loading:
   - residual_set_action_head.
   - residual_set_atom_head.
 provenance:
-  algorithm_version: V64.3.4-CC-AOCC-FPCCA-LBA-DA-EPC
-  screening_only: true
+  algorithm_version: V64.3.5-CC-AOCC-CCBR-LEA-DA-EPC

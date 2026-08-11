@@ -15,6 +15,7 @@ from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import OnlineMetricMean, compute_bdse_diagnostics
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
+from bdse.planner.hab import select_topm_atoms_hab
 from bdse.planner.tournament import full_interface_action, run_pair_conditioned_tournament
 from bdse.utils import configure_torch_for_device, resolve_torch_device
 from bdse.external_baselines.model_factory import load_model_for_config
@@ -195,6 +196,62 @@ def _criticality_metrics(
     details[f"{prefix}_critical_topm_hit_count"] = topm_hits
     details[f"{prefix}_critical_selected_hit_count"] = selected_hits
     return values, details
+
+
+def _frozen_family_slot_oracle_critical_recall(
+    teacher_base: np.ndarray,
+    teacher_g: np.ndarray,
+    active_atoms: np.ndarray,
+    valid_actions: np.ndarray,
+    teacher_action: int,
+    pred: dict[str, object],
+    sample,
+    cfg: dict[str, object],
+) -> float:
+    """Upper-bound literal-critical Top-M recall with family allocation frozen.
+
+    Critical atoms receive an oracle-dominant score while the runtime family
+    logits, family ids, M and fixed B remain unchanged.  A low value means an
+    atom-level residual cannot solve acquisition by itself because the frozen
+    family slot allocation blocks admission.  A high value isolates the failure
+    to atom ranking/representation instead.  This is diagnostic only.
+    """
+    base=np.asarray(teacher_base,dtype=np.float32).reshape(-1)
+    atom=np.asarray(teacher_g,dtype=np.float32)
+    active=_align_bool_mask(active_atoms,atom.shape[0])
+    valid=_align_bool_mask(valid_actions,base.shape[0])
+    dense=base+np.where(active[:,None],atom,0.0).sum(axis=0)
+    dense=np.where(valid,dense,np.inf)
+    if not np.isfinite(dense).any() or int(np.nanargmin(dense))!=int(teacher_action):
+        return float('nan')
+    loo=dense[None,:]-np.where(active[:,None],atom,0.0)
+    loo[:,~valid]=np.inf
+    critical=active & (np.nanargmin(loo,axis=1)!=int(teacher_action))
+    n=int(critical.sum())
+    if n==0:
+        return float('nan')
+    E=atom.shape[0]
+    fam=np.asarray(pred.get('family_ids',np.zeros((E,),dtype=np.int64)),dtype=np.int64).reshape(-1)
+    if fam.shape[0]<E: fam=np.pad(fam,(0,E-fam.shape[0]))
+    fam=fam[:E]
+    fs=np.asarray(pred.get('family_logits',[]),dtype=np.float32).reshape(-1)
+    costs=np.asarray(sample.evidence_bank.budget_costs(),dtype=np.float32).reshape(-1)
+    if costs.shape[0]<E: costs=np.pad(costs,(0,E-costs.shape[0]),constant_values=np.inf)
+    costs=costs[:E]
+    oracle_logits=np.where(active,critical.astype(np.float32)*1000.0,-1.0e9)
+    selector=cfg.get('selector',{}) or {}
+    B=float((cfg.get('evidence',{}) or {}).get('budget',16))
+    M=int(selector.get('proposal_top_m',max(int(2*B),int(B)+1)))
+    topm,_,_=select_topm_atoms_hab(
+        oracle_logits,fam,active,costs,B,M,
+        family_scores=fs if fs.size else None,
+        free_budget=selector.get('hab_free_budget',None),
+        reserve_fraction=float(selector.get('hab_reserve_fraction',0.2)),
+        enabled=bool(selector.get('hab_enabled',True)),
+        min_family_slots=selector.get('min_family_topm_slots',None),
+    )
+    mask=np.zeros((E,),dtype=bool); mask[np.asarray(topm,dtype=np.int64)]=True
+    return float((critical & mask).sum()/n)
 
 
 def add_dense_bridge_diagnostics(
@@ -495,6 +552,11 @@ def add_dense_bridge_diagnostics(
     )
     diag.values.update(teacher_critical)
     diag.details.update(teacher_details)
+    diag.values["teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall"] = (
+        _frozen_family_slot_oracle_critical_recall(
+            teacher_base, teacher_g, active_atoms, valid_actions, teacher_action, pred, sample, cfg
+        )
+    )
     diag.details["model_dense_full_action"] = model_dense_full_action
     diag.details["deployment_dense_full_action"] = deployment_dense_full_action
     diag.details["dense_hab_topm_action"] = int(dense_topm_action)

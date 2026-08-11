@@ -230,6 +230,8 @@ def _exact_winner_flip_critical_proposal_loss(
     critical_residual_logits: torch.Tensor | None = None,
     critical_boundary_attention_logits: torch.Tensor | None = None,
     critical_boundary_pair_indices: torch.Tensor | None = None,
+    critical_winner_endpoint_logits: torch.Tensor | None = None,
+    critical_flip_endpoint_logits: torch.Tensor | None = None,
     return_adapter_diagnostic: bool = False,
 ) -> tuple[torch.Tensor, ...]:
     """Train proposal logits from literal leave-one-atom-out winner flips.
@@ -248,7 +250,7 @@ def _exact_winner_flip_critical_proposal_loss(
     if not bool(crit_cfg.get("enabled", False)):
         zero = J0.new_tensor(0.0)
         base = (zero, zero, zero, zero, zero)
-        return (*base, zero, zero, zero) if return_adapter_diagnostic else base
+        return (*base, zero, zero, zero, zero, zero) if return_adapter_diagnostic else base
 
     active = active.bool()
     valid = valid.bool()
@@ -601,6 +603,60 @@ def _exact_winner_flip_critical_proposal_loss(
                 ).masked_select(boundary_mask).sum().clamp_min(1.0)
                 L_boundary_attribution = weighted_boundary.masked_select(boundary_mask).sum() / denom
 
+    # V64.3.5 Literal Endpoint Attribution (LEA).  CCBR factorizes a literal
+    # decision boundary into its winner and leave-one-out flip endpoints over
+    # the complete valid candidate bank.  Supervision is applied *only* to
+    # exact winner-flip critical atoms, so this changes neither the definition
+    # of criticality nor the deployment interface.
+    L_endpoint_attribution = J0.new_tensor(0.0)
+    endpoint_representable_fraction = J0.new_tensor(0.0)
+    endpoint_weight = float(crit_cfg.get("endpoint_attribution_weight", 0.0))
+    if (
+        endpoint_weight > 0.0
+        and critical_winner_endpoint_logits is not None
+        and critical_flip_endpoint_logits is not None
+        and critical_winner_endpoint_logits.ndim == 3
+        and critical_flip_endpoint_logits.ndim == 3
+        and critical_winner_endpoint_logits.shape[-1] == valid.shape[1]
+        and critical_flip_endpoint_logits.shape[-1] == valid.shape[1]
+    ):
+        winner_logits = critical_winner_endpoint_logits.to(dtype=J0.dtype)
+        flip_logits = critical_flip_endpoint_logits.to(dtype=J0.dtype)
+        K_endpoint = int(valid.shape[1])
+        winner_target = winner_for_alignment[:, None].expand(-1, active.shape[1]).long()
+        flip_target = loo_winner_for_alignment.long()
+        winner_is_valid = valid.gather(1, winner_for_alignment[:, None].long()).squeeze(1)
+        flip_is_valid = valid.gather(1, flip_target.clamp(min=0, max=max(K_endpoint - 1, 0)))
+        endpoint_mask = (
+            critical
+            & active
+            & source_aligned[:, None]
+            & winner_is_valid[:, None]
+            & flip_is_valid
+        )
+        critical_denom = (critical & active & source_aligned[:, None]).float().sum().clamp_min(1.0)
+        endpoint_representable_fraction = endpoint_mask.float().sum() / critical_denom
+        if bool(endpoint_mask.any()):
+            winner_ce = F.cross_entropy(
+                winner_logits.reshape(-1, K_endpoint),
+                winner_target.reshape(-1),
+                reduction="none",
+            ).reshape_as(winner_target)
+            flip_ce = F.cross_entropy(
+                flip_logits.reshape(-1, K_endpoint),
+                flip_target.reshape(-1),
+                reduction="none",
+            ).reshape_as(flip_target)
+            endpoint_terms = 0.5 * (winner_ce + flip_ce)
+            endpoint_atom_weight = 1.0 + float(
+                crit_cfg.get("endpoint_attribution_severity_weight", 1.0)
+            ) * severity.detach()
+            weighted_endpoint = endpoint_terms * endpoint_atom_weight * supervised_scene_weight[:, None]
+            denom = (
+                endpoint_atom_weight * supervised_scene_weight[:, None]
+            ).masked_select(endpoint_mask).sum().clamp_min(1.0)
+            L_endpoint_attribution = weighted_endpoint.masked_select(endpoint_mask).sum() / denom
+
     loss = (
         L_bce
         + float(crit_cfg.get("rank_weight", 1.0)) * L_rank
@@ -609,6 +665,7 @@ def _exact_winner_flip_critical_proposal_loss(
         + float(crit_cfg.get("exchange_rank_weight", 0.0)) * L_exchange
         + adapter_residual_weight * L_adapter_residual
         + boundary_weight * L_boundary_attribution
+        + endpoint_weight * L_endpoint_attribution
     )
 
     critical_count = critical.float().sum()
@@ -630,6 +687,8 @@ def _exact_winner_flip_critical_proposal_loss(
         L_adapter_residual,
         L_boundary_attribution,
         boundary_representable_fraction,
+        L_endpoint_attribution,
+        endpoint_representable_fraction,
     ) if return_adapter_diagnostic else base_result
 
 
@@ -3738,6 +3797,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         L_critical_adapter_residual_alignment,
         L_critical_boundary_attribution,
         critical_boundary_representable_fraction,
+        L_critical_endpoint_attribution,
+        critical_endpoint_representable_fraction,
     ) = _exact_winner_flip_critical_proposal_loss(
         finite_J0,
         g,
@@ -3758,6 +3819,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         critical_residual_logits=out.get("critical_proposal_residual_logits"),
         critical_boundary_attention_logits=out.get("critical_boundary_attention_logits"),
         critical_boundary_pair_indices=out.get("critical_boundary_pair_indices"),
+        critical_winner_endpoint_logits=out.get("critical_winner_endpoint_logits"),
+        critical_flip_endpoint_logits=out.get("critical_flip_endpoint_logits"),
         return_adapter_diagnostic=True,
     )
 
@@ -4782,6 +4845,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_critical_adapter_residual_alignment": L_critical_adapter_residual_alignment,
         "L_critical_boundary_attribution": L_critical_boundary_attribution,
         "critical_boundary_representable_fraction": critical_boundary_representable_fraction,
+        "L_critical_endpoint_attribution": L_critical_endpoint_attribution,
+        "critical_endpoint_representable_fraction": critical_endpoint_representable_fraction,
         "exact_winner_flip_critical_recall_topm": exact_winner_flip_critical_recall_topm,
         "exact_winner_flip_critical_atom_fraction": exact_winner_flip_critical_atom_fraction,
         "exact_winner_flip_critical_scene_fraction": exact_winner_flip_critical_scene_fraction,

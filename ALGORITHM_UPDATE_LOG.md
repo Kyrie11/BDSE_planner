@@ -4625,3 +4625,88 @@ replanning rather than evidence-budget relaxation.
 
 - Added V64.3.4-specific AP-WRCCA+LCV candidate, anchor-control, and local-control closed-loop configs instead of reusing V64.3.2 metadata. The model semantics are unchanged, but train/eval provenance now reports the same `V64.3.4-CC-AOCC-AP-WRCCA-LCV-DA-EPC` version end-to-end.
 - Final repository regression status after FPCCA/LBA, pair-sampler vectorization, diagnostics, and provenance hardening: `280 passed, 0 failed`.
+
+# V64.3.5 — Complete-Candidate Boundary Routing (CCBR) + Literal Endpoint Attribution (LEA) (2026-08-11)
+
+## Trigger: V64.3.4 FPCCA/LBA screen is a clean negative acquisition result
+
+The uploaded V64.3.4 same-subset acquisition matrix gives the same literal teacher winner-flip critical Top-M micro recall `0.3601532567` for AP-WRCCA+LCV, FPCCA-noLBA, FPCCA+LBA F6, and FPCCA+LBA F8. Adapter parameters/residuals and ACRA/LBA losses are non-zero, so another instrumentation/activation explanation is no longer credible.
+
+The four causal deltas relative to the common anchor are:
+
+- AP-WRCCA+LCV: Top-M `+0.0000`, selected `-0.00383`, proposal decisive `-0.01852`, teacher match `-0.006`;
+- FPCCA-noLBA: Top-M `+0.0000`, selected `-0.00766`, proposal decisive `-0.02829`, teacher match `-0.006`;
+- FPCCA+LBA F6: Top-M `+0.0000`, selected `-0.00766`, proposal decisive `-0.01456`, teacher match `-0.004`;
+- FPCCA+LBA F8: Top-M `+0.0000`, selected `-0.00766`, proposal decisive `-0.01573`, teacher match `-0.004`.
+
+FPCCA's literal-boundary support is the decisive failure signal: learned LBA representability is only `0.12408` for F6 and `0.20250` for F8. The independent teacher diagnostic reports literal boundary in deployment base top-6 `0.20479` and teacher winner in base top-6 only `0.36626`. Expanding F from 6 to 8 raises support but produces zero critical Top-M gain, so further F expansion is not the next algorithm.
+
+**Decision:** none of AP-WRCCA+LCV / FPCCA-noLBA / FPCCA+LBA F6 / FPCCA+LBA F8 is promoted into the main algorithm. They become negative/mechanism ablations.
+
+## Invalid full-style runs are excluded from algorithm evidence
+
+The uploaded FPCCA-noLBA/F6/F8 DA-EPC fast archives each found zero safe retained foundation checkpoints (`candidate_count=0`, `safe_candidate_count=0`), rebuilt a fresh fast foundation, and failed the immutable anchor gate with base winner-rival sign accuracy about `0.346--0.354 < 0.62`. These runs are not evidence about FPCCA. V64.3.5 full launchers therefore set `FOUNDATION_POLICY=explicit`, disable recovery/rebuild, and require both an existing `FOUNDATION_CKPT` and a screen promotion report before any full pipeline starts.
+
+## Algorithm change: Complete-Candidate Boundary Routing (CCBR)
+
+V64.3.5 removes the top-F pair-support assumption while preserving the fixed evidence interface.
+
+For each evidence atom, CCBR reuses the already-computed candidate action embeddings plus normalized deployment `J0` cost/rank. Two atom-conditioned O(EK) attention routers cover the **complete valid candidate bank**:
+
+1. a winner-endpoint router;
+2. a flip-endpoint router.
+
+Their pooled endpoint contexts are composed as `[winner, flip, flip-winner, winner*flip]` and mapped to a proposal residual. The final residual layer is zero initialized, so the legacy HAB anchor is exactly unchanged at step zero. CCBR does not construct K^2 pair tokens and does not issue any additional atom-action evidence query. Fixed `B=16`, proposal M, literal criticality, DA-EPC and exact selector semantics remain unchanged.
+
+This is intentionally not a repeat of V55 action-potential projection or V59 generic set-conditioned interaction potential. Those versions modified downstream action/value representation. CCBR modifies **acquisition boundary conditioning** only and uses exact literal boundary endpoints as its semantic support.
+
+## LEA: exact endpoint identity supervision
+
+V64.3.5 adds Literal Endpoint Attribution (LEA) only for exact teacher-interface winner-flip critical atoms. If the full teacher winner is `w` and removing atom `i` changes the scalar-aligned teacher winner to `f_i`, LEA supervises:
+
+- winner router -> `w`;
+- flip router -> `f_i`.
+
+Non-critical atoms receive no endpoint target. Therefore LEA does not turn margin proximity, severity, uncertainty, or any proxy into the definition of criticality. Teacher labels remain training-only.
+
+The clean mechanism screen is now only:
+
+1. CCBR-noLEA (representation-only);
+2. CCBR+LEA (representation + exact endpoint identity).
+
+No AP-WCCA/AP-WRCCA/FPCCA rerun is part of this phase.
+
+## New diagnostic: frozen-family-slot oracle ceiling
+
+A second possible acquisition ceiling was not directly measured in V64.3.4: the critical residual can reorder atoms but the legacy HAB family allocation remains frozen. V64.3.5 open-loop diagnostics therefore add `teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall`.
+
+For this diagnostic only, exact critical atoms receive oracle-dominant proposal logits while runtime family logits, family ids, B and M remain fixed. It never changes training or deployment.
+
+Stop rule:
+
+- oracle >= `0.90`, learned critical Top-M flat -> family allocation is not the main blocker; do not unfreeze/tune family stack;
+- oracle < `0.90` -> only then allow one small zero-init boundary-aware family-residual screen. Do not repeat full proposal/family unfreezing.
+
+## Promotion and next bottleneck rules
+
+CCBR promotion keeps the V64.3.4 causal gate:
+
+- critical Top-M micro gain >= `+0.01` absolute;
+- selected critical micro delta >= `-0.005`;
+- proposal decisive recall delta >= `-0.02`;
+- teacher action match delta >= `-0.005`;
+- CCBR+LEA additionally requires endpoint representability > `0.95` and non-zero LEA loss.
+
+If CCBR improves Top-M/selected but pair-full/candidate teacher match remains flat, acquisition work stops and the next algorithm must be explicit literal/decisive **pair-boundary value representation**. Do not repeat V55 global action potential or V59 generic set-conditioned potential. If open-loop improves but CL20 remains flat, switch to candidate dynamics/interactive prediction/replanning.
+
+## Engineering fixes and efficiency
+
+1. Fixed acquisition screen checker substring bug: `FPCCA-noLBA` no longer incorrectly requires LBA merely because `NOLBA` contains `LBA`.
+2. Added analogous explicit `noLEA` handling and LEA instrumentation checks.
+3. Corrected the old V64.3.4 FPCCA-LBA screen metadata text that incorrectly called the algorithm MR-BCCA.
+4. Added V64.3.5 config-contract support and complete adapter-signature matching including endpoint cost bias.
+5. Full wrappers hard-require explicit foundation + promotion report and use a V64.3.5 validation split cache derived from `bdse_val_v2`; automatic foundation rebuild is disabled.
+6. Retained the V64.3.4 vectorized pair sampler. Uploaded screen matrix pair-sampling time is only about `1.35--1.76 s/epoch`, versus ~`250 s/epoch` in historical V64.3.3. Current timing bottlenecks are loss construction (`~40--113 s/epoch`) and variable data wait (`~10--136 s/epoch`), not pair sampling.
+7. CCBR complexity is O(EK) and reuses existing action embeddings/J0, avoiding complete O(K^2) pair materialization.
+
+Final repository regression after V64.3.5: **285 passed, 0 failed, 30 warnings**. No nuPlan GPU training was performed in the delivery environment; CCBR/LEA performance claims require the next two-GPU screen.

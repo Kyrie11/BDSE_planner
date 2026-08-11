@@ -1,0 +1,197 @@
+V64.3.4 NEXT COMMANDS — AP-WRCCA+LCV vs FPCCA vs FPCCA+LBA
+===============================================================
+
+Goal
+----
+Use the uploaded V64.3.3 result as the fixed negative control. Do not run another
+50k/full pipeline until a 12k/4-epoch same-subset screen produces a meaningful
+literal-critical acquisition gain. All screens use two GPUs and the exact same
+foundation/data contract.
+
+0. Enter the code root and set immutable inputs
+-----------------------------------------------
+cd /path/to/bdse_v64_3_4_fpcca_lba
+
+export FOUNDATION_CKPT=/absolute/path/to/the/matched_foundation_checkpoint.pt
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+export GPUS=0,1
+export BATCH_SIZE_PER_GPU=16
+export NUM_WORKERS_PER_GPU=12
+export VAL_NUM_WORKERS_PER_GPU=4
+export PREFETCH_FACTOR=2
+
+# Optional only for the full closed-loop stage after a screen winner exists:
+# export NUPLAN_ROOT=/absolute/path/to/nuplan
+
+1. Static/contract smoke before GPU work
+----------------------------------------
+python -m pytest -q \
+  bdse/tests/test_v64_3_4_fpcca.py \
+  bdse/tests/test_v64_3_4_pair_sampler_vectorized.py \
+  bdse/tests/test_v64_3_4_mrbcca.py \
+  bdse/tests/test_v64_3_3_criticality_screen.py
+
+python -m bdse.tools.validate_v64_pipeline_config \
+  --train-config bdse/configs/v64_3_4_cc_aocc_fpcca_lba_daepc_screen_2gpu.yaml \
+  --eval-config bdse/configs/v64_3_4_cc_aocc_fpcca_cl.yaml \
+  --expected-family v64.3.4
+
+2. Recommended: run the complete 2-GPU screen matrix
+----------------------------------------------------
+# This sequentially runs:
+#   A) AP-WRCCA + LCV       (finishes the previous unrun target-value hypothesis)
+#   B) FPCCA without LBA    (representation-only ablation)
+#   C) FPCCA + LBA          (main V64.3.4 mechanism)
+# It runs F=8 only if no candidate passes AND the F=6 literal-boundary support
+# diagnostic is <0.70. It DOES NOT run a full 50k pipeline by default.
+
+rm -rf outputs_v64_3_4_acquisition_screen_matrix_2gpu_v1
+bash RUN_V64_3_4_ACQUISITION_SCREEN_MATRIX_2GPU.sh
+
+cat outputs_v64_3_4_acquisition_screen_matrix_2gpu_v1/acquisition_screen_comparison.json
+
+Promotion thresholds are deliberately stricter than "delta > 0":
+  screen instrumentation valid
+  adapter parameter activated
+  adapter forward activated
+  ACRA wired
+  LBA wired when applicable
+  literal critical Top-M micro delta       >= +0.010 absolute
+  literal critical selected micro delta    >= -0.005
+  proposal decisive recall delta           >= -0.020
+  teacher action-match delta                >= -0.005
+
+Do not promote an experiment that only moves adapter RMS/logits while literal
+critical Top-M stays flat. That is exactly the V64.3.3 failure mode.
+
+3. Equivalent manual screens (only if you do not use the matrix wrapper)
+------------------------------------------------------------------------
+OUT_ROOT=outputs_v64_3_4_apwrcca_lcv_screen_2gpu_v1 \
+  bash RUN_V64_3_4_APWRCCA_LCV_SCREEN_2GPU.sh
+
+OUT_ROOT=outputs_v64_3_4_fpcca_nolba_activation_screen_2gpu_v1 \
+  bash RUN_V64_3_4_FPCCA_NOLBA_ACTIVATION_SCREEN_2GPU.sh
+
+OUT_ROOT=outputs_v64_3_4_fpcca_lba_activation_screen_2gpu_v1 \
+  bash RUN_V64_3_4_FPCCA_LBA_ACTIVATION_SCREEN_2GPU.sh
+
+python -m bdse.tools.compare_v64_3_4_acquisition_screens \
+  --screen APWRCCA_LCV=outputs_v64_3_4_apwrcca_lcv_screen_2gpu_v1/provenance/critical_acquisition_screen.json \
+  --screen FPCCA_NOLBA=outputs_v64_3_4_fpcca_nolba_activation_screen_2gpu_v1/provenance/critical_acquisition_screen.json \
+  --screen FPCCA_LBA=outputs_v64_3_4_fpcca_lba_activation_screen_2gpu_v1/provenance/critical_acquisition_screen.json \
+  --output outputs_v64_3_4_acquisition_screen_comparison.json
+
+4. F=8 is conditional, not a generic capacity sweep
+---------------------------------------------------
+# Inspect FPCCA+LBA screen:
+python - <<'PY'
+import json
+p='outputs_v64_3_4_fpcca_lba_activation_screen_2gpu_v1/provenance/critical_acquisition_screen.json'
+d=json.load(open(p))
+print('top6 literal-boundary representability =', d.get('anchor_val_critical_boundary_in_base_top6_fraction'))
+print('teacher winner in base top6           =', d.get('anchor_val_teacher_winner_in_base_top6'))
+PY
+
+# Run F8 only if FPCCA-F6 did not pass AND top6 literal-boundary representability < 0.70.
+OUT_ROOT=outputs_v64_3_4_fpcca_f8_lba_activation_screen_2gpu_v1 \
+  bash RUN_V64_3_4_FPCCA_F8_LBA_ACTIVATION_SCREEN_2GPU.sh
+
+If top6 representability is already high but critical Top-M remains flat, DO NOT
+keep expanding F. The representation/learning rule failed; a larger frontier is
+not causally justified.
+
+5. Full pipeline: run only the screen winner
+-------------------------------------------
+# Set this if you want the pipeline to run paired CL20 after Protocol PASS.
+export RUN_CLOSED_LOOP_AFTER_GATE=1
+export RUN_DIAGNOSTIC_CL20_ON_GATE_FAIL=1
+export RUN_CL100_AFTER_CL20=0
+# export NUPLAN_ROOT=/absolute/path/to/nuplan
+
+# Choose exactly ONE according to acquisition_screen_comparison.json:
+
+# A) AP-WRCCA+LCV wins
+OUT_ROOT=outputs_v64_3_4_apwrcca_lcv_daepc_fast_2gpu_v1 \
+  bash RUN_V64_3_4_APWRCCA_LCV_FULL_PIPELINE_2GPU.sh
+
+# B) FPCCA representation-only wins
+OUT_ROOT=outputs_v64_3_4_fpcca_nolba_daepc_fast_2gpu_v1 \
+  bash RUN_V64_3_4_FPCCA_NOLBA_FULL_PIPELINE_2GPU.sh
+
+# C) FPCCA+LBA wins (preferred mechanism if metrics are comparable)
+OUT_ROOT=outputs_v64_3_4_fpcca_lba_daepc_fast_2gpu_v1 \
+  bash RUN_V64_3_4_FPCCA_LBA_FULL_PIPELINE_2GPU.sh
+
+# D) Conditional F8 FPCCA+LBA wins
+OUT_ROOT=outputs_v64_3_4_fpcca_f8_lba_daepc_fast_2gpu_v1 \
+  bash RUN_V64_3_4_FPCCA_F8_LBA_FULL_PIPELINE_2GPU.sh
+
+6. Full-run causal decision after the winner finishes
+-----------------------------------------------------
+Inspect, in this order:
+
+A. Acquisition
+  teacher_exact_winner_flip_critical_recall_topm
+  teacher_exact_winner_flip_critical_recall_selected
+  proposal_decisive_atom_recall
+  critical-boundary frontier representability
+
+B. Fixed-budget interface
+  dense_vs_hab_topm_dense_value_match
+  dense_vs_selected_budget_dense_value_match
+  budget_vs_pair_full_match
+  evidence_certificate_fraction
+  fallback_would_trigger_rate
+
+C. Value/action ceiling
+  pair_full_interface_action_match
+  local_pair_full_interface_action_match
+  teacher_action_match
+  paired teacher regret vs matched foundation
+
+D. Closed loop
+  only after Protocol PASS; use paired candidate/local/foundation CL20 on exactly
+  the same scenario tokens. CL100 remains blocked until competitive open-loop and
+  CL20 evidence are both positive.
+
+Decision rules:
+
+1) critical Top-M does not improve in any clean screen
+   -> acquisition representation is still the blocker. Do NOT modify B/M/DA-EPC.
+
+2) critical Top-M improves, selected critical does not
+   -> only then revisit B16 allocation/tie-breaking; keep B=16.
+
+3) critical Top-M AND selected improve, but pair-full/candidate teacher match is flat
+   -> acquisition is fixed enough; switch the next algorithm to atom->action /
+      pair-boundary value representation. Do not stack more proposal losses.
+
+4) open-loop teacher match/regret improves, CL20 is flat/worse
+   -> switch to candidate dynamics / interactive prediction / replanning.
+
+7. Important protocol note from uploaded V64.3.3
+------------------------------------------------
+The uploaded full runs have dense_runtime_query_decision_match=0.997 (<0.999), so
+formal closed loop was correctly blocked. In the three mismatched AP-WCCA scenes,
+raw dense/runtime query features are exactly identical and neural score max error
+is <0.001; this is a near-tie numerical reproducibility issue, not cache/query
+provenance drift.
+
+Do NOT lower the 0.999 protocol threshold and do NOT mix a numerical-matmul change
+into the acquisition ablation. If 0.997 repeats for the selected V64.3.4 winner,
+run a separate strict numerical-parity engineering experiment after the algorithm
+choice is frozen.
+
+8. Do-not-repeat list
+---------------------
+- no AP-WCCA/AP-WRCCA binary rerun as a main candidate;
+- no full proposal/family unfreeze;
+- no B/M increase;
+- no DA-EPC relaxation;
+- no conformal epsilon reduction to force residual flips;
+- no V40-V43 beam/swap/repair search;
+- no blind BCC/HCBE/hard-negative weight escalation;
+- no nominal 6-D query extension / opaque base prior;
+- no test-set tuning before algorithm/protocol freeze.

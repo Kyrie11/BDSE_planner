@@ -45,6 +45,8 @@ def build_report(rows: list[dict], variant: str) -> dict:
         "acra_alignment_loss_max": _max(rows, "L_critical_adapter_residual_alignment"),
         "boundary_attribution_loss_max": _max(rows, "L_critical_boundary_attribution"),
         "boundary_representable_fraction_max": _max(rows, "critical_boundary_representable_fraction"),
+        "endpoint_attribution_loss_max": _max(rows, "L_critical_endpoint_attribution"),
+        "endpoint_representable_fraction_max": _max(rows, "critical_endpoint_representable_fraction"),
         "anchor_val_critical_topm_recall_macro": _finite(anchor, "val_teacher_exact_winner_flip_critical_recall_topm"),
         "last_val_critical_topm_recall_macro": _finite(last, "val_teacher_exact_winner_flip_critical_recall_topm"),
         "anchor_val_critical_topm_recall_micro": _finite(anchor, "val_teacher_exact_winner_flip_critical_recall_topm_micro"),
@@ -55,6 +57,12 @@ def build_report(rows: list[dict], variant: str) -> dict:
         "last_val_critical_scene_rate": _finite(last, "val_teacher_exact_winner_flip_critical_scene_rate"),
         "anchor_val_critical_count_mean": _finite(anchor, "val_teacher_exact_winner_flip_critical_count"),
         "last_val_critical_count_mean": _finite(last, "val_teacher_exact_winner_flip_critical_count"),
+        "anchor_val_frozen_family_slot_oracle_topm_recall": _finite(
+            anchor, "val_teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall"
+        ),
+        "last_val_frozen_family_slot_oracle_topm_recall": _finite(
+            last, "val_teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall"
+        ),
         "anchor_val_critical_boundary_in_base_top5_fraction": _finite(
             anchor, "val_teacher_exact_winner_flip_critical_boundary_in_base_top5_fraction"
         ),
@@ -112,8 +120,13 @@ def build_report(rows: list[dict], variant: str) -> dict:
         report["acra_alignment_loss_max"] is not None
         and report["acra_alignment_loss_max"] > 1.0e-10
     )
-    requires_lba = "LBA" in str(variant).upper()
+    variant_upper = str(variant).upper().replace("_", "-")
+    # Do not treat the explicit no-LBA/no-LEA ablations as requiring their
+    # corresponding attribution loss merely because the substring is present.
+    requires_lba = "LBA" in variant_upper and "NOLBA" not in variant_upper and "NO-LBA" not in variant_upper
+    requires_lea = "LEA" in variant_upper and "NOLEA" not in variant_upper and "NO-LEA" not in variant_upper
     report["lba_required"] = requires_lba
+    report["lea_required"] = requires_lea
     report["lba_wired"] = bool(
         (not requires_lba)
         or (
@@ -121,6 +134,15 @@ def build_report(rows: list[dict], variant: str) -> dict:
             and report["boundary_attribution_loss_max"] > 1.0e-10
             and report["boundary_representable_fraction_max"] is not None
             and report["boundary_representable_fraction_max"] > 0.0
+        )
+    )
+    report["lea_wired"] = bool(
+        (not requires_lea)
+        or (
+            report["endpoint_attribution_loss_max"] is not None
+            and report["endpoint_attribution_loss_max"] > 1.0e-10
+            and report["endpoint_representable_fraction_max"] is not None
+            and report["endpoint_representable_fraction_max"] > 0.95
         )
     )
     report["literal_critical_support_nonempty"] = bool(
@@ -133,6 +155,7 @@ def build_report(rows: list[dict], variant: str) -> dict:
         and report["adapter_forward_activated"]
         and report["acra_wired"]
         and report["lba_wired"]
+        and report["lea_wired"]
         and report["literal_critical_support_nonempty"]
         and report["delta_val_critical_topm_recall_micro"] is not None
         and report["delta_val_critical_topm_recall_micro"] > 0.0
