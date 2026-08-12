@@ -34,6 +34,7 @@ V64_3_PREFIXES = (
     "v64_3_5_cc_aocc_ccbr",
     "v64_3_6_cc_aocc_ccbr",
     "v64_3_7_cc_aocc_darm_dbr",
+    "v64_3_8_cc_aocc_bdmu",
 )
 V64_3_ALGORITHM_VERSIONS = {
     "V64.3-CC-AOCC-AP-WCCA",
@@ -57,6 +58,9 @@ V64_3_ALGORITHM_VERSIONS = {
     "V64.3.6-CC-AOCC-CCBR-BCHA-LBPR-LEA-DA-EPC",
     "V64.3.7-CC-AOCC-DARM-DBR-DA-EPC",
     "V64.3.7-CC-AOCC-DARM-DBR-DA-EPC-LITERAL",
+    "V64.3.8-CC-AOCC-BDMU-DARM-DBR",
+    "V64.3.8-CC-AOCC-BDMU-R1-DARM-DBR",
+    "V64.3.8-CC-AOCC-BDMU-NOCOST-DARM-DBR",
 }
 V64_3_REQUIRED_TRAINABLE = {
     "critical_proposal_adapter",
@@ -119,15 +123,16 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
     }
     if role == "train":
         v6437_value_isolation = metadata_version.startswith("V64.3.7-")
+        v6438_bdmu_isolation = metadata_version.startswith("V64.3.8-")
         checks.update(
             {
-                "literal_winner_flip_criticality_enabled": bool(crit.get("enabled", False)) or v6437_value_isolation,
+                "literal_winner_flip_criticality_enabled": bool(crit.get("enabled", False)) or v6437_value_isolation or v6438_bdmu_isolation,
                 "teacher_interface_target": str(crit.get("target_source", "")).lower()
                 in {"teacher", "teacher_interface", "teacher_exact"},
             }
         )
 
-    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64_3"}
+    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64_3"}
     if strict_v64_3:
         trainable = {str(x) for x in training_cfg.get("trainable_modules", [])}
         checks.update(
@@ -166,15 +171,40 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
             }
         )
         if role == "train":
+            if metadata_version.startswith("V64.3.8-"):
+                loss_weights = training_cfg.get("loss_weights", {}) or {}
+                positive_losses = {
+                    str(k)
+                    for k, v in loss_weights.items()
+                    if abs(float(v)) > 1.0e-12
+                }
+                bdmu_cfg = training_cfg.get("budgeted_decisive_margin_utility", {}) or {}
+                checks.update(
+                    {
+                        "v64_3_8_bdmu_enabled": bool(bdmu_cfg.get("enabled", False)),
+                        "v64_3_8_bdmu_is_only_positive_loss": positive_losses
+                        == {"budgeted_decisive_margin_utility"},
+                        "v64_3_8_bdmu_budget_feasible_exchange": str(
+                            bdmu_cfg.get("exchange_mode", "")
+                        ).strip().lower()
+                        == "best_budget_feasible_single_exchange",
+                        "v64_3_8_literal_critical_objective_disabled": not bool(crit.get("enabled", False)),
+                        "v64_3_8_family_coupling_disabled": not bool(family_coupling.get("enabled", False)),
+                        "v64_3_8_critical_adapter_enabled": bool(critical_adapter.get("enabled", False)),
+                    }
+                )
+
             checks.update(
                 {
                     "v64_3_required_trainable_exact": (
-                        ({"decisive_boundary_pair_adapter"}.issubset(trainable) and bool(dbr.get("enabled", False)))
-                        if metadata_version.startswith("V64.3.7-")
-                        else (({"critical_proposal_adapter"}.issubset(trainable) and
-                               ((not bool(lbpr.get("enabled", False))) or "literal_boundary_pair_adapter" in trainable))
-                              if metadata_version.startswith("V64.3.6-")
-                              else V64_3_REQUIRED_TRAINABLE.issubset(trainable))
+                        (trainable == {"critical_proposal_adapter"} and bool(dbr.get("enabled", False)))
+                        if metadata_version.startswith("V64.3.8-")
+                        else (({"decisive_boundary_pair_adapter"}.issubset(trainable) and bool(dbr.get("enabled", False)))
+                              if metadata_version.startswith("V64.3.7-")
+                              else (({"critical_proposal_adapter"}.issubset(trainable) and
+                                     ((not bool(lbpr.get("enabled", False))) or "literal_boundary_pair_adapter" in trainable))
+                                    if metadata_version.startswith("V64.3.6-")
+                                    else V64_3_REQUIRED_TRAINABLE.issubset(trainable)))
                     ),
                     "v64_3_forbidden_legacy_trainables_absent": not bool(trainable & V64_3_FORBIDDEN_TRAINABLE),
                     "v64_3_critical_adapter_trainable": (
@@ -194,8 +224,15 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
                         (not metadata_version.startswith("V64.3.7-"))
                         or any(str(x) == "decisive_boundary_pair_adapter." for x in checkpoint_cfg.get("allowed_missing_prefixes", []))
                     ),
+                    "v64_3_8_requires_pretrained_dbr_checkpoint": (
+                        (not metadata_version.startswith("V64.3.8-"))
+                        or (bool(dbr.get("enabled", False)) and not any(
+                            str(x) == "decisive_boundary_pair_adapter."
+                            for x in checkpoint_cfg.get("allowed_missing_prefixes", [])
+                        ))
+                    ),
                     "v64_3_7_screening_provenance_match": (
-                        (not metadata_version.startswith("V64.3.7-"))
+                        (not metadata_version.startswith(("V64.3.7-", "V64.3.8-")))
                         or metadata_cfg.get("screening_only", None) == provenance_cfg.get("screening_only", None)
                     ),
                 }
@@ -245,7 +282,7 @@ def main() -> int:
     ap.add_argument("--eval-config", type=Path, required=True)
     ap.add_argument(
         "--expected-family",
-        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64_3"],
+        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64_3"],
         default="v64",
         help="Use v64.3+ to reject any stale V64.2 config even if generic V64 checks pass.",
     )
@@ -258,7 +295,7 @@ def main() -> int:
         "train": _check(args.train_config, "train", args.expected_family),
         "eval": _check(args.eval_config, "eval", args.expected_family),
     }
-    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64_3"}
+    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64_3"}
     train_cond = report["train"].get("critical_proposal_conditioning", "")
     eval_cond = report["eval"].get("critical_proposal_conditioning", "")
     train_signature = report["train"].get("critical_proposal_signature", {})

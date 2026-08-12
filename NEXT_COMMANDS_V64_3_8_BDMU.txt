@@ -1,0 +1,194 @@
+# V64.3.8 BDMU — next commands (2 GPUs, mechanism-first / test-last protocol)
+# Generated after auditing the uploaded V64.3.7 BROAD+LITERAL screen matrix.
+#
+# Core rule:
+#   1) First reproduce DARM+DBR-LITERAL on the full train/val pipeline.
+#   2) Only if that full audit promotes, train BDMU acquisition on the frozen value path.
+#   3) Only if BDMU screen + full audit promote, run theory ablations and final test/CL.
+# This avoids repeating negative acquisition tricks and avoids test-set model selection.
+
+set -euo pipefail
+cd /path/to/bdse_v64_3_8_bdmu
+
+# ---------- Shared data / hardware ----------
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+export GPUS=0,1
+export NPROC_PER_NODE=2
+export BATCH_SIZE_PER_GPU=16
+export NUM_WORKERS_PER_GPU=12
+export VAL_NUM_WORKERS_PER_GPU=4
+export PREFETCH_FACTOR=2
+
+# V62 is still used only to reproduce/validate the frozen V64.3.7 DARM+DBR value path.
+export FOUNDATION_CKPT=/absolute/path/to/outputs_v62_dcab_ewfc_fast_2gpu_v1/train/bdse_v62_dcab_ewfc.best.pt
+
+# The uploaded comparison already has winner=LITERAL and both arms are protocol-valid.
+export PROMOTED_SCREEN_REPORT=/absolute/path/to/outputs_v64_3_7_darm_dbr_screen_matrix_2gpu_v1/darm_dbr_screen_comparison.json
+
+# ============================================================================
+# PHASE 0 — full-pipeline confirmation of DARM+DBR-LITERAL (mandatory gate)
+# ============================================================================
+export DARM_ROOT=outputs_v64_3_7_darm_dbr_literal_full_2gpu_v2
+RUN_MODE=train SAVE_EVERY_N_EPOCHS=1 OUT_ROOT="$DARM_ROOT" \
+  bash RUN_V64_3_7_PROMOTED_FULL_TRAIN_2GPU.sh
+
+# Reuse the V64.3.7.1 teacher-oriented checker on the full 50k/1k run.
+export DARM_DBR_FULL_REPORT="$DARM_ROOT/provenance/v64_3_7_darm_dbr_full_audit.json"
+mkdir -p "$DARM_ROOT/provenance"
+python -m bdse.tools.check_v64_3_7_darm_dbr_screen \
+  --train-log "$DARM_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl" \
+  --variant DARM+DBR-LITERAL-FULL \
+  --output "$DARM_DBR_FULL_REPORT"
+python - "$DARM_DBR_FULL_REPORT" <<'PY'
+import json,sys
+r=json.load(open(sys.argv[1]))
+print(json.dumps({k:r.get(k) for k in ['selected_epoch','meaningful_value_gain','deployment_gain','full_promotion']}, indent=2))
+if not r.get('full_promotion', False):
+    raise SystemExit('STOP: DARM+DBR did not reproduce on the full pipeline. Do NOT run V64.3.8 BDMU.')
+PY
+
+# Bind BDMU to the exact promoted full-run epoch, not to an opaque best.pt.
+export DARM_DBR_CKPT="$(python - "$DARM_DBR_FULL_REPORT" "$DARM_ROOT" <<'PY'
+import json,sys
+r=json.load(open(sys.argv[1])); root=sys.argv[2]
+e=int(r['selected_epoch'])+1
+print(f'{root}/train/checkpoints/bdse_v64_saqa_bcc.epoch_{e:04d}.pt')
+PY
+)"
+test -s "$DARM_DBR_CKPT"
+echo "DARM_DBR_CKPT=$DARM_DBR_CKPT"
+
+# Optional but recommended: one selected-checkpoint validation open-loop pass.
+# This uses val only and cannot change the selected epoch.
+export V64_CKPT="$DARM_DBR_CKPT"
+export TRAIN_CONFIG=bdse/configs/v64_3_7_cc_aocc_darm_dbr_literal_daepc_train_2gpu.yaml
+export EVAL_CONFIG=bdse/configs/v64_3_7_cc_aocc_darm_dbr_literal_cl.yaml
+export OUT_ROOT="${DARM_ROOT}_selected_val_openloop"
+export OPEN_LOOP_SPLIT=val OPEN_LOOP_MAX_SCENARIOS=1000 RUN_MODE=open_loop
+bash run_v64_saqa_bcc.sh
+
+# ============================================================================
+# PHASE 1 — V64.3.8 BDMU acquisition-isolation screen
+# ============================================================================
+# BDMU launcher checks DARM_DBR_FULL_REPORT and refuses to run if Phase 0 failed.
+export OUT_ROOT=outputs_v64_3_8_bdmu_screen_2gpu_v1
+bash RUN_V64_3_8_BDMU_SCREEN_2GPU.sh
+export BDMU_SCREEN_REPORT="$OUT_ROOT/provenance/v64_3_8_bdmu_screen.json"
+cat "$BDMU_SCREEN_REPORT"
+
+python - "$BDMU_SCREEN_REPORT" <<'PY'
+import json,sys
+r=json.load(open(sys.argv[1]))
+print(json.dumps({k:r.get(k) for k in ['selected_epoch','mechanism_gain','deployment_gain','teacher_nonworse','teacher_regret_nonworse','full_promotion']}, indent=2))
+if not r.get('full_promotion', False):
+    raise SystemExit('STOP: BDMU did not pass the mechanism+deployment screen. Do not spend compute on full/ablations.')
+PY
+
+# ============================================================================
+# PHASE 2 — full BDMU training, then fixed validation-only model selection
+# ============================================================================
+export BDMU_ROOT=outputs_v64_3_8_bdmu_full_2gpu_v1
+RUN_MODE=train SAVE_EVERY_N_EPOCHS=1 OUT_ROOT="$BDMU_ROOT" \
+  bash RUN_V64_3_8_BDMU_FULL_TRAIN_2GPU.sh
+
+export BDMU_FULL_REPORT="$BDMU_ROOT/provenance/v64_3_8_bdmu_full_audit.json"
+mkdir -p "$BDMU_ROOT/provenance"
+python -m bdse.tools.check_v64_3_8_bdmu_screen \
+  --train-log "$BDMU_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl" \
+  --output "$BDMU_FULL_REPORT"
+cat "$BDMU_FULL_REPORT"
+python - "$BDMU_FULL_REPORT" <<'PY'
+import json,sys
+r=json.load(open(sys.argv[1]))
+if not r.get('full_promotion', False):
+    raise SystemExit('STOP: BDMU screen signal did not generalize to the full pipeline. Do not run test/ablations.')
+PY
+
+# Exact epoch selected by the mechanism-first BDMU full audit.
+export FINAL_BDMU_CKPT="$(python - "$BDMU_FULL_REPORT" "$BDMU_ROOT" <<'PY'
+import json,sys
+r=json.load(open(sys.argv[1])); root=sys.argv[2]
+e=int(r['selected_epoch'])+1
+print(f'{root}/train/checkpoints/bdse_v64_saqa_bcc.epoch_{e:04d}.pt')
+PY
+)"
+test -s "$FINAL_BDMU_CKPT"
+echo "FINAL_BDMU_CKPT=$FINAL_BDMU_CKPT"
+
+# A secondary explicit Pareto report is useful for the paper artifact and checks
+# that the selected epoch is not severe-regret harmful. It never reads test.
+python -m bdse.tools.select_decision_pareto_checkpoint \
+  --train-log "$BDMU_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl" \
+  --checkpoint-dir "$BDMU_ROOT/train/checkpoints" \
+  --min-epoch 2 \
+  --output "$BDMU_ROOT/provenance/validation_decision_pareto_checkpoint.json"
+
+# Selected-checkpoint VAL open-loop (same frozen checkpoint, both GPUs).
+export V64_CKPT="$FINAL_BDMU_CKPT"
+export TRAIN_CONFIG=bdse/configs/v64_3_8_cc_aocc_bdmu_daepc_train_2gpu.yaml
+export EVAL_CONFIG=bdse/configs/v64_3_8_cc_aocc_bdmu_cl.yaml
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export OPEN_LOOP_SPLIT=val OPEN_LOOP_MAX_SCENARIOS=1000
+export OUT_ROOT="${BDMU_ROOT}_selected_val_openloop"
+export RUN_MODE=open_loop
+bash run_v64_saqa_bcc.sh
+
+# ============================================================================
+# PHASE 3 — theory ablations (ONLY after main full BDMU promotion)
+# ============================================================================
+# The launcher has three hard gates: DARM full, BDMU screen, BDMU full.
+# R1: only nearest rival, testing whether multi-rival decisive utility matters.
+# NOCOST: cost_power=0, testing whether utility-per-query-cost matters.
+export BDMU_MAIN_SCREEN_REPORT="$BDMU_SCREEN_REPORT"
+export ABLATION_ROOT=outputs_v64_3_8_bdmu_theory_ablations_2gpu_v1
+bash RUN_V64_3_8_BDMU_THEORY_ABLATIONS_2GPU.sh
+
+# Do NOT rerun AP-WCCA/AP-WRCCA, FPCCA/CCBR losses, BCHA, larger B/M,
+# full proposal unfreeze, binary literal-critical BCE, global pair tournaments,
+# global/evidence/set potentials, or selector beam/swap/bruteforce variants.
+
+# ============================================================================
+# PHASE 4 — held-out test exactly once after checkpoint/hparams are frozen
+# ============================================================================
+export V64_CKPT="$FINAL_BDMU_CKPT"
+export BDSE_VAL_CACHE="$BDSE_TEST_CACHE"  # run_v64 uses this input slot for eval cache
+export OPEN_LOOP_SPLIT=test
+export OPEN_LOOP_MAX_SCENARIOS=1000        # set to your declared full paper test size for final tables
+export OUT_ROOT=outputs_v64_3_8_bdmu_final_test_openloop_2gpu_v1
+export RUN_MODE=open_loop
+bash run_v64_saqa_bcc.sh
+
+# ============================================================================
+# PHASE 5 — closed-loop, same frozen checkpoint, 2 GPUs / 4 process shards
+# ============================================================================
+# Set these to your raw nuPlan installation (not the BDSE preprocessed cache).
+export NUPLAN_ROOT=/absolute/path/to/nuplan
+# Optional if your DB root differs from $NUPLAN_ROOT/data/cache/val/
+# export NUPLAN_DB_ROOT=/absolute/path/to/nuplan/db/val
+
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export CL_TOKEN_SPLIT=val
+export V64_CKPT="$FINAL_BDMU_CKPT"
+export GPUS=0,1 NPROC_PER_NODE=2 CL_PROCESSES_PER_GPU=2
+
+# 5a) cheap integration/safety debug only; do not tune algorithm from the 20 scenes.
+export CL_CHALLENGE=closed_loop_nonreactive_agents
+export OUT_ROOT=outputs_v64_3_8_bdmu_cl20_nonreactive_2gpu_v1
+export RUN_MODE=cl20
+bash run_v64_saqa_bcc.sh
+
+# 5b) publication-scale non-reactive, same checkpoint.
+export OUT_ROOT=outputs_v64_3_8_bdmu_cl100_nonreactive_2gpu_v1
+export RUN_MODE=cl100
+bash run_v64_saqa_bcc.sh
+
+# 5c) publication-critical reactive agents, same checkpoint, separate root.
+export CL_CHALLENGE=closed_loop_reactive_agents
+export OUT_ROOT=outputs_v64_3_8_bdmu_cl100_reactive_2gpu_v1
+export RUN_MODE=cl100
+bash run_v64_saqa_bcc.sh
+
+# After all runs, archive the exact JSONs/logs/config-contracts and compare paired
+# scenario tokens against the frozen V64.3.7 DARM+DBR-LITERAL checkpoint.

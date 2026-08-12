@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 
 from bdse.model.residual_gate import confidence_shrunk_residual_pair_delta_numpy, confidence_shrunk_residual_pair_delta_torch
+from bdse.model.decisive_margin_utility import BDMUConfig, budgeted_decisive_margin_utility_torch
 from bdse.model.potential_projection import (
     project_pair_residual_to_action_potential_numpy,
     project_pair_residual_to_action_potential_torch,
@@ -209,6 +210,127 @@ def _straight_through_topm_mask(
     soft = soft * (target_mass / soft.sum(dim=1, keepdim=True).clamp_min(1.0e-6))
     st = soft + (hard - soft).detach()
     return st, hard.bool()
+
+
+
+def _budgeted_decisive_margin_utility_loss(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    cfg: dict[str, Any],
+    deployment_topm: torch.Tensor,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """V64.3.8 BDMU acquisition objective.
+
+    The reference B-set is generated from the *frozen V64.3.7 proposal* rather
+    than from the trainable acquisition residual.  Therefore the target does not
+    chase its own ranking during optimization: only the cheap proposal adapter
+    moves, while the DARM+DBR value path and reference budget allocation remain
+    immutable.  The target itself is a continuous local exchange derivative of
+    teacher one-sided decisive margins under B=16.
+    """
+    train_cfg = cfg.get("training", {}) or {}
+    util_cfg = train_cfg.get("budgeted_decisive_margin_utility", {}) or {}
+    zero = outputs["J0"].new_tensor(0.0)
+    if not bool(util_cfg.get("enabled", False)):
+        return zero, {
+            "bdmu_scene_fraction": zero,
+            "bdmu_positive_atom_fraction": zero,
+            "bdmu_reference_margin_deficit": zero,
+            "bdmu_reference_selected_utility_capture": zero,
+            "bdmu_current_topm_utility_capture": zero,
+            "bdmu_missed_utility_fraction": zero,
+            "bdmu_target_entropy": zero,
+        }
+    teacher_cost = batch.get("teacher_J_T")
+    teacher_g = batch.get("teacher_g_evid")
+    if teacher_cost is None or teacher_g is None:
+        raise ValueError("BDMU requires teacher_J_T and teacher_g_evid")
+    active = batch.get("evidence_active", torch.ones_like(outputs["proposal_logits"], dtype=torch.bool)).bool()
+    valid = batch["candidate_valid"].bool()
+    atom_costs = batch.get("evidence_budget_costs", torch.ones_like(outputs["proposal_logits"])).float()
+
+    reference_source = str(util_cfg.get("reference_source", "frozen_foundation_fast_budget")).strip().lower()
+    if reference_source in {"frozen_foundation_fast_budget", "foundation_fast", "frozen_fast"}:
+        if "pair_atom_delta" not in outputs:
+            raise ValueError("BDMU frozen fast-budget reference requires pair_atom_delta from the frozen DARM+DBR path")
+        # Current proposal = foundation proposal + scale * trainable residual.
+        # Subtract exactly that residual to reconstruct the immutable V64.3.7
+        # acquisition score, including the frozen family log-gate.
+        adapter_scale = float((cfg.get("model", {}).get("critical_proposal_adapter", {}) or {}).get("scale", 1.0))
+        residual = outputs.get("critical_proposal_residual_logits")
+        if residual is None:
+            foundation_logits = outputs["proposal_logits"].detach()
+        else:
+            foundation_logits = (outputs["proposal_logits"] - adapter_scale * residual).detach()
+        ref_outputs = dict(outputs)
+        ref_outputs["proposal_logits"] = foundation_logits
+        budget = float((cfg.get("evidence", {}) or {}).get("budget", 16))
+        reference_mask = _fast_pair_margin_surrogate_masks(ref_outputs, batch, cfg, [budget])[budget]
+    elif reference_source in {"oracle", "oracle_selected", "precomputed_oracle"}:
+        oracle = batch.get("oracle_selected_mask")
+        if oracle is None:
+            raise ValueError("BDMU reference_source=oracle_selected requires oracle_selected_mask")
+        reference_mask = oracle.bool()
+    else:
+        raise ValueError(f"Unknown BDMU reference_source={reference_source!r}")
+
+    target_cfg = BDMUConfig(
+        budget=float((cfg.get("evidence", {}) or {}).get("budget", 16)),
+        rival_count=int(util_cfg.get("rival_count", 4)),
+        preserve_fraction=float(util_cfg.get("preserve_fraction", 0.60)),
+        margin_floor=float(util_cfg.get("margin_floor", 0.02)),
+        margin_cap=float(util_cfg.get("margin_cap", 0.75)),
+        rival_temperature=float(util_cfg.get("rival_temperature", 0.20)),
+        min_action_scale=float(util_cfg.get("min_action_scale", 100.0)),
+        cost_power=float(util_cfg.get("cost_power", 1.0)),
+        min_atom_cost=float(util_cfg.get("min_atom_cost", 1.0e-3)),
+        utility_epsilon=float(util_cfg.get("utility_epsilon", 1.0e-8)),
+    )
+    utility, target_diag = budgeted_decisive_margin_utility_torch(
+        teacher_cost,
+        teacher_g,
+        active,
+        valid,
+        batch["teacher_a_star"],
+        reference_mask,
+        atom_costs,
+        target_cfg,
+    )
+    has = target_diag["scene_has_utility"].bool()
+    eps = float(target_cfg.utility_epsilon)
+    mass = utility.sum(dim=1, keepdim=True)
+    target_dist = utility / mass.clamp_min(eps)
+    acquisition_logits = outputs["proposal_logits"].float().masked_fill(~active, _neg_mask_value(outputs["proposal_logits"]))
+    logp = F.log_softmax(acquisition_logits, dim=1)
+    listwise = -(target_dist * logp).sum(dim=1)
+    scene_weight = has.float()
+    L_rank = (listwise * scene_weight).sum() / scene_weight.sum().clamp_min(1.0)
+
+    # A small residual norm is the preservation prior: when the continuous
+    # teacher utility provides no evidence to move an atom, the zero-init V64.3.7
+    # proposal remains the exact default.  This is not a second acquisition target.
+    residual = outputs.get("critical_proposal_residual_logits")
+    if residual is not None:
+        residual_safe = torch.where(active, residual.float(), torch.zeros_like(residual.float()))
+        residual_norm = residual_safe.square().sum() / active.float().sum().clamp_min(1.0)
+    else:
+        residual_norm = zero
+    L = L_rank + float(util_cfg.get("residual_l2_weight", 1.0e-3)) * residual_norm
+
+    ref_capture = (utility * reference_mask.float()).sum(dim=1) / mass.squeeze(1).clamp_min(eps)
+    topm_capture = (utility * deployment_topm.float()).sum(dim=1) / mass.squeeze(1).clamp_min(eps)
+    missed_fraction = target_diag["missed_utility"] / target_diag["total_utility"].clamp_min(eps)
+    entropy = -(target_dist * torch.log(target_dist.clamp_min(eps))).sum(dim=1)
+    denom = scene_weight.sum().clamp_min(1.0)
+    return L, {
+        "bdmu_scene_fraction": has.float().mean(),
+        "bdmu_positive_atom_fraction": (target_diag["positive_fraction"] * scene_weight).sum() / denom,
+        "bdmu_reference_margin_deficit": (target_diag["weighted_deficit"] * scene_weight).sum() / denom,
+        "bdmu_reference_selected_utility_capture": (ref_capture * scene_weight).sum() / denom,
+        "bdmu_current_topm_utility_capture": (topm_capture * scene_weight).sum() / denom,
+        "bdmu_missed_utility_fraction": (missed_fraction * scene_weight).sum() / denom,
+        "bdmu_target_entropy": (entropy * scene_weight).sum() / denom,
+    }
 
 
 def _exact_winner_flip_critical_proposal_loss(
@@ -3218,6 +3340,72 @@ def _certificate_action_gap_loss(
     L_frontier = (frontier_terms * frontier_mask.float()).sum() / frontier_mask.float().sum().clamp_min(1.0)
     return L_gap, L_safe, L_frontier
 
+def _bdmu_only_loss_mode(train_cfg: dict[str, Any]) -> bool:
+    """Return True only for the strict V64.3.8 acquisition-isolation objective.
+
+    Older training recipes intentionally keep their full loss graph.  The fast
+    path is therefore opt-in twice: BDMU must be enabled and it must be the only
+    positive entry in ``training.loss_weights``.  This makes the optimization
+    algebra identical to the ordinary weighted sum while avoiding construction
+    of legacy zero-weight objectives.
+    """
+    util_cfg = (train_cfg.get("budgeted_decisive_margin_utility", {}) or {})
+    if not bool(util_cfg.get("enabled", False)):
+        return False
+    weights = train_cfg.get("loss_weights", {}) or {}
+    positive = {str(k) for k, v in weights.items() if abs(float(v)) > 0.0}
+    return positive == {"budgeted_decisive_margin_utility"}
+
+
+def _compute_bdmu_only_losses(
+    out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]
+) -> dict[str, torch.Tensor]:
+    """Semantics-preserving fast path for BDMU-only adapter finetuning."""
+    logits = out["proposal_logits"]
+    active = batch.get("evidence_active", torch.ones_like(logits, dtype=torch.bool)).bool()
+    costs = batch.get("evidence_budget_costs", torch.ones_like(logits)).float()
+    fam = batch.get(
+        "evidence_family_ids", torch.zeros_like(logits, dtype=torch.long)
+    ).long()
+    deployment_hard, _ = _fast_topm_mask_torch(
+        logits,
+        active,
+        costs,
+        fam,
+        batch.get("evidence_features"),
+        cfg,
+        family_scores=out.get("family_logits"),
+    )
+    L_bdmu, diag = _budgeted_decisive_margin_utility_loss(
+        out, batch, cfg, deployment_hard
+    )
+    weight = float(
+        ((cfg.get("training", {}) or {}).get("loss_weights", {}) or {}).get(
+            "budgeted_decisive_margin_utility", 0.0
+        )
+    )
+    total = L_bdmu * weight
+    zero = total.new_tensor(0.0)
+    residual = out.get("critical_proposal_residual_logits")
+    if residual is None:
+        residual_abs_mean = zero
+        residual_rms = zero
+    else:
+        r = torch.where(active, residual.float(), torch.zeros_like(residual.float()))
+        denom = active.float().sum().clamp_min(1.0)
+        residual_abs_mean = r.abs().sum() / denom
+        residual_rms = torch.sqrt(r.square().sum() / denom)
+    result = {
+        "loss": total,
+        "L_budgeted_decisive_margin_utility": L_bdmu,
+        "critical_proposal_residual_abs_mean": residual_abs_mean,
+        "critical_proposal_residual_rms": residual_rms,
+        "bdmu_fast_path_active": total.new_tensor(1.0),
+    }
+    result.update(diag)
+    return result
+
+
 def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     # Losses include large teacher costs and masking sentinels.  Compute them in
     # float32 even when model forward uses CUDA AMP; otherwise fp16 masks such as
@@ -3238,6 +3426,12 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     target_action = batch["teacher_a_star"].long()
     train_cfg = cfg.get("training", {})
     lw = train_cfg.get("loss_weights", {})
+
+    # V64.3.8 efficiency path.  This is exactly the same weighted objective as
+    # the general path when BDMU is the sole non-zero loss; it only avoids
+    # constructing legacy terms that would subsequently be multiplied by zero.
+    if _bdmu_only_loss_mode(train_cfg):
+        return _compute_bdmu_only_losses(out, batch, cfg)
 
     finite_J0 = torch.where(torch.isfinite(J0), J0, torch.zeros_like(J0))
     if bool(train_cfg.get("normalize_base_loss", False)):
@@ -3915,6 +4109,11 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         critical_winner_endpoint_logits=out.get("critical_winner_endpoint_logits"),
         critical_flip_endpoint_logits=out.get("critical_flip_endpoint_logits"),
         return_adapter_diagnostic=True,
+    )
+
+    # V64.3.8 BDMU: continuous theorem-aligned acquisition supervision.
+    L_budgeted_decisive_margin_utility, bdmu_diag = _budgeted_decisive_margin_utility_loss(
+        out, batch, cfg, deployment_hard
     )
 
     # v24 CACE: Closed-loop Action-Critical Evidence supervision.  v23 showed
@@ -4922,6 +5121,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("proposal_dense_winner", 0.0)) * L_proposal_dense_winner
         + float(lw.get("proposal_logit_stability", 0.0)) * L_proposal_logit_stability
         + float(lw.get("exact_winner_flip_critical_proposal", 0.0)) * L_exact_winner_flip_critical_proposal
+        + float(lw.get("budgeted_decisive_margin_utility", 0.0)) * L_budgeted_decisive_margin_utility
         + float(lw.get("action", 1.0)) * L_act
         + float(lw.get("full_action", 1.0)) * L_full_action
         + float(lw.get("full_margin", 0.5)) * L_full_margin
@@ -4981,6 +5181,8 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_proposal_dense_winner": L_proposal_dense_winner,
         "L_proposal_logit_stability": L_proposal_logit_stability,
         "L_exact_winner_flip_critical_proposal": L_exact_winner_flip_critical_proposal,
+        "L_budgeted_decisive_margin_utility": L_budgeted_decisive_margin_utility,
+        **bdmu_diag,
         # V64.3.4 audit fix: ACRA has been part of
         # L_exact_winner_flip_critical_proposal since V64.3.3, but the standalone
         # diagnostic was accidentally omitted from the returned loss dictionary.

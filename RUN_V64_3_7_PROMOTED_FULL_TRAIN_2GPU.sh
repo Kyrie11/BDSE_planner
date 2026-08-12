@@ -19,6 +19,6 @@ export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data
 export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
 export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2}"
 export GPUS="${GPUS:-0,1}" NPROC_PER_NODE=2 BATCH_SIZE_PER_GPU="${BATCH_SIZE_PER_GPU:-16}" NUM_WORKERS_PER_GPU="${NUM_WORKERS_PER_GPU:-12}" VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-4}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
-export MAX_TRAIN_SCENARIOS="${MAX_TRAIN_SCENARIOS:-50000}" VAL_SCENARIOS="${VAL_SCENARIOS:-1000}" VAL_EVERY_N_EPOCHS=1 VAL_BEFORE_TRAINING=1 BEST_MIN_EPOCH=3 AUTO_RESUME=0 INIT_MODE=warm_start RUN_MODE=train_open_loop
+export MAX_TRAIN_SCENARIOS="${MAX_TRAIN_SCENARIOS:-50000}" VAL_SCENARIOS="${VAL_SCENARIOS:-1000}" VAL_EVERY_N_EPOCHS=1 VAL_BEFORE_TRAINING=1 BEST_MIN_EPOCH=3 AUTO_RESUME=0 INIT_MODE=warm_start RUN_MODE="${RUN_MODE:-train}" SAVE_EVERY_N_EPOCHS="${SAVE_EVERY_N_EPOCHS:-1}"
 python -m bdse.tools.validate_v64_pipeline_config --train-config "$TRAIN_CONFIG" --eval-config "$EVAL_CONFIG" --expected-family v64.3.7 --output "$OUT_ROOT.config_contract.json"
 exec bash run_v64_saqa_bcc.sh

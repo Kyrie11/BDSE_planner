@@ -13,6 +13,7 @@ from tqdm import tqdm
 from bdse.config import load_config
 from bdse.data.nuplan_dataset import NuPlanBDSEDataset, PreprocessedBDSEDataset
 from bdse.metrics.bdse_metrics import OnlineMetricMean, compute_bdse_diagnostics
+from bdse.model.decisive_margin_utility import BDMUConfig, budgeted_decisive_margin_utility_numpy
 from bdse.planner.nuplan_planner import BDSEPlannerCore, runtime_query_diagnostics
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.hab import select_topm_atoms_hab
@@ -196,6 +197,92 @@ def _criticality_metrics(
     details[f"{prefix}_critical_topm_hit_count"] = topm_hits
     details[f"{prefix}_critical_selected_hit_count"] = selected_hits
     return values, details
+
+
+
+def _bdmu_metrics_enabled(cfg: dict[str, object]) -> bool:
+    """Return True only when V64.3.8 BDMU diagnostics are requested.
+
+    This guard keeps legacy V64.3.7-and-earlier validation bit-for-bit on the
+    old diagnostic path instead of paying teacher utility reconstruction cost.
+    """
+    util_cfg = ((cfg.get("training", {}) or {}).get("budgeted_decisive_margin_utility", {}) or {})
+    if bool(util_cfg.get("enabled", False)):
+        return True
+    metadata = cfg.get("metadata", {}) or {}
+    version = str(metadata.get("algorithm_version", metadata.get("version", ""))).lower()
+    return version.startswith("v64.3.8") or "v64.3.8" in version
+
+
+def _teacher_bdmu_metrics(sample, pred: dict[str, object], selected_atoms, cfg: dict[str, object]) -> dict[str, float]:
+    """Teacher-only V64.3.8 BDMU diagnostics on the deployed B-set.
+
+    The metric asks how much local one-exchange decisive-margin utility remains
+    outside the selected set and outside HAB Top-M.  It never changes planner
+    output and is cheap enough for the normal 500-scene validation path.
+    """
+    pred_g = np.asarray(pred.get("g", []), dtype=np.float32)
+    if pred_g.ndim != 2 or pred_g.shape[0] <= 0 or pred_g.shape[1] <= 1:
+        return {}
+    E, K = pred_g.shape
+    teacher_g = np.zeros((E, K), dtype=np.float32)
+    src_g = np.asarray(sample.teacher.g_evid, dtype=np.float32)
+    teacher_g[: min(E, src_g.shape[0]), : min(K, src_g.shape[1])] = src_g[:E, :K]
+    teacher_cost = np.full((K,), np.inf, dtype=np.float32)
+    src_cost = np.asarray(sample.teacher.J_T, dtype=np.float32).reshape(-1)
+    teacher_cost[: min(K, src_cost.shape[0])] = src_cost[:K]
+    active = _align_bool_mask(np.asarray(sample.evidence_bank.active_mask, dtype=bool), E)
+    valid = _align_bool_mask(np.asarray(sample.candidates.valid_mask, dtype=bool), K)
+    ref = np.zeros((E,), dtype=bool)
+    sel = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    sel = sel[(sel >= 0) & (sel < E)]
+    ref[sel] = True
+    topm = np.zeros((E,), dtype=bool)
+    top = np.asarray(pred.get("top_m_atoms", []), dtype=np.int64).reshape(-1)
+    top = top[(top >= 0) & (top < E)]
+    topm[top] = True
+    try:
+        costs = np.asarray(sample.evidence_bank.budget_costs(), dtype=np.float32).reshape(-1)
+    except Exception:
+        costs = np.ones((E,), dtype=np.float32)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    util_cfg = ((cfg.get("training", {}) or {}).get("budgeted_decisive_margin_utility", {}) or {})
+    target_cfg = BDMUConfig(
+        budget=float((cfg.get("evidence", {}) or {}).get("budget", 16)),
+        rival_count=int(util_cfg.get("rival_count", 4)),
+        preserve_fraction=float(util_cfg.get("preserve_fraction", 0.60)),
+        margin_floor=float(util_cfg.get("margin_floor", 0.02)),
+        margin_cap=float(util_cfg.get("margin_cap", 0.75)),
+        rival_temperature=float(util_cfg.get("rival_temperature", 0.20)),
+        min_action_scale=float(util_cfg.get("min_action_scale", 100.0)),
+        cost_power=float(util_cfg.get("cost_power", 1.0)),
+        min_atom_cost=float(util_cfg.get("min_atom_cost", 1.0e-3)),
+        utility_epsilon=float(util_cfg.get("utility_epsilon", 1.0e-8)),
+    )
+    utility, details = budgeted_decisive_margin_utility_numpy(
+        teacher_cost, teacher_g, active, valid, int(sample.teacher.a_star), ref, costs[:E], target_cfg
+    )
+    total = float(utility.sum())
+    eps = max(float(target_cfg.utility_epsilon), 1.0e-12)
+    if total <= eps:
+        topm_capture = float("nan")
+        selected_capture = float("nan")
+        missed_fraction = float("nan")
+    else:
+        topm_capture = float(utility[topm].sum() / total)
+        selected_capture = float(utility[ref].sum() / total)
+        missed_fraction = float(utility[active & ~ref].sum() / total)
+    return {
+        "teacher_bdmu_scalar_winner_aligned": float(details.get("aligned", 0.0)),
+        "teacher_bdmu_scene_has_utility": float(details.get("scene_has_utility", 0.0)),
+        "teacher_bdmu_topm_utility_capture": topm_capture,
+        "teacher_bdmu_selected_utility_capture": selected_capture,
+        "teacher_bdmu_missed_utility_fraction": missed_fraction,
+        "teacher_bdmu_reference_margin_deficit": float(details.get("weighted_deficit", float("nan"))),
+        "teacher_bdmu_positive_atom_fraction": float(details.get("positive_fraction", float("nan"))),
+        "teacher_bdmu_total_utility": total,
+    }
 
 
 def _frozen_family_slot_oracle_critical_recall(
@@ -552,6 +639,8 @@ def add_dense_bridge_diagnostics(
     )
     diag.values.update(teacher_critical)
     diag.details.update(teacher_details)
+    if _bdmu_metrics_enabled(cfg):
+        diag.values.update(_teacher_bdmu_metrics(sample, pred, selected, cfg))
     diag.values["teacher_exact_winner_flip_frozen_family_slot_oracle_topm_recall"] = (
         _frozen_family_slot_oracle_critical_recall(
             teacher_base, teacher_g, active_atoms, valid_actions, teacher_action, pred, sample, cfg

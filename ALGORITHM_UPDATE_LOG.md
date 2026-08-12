@@ -5014,3 +5014,85 @@ The priority ordering remains, with stronger evidence:
 Do not introduce another pair architecture, global tournament/potential, BCHA, CCBR/LEA gate, larger B/M, scratch training, or acquisition loss before completing the missing LITERAL screen and the guarded full pipeline.
 
 If the DARM+DBR gain survives the full pipeline, freeze the value/aggregation mechanism. The next acquisition hypothesis should be **DARM-consistent decisive-margin marginal utility**: train the cheap proposal path to rank auditable atoms by how much they reduce the one-sided decisive-margin deficit under fixed B=16. This connects acquisition directly to the theorem-aligned DARM decision objective instead of repeating sparse binary critical classification.
+
+# V64.3.8 — BDMU: Budgeted Decisive-Margin Marginal Utility Acquisition (2026-08-12)
+
+## New uploaded V64.3.7 matrix result
+
+The latest uploaded `outputs_v64_3_7_darm_dbr_screen_matrix_2gpu_v1` now contains **both BROAD and LITERAL**. This supersedes the previous V64.3.7.1 note that only BROAD was available.
+
+Common immutable epoch -1 anchor: teacher/pair-full/local-pair-full action match `0.264/0.264/0.264`, teacher regret `14484.4613`, pair-full regret `14079.9774`, exact critical Top-M `0.3601533`, selected exact-critical `0.2605364`, proposal decisive recall `0.7915091`.
+
+BROAD selected epoch 3: teacher `0.282` (+1.8pp), pair-full `0.274` (+1.0pp), local pair-full unchanged `0.264`, teacher regret `13367.1395` (-1117.32), pair-full regret `13673.7794` (-406.20), residual intervention net +1.0pp, compression net +0.8pp.
+
+LITERAL selected epoch 2: teacher `0.286` (+2.2pp), pair-full `0.280` (+1.6pp), local pair-full unchanged `0.264`, teacher regret `14027.5786` (-456.88), pair-full regret `14031.3813` (-48.60), residual intervention net +1.6pp, compression net +0.6pp.
+
+Acquisition metrics are exactly unchanged in both arms. Therefore LITERAL is the provisional main **value-supervision** candidate because it best preserves the teacher decision, while BROAD's stronger regret reduction exposes an action-identity versus severity tradeoff. LITERAL already contains BROAD support plus the bounded exact-boundary quota; do not construct a redundant BROAD+LITERAL mixture.
+
+The value-side causal question is now sufficiently positive to justify moving to acquisition **only after LITERAL reproduces on the full 50k/1k pipeline**.
+
+## Bottleneck update
+
+The first bottleneck (decisive pair value + final aggregation) is partially resolved by DARM+DBR. The unresolved bottleneck is now acquisition generalization: exact critical Top-M remains `0.3601533` and selected exact-critical remains `0.2605364` despite downstream value gains.
+
+Do not retry AP-WCCA/AP-WRCCA, LCV, FPCCA-F6/F8, CCBR/LEA objectives, BCHA, larger B/M, full proposal unfreeze, binary literal-critical BCE, global pair tournament/potential, evidence/set potential, beam/swap/bruteforce selection, or scratch foundation training.
+
+## Algorithm: Budgeted Decisive-Margin Marginal Utility (BDMU)
+
+BDMU trains acquisition on the same one-sided decision-margin object used by DARM instead of predicting whether an atom is a sparse literal-critical event.
+
+For full teacher winner `w`, nearest teacher rivals `b`, and immutable frozen-foundation B-set `S_B`, define a normalized full teacher margin `m_T(w,b)` and preservation threshold
+
+`gamma_b = min(m_T, max(rho*m_T, margin_floor), margin_cap)`.
+
+The reference deficit is
+
+`delta_b(S_B) = [gamma_b - m_{S_B}(w,b)]_+`.
+
+Selected-atom utility is the deficit increase under removal. Missed-atom utility is the best deficit reduction under a **budget-feasible single exchange** `S_B-{j}+{i}`; direct addition is allowed only when the reference has true budget slack. This revision is important: the supervision never relies on a B+1 counterfactual and therefore respects the fixed planner-interface budget even in the teacher target.
+
+Utilities are softly aggregated over the nearest `R=4` teacher rivals and divided by query cost (`cost_power=1`). Exact winner-flip atoms are a high-value limiting case, not the only positive label. The R=1 and no-cost settings are reserved as theory ablations.
+
+## Strict causal isolation
+
+- Warm-start only from a **full-pipeline promoted V64.3.7 DARM+DBR-LITERAL checkpoint**.
+- Freeze DARM, DBR and all foundation modules.
+- Train only the existing zero-init `critical_proposal_adapter` with complete-candidate boundary-routing representation.
+- CCBR is representation only; all old CCBR/LEA/HCBE/ACRA/literal-critical objectives are disabled.
+- Reconstruct immutable foundation proposal logits by subtracting the trainable residual before computing the reference B-set, preventing target chasing.
+- The training reference B-set uses the existing all-GPU one-shot MARS/HAB budget surrogate for throughput; it is explicitly an immutable budget-feasible reference approximation, while exact deployed selector behavior remains an evaluation target.
+- Keep B=16, proposal Top-M, evidence atoms, selector, DA-EPC and runtime final aggregation unchanged.
+- V64.3.8 checkpoint contract does **not** allow `decisive_boundary_pair_adapter.*` to be missing. Pointing at V62 directly must fail.
+
+Tightened paper chain:
+
+`fixed planner-interface budget -> auditable evidence atoms -> budget-feasible BDMU decisive-margin utility -> budgeted acquisition -> DARM one-sided margin preservation -> final decision preservation`.
+
+The theorem bridge is conditional and reuses the DARM certificate: for a complete decisive-rival set, `D(S)=sum_b pi_b[gamma_b-m_S(w,b)]_+` with positive weights satisfies `D(S)=0 =>` every decisive margin is positive; BDMU is the budget-feasible local decrease of this same deficit. Practical R=4 is a training approximation, while the exact downstream certificate remains the verifier.
+
+## Promotion protocol
+
+1. Reproduce DARM+DBR-LITERAL on full train/val and require the existing teacher-oriented full audit to pass. Otherwise BDMU launchers block.
+2. BDMU 12k/500 screen must activate the adapter, expose non-zero teacher utility support, improve BDMU Top-M utility capture by >=2pp plus selected-capture or exact-critical corroboration, and produce a teacher-action >=+0.5pp or regret >=2% gain without teacher/regret harm.
+3. BDMU 50k/1k full run must reproduce the same mechanism+deployment gate before test/closed-loop or ablations.
+4. R1 and no-cost ablations are blocked until **both** main BDMU screen and main BDMU full audit pass.
+5. Held-out test is run once after checkpoint/hyperparameters are frozen. CL20 is integration debug only; CL100 non-reactive and reactive use the same frozen checkpoint.
+
+## Engineering / efficiency changes
+
+- Added a strict BDMU-only loss fast path. It is active only when BDMU is enabled and is the sole positive `loss_weights` entry; legacy configs keep the original loss graph.
+- Fixed a config-default trap: `load_config` injects a default family loss if omitted, so V64.3.8 explicitly sets `family: 0.0`. Without this, the intended fast path would silently be disabled.
+- BDMU diagnostics are opt-in; V64.3.7-and-earlier evaluation pays no new utility-diagnostic overhead.
+- Full V64.3.7 and V64.3.8 launchers save every epoch and train before evaluation. Checkpoint selection/audit occurs on validation only, then open/closed-loop runs use the frozen selected epoch.
+- Uploaded LITERAL e3 profiling shows loss construction can be a material cost (`73.63 s` of `217.81 s` epoch; pair sampling `1.92 s`). The fast path removes zero-weight legacy loss construction, but **no V64.3.8 speedup is claimed until the next GPU run measures it**.
+
+## New files / tests
+
+- `bdse/model/decisive_margin_utility.py`
+- BDMU objective + strict fast path in `bdse/model/losses.py`
+- BDMU validation metrics in `bdse/experiments/evaluate_open_loop.py` and training validation export
+- `bdse/tools/check_v64_3_8_bdmu_screen.py`
+- `bdse/tools/select_decision_pareto_checkpoint.py`
+- V64.3.8 main train/screen/closed-loop configs plus R1/no-cost configs
+- 2-GPU screen/full/theory-ablation launchers
+- regression tests covering Torch/NumPy utility equivalence, cost normalization, scalar-teacher mismatch exclusion, fixed-budget no-B+1 behavior, strict acquisition isolation, zero-init preservation, checkpoint contract, fast-path opt-in and legacy diagnostic opt-in.

@@ -27,6 +27,8 @@ from bdse.experiments.evaluate_open_loop import (
     add_dense_bridge_diagnostics,
     _criticality_metrics,
     _frozen_family_slot_oracle_critical_recall,
+    _teacher_bdmu_metrics,
+    _bdmu_metrics_enabled,
 )
 from bdse.metrics.bdse_metrics import compute_bdse_diagnostics
 from bdse.model.bdse_model import BDSEModel
@@ -1145,6 +1147,8 @@ def _teacher_literal_criticality_full_support(
     else:
         values["teacher_exact_winner_flip_global_oracle_topm_recall"] = float("nan")
         values["teacher_exact_winner_flip_family_slot_oracle_gap"] = float("nan")
+    if _bdmu_metrics_enabled(cfg):
+        values.update(_teacher_bdmu_metrics(sample, pred, selected_atoms, cfg))
     return values, details
 
 

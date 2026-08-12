@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-08-12",
+  "algorithm_version": "V64.3.8-CC-AOCC-BDMU-DARM-DBR",
+  "compileall": "PASS",
+  "bash_syntax": {
+    "RUN_V64_3_7_PROMOTED_FULL_TRAIN_2GPU.sh": "PASS",
+    "RUN_V64_3_8_BDMU_SCREEN_2GPU.sh": "PASS",
+    "RUN_V64_3_8_BDMU_FULL_TRAIN_2GPU.sh": "PASS",
+    "RUN_V64_3_8_BDMU_THEORY_ABLATIONS_2GPU.sh": "PASS",
+    "run_v64_saqa_bcc.sh": "PASS"
+  },
+  "config_contract": {
+    "v64_3_8_main_screen": "PASS",
+    "v64_3_8_main_full": "PASS",
+    "v64_3_8_r1_ablation": "PASS",
+    "v64_3_8_nocost_ablation": "PASS",
+    "v64_3_7_broad_legacy_compatibility": "PASS",
+    "v64_3_7_literal_legacy_compatibility": "PASS",
+    "explicit_v64_3_8_checks": [
+      "BDMU enabled",
+      "BDMU sole positive loss",
+      "budget-feasible single exchange",
+      "literal critical objective disabled",
+      "family coupling disabled",
+      "critical acquisition adapter enabled",
+      "pretrained DBR required"
+    ]
+  },
+  "tests": {
+    "collected": 309,
+    "full_regression_execution": "PASS (split into four interleaved chunks after monolithic invocation hit the command time limit)",
+    "passed": 309,
+    "failed": 0,
+    "chunks": [
+      {
+        "passed": 78,
+        "warnings": 7
+      },
+      {
+        "passed": 77,
+        "warnings": 11
+      },
+      {
+        "passed": 77,
+        "warnings": 8
+      },
+      {
+        "passed": 77,
+        "warnings": 9
+      }
+    ],
+    "v64_3_8_targeted": {
+      "passed": 10,
+      "failed": 0,
+      "warnings": 1
+    }
+  },
+  "dataset_paths": {
+    "/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2": false,
+    "/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2": false,
+    "/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2": false
+  },
+  "runtime_claims": {
+    "new_bdmu_gpu_training_run_performed": false,
+    "new_bdmu_closed_loop_run_performed": false,
+    "reason": "User nuPlan caches are not mounted in this delivery environment; no numerical BDMU gain or speedup is claimed before the prescribed 2-GPU run."
+  }
+}
