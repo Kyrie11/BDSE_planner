@@ -739,6 +739,8 @@ training:
   budgeted_decisive_margin_utility:
     enabled: true
     reference_source: frozen_foundation_fast_budget
+    topm_membership_source: exact_runtime_hab
+    reference_topm_pool_source: exact_runtime_hab
     exchange_mode: best_budget_feasible_single_exchange
     rival_count: 4
     preserve_fraction: 0.6

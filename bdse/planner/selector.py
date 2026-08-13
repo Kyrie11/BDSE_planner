@@ -231,6 +231,108 @@ def restrict_topm_to_decision_evidence(
     }
 
 
+def finalize_runtime_topm_policy(
+    topm: np.ndarray | list[int],
+    *,
+    proposal_scores: np.ndarray,
+    family_ids: np.ndarray,
+    active_mask: np.ndarray,
+    max_size: int,
+    selector_cfg: dict[str, Any],
+    raw_hard_mask: np.ndarray | None = None,
+    interaction_group_ids: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int]]:
+    """Apply the canonical deployment post-processing policy to HAB Top-M.
+
+    This helper is intentionally shared by deployment and training-side exact
+    masks.  AF-BDMU learns *membership at the deployed Top-M boundary*, so a
+    duplicated/reordered implementation silently changes the supervised event.
+
+    Canonical order:
+      1. remove/refill structural-safety atoms when the decision budget bypasses
+         the deterministic safety channel, otherwise force mandatory hard atoms;
+      2. reserve soft interaction slots, using agent-group-aware ordering;
+      3. keep M fixed throughout (only one-for-one exchanges/refills).
+
+    Returns ``(topm, mandatory_hard_mask, soft_interaction_mask, diagnostics)``.
+    """
+    scores = np.asarray(proposal_scores, dtype=np.float32).reshape(-1)
+    fam = np.asarray(family_ids, dtype=np.int64).reshape(-1)
+    active = np.asarray(active_mask, dtype=bool).reshape(-1)
+    E = int(active.shape[0])
+    if scores.shape[0] < E:
+        scores = np.pad(scores, (0, E - scores.shape[0]), constant_values=-np.inf)
+    scores = scores[:E]
+    if fam.shape[0] < E:
+        fam = np.pad(fam, (0, E - fam.shape[0]), constant_values=0)
+    fam = fam[:E]
+    hard = _as_bool_mask(raw_hard_mask, E)
+    mandatory = structural_safety_mask(
+        hard,
+        fam,
+        active,
+        include_feasibility=bool(selector_cfg.get("structural_safety_include_feasibility", True)),
+    )
+    structural_bypass = bool(selector_cfg.get("decision_budget_excludes_structural_safety", False))
+    size = max(0, int(max_size))
+    current = np.asarray(topm, dtype=np.int64).reshape(-1)
+    diag: dict[str, int] = {
+        "structural_safety_bypass": int(structural_bypass),
+        "structural_safety_atom_count": int(mandatory.sum()),
+    }
+
+    if structural_bypass:
+        current, restrict_diag = restrict_topm_to_decision_evidence(
+            current,
+            active & ~mandatory,
+            scores,
+            size,
+            family_ids=fam,
+        )
+        diag.update({f"scide_{k}": int(v) for k, v in restrict_diag.items()})
+    elif bool(selector_cfg.get("force_hard_topm", True)):
+        forced = np.flatnonzero(mandatory)
+        if forced.size:
+            forced_cap = int(selector_cfg.get("max_forced_hard_topm", max(1, size // 2)))
+            forced = np.asarray(
+                sorted(
+                    forced.tolist(),
+                    key=lambda i: (-float(scores[int(i)]), int(i)),
+                )[:forced_cap],
+                dtype=np.int64,
+            )
+            forced_set = set(forced.tolist())
+            current = np.asarray(
+                (
+                    forced.tolist()
+                    + [int(i) for i in current.tolist() if int(i) not in forced_set]
+                )[:size],
+                dtype=np.int64,
+            )
+            diag["forced_hard_topm"] = int(forced.size)
+
+    interaction_family_set = set(int(x) for x in selector_cfg.get("interaction_family_ids", [2, 3]))
+    soft_interaction = (
+        np.asarray([int(f) in interaction_family_set for f in fam.tolist()], dtype=bool)
+        & active
+        & ~hard
+    )
+    reserve = int(selector_cfg.get("min_soft_interaction_topm_slots", 0))
+    if reserve > 0 and bool(soft_interaction.any()):
+        current, reserve_diag = reserve_topm_candidates(
+            current,
+            soft_interaction,
+            scores,
+            size,
+            reserve,
+            protected_mask=mandatory,
+            group_ids=interaction_group_ids,
+        )
+        diag.update({f"soft_interaction_topm_{k}": int(v) for k, v in reserve_diag.items()})
+
+    return current, mandatory, soft_interaction, diag
+
+
 def _complete_safety_aware_selection(
     selected: list[int] | np.ndarray,
     atom_budget_costs: np.ndarray,

@@ -1,4 +1,7 @@
-# V64.3.9 AF-BDMU — next commands (2 GPUs, repaired full gate, representative screen)
+# V64.3.9 AF-BDMU-R1 — next commands (2 GPUs, exact runtime Top-M parity repair)
+# IMPORTANT: outputs_v64_3_9_af_bdmu_screen_2gpu_v1 is invalid for AF-BDMU causal attribution
+# because BDMU training used a different Top-M post-processing policy from deployment.
+# Do NOT resume/reuse that training output. Re-run Phase 1 into the v2_runtime_parity root.
 # Goal: test whether Top-M decisive-margin utility ranking is still binding after
 # DARM+DBR has been causally validated under frozen acquisition.
 # Do not use test/closed-loop for model selection.
@@ -95,10 +98,15 @@ cat v64_3_9_input_pipeline_benchmark.json
 # -----------------------------------------------------------------------------
 # PHASE 1 — AF-BDMU acquisition-isolation screen
 # -----------------------------------------------------------------------------
+# Mandatory engineering preflight: this must PASS before GPU training.
+python -m bdse.tools.check_v64_3_9_runtime_topm_contract \
+  --config bdse/configs/v64_3_9_cc_aocc_af_bdmu_daepc_screen_2gpu.yaml \
+  --output v64_3_9_runtime_topm_contract.preflight.json
+cat v64_3_9_runtime_topm_contract.preflight.json
 # The launcher uses a 500-scene UNIFORM-BLOCK sample across the full validation
 # order; do not revert to prefix-500 because the current cache has a large
 # first-half/second-half difficulty shift.
-export OUT_ROOT=outputs_v64_3_9_af_bdmu_screen_2gpu_v1
+export OUT_ROOT=outputs_v64_3_9_af_bdmu_screen_2gpu_v2_runtime_parity
 export VAL_MAX_SCENARIOS_STRATEGY=uniform_blocks
 bash RUN_V64_3_9_AF_BDMU_SCREEN_2GPU.sh
 export AF_BDMU_SCREEN_REPORT="$OUT_ROOT/provenance/v64_3_9_af_bdmu_screen.json"
@@ -116,7 +124,7 @@ PY
 # -----------------------------------------------------------------------------
 # PHASE 2 — full AF-BDMU training (50k train / full 1k validation)
 # -----------------------------------------------------------------------------
-export AF_ROOT=outputs_v64_3_9_af_bdmu_full_2gpu_v1
+export AF_ROOT=outputs_v64_3_9_af_bdmu_full_2gpu_v2_runtime_parity
 export OUT_ROOT="$AF_ROOT"
 export AF_BDMU_SCREEN_REPORT="$AF_BDMU_SCREEN_REPORT"
 bash RUN_V64_3_9_AF_BDMU_FULL_TRAIN_2GPU.sh

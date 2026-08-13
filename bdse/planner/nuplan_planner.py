@@ -44,6 +44,7 @@ from bdse.planner.hab import family_ids_from_atoms, select_topm_atoms_hab
 from bdse.planner.fallback import runtime_safety_cache_scope, runtime_safety_diagnostics, runtime_safety_flags_from_runtime, runtime_safety_flag_components, runtime_risk_scores
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, restrict_pairs_to_viability_frontier
 from bdse.planner.selector import (
+    finalize_runtime_topm_policy,
     SelectionResult,
     runtime_greedy_selector,
     runtime_greedy_selector_pair_conditioned,
@@ -410,34 +411,25 @@ class BDSEPlannerCore:
             raw_hard_mask = np.asarray(evidence_bank.hard_mask(), dtype=bool)[: evidence_bank.E]
         except Exception:
             raw_hard_mask = np.zeros((evidence_bank.E,), dtype=bool)
-        mandatory_hard_mask = structural_safety_mask(
-            raw_hard_mask,
-            family_ids,
-            active,
-            include_feasibility=bool(cfg.get("selector", {}).get("structural_safety_include_feasibility", True)),
+        interaction_group_ids = np.full((evidence_bank.E,), -1, dtype=np.int64)
+        for i, atom in enumerate(evidence_bank.atoms[: evidence_bank.E]):
+            try:
+                interaction_group_ids[i] = int(getattr(atom, "anchor", {}).get("agent_index", -1))
+            except Exception:
+                interaction_group_ids[i] = -1
+        topm, mandatory_hard_mask, _, topm_policy_diag = finalize_runtime_topm_policy(
+            topm,
+            proposal_scores=proposal_logits,
+            family_ids=family_ids,
+            active_mask=active,
+            max_size=M,
+            selector_cfg=selector_cfg_early,
+            raw_hard_mask=raw_hard_mask,
+            interaction_group_ids=interaction_group_ids,
         )
         structural_safety_bypass = bool(selector_cfg_early.get("decision_budget_excludes_structural_safety", False))
-        if structural_safety_bypass:
-            topm, decision_topm_diag = restrict_topm_to_decision_evidence(
-                topm,
-                active & ~mandatory_hard_mask,
-                proposal_logits,
-                M,
-                family_ids=family_ids,
-            )
-            hab_diag = dict(hab_diag)
-            hab_diag.update({f"scide_{k}": int(v) for k, v in decision_topm_diag.items()})
-            hab_diag["structural_safety_bypass"] = 1
-        elif bool(cfg.get("selector", {}).get("force_hard_topm", True)):
-            forced = np.flatnonzero(mandatory_hard_mask)
-            if forced.size:
-                forced_cap = int(cfg.get("selector", {}).get("max_forced_hard_topm", max(1, M // 2)))
-                forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(proposal_logits[int(i)]), int(i)))[:forced_cap], dtype=np.int64)
-                forced_set = set(forced.tolist())
-                non_forced = [int(i) for i in np.asarray(topm, dtype=np.int64).reshape(-1).tolist() if int(i) not in forced_set]
-                topm = np.asarray((forced.tolist() + non_forced)[:M], dtype=np.int64)
-                hab_diag = dict(hab_diag)
-                hab_diag["forced_hard_topm"] = int(forced.size)
+        hab_diag = dict(hab_diag)
+        hab_diag.update(topm_policy_diag)
         rival_sets = build_rival_sets_from_base(
             J0,
             candidates.valid_mask,

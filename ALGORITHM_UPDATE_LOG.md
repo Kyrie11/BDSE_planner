@@ -5210,3 +5210,49 @@ Continue all V64.3.8 no-repeat constraints. Additionally:
 - do not weaken the full-pipeline gate to an unconditional bypass; the replacement is a causal interface contract, not `skip_audit`;
 - do not change DARM/DBR while testing AF-BDMU;
 - if AF-BDMU improves Top-M utility without improving teacher decision/regret, do not run another acquisition-loss family next.
+
+# V64.3.9-R1 — Engineering correction: exact runtime Top-M parity (2026-08-13)
+
+## Status of the uploaded V64.3.9 screen
+
+The uploaded `outputs_v64_3_9_af_bdmu_screen_2gpu_v1` is **not a clean AF-BDMU algorithm-negative result** and must not be used to trigger a new acquisition/value redesign.
+
+The launcher/config/checkpoint contracts all passed and optimization was active: train loss decreased from `2.2914` (epoch 0) to `2.1394` (epoch 3), listwise loss from `3.2052` to `3.0523`, Top-M swap-rank loss from `0.5941` to `0.4409`, and the proposal adapter residual RMS increased from `0.2316` to `1.0341`. However, validation exact-critical Top-M recall stayed exactly `0.23734`, while validation BDMU Top-M utility capture did not improve over the epoch -1 anchor (`0.47680`; selected epoch 1=`0.47511`).
+
+Code audit found a material training/deployment interface mismatch exactly on the mechanism AF-BDMU is intended to test:
+
+- real runtime Top-M post-processing in `BDSEModel.predict_certificate_numpy` uses **structural-safety exclusion/refill first, then group-aware soft-interaction reservation**;
+- the BDMU-only training fast mask used **soft-interaction reservation first, then structural-safety exclusion/refill**;
+- the training fast reservation ignored `evidence_agent_group_ids`, while runtime deliberately reserves distinct interaction-agent groups;
+- the frozen-foundation reference B-set was also conditioned on this fast/surrogate Top-M pool.
+
+The active V64.3.9 config has both `decision_budget_excludes_structural_safety=true` and `min_soft_interaction_topm_slots=2`, so this is not a dormant code path. It changes which atoms are labeled `missed`/`occupied` by the AF-BDMU Top-M swap loss and can also change the utility reference set. Therefore the V1 screen cannot cleanly answer whether AF-BDMU itself works.
+
+**Causal decision:** do not run V64.3.9 full/test/closed-loop from the V1 screen, but also do not pivot to a new algorithm yet. Re-run Phase 1 after restoring exact training/deployment Top-M semantic parity.
+
+## Engineering-only fix
+
+No AF-BDMU algorithm object, utility formula, loss weight, budget, DARM/DBR value model, or promotion threshold was changed.
+
+1. Added `finalize_runtime_topm_policy(...)` in `bdse/planner/selector.py` as the canonical deployment Top-M post-processing helper. Its order is structural exclusion/refill (or mandatory-hard handling) -> group-aware soft-interaction reservation, always at fixed M.
+2. `BDSEModel.predict_certificate_numpy` and the planner rule fallback now use the same canonical helper.
+3. `_runtime_hab_topm_hard_mask(...)` now calls the same canonical helper and is the source of **every scene's** hard membership mask in BDMU-only training. The previous GPU fast mask remains diagnostic only.
+4. The frozen V64.3.7 reference B-set now first obtains the exact frozen-foundation runtime Top-M pool and only then applies the pre-existing fast budget selector. Thus the BDMU target is no longer conditioned on a different proposal interface.
+5. Added explicit V64.3.9 config contracts:
+   - `topm_membership_source: exact_runtime_hab`
+   - `reference_topm_pool_source: exact_runtime_hab`
+6. Added `bdse/tools/check_v64_3_9_runtime_topm_contract.py`. The launcher runs it before spending GPU compute. A synthetic group-diversity fixture deliberately exposes the historical mismatch: canonical/exact Top-M is `{1,3,5}`, while the legacy fast surrogate is `{1,3,4}`.
+7. Added training diagnostics `bdmu_runtime_topm_surrogate_jaccard` and `bdmu_runtime_topm_exact_fraction`; the latter must be `1.0` in the repaired BDMU-only path.
+8. Screen/full launcher defaults use new `*_v2_runtime_parity` output roots to prevent contamination by the invalid V1 artifacts.
+
+## Validation
+
+- targeted V64.3.9 tests: `5 passed`;
+- complete repository suite after the fix: `315 passed`, `34 warnings` (existing PyTorch Transformer nested-tensor warnings only);
+- V64.3.9 train/eval config contract: PASS;
+- runtime Top-M semantic contract: PASS;
+- shell syntax for repaired screen/full launchers: PASS.
+
+## Next scientific decision rule
+
+The no-repeat/algorithm stop rules from V64.3.9 remain unchanged, but they may be applied **only after the repaired Phase-1 screen**. In particular, do not interpret the V1 failure as evidence to pivot to value/frontier modeling. A value pivot is justified only if an exact-interface rerun shows that acquisition mechanism metrics improve while teacher match/regret fail to respond.

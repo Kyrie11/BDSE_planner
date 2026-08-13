@@ -21,6 +21,7 @@ from bdse.model.potential_projection import (
 from bdse.planner.hab import select_topm_atoms_hab
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base, restrict_pairs_to_viability_frontier
 from bdse.planner.selector import (
+    finalize_runtime_topm_policy,
     margin_normalization_scale,
     reserve_topm_candidates,
     restrict_topm_to_decision_evidence,
@@ -247,6 +248,22 @@ def _budgeted_decisive_margin_utility_loss(
             "bdmu_frontier_rival_count": zero,
             "bdmu_reference_worst_margin_deficit": zero,
         }
+    topm_membership_source = str(
+        util_cfg.get("topm_membership_source", "exact_runtime_hab")
+    ).strip().lower()
+    reference_topm_pool_source = str(
+        util_cfg.get("reference_topm_pool_source", "exact_runtime_hab")
+    ).strip().lower()
+    if topm_membership_source != "exact_runtime_hab":
+        raise ValueError(
+            "BDMU requires topm_membership_source=exact_runtime_hab so the "
+            "swap-ranking event matches deployment Top-M membership"
+        )
+    if reference_topm_pool_source != "exact_runtime_hab":
+        raise ValueError(
+            "BDMU requires reference_topm_pool_source=exact_runtime_hab so the "
+            "frozen reference B-set is conditioned on the deployment HAB pool"
+        )
     teacher_cost = batch.get("teacher_J_T")
     teacher_g = batch.get("teacher_g_evid")
     if teacher_cost is None or teacher_g is None:
@@ -271,7 +288,23 @@ def _budgeted_decisive_margin_utility_loss(
         ref_outputs = dict(outputs)
         ref_outputs["proposal_logits"] = foundation_logits
         budget = float((cfg.get("evidence", {}) or {}).get("budget", 16))
-        reference_mask = _fast_pair_margin_surrogate_masks(ref_outputs, batch, cfg, [budget])[budget]
+        # V64.3.9 engineering correction: the reference budget selector must be
+        # conditioned on the *same* HAB Top-M pool used by deployment.  The old
+        # fast path applied interaction reservation before structural-safety
+        # exclusion and did not honor interaction group IDs; deployment does
+        # structural exclusion/refill first and then a group-aware reserve.  In
+        # AF-BDMU this mismatch changes the teacher utility target itself, so it
+        # invalidates an acquisition-only causal interpretation.  Keep the
+        # fast budget selector, but feed it the exact frozen-foundation runtime
+        # Top-M pool.
+        foundation_runtime_topm = _runtime_hab_topm_hard_mask(ref_outputs, batch, cfg)
+        reference_mask = _fast_pair_margin_surrogate_masks(
+            ref_outputs,
+            batch,
+            cfg,
+            [budget],
+            topm_mask_override=foundation_runtime_topm,
+        )[budget]
     elif reference_source in {"oracle", "oracle_selected", "precomputed_oracle"}:
         oracle = batch.get("oracle_selected_mask")
         if oracle is None:
@@ -2052,7 +2085,6 @@ def _runtime_hab_topm_hard_mask(
     fam_t = batch.get("evidence_family_ids", torch.zeros_like(logits_t, dtype=torch.long))
     group_t = batch.get("evidence_agent_group_ids", torch.full_like(fam_t, -1))
     features_t = batch.get("evidence_features")
-    hard_t = batch.get("decisive_hard_mask")
     snapshot = _packed_numpy_snapshot(
         {
             "logits": (logits_t, torch.float32),
@@ -2062,7 +2094,6 @@ def _runtime_hab_topm_hard_mask(
             "family_ids": (fam_t, torch.int64),
             "group_ids": (group_t, torch.int64),
             "features": (features_t, torch.float32),
-            "decisive_hard": (hard_t, torch.bool),
         }
     )
     logits = snapshot["logits"]
@@ -2072,7 +2103,6 @@ def _runtime_hab_topm_hard_mask(
     group = snapshot["group_ids"]
     family_logits = snapshot["family_logits"]
     features = snapshot["features"]
-    decisive_hard = snapshot["decisive_hard"]
     assert logits is not None and active is not None and costs is not None and fam is not None
     B, E = logits.shape
     mask = np.zeros((B, E), dtype=bool)
@@ -2080,7 +2110,6 @@ def _runtime_hab_topm_hard_mask(
     budget = float((cfg.get("evidence", {}) or {}).get("budget", 16))
     M = int(s_cfg.get("proposal_top_m", max(int(2 * budget), int(budget) + 1)))
     for bidx in range(B):
-        structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
         topm, _, _ = select_topm_atoms_hab(
             logits[bidx], fam[bidx], active[bidx], costs[bidx], budget, M,
             family_scores=family_logits[bidx] if family_logits is not None else None,
@@ -2089,31 +2118,17 @@ def _runtime_hab_topm_hard_mask(
             enabled=bool(s_cfg.get("hab_enabled", True)),
             min_family_slots=s_cfg.get("min_family_topm_slots", None),
         )
-        if (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and decisive_hard is not None:
-            forced = np.flatnonzero(decisive_hard[bidx] & active[bidx])
-            if forced.size:
-                cap = int(s_cfg.get("max_forced_hard_topm", max(1, M // 2)))
-                forced = np.asarray(sorted(forced.tolist(), key=lambda i: (-float(logits[bidx, i]), int(i)))[:cap], dtype=np.int64)
-                forced_set = set(forced.tolist())
-                topm = np.asarray((forced.tolist() + [int(i) for i in topm.tolist() if int(i) not in forced_set])[:M], dtype=np.int64)
         hard_feature = features[bidx, :, 0] > 0.5 if features is not None else np.zeros((E,), dtype=bool)
-        interaction_ids = set(int(x) for x in s_cfg.get("interaction_family_ids", [2, 3]))
-        soft_interaction = np.asarray([int(x) in interaction_ids for x in fam[bidx].tolist()], dtype=bool) & active[bidx] & ~hard_feature
-        protected = structural_safety_mask(
-            hard_feature, fam[bidx], active[bidx],
-            include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
+        topm, _, _, _ = finalize_runtime_topm_policy(
+            topm,
+            proposal_scores=logits[bidx],
+            family_ids=fam[bidx],
+            active_mask=active[bidx],
+            max_size=M,
+            selector_cfg=s_cfg,
+            raw_hard_mask=hard_feature,
+            interaction_group_ids=group[bidx] if group is not None else None,
         )
-        reserve = int(s_cfg.get("min_soft_interaction_topm_slots", 0))
-        if reserve > 0 and soft_interaction.any():
-            topm, _ = reserve_topm_candidates(
-                topm, soft_interaction, logits[bidx], M, reserve,
-                protected_mask=None if structural_bypass else protected,
-                group_ids=group[bidx] if group is not None else None,
-            )
-        if structural_bypass:
-            topm, _ = restrict_topm_to_decision_evidence(
-                topm, active[bidx] & ~protected, logits[bidx], M, family_ids=fam[bidx]
-            )
         mask[bidx, np.asarray(topm, dtype=np.int64)] = True
     return torch.from_numpy(mask).to(device=logits_t.device, non_blocking=True)
 
@@ -2151,6 +2166,8 @@ def _fast_pair_margin_surrogate_masks(
     batch: dict[str, torch.Tensor],
     cfg: dict[str, Any],
     budgets: list[float],
+    *,
+    topm_mask_override: torch.Tensor | None = None,
 ) -> dict[float, torch.Tensor]:
     """Build nested fixed-budget masks entirely on the accelerator.
 
@@ -2173,7 +2190,24 @@ def _fast_pair_margin_surrogate_masks(
     fam = batch.get("evidence_family_ids", torch.zeros_like(logits, dtype=torch.long)).long()
     features = batch.get("evidence_features")
     flags = batch.get("runtime_safety_flags", torch.zeros_like(valid)).bool()
-    topm_mask, soft_interaction = _fast_topm_mask_torch(logits, active, costs, fam, features, cfg, family_scores=outputs.get("family_logits"))
+    fast_topm_mask, soft_interaction = _fast_topm_mask_torch(
+        logits,
+        active,
+        costs,
+        fam,
+        features,
+        cfg,
+        family_scores=outputs.get("family_logits"),
+    )
+    if topm_mask_override is None:
+        topm_mask = fast_topm_mask
+    else:
+        if topm_mask_override.shape != fast_topm_mask.shape:
+            raise ValueError(
+                "topm_mask_override must match proposal_logits shape: "
+                f"got {tuple(topm_mask_override.shape)} vs {tuple(fast_topm_mask.shape)}"
+            )
+        topm_mask = topm_mask_override.detach().bool() & active
 
     B, E, P = delta.shape
     K = J0.shape[1]
@@ -3433,7 +3467,12 @@ def _compute_bdmu_only_losses(
     fam = batch.get(
         "evidence_family_ids", torch.zeros_like(logits, dtype=torch.long)
     ).long()
-    deployment_hard, _ = _fast_topm_mask_torch(
+    # AF-BDMU's swap-ranking term is defined on the actual deployment Top-M
+    # membership.  Use the exact stop-gradient runtime HAB mask on every scene;
+    # the former fast approximation is retained only as an instrumentation
+    # diagnostic so semantic drift becomes visible instead of silently changing
+    # the target.
+    fast_deployment_hard, _ = _fast_topm_mask_torch(
         logits,
         active,
         costs,
@@ -3442,6 +3481,7 @@ def _compute_bdmu_only_losses(
         cfg,
         family_scores=out.get("family_logits"),
     )
+    deployment_hard = _runtime_hab_topm_hard_mask(out, batch, cfg)
     L_bdmu, diag = _budgeted_decisive_margin_utility_loss(
         out, batch, cfg, deployment_hard
     )
@@ -3468,6 +3508,11 @@ def _compute_bdmu_only_losses(
         "critical_proposal_residual_rms": residual_rms,
         "bdmu_fast_path_active": total.new_tensor(1.0),
     }
+    with torch.no_grad():
+        intersection = (fast_deployment_hard & deployment_hard).sum(dim=1).float()
+        union = (fast_deployment_hard | deployment_hard).sum(dim=1).float().clamp_min(1.0)
+        result["bdmu_runtime_topm_surrogate_jaccard"] = (intersection / union).mean()
+        result["bdmu_runtime_topm_exact_fraction"] = total.new_tensor(1.0)
     result.update(diag)
     return result
 

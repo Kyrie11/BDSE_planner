@@ -29,11 +29,14 @@ export VAL_EVERY_N_EPOCHS=1 VAL_BEFORE_TRAINING=1 BEST_MIN_EPOCH=2 AUTO_RESUME=0
 export SAVE_EVERY_N_EPOCHS="${SAVE_EVERY_N_EPOCHS:-1}"
 export TRAIN_CONFIG="bdse/configs/v64_3_9_cc_aocc_af_bdmu_daepc_train_2gpu.yaml"
 export EVAL_CONFIG="bdse/configs/v64_3_9_cc_aocc_af_bdmu_cl.yaml"
-export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_9_af_bdmu_full_2gpu_v1}"
+export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_9_af_bdmu_full_2gpu_v2_runtime_parity}"
 mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
 python -m bdse.tools.validate_v64_pipeline_config \
   --train-config "$TRAIN_CONFIG" --eval-config "$EVAL_CONFIG" --expected-family v64.3.9 \
   --output "$OUT_ROOT/provenance/config_contract.json"
+python -m bdse.tools.check_v64_3_9_runtime_topm_contract \
+  --config "$TRAIN_CONFIG" \
+  --output "$OUT_ROOT/provenance/runtime_topm_contract.json"
 bash run_v64_saqa_bcc.sh
 python -m bdse.tools.validate_training_artifacts \
   --output-root "$OUT_ROOT" --require-epoch-checkpoint \

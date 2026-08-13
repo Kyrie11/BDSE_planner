@@ -202,6 +202,12 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
                             "v64_3_9_frontier_expands_rivals": int(bdmu_cfg.get("rival_max_count", 0)) > int(bdmu_cfg.get("rival_min_count", 0)) >= 1,
                             "v64_3_9_worst_rival_term_active": float(bdmu_cfg.get("worst_rival_weight", 0.0)) > 0.0,
                             "v64_3_9_topm_swap_rank_active": float(bdmu_cfg.get("topm_swap_rank_weight", 0.0)) > 0.0,
+                            "v64_3_9_exact_runtime_topm_training_contract": str(
+                                bdmu_cfg.get("topm_membership_source", "")
+                            ).strip().lower() == "exact_runtime_hab",
+                            "v64_3_9_exact_runtime_topm_reference_contract": str(
+                                bdmu_cfg.get("reference_topm_pool_source", "")
+                            ).strip().lower() == "exact_runtime_hab",
                         }
                     )
 
