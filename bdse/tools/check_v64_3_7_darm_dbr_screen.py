@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-AUDIT_VERSION = "v64.3.7.1"
+AUDIT_VERSION = "v64.3.7.2"
 
 
 def _finite(x: Any) -> float | None:
@@ -39,7 +39,7 @@ def load_rows(path: Path) -> list[dict[str, Any]]:
 def build(rows: list[dict[str, Any]], variant: str) -> dict[str, Any]:
     """Audit a DARM+DBR screen without conflating instrumentation and algorithm gates.
 
-    V64.3.7 incorrectly used two diagnostics as hard validity conditions:
+    V64.3.7/V64.3.7.1 incorrectly used diagnostics as hard validity conditions:
       1) all-challenger anchor-star coverage >= 0.20, even though the configured
          boundary sampler is discrete and the observed 0.19909 was within one
          sampled-edge quantum of the arbitrary threshold; and
@@ -140,9 +140,25 @@ def build(rows: list[dict[str, Any]], variant: str) -> dict[str, Any]:
     runtime_active = _min(post, "val_decisive_anchor_margin_active")
     anchor_teacher = _finite(anchor.get(keys["teacher"]))
     strong_anchor_restored = anchor_teacher is not None and anchor_teacher >= 0.24
+    anchor_pairfull = _finite(anchor.get(keys["pairfull"]))
+    anchor_localpair = _finite(anchor.get(keys["localpair"]))
+    deployed_local_match = _finite(anchor.get("val_deployed_vs_selected_local_anchor_match"))
+    # The absolute 0.24 floor was calibrated on a 500-row prefix screen and is
+    # not invariant to validation-set composition.  For a declared FULL run,
+    # verify the actual zero-residual interface contract instead: pair-full must
+    # collapse to the selected-local anchor and, when exported, the deployed
+    # action must match that anchor.  Screen variants keep the historical floor.
+    anchor_interface_consistent = bool(
+        anchor_pairfull is not None
+        and anchor_localpair is not None
+        and abs(anchor_pairfull - anchor_localpair) <= 0.005
+        and (deployed_local_match is None or deployed_local_match >= 0.99)
+    )
+    full_pipeline_variant = "FULL" in str(variant).upper()
+    anchor_gate_pass = anchor_interface_consistent if full_pipeline_variant else strong_anchor_restored
 
     instrumentation_valid = bool(
-        strong_anchor_restored
+        anchor_gate_pass
         and dbr_delta > 1e-7
         and dbr_rms > 1e-7
         and (full_cov is None or full_cov > 0.0)
@@ -173,6 +189,9 @@ def build(rows: list[dict[str, Any]], variant: str) -> dict[str, Any]:
         "deployment_gain": bool(deployment),
         "full_promotion": full_promotion,
         "strong_selected_local_anchor_restored": bool(strong_anchor_restored),
+        "anchor_interface_consistent": bool(anchor_interface_consistent),
+        "anchor_gate_mode": "interface_consistency" if full_pipeline_variant else "screen_absolute_floor",
+        "anchor_gate_pass": bool(anchor_gate_pass),
         "activation": {
             "dbr_parameter_delta_rms_max": dbr_delta,
             "dbr_residual_rms_max": dbr_rms,
@@ -195,6 +214,8 @@ def build(rows: list[dict[str, Any]], variant: str) -> dict[str, Any]:
         },
         "thresholds": {
             "anchor_teacher_match_floor": 0.24,
+            "full_pipeline_anchor_uses_absolute_floor": False,
+            "full_pipeline_pairfull_local_tolerance": 0.005,
             "pair_full_gain": 0.01,
             "pair_full_over_local": 0.005,
             "final_teacher_gain": 0.01,

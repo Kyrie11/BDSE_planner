@@ -86,7 +86,7 @@ def main() -> int:
     ap.add_argument("--split", default="train")
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--workers", type=int, nargs="+", default=[8, 12, 16])
-    ap.add_argument("--prefetch-factor", type=int, default=2)
+    ap.add_argument("--prefetch-factors", type=int, nargs="+", default=[2, 4])
     ap.add_argument("--max-scenarios", type=int, default=4096)
     ap.add_argument("--warmup-batches", type=int, default=8)
     ap.add_argument("--measured-batches", type=int, default=64)
@@ -101,11 +101,12 @@ def main() -> int:
             args.split,
             args.batch_size,
             w,
-            args.prefetch_factor,
+            pf,
             args.max_scenarios,
             args.warmup_batches,
             args.measured_batches,
         )
+        for pf in args.prefetch_factors
         for w in args.workers
     ]
     finite = [r for r in results if np.isfinite(float(r["samples_per_s"]))]
@@ -117,7 +118,7 @@ def main() -> int:
         "split": args.split,
         "results": results,
         "recommended_num_workers_per_process": None if best is None else int(best["num_workers"]),
-        "recommended_prefetch_factor": int(args.prefetch_factor),
+        "recommended_prefetch_factor": None if best is None else int(best["prefetch_factor"]),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")

@@ -1155,6 +1155,8 @@ class PreprocessedBDSEDataset:
         manifest_name: str = "manifest.jsonl",
         max_scenarios: int | None = None,
         max_scenarios_per_split: int | None = None,
+        max_scenarios_strategy: str = "first",
+        max_scenarios_block_size: int = 32,
     ):
         self.preprocessed_dir = Path(preprocessed_dir)
         if split is None:
@@ -1168,6 +1170,13 @@ class PreprocessedBDSEDataset:
         self.manifest_name = manifest_name
         self.max_scenarios = max_scenarios
         self.max_scenarios_per_split = max_scenarios_per_split
+        self.max_scenarios_strategy = str(max_scenarios_strategy).strip().lower()
+        if self.max_scenarios_strategy not in {"first", "uniform", "uniform_blocks"}:
+            raise ValueError(
+                f"Unsupported max_scenarios_strategy={max_scenarios_strategy!r}; "
+                "expected 'first', 'uniform', or 'uniform_blocks'."
+            )
+        self.max_scenarios_block_size = max(1, int(max_scenarios_block_size))
         self._paths: list[Path] | None = None
 
     @staticmethod
@@ -1274,6 +1283,20 @@ class PreprocessedBDSEDataset:
                         break
         return out
 
+    def _cap_paths(self, paths: list[Path], cap: int | None) -> list[Path]:
+        if cap is None or len(paths) <= int(cap):
+            return list(paths)
+        cap = max(0, int(cap))
+        if cap <= 0:
+            return []
+        if self.max_scenarios_strategy == "first":
+            return list(paths[:cap])
+        if self.max_scenarios_strategy == "uniform":
+            idx = _uniform_indices(len(paths), cap)
+        else:
+            idx = _uniform_block_indices(len(paths), cap, self.max_scenarios_block_size)
+        return [paths[int(i)] for i in idx.tolist()]
+
     def _apply_training_caps(self, paths: list[Path]) -> list[Path]:
         """Apply caps without silently collapsing multi-city training to one folder.
 
@@ -1288,9 +1311,7 @@ class PreprocessedBDSEDataset:
         per_cap = None if self.max_scenarios_per_split is None else max(0, int(self.max_scenarios_per_split))
         splits = list(self.splits or [])
         if not splits:
-            if total_cap is not None:
-                paths = paths[:total_cap]
-            return paths
+            return self._cap_paths(paths, total_cap)
         if len(splits) <= 1:
             split = splits[0]
             if per_cap is not None and self._is_canonical_split_name(split):
@@ -1298,14 +1319,12 @@ class PreprocessedBDSEDataset:
                 for p in paths:
                     groups.setdefault(self._concrete_split_key_for_path(p, split), []).append(p)
                 if len(groups) > 1:
-                    groups = {k: v[:per_cap] for k, v in groups.items()}
+                    groups = {k: self._cap_paths(v, per_cap) for k, v in groups.items()}
                     order = sorted(groups)
                     return self._round_robin_cap(groups, order, total_cap)
             if per_cap is not None:
-                paths = paths[:per_cap]
-            if total_cap is not None:
-                paths = paths[:total_cap]
-            return paths
+                paths = self._cap_paths(paths, per_cap)
+            return self._cap_paths(paths, total_cap)
 
         groups: dict[str, list[Path]] = {s: [] for s in splits}
         other: list[Path] = []
@@ -1320,7 +1339,7 @@ class PreprocessedBDSEDataset:
                 other.append(p)
 
         if per_cap is not None:
-            groups = {k: v[:per_cap] for k, v in groups.items()}
+            groups = {k: self._cap_paths(v, per_cap) for k, v in groups.items()}
 
         return self._round_robin_cap(groups, splits, total_cap, other)
 

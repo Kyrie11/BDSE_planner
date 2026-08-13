@@ -29,8 +29,11 @@ GPUS="${GPUS:-0,1}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-2}"
 MASTER_PORT="${MASTER_PORT:-29545}"
 MAX_TRAIN_SCENARIOS="${MAX_TRAIN_SCENARIOS:-50000}"
+MAX_SCENARIOS_STRATEGY="${MAX_SCENARIOS_STRATEGY:-first}"
 VAL_SCENARIOS="${VAL_SCENARIOS:-500}"
+VAL_MAX_SCENARIOS_STRATEGY="${VAL_MAX_SCENARIOS_STRATEGY:-first}"
 OPEN_LOOP_MAX_SCENARIOS="${OPEN_LOOP_MAX_SCENARIOS:-1000}"
+OPEN_LOOP_MAX_SCENARIOS_STRATEGY="${OPEN_LOOP_MAX_SCENARIOS_STRATEGY:-first}"
 EVAL_CONFIG="${EVAL_CONFIG:-bdse/configs/v64_saqa_bcc_cl.yaml}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-bdse/configs/v64_saqa_bcc_train_2gpu.yaml}"
 # Paper-grade protocol: checkpoint/hyperparameter selection uses val_tune only;
@@ -285,6 +288,7 @@ train_2gpu() {
       --preprocessed-dir "$BDSE_TRAIN_CACHE" \
       --max-scenarios "$MAX_TRAIN_SCENARIOS" \
       --max-scenarios-per-split $((MAX_TRAIN_SCENARIOS / 4)) \
+      --max-scenarios-strategy "$MAX_SCENARIOS_STRATEGY" \
       --batch-size "$BATCH_SIZE_PER_GPU" \
       --num-workers "$NUM_WORKERS_PER_GPU" \
       --prefetch-factor "$PREFETCH_FACTOR" \
@@ -297,6 +301,7 @@ train_2gpu() {
       --val-preprocessed-dir "$BDSE_VAL_CACHE" \
       --val-split "$VAL_SPLIT" \
       --val-max-scenarios "$VAL_SCENARIOS" \
+      --val-max-scenarios-strategy "$VAL_MAX_SCENARIOS_STRATEGY" \
       --val-mode open_loop \
       "${val_dense_args[@]}" \
       --val-every-n-epochs "$VAL_EVERY_N_EPOCHS" \
@@ -349,6 +354,7 @@ train_foundation_2gpu() {
       --preprocessed-dir "$BDSE_TRAIN_CACHE" \
       --max-scenarios "$MAX_TRAIN_SCENARIOS" \
       --max-scenarios-per-split $((MAX_TRAIN_SCENARIOS / 4)) \
+      --max-scenarios-strategy "$MAX_SCENARIOS_STRATEGY" \
       --batch-size "$BATCH_SIZE_PER_GPU" \
       --num-workers "$NUM_WORKERS_PER_GPU" \
       --prefetch-factor "$PREFETCH_FACTOR" \
@@ -360,6 +366,7 @@ train_foundation_2gpu() {
       --val-preprocessed-dir "$BDSE_VAL_CACHE" \
       --val-split "$VAL_SPLIT" \
       --val-max-scenarios "$VAL_SCENARIOS" \
+      --val-max-scenarios-strategy "$VAL_MAX_SCENARIOS_STRATEGY" \
       --val-mode open_loop \
       --val-every-n-epochs 1 \
       --val-batch-size "$VAL_BATCH_SIZE_PER_GPU" \
@@ -385,7 +392,7 @@ prepare_open_loop_shards() {
   rm -rf "$shard_root"
   mkdir -p "$shard_root/gpu0/val" "$shard_root/gpu1/val"
 
-  python - "$BDSE_VAL_CACHE" "$shard_root" "$OPEN_LOOP_MAX_SCENARIOS" "$OPEN_LOOP_SPLIT" <<'PY'
+  python - "$BDSE_VAL_CACHE" "$shard_root" "$OPEN_LOOP_MAX_SCENARIOS" "$OPEN_LOOP_SPLIT" "$OPEN_LOOP_MAX_SCENARIOS_STRATEGY" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -396,7 +403,10 @@ cache_root = Path(sys.argv[1])
 shard_root = Path(sys.argv[2])
 limit = int(sys.argv[3])
 source_split = str(sys.argv[4])
-paths = PreprocessedBDSEDataset(cache_root, split=[source_split], max_scenarios=limit).build_index()
+strategy = str(sys.argv[5])
+paths = PreprocessedBDSEDataset(
+    cache_root, split=[source_split], max_scenarios=limit, max_scenarios_strategy=strategy
+).build_index()
 if not paths:
     raise SystemExit("No validation samples found")
 
@@ -419,6 +429,7 @@ for shard in range(2):
 meta = {
     "source_split": source_split,
     "requested_scenarios": limit,
+    "max_scenarios_strategy": strategy,
     "selected_scenarios": len(paths),
     "gpu0_scenarios": len(records[0]),
     "gpu1_scenarios": len(records[1]),

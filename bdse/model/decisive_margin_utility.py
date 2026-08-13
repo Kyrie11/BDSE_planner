@@ -1,6 +1,6 @@
 """Budgeted decisive-margin marginal utility (BDMU).
 
-V64.3.8 trains acquisition on the same one-sided decision-margin object used by
+V64.3.8 introduced acquisition training; V64.3.9 refines it on the same one-sided decision-margin object used by
 DARM, instead of treating literal winner flips as the only positive target.
 The utility is local to a *fixed-budget reference set* S_B:
 
@@ -9,8 +9,7 @@ The utility is local to a *fixed-budget reference set* S_B:
   genuine budget slack exists);
 * for an atom inside S_B, value is the increase in deficit caused by removing it.
 
-Both terms are non-negative, cost-normalized and evaluated only on the teacher
-winner versus its nearest valid teacher rivals.  The target therefore never
+Both terms are non-negative, cost-normalized and evaluated on the teacher winner versus a configurable decisive rival frontier.  The target therefore never
 requires a B+1 interface.  Exact winner-flip atoms become a high-value limiting
 case without collapsing supervision to a sparse binary event.
 """
@@ -25,7 +24,18 @@ import torch
 @dataclass(frozen=True)
 class BDMUConfig:
     budget: float = 16.0
+    # Legacy fixed-R mode remains the default so V64.3.8 configs are bit-for-bit
+    # compatible.  V64.3.9 enables ``adaptive_frontier`` explicitly.
     rival_count: int = 4
+    rival_mode: str = "fixed"
+    rival_min_count: int = 4
+    rival_max_count: int = 8
+    frontier_margin_floor: float = 0.05
+    frontier_margin_multiplier: float = 2.0
+    # The one-sided theorem is a weakest-decisive-rival statement.  A pure
+    # weighted mean can hide one badly uncovered frontier edge, so V64.3.9 can
+    # mix the mean deficit with the worst retained frontier deficit.
+    worst_rival_weight: float = 0.0
     preserve_fraction: float = 0.60
     margin_floor: float = 0.02
     margin_cap: float = 0.75
@@ -99,10 +109,28 @@ def budgeted_decisive_margin_utility_torch(
     rival_valid.scatter_(1, winner_idx[:, None], False)
     # Teacher winner must strictly dominate the rival under the scalar teacher.
     rival_valid &= full_margin > 0.0
-    r = min(max(int(cfg.rival_count), 1), max(K - 1, 1))
+    rival_mode = str(cfg.rival_mode).strip().lower()
+    if rival_mode in {"adaptive", "adaptive_frontier", "frontier"}:
+        r_min = min(max(int(cfg.rival_min_count), 1), max(K - 1, 1))
+        r = min(max(int(cfg.rival_max_count), r_min), max(K - 1, 1))
+    elif rival_mode in {"fixed", "topr", "nearest"}:
+        r = min(max(int(cfg.rival_count), 1), max(K - 1, 1))
+        r_min = r
+    else:
+        raise ValueError(f"Unknown BDMU rival_mode={cfg.rival_mode!r}")
     order_value = full_margin.masked_fill(~rival_valid, inf)
     rival_margin, rival_idx = torch.topk(order_value, k=r, dim=1, largest=False, sorted=True)
     rival_mask = torch.isfinite(rival_margin) & aligned[:, None]
+    if rival_mode in {"adaptive", "adaptive_frontier", "frontier"}:
+        nearest = rival_margin[:, :1]
+        threshold = torch.maximum(
+            torch.full_like(nearest, float(cfg.frontier_margin_floor)),
+            nearest * float(cfg.frontier_margin_multiplier),
+        )
+        position = torch.arange(r, device=tc.device)[None, :]
+        rival_mask &= (position < r_min) | (rival_margin <= threshold)
+    else:
+        threshold = torch.full((B, 1), float("nan"), device=tc.device, dtype=tc.dtype)
 
     full_pos = rival_margin.clamp_min(0.0)
     desired = torch.maximum(
@@ -124,13 +152,31 @@ def budgeted_decisive_margin_utility_torch(
     rival_g = tg.gather(2, rival_idx[:, None, :].expand(B, E, r))
     atom_delta = (rival_g - winner_g[:, :, None]) / scale[:, None, :]
 
-    deficit = torch.relu(gamma - ref_rival_margin)  # [B,R]
+    deficit = torch.relu(gamma - ref_rival_margin) * rival_mask.float()  # [B,R]
     add_deficit = torch.relu(gamma[:, None, :] - (ref_rival_margin[:, None, :] + atom_delta))
     remove_deficit = torch.relu(gamma[:, None, :] - (ref_rival_margin[:, None, :] - atom_delta))
-    add_gain = torch.relu(deficit[:, None, :] - add_deficit)
-    removal_loss = torch.relu(remove_deficit - deficit[:, None, :])
-    weighted_add = (add_gain * rival_weight[:, None, :]).sum(dim=2)
-    weighted_removal = (removal_loss * rival_weight[:, None, :]).sum(dim=2)
+
+    worst_weight = min(max(float(cfg.worst_rival_weight), 0.0), 1.0)
+
+    def aggregate_deficit(x: torch.Tensor) -> torch.Tensor:
+        # x has shape [B,...,R].  Invalid/padded frontier entries never
+        # contribute.  V64.3.8 is exactly recovered when worst_weight=0.
+        w = rival_weight
+        m = rival_mask
+        while w.ndim < x.ndim:
+            w = w.unsqueeze(1)
+            m = m.unsqueeze(1)
+        mean = (x * w).sum(dim=-1)
+        if worst_weight <= 0.0:
+            return mean
+        worst = torch.where(m, x, torch.full_like(x, -1.0e9)).max(dim=-1).values.clamp_min(0.0)
+        return (1.0 - worst_weight) * mean + worst_weight * worst
+
+    reference_objective = aggregate_deficit(deficit)
+    add_objective = aggregate_deficit(add_deficit)
+    remove_objective = aggregate_deficit(remove_deficit)
+    weighted_add = torch.relu(reference_objective[:, None] - add_objective)
+    weighted_removal = torch.relu(remove_objective - reference_objective[:, None])
 
     # A missed atom is valued only through a budget-feasible intervention.  If
     # there is true slack, S_B U {i} is feasible.  Otherwise use the best
@@ -150,8 +196,8 @@ def budgeted_decisive_margin_utility_torch(
         - atom_delta[:, None, :, :]
     )
     exchange_deficit = torch.relu(gamma[:, None, None, :] - exchange_margin)
-    exchange_gain = torch.relu(deficit[:, None, None, :] - exchange_deficit)
-    weighted_exchange = (exchange_gain * rival_weight[:, None, None, :]).sum(dim=3)
+    exchange_objective = aggregate_deficit(exchange_deficit)
+    weighted_exchange = torch.relu(reference_objective[:, None, None] - exchange_objective)
     exchange_feasible = (
         outside[:, :, None]
         & ref[:, None, :]
@@ -167,7 +213,9 @@ def budgeted_decisive_margin_utility_torch(
 
     total_utility = utility.sum(dim=1)
     scene_has_utility = aligned & (total_utility > float(cfg.utility_epsilon))
-    weighted_deficit = (deficit * rival_weight).sum(dim=1)
+    mean_deficit = (deficit * rival_weight).sum(dim=1)
+    worst_deficit = torch.where(rival_mask, deficit, torch.full_like(deficit, -1.0e9)).max(dim=1).values.clamp_min(0.0)
+    weighted_deficit = reference_objective
     selected_utility = (utility * ref.float()).sum(dim=1)
     missed_utility = (utility * (~ref).float()).sum(dim=1)
     positive_fraction = ((utility > float(cfg.utility_epsilon)) & active).float().sum(dim=1) / active.float().sum(dim=1).clamp_min(1.0)
@@ -178,6 +226,10 @@ def budgeted_decisive_margin_utility_torch(
         "selected_utility": selected_utility,
         "missed_utility": missed_utility,
         "weighted_deficit": weighted_deficit,
+        "mean_deficit": mean_deficit,
+        "worst_deficit": worst_deficit,
+        "frontier_count": rival_mask.float().sum(dim=1),
+        "frontier_threshold": threshold.squeeze(1),
         "positive_fraction": positive_fraction,
         "reference_count": ref.float().sum(dim=1),
     }
@@ -234,7 +286,24 @@ def budgeted_decisive_margin_utility_numpy(
     rivals = np.flatnonzero(valid & (np.arange(K) != w) & (full_margin > 0.0))
     if rivals.size == 0:
         return np.zeros((E,), dtype=np.float32), {"aligned": 1.0, "scene_has_utility": 0.0}
-    rivals = rivals[np.argsort(full_margin[rivals], kind="stable")[: max(1, int(cfg.rival_count))]]
+    rivals = rivals[np.argsort(full_margin[rivals], kind="stable")]
+    rival_mode = str(cfg.rival_mode).strip().lower()
+    if rival_mode in {"adaptive", "adaptive_frontier", "frontier"}:
+        r_min = min(max(int(cfg.rival_min_count), 1), max(K - 1, 1))
+        r_max = min(max(int(cfg.rival_max_count), r_min), max(K - 1, 1))
+        rivals = rivals[:r_max]
+        fm_all = full_margin[rivals]
+        if rivals.size:
+            threshold = max(float(cfg.frontier_margin_floor), float(fm_all[0]) * float(cfg.frontier_margin_multiplier))
+            keep = (np.arange(rivals.size) < r_min) | (fm_all <= threshold)
+            rivals = rivals[keep]
+        else:
+            threshold = float("nan")
+    elif rival_mode in {"fixed", "topr", "nearest"}:
+        rivals = rivals[: max(1, int(cfg.rival_count))]
+        threshold = float("nan")
+    else:
+        raise ValueError(f"Unknown BDMU rival_mode={cfg.rival_mode!r}")
     fm = full_margin[rivals]
     gamma = np.minimum(
         fm,
@@ -254,10 +323,18 @@ def budgeted_decisive_margin_utility_numpy(
     delta = (tg[:, rivals] - tg[:, [w]]) / scale
     add_deficit = np.maximum(gamma[None, :] - (rm[None, :] + delta), 0.0)
     remove_deficit = np.maximum(gamma[None, :] - (rm[None, :] - delta), 0.0)
-    add_gain = np.maximum(deficit[None, :] - add_deficit, 0.0)
-    removal_loss = np.maximum(remove_deficit - deficit[None, :], 0.0)
-    weighted_add = (add_gain * rw[None, :]).sum(axis=1)
-    weighted_removal = (removal_loss * rw[None, :]).sum(axis=1)
+    worst_weight = min(max(float(cfg.worst_rival_weight), 0.0), 1.0)
+
+    def aggregate_deficit_np(x: np.ndarray) -> np.ndarray:
+        mean = np.sum(x * rw.reshape((1,) * (x.ndim - 1) + (rw.size,)), axis=-1)
+        if worst_weight <= 0.0:
+            return mean
+        worst = np.max(x, axis=-1) if x.shape[-1] else np.zeros(x.shape[:-1], dtype=np.float64)
+        return (1.0 - worst_weight) * mean + worst_weight * worst
+
+    reference_objective = float(aggregate_deficit_np(deficit))
+    weighted_add = np.maximum(reference_objective - aggregate_deficit_np(add_deficit), 0.0)
+    weighted_removal = np.maximum(aggregate_deficit_np(remove_deficit) - reference_objective, 0.0)
 
     finite_cost = np.isfinite(costs) & (costs > 0.0)
     spent = float(np.where(ref & finite_cost, costs, 0.0).sum())
@@ -273,8 +350,8 @@ def budgeted_decisive_margin_utility_numpy(
                 continue
             exchange_margin = rm + delta[i] - delta[j]
             exchange_deficit = np.maximum(gamma - exchange_margin, 0.0)
-            exchange_gain = np.maximum(deficit - exchange_deficit, 0.0)
-            best = max(best, float((exchange_gain * rw).sum()))
+            exchange_value = max(reference_objective - float(aggregate_deficit_np(exchange_deficit)), 0.0)
+            best = max(best, exchange_value)
         outside_value[i] = best
     local = np.where(ref, weighted_removal, outside_value)
     utility = local / np.power(costs, float(cfg.cost_power))
@@ -286,7 +363,11 @@ def budgeted_decisive_margin_utility_numpy(
         "total_utility": total,
         "selected_utility": float(utility[ref].sum()),
         "missed_utility": float(utility[active & ~ref].sum()),
-        "weighted_deficit": float(np.sum(deficit * rw)),
+        "weighted_deficit": float(reference_objective),
+        "mean_deficit": float(np.sum(deficit * rw)),
+        "worst_deficit": float(np.max(deficit)) if deficit.size else 0.0,
+        "frontier_count": float(rivals.size),
+        "frontier_threshold": float(threshold),
         "positive_fraction": float(np.mean(utility[active] > float(cfg.utility_epsilon))) if active.any() else 0.0,
         "reference_count": float(ref.sum()),
     }

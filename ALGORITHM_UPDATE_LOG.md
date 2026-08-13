@@ -5096,3 +5096,117 @@ The theorem bridge is conditional and reuses the DARM certificate: for a complet
 - V64.3.8 main train/screen/closed-loop configs plus R1/no-cost configs
 - 2-GPU screen/full/theory-ablation launchers
 - regression tests covering Torch/NumPy utility equivalence, cost normalization, scalar-teacher mismatch exclusion, fixed-budget no-B+1 behavior, strict acquisition isolation, zero-init preservation, checkpoint contract, fast-path opt-in and legacy diagnostic opt-in.
+
+# V64.3.9 — AF-BDMU: Adaptive-Frontier Budgeted Decisive-Margin Utility Acquisition (2026-08-13)
+
+## Re-audit of the uploaded V64.3.7 full pipeline
+
+The previous V64.3.8 note treated the full-pipeline stop as a missing-checkpoint / calibration-launch failure. That diagnosis is **not the failure represented by the newly uploaded artifacts**. The current full DARM+DBR-LITERAL training log contains epochs `-1,0,...,5`, early-stops after epoch 5, and the launcher log records a final model save. The uploaded archive omits `.pt` weights, but the training process itself completed.
+
+The sequence was blocked by the old V64.3.7 promotion checker. It required the epoch -1 validation anchor to satisfy `teacher_action_match >= 0.24`. On the full 1000-scene validation set the anchor is `0.180`, although the zero-residual pair-full and selected-local interfaces agree (`0.181/0.181`). This is a protocol bug: an absolute score floor tied to the old first-500 screen cannot be used as an instrumentation contract on a different validation composition.
+
+The distribution shift is large. On the selected epoch-1 checkpoint, the first 500 validation samples have teacher/pair-full/local match about `0.284/0.286/0.264`, while the second 500 have about `0.112/0.110/0.098`. Exact-critical Top-M recall is actually higher on the difficult second half, so the lower action-match ceiling cannot be attributed to acquisition alone.
+
+V64.3.7.2 therefore keeps the historical absolute anchor floor only for the original screen protocol. For `*FULL*` variants it instead checks the zero-residual **interface consistency** contract (`pair-full ~= selected-local`, tolerance 0.005) and the existing DARM activation/value/deployment causal gates. Re-auditing the uploaded full log now selects epoch 1 and gives:
+
+- teacher match `0.180 -> 0.198` (`+1.8pp`);
+- pair-full match `0.181 -> 0.198` (`+1.7pp`);
+- selected-local match unchanged at `0.181`;
+- teacher regret `19759.44 -> 16496.54` (`-3262.91`);
+- pair-full regret `19545.80 -> 16461.69` (`-3084.11`);
+- residual intervention beneficial/harmful = `0.019/0.002`, net `+1.7pp`;
+- acquisition metrics are exactly unchanged.
+
+Under the repaired protocol `meaningful_value_gain=true`, `deployment_gain=true`, and `full_promotion=true`. This is stronger full-pipeline causal evidence that DARM+DBR improves the downstream teacher decision under frozen acquisition.
+
+## Corrected bottleneck interpretation
+
+Two certificate diagnostics must not be conflated:
+
+- `selector_aocc_pairwise_certified_pair_fraction_raw = 0.031` is the conservative AOCC pairwise lower-bound surrogate;
+- `evidence_certificate_fraction = 0.946` is the exact runtime B=16 -> Top-M downstream winner-preservation certificate used by the deployed guard.
+
+Therefore the current primary controllable bottleneck is **not** “certificate utilization inside the selected B=16 set”. The selected B-set preserves the current Top-M downstream action in 94.6% of scenes.
+
+The clearest acquisition failure is before that stage:
+
+- exact winner-flip critical Top-M recall = `0.4279` micro / `0.3838` macro;
+- exact winner-flip selected recall = `0.3076` micro / `0.2777` macro;
+- proposal decisive recall = `0.8005`;
+- frozen-family-slot oracle Top-M critical recall = `1.000`;
+- global oracle Top-M critical recall = `1.000`.
+
+Thus the existing semantic family capacity can contain the decisive atoms, but learned proposal ranking does not put enough of them into Top-M. This is the acquisition bottleneck that can be causally tested while value is frozen.
+
+There is also a **global value/model ceiling**: even the selected full-interface pair pathway reaches only `0.198` teacher match. Acquisition cannot explain the remaining roughly 80% teacher mismatch. The correct next experiment is therefore not “acquisition is the only bottleneck”; it is: **under a frozen, causally validated DARM+DBR value interface, test whether fixing Top-M decisive-utility ranking produces further teacher decision gain.** If the acquisition mechanism moves without an endpoint gain, stop selector iterations and pivot to value/frontier representation.
+
+## Keep / modify / reject from V64.3.8 BDMU
+
+Keep:
+
+- fixed planner-interface evidence budget `B=16`;
+- auditable evidence atoms and existing HAB/selector interface;
+- frozen DARM+DBR/foundation for causal attribution;
+- immutable frozen-foundation reference B-set;
+- budget-feasible direct-add/single-exchange utility (never B+1);
+- cost-normalized continuous one-sided margin deficit;
+- exact winner-flip labels as a limiting-case diagnostic, not the primary loss.
+
+Upgrade:
+
+1. **Adaptive decisive rival frontier.** Fixed `R=4` can omit a teacher rival that lies on the same local decision frontier. AF-BDMU always includes at least four nearest positive-margin rivals, additionally includes rivals with normalized teacher margin below `max(0.05, 2 * nearest_margin)`, and caps the set at eight.
+2. **One-sided weakest-rival preservation.** The old soft weighted mean can hide one decisive rival behind several easy rivals. The reference deficit becomes a convex mixture of weighted-mean and worst-frontier deficit, with `worst_rival_weight=0.35`.
+3. **Top-M swap ranking.** Generic absolute/listwise utility regression is not sufficient when the diagnosed failure is the proposal boundary. The new pairwise term is formed only from a positive-utility atom currently missed by Top-M and a lower-utility atom currently occupying Top-M. It directly trains the feasible one-for-one proposal-boundary correction without increasing M or B. Main weights are listwise `0.65` + Top-M swap rank `0.35`.
+
+Do **not** add a large binary `certificate contribution` term to the utility in this version. The exact downstream evidence certificate is already `0.946`; optimizing the conservative 3.1% AOCC surrogate as if it were the deployed certificate would target the wrong bottleneck. Likewise, do not reintroduce LITERAL winner-flip BCE as the main acquisition objective; the uploaded experiments already show that binary boundary identity is useful but too sparse to encode margin severity.
+
+## CCF-A mainline and novelty position
+
+Keep the tightened paper chain:
+
+`fixed planner-interface budget -> auditable evidence atoms -> budget-feasible decisive-margin marginal utility -> budgeted acquisition -> DARM one-sided decisive-margin preservation -> final decision preservation`.
+
+The novelty claim should be framed as **Auditable Budgeted Decision Preservation**, not generic decision-aware selection. AF-BDMU makes the acquisition stage match the same one-sided margin object used by DARM, while the exact interface budget and frozen-value experiment make the causal contribution auditable. The paper should not claim a distribution-free safety certificate; the certificate is an empirical/calibrated decision-preservation interface certificate.
+
+## New protocol exit rule
+
+V64.3.9 promotion requires:
+
+- AF-BDMU adapter moves and the adaptive frontier / Top-M swap-rank objective is active;
+- Top-M continuous utility capture improves by at least `+1.5pp`;
+- either selected utility capture improves by `+0.5pp` or exact critical Top-M recall improves by `+0.5pp`;
+- fixed-B teacher match improves by `+0.5pp` or teacher regret improves by at least 2%;
+- teacher match/regret are non-harmful within the stated tolerances.
+
+**Exit rule:** if Top-M utility/critical recall improves but teacher match/regret does not, classify acquisition as no longer binding under the frozen value interface and pivot the next algorithm cycle to a decisive value/frontier model. Do not keep tuning acquisition losses.
+
+## Engineering and efficiency changes
+
+1. **Full-pipeline gate fix.** V64.3.7 full promotion uses interface consistency instead of the stale first-500 absolute anchor floor.
+2. **Training artifact contract.** `validate_training_artifacts.py` requires a parseable trained-epoch log plus final checkpoint, and can require an epoch checkpoint. This separates genuine training completion from launcher/promotion failures.
+3. **Representative capped validation.** `PreprocessedBDSEDataset` supports `max_scenarios_strategy={first,uniform,uniform_blocks}`. V64.3.9 screens use `uniform_blocks` so a 500-scene screen covers the whole ordered validation cache while retaining short contiguous blocks for I/O locality.
+4. **Input pipeline benchmark.** The worker benchmark now sweeps both worker count and prefetch factor and reports the measured best combination instead of assuming prefetch=2.
+5. **BDMU fast path remains.** Only the acquisition utility graph is built when BDMU is the sole positive loss.
+6. **Do not change open-loop model semantics for speed in this causal round.** The selected-checkpoint 1000-scene open loop averages `592.55 ms` internal planner latency: prediction is `458.57 ms` (~77%), selector `66.98 ms`, tournament `8.95 ms`. The next safe speed work is batched/cached prediction after AF-BDMU semantics are frozen, not an approximate selector/value rewrite in the same experiment.
+7. DARM full training profiling shows data wait is large (`452--702 s/epoch` out of `963--1482 s/epoch`), so worker/prefetch measurement is justified before the next long run.
+
+## New files / tests
+
+- adaptive-frontier + mean/worst decisive-deficit support in `bdse/model/decisive_margin_utility.py`;
+- Top-M swap-ranking acquisition loss in `bdse/model/losses.py`;
+- AF-BDMU diagnostics in `bdse/experiments/evaluate_open_loop.py`;
+- representative capped-cache selection in `bdse/data/nuplan_dataset.py` and CLI/wrapper plumbing;
+- `bdse/tools/check_v64_3_9_af_bdmu_screen.py` with an explicit acquisition->value pivot diagnosis;
+- `bdse/tools/validate_training_artifacts.py`;
+- V64.3.9 train/screen/closed-loop configs and 2-GPU launchers;
+- regression tests for Torch/NumPy adaptive-frontier equivalence, strict frozen-value acquisition isolation, representative uniform-block validation sampling, and full-gate interface consistency.
+
+## V64.3.9 no-repeat constraints
+
+Continue all V64.3.8 no-repeat constraints. Additionally:
+
+- do not tune an AOCC binary certificate bonus unless a future experiment first shows that the exact B->TopM evidence certificate has become binding;
+- do not use prefix-500 validation for promotion on the current cache ordering;
+- do not weaken the full-pipeline gate to an unconditional bypass; the replacement is a causal interface contract, not `skip_audit`;
+- do not change DARM/DBR while testing AF-BDMU;
+- if AF-BDMU improves Top-M utility without improving teacher decision/regret, do not run another acquisition-loss family next.

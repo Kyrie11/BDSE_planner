@@ -240,6 +240,12 @@ def _budgeted_decisive_margin_utility_loss(
             "bdmu_current_topm_utility_capture": zero,
             "bdmu_missed_utility_fraction": zero,
             "bdmu_target_entropy": zero,
+            "bdmu_listwise_loss": zero,
+            "bdmu_topm_swap_rank_loss": zero,
+            "bdmu_topm_swap_rank_pairs": zero,
+            "bdmu_topm_swap_rank_scene_fraction": zero,
+            "bdmu_frontier_rival_count": zero,
+            "bdmu_reference_worst_margin_deficit": zero,
         }
     teacher_cost = batch.get("teacher_J_T")
     teacher_g = batch.get("teacher_g_evid")
@@ -277,6 +283,12 @@ def _budgeted_decisive_margin_utility_loss(
     target_cfg = BDMUConfig(
         budget=float((cfg.get("evidence", {}) or {}).get("budget", 16)),
         rival_count=int(util_cfg.get("rival_count", 4)),
+        rival_mode=str(util_cfg.get("rival_mode", "fixed")),
+        rival_min_count=int(util_cfg.get("rival_min_count", util_cfg.get("rival_count", 4))),
+        rival_max_count=int(util_cfg.get("rival_max_count", max(int(util_cfg.get("rival_count", 4)), 8))),
+        frontier_margin_floor=float(util_cfg.get("frontier_margin_floor", 0.05)),
+        frontier_margin_multiplier=float(util_cfg.get("frontier_margin_multiplier", 2.0)),
+        worst_rival_weight=float(util_cfg.get("worst_rival_weight", 0.0)),
         preserve_fraction=float(util_cfg.get("preserve_fraction", 0.60)),
         margin_floor=float(util_cfg.get("margin_floor", 0.02)),
         margin_cap=float(util_cfg.get("margin_cap", 0.75)),
@@ -304,7 +316,55 @@ def _budgeted_decisive_margin_utility_loss(
     logp = F.log_softmax(acquisition_logits, dim=1)
     listwise = -(target_dist * logp).sum(dim=1)
     scene_weight = has.float()
-    L_rank = (listwise * scene_weight).sum() / scene_weight.sum().clamp_min(1.0)
+    L_listwise = (listwise * scene_weight).sum() / scene_weight.sum().clamp_min(1.0)
+
+    # V64.3.9: optimize the actual proposal bottleneck rather than a generic
+    # hardest-negative objective.  A pair is created only when a positive-utility
+    # atom is currently *missed by Top-M* and a lower-utility atom is currently
+    # occupying a Top-M slot.  This is the exact one-for-one proposal-boundary
+    # error that the deployment interface can repair without changing M or B.
+    rank_weight = float(util_cfg.get("topm_swap_rank_weight", 0.0))
+    rank_margin = float(util_cfg.get("topm_swap_rank_margin", 0.5))
+    rank_pos_k = max(1, int(util_cfg.get("topm_swap_positive_k", 8)))
+    rank_neg_k = max(1, int(util_cfg.get("topm_swap_negative_k", 8)))
+    rank_losses: list[torch.Tensor] = []
+    rank_pair_count = zero
+    rank_scene_count = zero
+    if rank_weight > 0.0:
+        for bi in range(int(utility.shape[0])):
+            if not bool(has[bi]):
+                continue
+            u = utility[bi]
+            cur_topm = deployment_topm[bi].bool() & active[bi]
+            missed = active[bi] & ~cur_topm & (u > eps)
+            occupied = cur_topm
+            missed_idx = torch.nonzero(missed, as_tuple=False).squeeze(1)
+            occupied_idx = torch.nonzero(occupied, as_tuple=False).squeeze(1)
+            if missed_idx.numel() == 0 or occupied_idx.numel() == 0:
+                continue
+            p = min(rank_pos_k, int(missed_idx.numel()))
+            n = min(rank_neg_k, int(occupied_idx.numel()))
+            pos_order = torch.topk(u[missed_idx], k=p, largest=True).indices
+            neg_order = torch.topk(u[occupied_idx], k=n, largest=False).indices
+            pos_idx = missed_idx[pos_order]
+            neg_idx = occupied_idx[neg_order]
+            gap = u[pos_idx][:, None] - u[neg_idx][None, :]
+            valid_pair = gap > eps
+            if not bool(valid_pair.any()):
+                continue
+            score_gap = acquisition_logits[bi, pos_idx][:, None] - acquisition_logits[bi, neg_idx][None, :]
+            pair_loss = F.softplus(rank_margin - score_gap)
+            # Teacher utility gap is a bounded importance weight; normalization
+            # makes the term stable across scenes with different margin scales.
+            pair_weight = torch.where(valid_pair, gap, torch.zeros_like(gap))
+            pair_weight = pair_weight / pair_weight.sum().clamp_min(eps)
+            rank_losses.append((pair_loss * pair_weight).sum())
+            rank_pair_count = rank_pair_count + valid_pair.float().sum()
+            rank_scene_count = rank_scene_count + zero.new_tensor(1.0)
+    L_swap_rank = torch.stack(rank_losses).mean() if rank_losses else zero
+
+    listwise_weight = float(util_cfg.get("listwise_weight", 1.0))
+    L_rank = listwise_weight * L_listwise + rank_weight * L_swap_rank
 
     # A small residual norm is the preservation prior: when the continuous
     # teacher utility provides no evidence to move an atom, the zero-init V64.3.7
@@ -330,6 +390,12 @@ def _budgeted_decisive_margin_utility_loss(
         "bdmu_current_topm_utility_capture": (topm_capture * scene_weight).sum() / denom,
         "bdmu_missed_utility_fraction": (missed_fraction * scene_weight).sum() / denom,
         "bdmu_target_entropy": (entropy * scene_weight).sum() / denom,
+        "bdmu_listwise_loss": L_listwise.detach(),
+        "bdmu_topm_swap_rank_loss": L_swap_rank.detach(),
+        "bdmu_topm_swap_rank_pairs": rank_pair_count.detach(),
+        "bdmu_topm_swap_rank_scene_fraction": (rank_scene_count / max(float(utility.shape[0]), 1.0)).detach(),
+        "bdmu_frontier_rival_count": (target_diag["frontier_count"] * scene_weight).sum() / denom,
+        "bdmu_reference_worst_margin_deficit": (target_diag["worst_deficit"] * scene_weight).sum() / denom,
     }
 
 

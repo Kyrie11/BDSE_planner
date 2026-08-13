@@ -251,6 +251,12 @@ def _teacher_bdmu_metrics(sample, pred: dict[str, object], selected_atoms, cfg: 
     target_cfg = BDMUConfig(
         budget=float((cfg.get("evidence", {}) or {}).get("budget", 16)),
         rival_count=int(util_cfg.get("rival_count", 4)),
+        rival_mode=str(util_cfg.get("rival_mode", "fixed")),
+        rival_min_count=int(util_cfg.get("rival_min_count", util_cfg.get("rival_count", 4))),
+        rival_max_count=int(util_cfg.get("rival_max_count", max(int(util_cfg.get("rival_count", 4)), 8))),
+        frontier_margin_floor=float(util_cfg.get("frontier_margin_floor", 0.05)),
+        frontier_margin_multiplier=float(util_cfg.get("frontier_margin_multiplier", 2.0)),
+        worst_rival_weight=float(util_cfg.get("worst_rival_weight", 0.0)),
         preserve_fraction=float(util_cfg.get("preserve_fraction", 0.60)),
         margin_floor=float(util_cfg.get("margin_floor", 0.02)),
         margin_cap=float(util_cfg.get("margin_cap", 0.75)),
@@ -280,6 +286,9 @@ def _teacher_bdmu_metrics(sample, pred: dict[str, object], selected_atoms, cfg: 
         "teacher_bdmu_selected_utility_capture": selected_capture,
         "teacher_bdmu_missed_utility_fraction": missed_fraction,
         "teacher_bdmu_reference_margin_deficit": float(details.get("weighted_deficit", float("nan"))),
+        "teacher_bdmu_reference_mean_margin_deficit": float(details.get("mean_deficit", float("nan"))),
+        "teacher_bdmu_reference_worst_margin_deficit": float(details.get("worst_deficit", float("nan"))),
+        "teacher_bdmu_frontier_rival_count": float(details.get("frontier_count", float("nan"))),
         "teacher_bdmu_positive_atom_fraction": float(details.get("positive_fraction", float("nan"))),
         "teacher_bdmu_total_utility": total,
     }

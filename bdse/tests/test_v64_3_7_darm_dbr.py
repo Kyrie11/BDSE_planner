@@ -244,3 +244,22 @@ def test_v64_3_7_1_screen_accepts_teacher_aligned_budget_divergence_and_discrete
     assert report['activation']['decisive_anchor_full_pair_coverage_max'] < 0.20
     assert report['thresholds']['all_challenger_pair_coverage_is_gate'] is False
     assert report['thresholds']['budget_vs_pair_full_agreement_is_gate'] is False
+
+
+def test_v64_3_7_2_full_gate_uses_interface_contract_not_prefix_absolute_floor() -> None:
+    rows = [
+        _screen_row(-1, 0.18, 0.181, 0.181, teacher_regret=19759.0, pairfull_regret=19545.0),
+        _screen_row(
+            1, 0.198, 0.198, 0.181, dbr=0.01,
+            teacher_regret=16496.0, pairfull_regret=16461.0,
+            budgetpair=0.887, beneficial_compression=0.011,
+            harmful_compression=0.011, coverage=0.199,
+        ),
+    ]
+    report = build_darm_screen(rows, 'DARM+DBR-LITERAL-FULL')
+    assert report['strong_selected_local_anchor_restored'] is False
+    assert report['anchor_interface_consistent'] is True
+    assert report['anchor_gate_mode'] == 'interface_consistency'
+    assert report['meaningful_value_gain']
+    assert report['deployment_gain']
+    assert report['full_promotion']

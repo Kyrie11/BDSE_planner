@@ -969,6 +969,7 @@ def _make_preprocessed_dataset(
     splits: list[str],
     max_scenarios: int | None,
     max_scenarios_per_split: int | None,
+    max_scenarios_strategy: str = "first",
     cfg: dict[str, Any],
     max_files: int | None = None,
     for_training: bool = False,
@@ -979,6 +980,7 @@ def _make_preprocessed_dataset(
             split=splits,
             max_scenarios=max_scenarios,
             max_scenarios_per_split=max_scenarios_per_split,
+            max_scenarios_strategy=max_scenarios_strategy,
         )
         if for_training:
             _apply_training_quality_filter(dataset, cfg)
@@ -1923,6 +1925,7 @@ def main() -> None:
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None, help="Total cap after split selection. With multiple concrete splits, the cap is balanced across splits.")
     parser.add_argument("--max-scenarios-per-split", type=int, default=None, help="Optional per-split cap for multi-city/cache training.")
+    parser.add_argument("--max-scenarios-strategy", choices=["first", "uniform", "uniform_blocks"], default="first", help="How to cap a single preprocessed split. 'uniform_blocks' avoids prefix-only screen/validation bias while preserving local NPZ cache locality.")
     parser.add_argument("--preprocessed-dir", type=str, default=None, help="Load generated .npz cache instead of building samples on the fly.")
     parser.add_argument("--output", type=str, default="outputs/bdse_model.pt")
     parser.add_argument("--epochs", type=int, default=None)
@@ -1960,6 +1963,7 @@ def main() -> None:
     parser.add_argument("--val-preprocessed-dir", type=str, default=None, help="Validation cache root. Defaults to --preprocessed-dir.")
     parser.add_argument("--val-max-scenarios", type=int, default=None, help="Cap validation samples, e.g. 1000 for fast per-epoch validation.")
     parser.add_argument("--val-max-scenarios-per-split", type=int, default=None, help="Optional validation per-split cap for multi-city validation.")
+    parser.add_argument("--val-max-scenarios-strategy", choices=["first", "uniform", "uniform_blocks"], default="first", help="How to cap a single preprocessed validation split. Use uniform_blocks for representative mechanism screens.")
     parser.add_argument("--val-batch-size", type=int, default=None, help="Validation loss batch size. Defaults to --batch-size / training batch_size.")
     parser.add_argument("--val-num-workers", type=int, default=None, help="Validation DataLoader workers for val loss. Defaults to training num_workers.")
     parser.add_argument("--val-every-n-epochs", type=int, default=1, help="Run validation every N epochs. Set 0 to disable validation even when --val-split is provided.")
@@ -2040,6 +2044,7 @@ def main() -> None:
         splits=splits,
         max_scenarios=args.max_scenarios,
         max_scenarios_per_split=args.max_scenarios_per_split,
+        max_scenarios_strategy=args.max_scenarios_strategy,
         cfg=cfg,
         max_files=args.max_files,
         for_training=True,
@@ -2079,6 +2084,7 @@ def main() -> None:
             splits=list(args.val_split),
             max_scenarios=args.val_max_scenarios,
             max_scenarios_per_split=args.val_max_scenarios_per_split,
+            max_scenarios_strategy=args.val_max_scenarios_strategy,
             cfg=cfg,
             max_files=args.max_files,
             for_training=False,
