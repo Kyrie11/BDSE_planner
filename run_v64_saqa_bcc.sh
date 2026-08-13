@@ -56,6 +56,7 @@ VAL_NUM_WORKERS_PER_GPU="${VAL_NUM_WORKERS_PER_GPU:-2}"
 VAL_BATCH_SIZE_PER_GPU="${VAL_BATCH_SIZE_PER_GPU:-$BATCH_SIZE_PER_GPU}"
 VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-3}"
 VAL_DENSE_DIAGNOSTIC="${VAL_DENSE_DIAGNOSTIC:-0}"
+VAL_MODE="${VAL_MODE:-open_loop}"
 VAL_BEFORE_TRAINING="${VAL_BEFORE_TRAINING:-0}"
 SAVE_EVERY_N_EPOCHS="${SAVE_EVERY_N_EPOCHS:-0}"
 SAVE_EVERY_N_STEPS="${SAVE_EVERY_N_STEPS:-2000}"
@@ -302,7 +303,7 @@ train_2gpu() {
       --val-split "$VAL_SPLIT" \
       --val-max-scenarios "$VAL_SCENARIOS" \
       --val-max-scenarios-strategy "$VAL_MAX_SCENARIOS_STRATEGY" \
-      --val-mode open_loop \
+      --val-mode "$VAL_MODE" \
       "${val_dense_args[@]}" \
       --val-every-n-epochs "$VAL_EVERY_N_EPOCHS" \
       --val-batch-size "$VAL_BATCH_SIZE_PER_GPU" \
@@ -367,7 +368,7 @@ train_foundation_2gpu() {
       --val-split "$VAL_SPLIT" \
       --val-max-scenarios "$VAL_SCENARIOS" \
       --val-max-scenarios-strategy "$VAL_MAX_SCENARIOS_STRATEGY" \
-      --val-mode open_loop \
+      --val-mode "$VAL_MODE" \
       --val-every-n-epochs 1 \
       --val-batch-size "$VAL_BATCH_SIZE_PER_GPU" \
       --val-num-workers "$VAL_NUM_WORKERS_PER_GPU" \

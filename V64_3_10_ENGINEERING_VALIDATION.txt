@@ -1,0 +1,38 @@
+V64.3.10 HAP-BDMU engineering validation
+Date: 2026-08-13
+
+1) Python compile: PASS
+   - bdse/model/losses.py
+   - bdse/tools/check_v64_3_10_hap_bdmu_contract.py
+   - bdse/tools/check_v64_3_10_hap_bdmu_screen.py
+   - bdse/tools/validate_v64_pipeline_config.py
+
+2) Shell syntax: PASS
+   - RUN_V64_3_10_HAP_BDMU_SCREEN_2GPU.sh
+   - RUN_V64_3_10_HAP_BDMU_FULL_TRAIN_2GPU.sh
+   - NEXT_COMMANDS_V64_3_10_HAP_BDMU.txt
+
+3) Strict V64.3.10 config contract: PASS
+   - fixed B=16
+   - only critical_proposal_adapter trainable
+   - DARM/DBR/foundation frozen
+   - exact runtime HAB Top-M target/reference
+   - exact HAB utility projection
+   - feasible-admission rank active
+   - same-family HAB stratum ranking enabled
+   - legacy V64.3.9 unconstrained swap rank disabled
+
+4) HAP semantic contract: PASS
+   - runtime structural/group-aware Top-M parity fixture
+   - utility projection uses canonical runtime policy
+   - utility projection respects frozen family-slot fixture
+
+5) Causal checker synthetic promotion fixture: PASS
+   - fixed-reference utility gap detected
+   - oracle-gap closure computed correctly
+   - mechanism/deployment/promotion branches exercised
+
+6) Full repository tests: 318 passed, 34 warnings
+   Warnings are existing PyTorch Transformer nested-tensor warnings; no test failure.
+
+No known blocking engineering error remains in the delivered V64.3.10 code path. GPU/data-environment execution still needs the user's nuPlan caches and promoted DARM+DBR checkpoint.

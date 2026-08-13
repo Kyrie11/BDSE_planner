@@ -245,6 +245,12 @@ def _budgeted_decisive_margin_utility_loss(
             "bdmu_topm_swap_rank_loss": zero,
             "bdmu_topm_swap_rank_pairs": zero,
             "bdmu_topm_swap_rank_scene_fraction": zero,
+            "bdmu_hab_oracle_topm_utility_capture": zero,
+            "bdmu_hab_oracle_gap": zero,
+            "bdmu_feasible_admission_rank_loss": zero,
+            "bdmu_feasible_admission_pairs": zero,
+            "bdmu_feasible_admission_same_family_pair_fraction": zero,
+            "bdmu_feasible_admission_scene_fraction": zero,
             "bdmu_frontier_rival_count": zero,
             "bdmu_reference_worst_margin_deficit": zero,
         }
@@ -351,53 +357,158 @@ def _budgeted_decisive_margin_utility_loss(
     scene_weight = has.float()
     L_listwise = (listwise * scene_weight).sum() / scene_weight.sum().clamp_min(1.0)
 
-    # V64.3.9: optimize the actual proposal bottleneck rather than a generic
-    # hardest-negative objective.  A pair is created only when a positive-utility
-    # atom is currently *missed by Top-M* and a lower-utility atom is currently
-    # occupying a Top-M slot.  This is the exact one-for-one proposal-boundary
-    # error that the deployment interface can repair without changing M or B.
-    rank_weight = float(util_cfg.get("topm_swap_rank_weight", 0.0))
-    rank_margin = float(util_cfg.get("topm_swap_rank_margin", 0.5))
-    rank_pos_k = max(1, int(util_cfg.get("topm_swap_positive_k", 8)))
-    rank_neg_k = max(1, int(util_cfg.get("topm_swap_negative_k", 8)))
-    rank_losses: list[torch.Tensor] = []
-    rank_pair_count = zero
-    rank_scene_count = zero
-    if rank_weight > 0.0:
+    # V64.3.9 legacy swap ranking compared arbitrary missed/occupied atoms.
+    # V64.3.10 optionally projects the continuous teacher utility through the
+    # *exact deployed HAB policy* first.  The resulting oracle Top-M is a
+    # realizable target under the frozen family gate, structural bypass, and
+    # group-aware interaction reserve.  Structured ranking is then applied only
+    # to the set difference between the current Top-M and that feasible oracle.
+    admission_mode = str(util_cfg.get("admission_projection_mode", "legacy_swap")).strip().lower()
+    oracle_topm = deployment_topm.detach().bool()
+    if admission_mode in {"exact_hab_utility", "hab_utility_projection", "feasible_hab"}:
+        oracle_scores = utility.detach().float()
+        oracle_topm = _runtime_hab_topm_mask_from_scores(
+            oracle_scores, outputs.get("family_logits"), batch, cfg
+        ).bool() & active
+
+    legacy_rank_weight = float(util_cfg.get("topm_swap_rank_weight", 0.0))
+    feasible_rank_weight = float(util_cfg.get("feasible_admission_rank_weight", 0.0))
+    # Keep V64.3.9 and V64.3.10 hyperparameters independent.  Falling back from
+    # the new feasible-admission keys to legacy swap keys would silently make a
+    # V64.3.10 config edit ineffective whenever both key families are present.
+    legacy_rank_margin = float(util_cfg.get("topm_swap_rank_margin", 0.5))
+    legacy_rank_pos_k = max(1, int(util_cfg.get("topm_swap_positive_k", 8)))
+    legacy_rank_neg_k = max(1, int(util_cfg.get("topm_swap_negative_k", 8)))
+    feasible_rank_margin = float(util_cfg.get("feasible_admission_margin", 0.5))
+    feasible_rank_pos_k = max(1, int(util_cfg.get("feasible_admission_positive_k", 8)))
+    feasible_rank_neg_k = max(1, int(util_cfg.get("feasible_admission_negative_k", 8)))
+
+    feasible_same_family = bool(util_cfg.get("feasible_admission_same_family", True))
+    feasible_cross_family_fallback = bool(util_cfg.get("feasible_admission_cross_family_fallback", True))
+    evidence_family_ids = batch.get("evidence_family_ids")
+
+    def _set_difference_rank_loss(
+        target_topm: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Rank only replacements that can cross the frozen HAB admission boundary.
+
+        HAB allocates proposal slots by semantic family before final post-processing.
+        Therefore a positive oracle atom should primarily beat an occupied atom from
+        the *same frozen family stratum*.  Cross-family comparisons do not normally
+        change a fixed family allocation and were one source of weak/irrelevant
+        gradients in AF-BDMU.  A cross-family fallback is retained only for rare
+        global-refill/finalization transitions where no same-family displaced atom
+        exists.
+        """
+        rank_losses: list[torch.Tensor] = []
+        pair_count = zero
+        same_family_pair_count = zero
+        scene_count = zero
         for bi in range(int(utility.shape[0])):
             if not bool(has[bi]):
                 continue
             u = utility[bi]
             cur_topm = deployment_topm[bi].bool() & active[bi]
-            missed = active[bi] & ~cur_topm & (u > eps)
-            occupied = cur_topm
+            tgt_topm = target_topm[bi].bool() & active[bi]
+            missed = tgt_topm & ~cur_topm & (u > eps)
+            occupied = cur_topm & ~tgt_topm
             missed_idx = torch.nonzero(missed, as_tuple=False).squeeze(1)
             occupied_idx = torch.nonzero(occupied, as_tuple=False).squeeze(1)
             if missed_idx.numel() == 0 or occupied_idx.numel() == 0:
                 continue
-            p = min(rank_pos_k, int(missed_idx.numel()))
-            n = min(rank_neg_k, int(occupied_idx.numel()))
-            pos_order = torch.topk(u[missed_idx], k=p, largest=True).indices
-            neg_order = torch.topk(u[occupied_idx], k=n, largest=False).indices
-            pos_idx = missed_idx[pos_order]
-            neg_idx = occupied_idx[neg_order]
+            p = min(feasible_rank_pos_k, int(missed_idx.numel()))
+            pos_idx = missed_idx[torch.topk(u[missed_idx], k=p, largest=True).indices]
+            scene_terms: list[torch.Tensor] = []
+            scene_weights: list[torch.Tensor] = []
+            for pos in pos_idx:
+                neg_pool = occupied_idx
+                used_same_family = False
+                if feasible_same_family and evidence_family_ids is not None:
+                    same = evidence_family_ids[bi, occupied_idx].long().eq(evidence_family_ids[bi, pos].long())
+                    if bool(same.any()):
+                        neg_pool = occupied_idx[same]
+                        used_same_family = True
+                    elif not feasible_cross_family_fallback:
+                        continue
+                n = min(feasible_rank_neg_k, int(neg_pool.numel()))
+                if n <= 0:
+                    continue
+                neg_idx = neg_pool[torch.topk(u[neg_pool], k=n, largest=False).indices]
+                gap = u[pos] - u[neg_idx]
+                valid_pair = gap > eps
+                if not bool(valid_pair.any()):
+                    continue
+                neg_idx = neg_idx[valid_pair]
+                gap = gap[valid_pair]
+                score_gap = acquisition_logits[bi, pos] - acquisition_logits[bi, neg_idx]
+                pair_loss = F.softplus(feasible_rank_margin - score_gap)
+                scene_terms.append(pair_loss)
+                scene_weights.append(gap)
+                cnt = gap.new_tensor(float(gap.numel()))
+                pair_count = pair_count + cnt
+                if used_same_family:
+                    same_family_pair_count = same_family_pair_count + cnt
+            if not scene_terms:
+                continue
+            terms = torch.cat([x.reshape(-1) for x in scene_terms], dim=0)
+            weights = torch.cat([x.reshape(-1) for x in scene_weights], dim=0)
+            weights = weights / weights.sum().clamp_min(eps)
+            rank_losses.append((terms * weights).sum())
+            scene_count = scene_count + zero.new_tensor(1.0)
+        return (
+            torch.stack(rank_losses).mean() if rank_losses else zero,
+            pair_count,
+            same_family_pair_count,
+            scene_count,
+        )
+
+    # Historical AF-BDMU loss is kept bit-for-bit in spirit for reproducibility
+    # and is disabled by the V64.3.10 config.  Unlike the feasible projection
+    # below it can compare atoms that do not compete for the same realizable HAB
+    # membership transition.
+    if legacy_rank_weight > 0.0:
+        legacy_losses: list[torch.Tensor] = []
+        rank_pair_count = zero
+        rank_scene_count = zero
+        for bi in range(int(utility.shape[0])):
+            if not bool(has[bi]):
+                continue
+            u = utility[bi]
+            cur_topm = deployment_topm[bi].bool() & active[bi]
+            missed_idx = torch.nonzero(active[bi] & ~cur_topm & (u > eps), as_tuple=False).squeeze(1)
+            occupied_idx = torch.nonzero(cur_topm, as_tuple=False).squeeze(1)
+            if missed_idx.numel() == 0 or occupied_idx.numel() == 0:
+                continue
+            p = min(legacy_rank_pos_k, int(missed_idx.numel()))
+            n = min(legacy_rank_neg_k, int(occupied_idx.numel()))
+            pos_idx = missed_idx[torch.topk(u[missed_idx], k=p, largest=True).indices]
+            neg_idx = occupied_idx[torch.topk(u[occupied_idx], k=n, largest=False).indices]
             gap = u[pos_idx][:, None] - u[neg_idx][None, :]
             valid_pair = gap > eps
             if not bool(valid_pair.any()):
                 continue
             score_gap = acquisition_logits[bi, pos_idx][:, None] - acquisition_logits[bi, neg_idx][None, :]
-            pair_loss = F.softplus(rank_margin - score_gap)
-            # Teacher utility gap is a bounded importance weight; normalization
-            # makes the term stable across scenes with different margin scales.
+            pair_loss = F.softplus(legacy_rank_margin - score_gap)
             pair_weight = torch.where(valid_pair, gap, torch.zeros_like(gap))
             pair_weight = pair_weight / pair_weight.sum().clamp_min(eps)
-            rank_losses.append((pair_loss * pair_weight).sum())
+            legacy_losses.append((pair_loss * pair_weight).sum())
             rank_pair_count = rank_pair_count + valid_pair.float().sum()
             rank_scene_count = rank_scene_count + zero.new_tensor(1.0)
-    L_swap_rank = torch.stack(rank_losses).mean() if rank_losses else zero
+        L_swap_rank = torch.stack(legacy_losses).mean() if legacy_losses else zero
+    else:
+        L_swap_rank, rank_pair_count, rank_scene_count = zero, zero, zero
+
+    if feasible_rank_weight > 0.0:
+        L_feasible_rank, feasible_pair_count, feasible_same_family_pair_count, feasible_scene_count = _set_difference_rank_loss(oracle_topm)
+    else:
+        L_feasible_rank, feasible_pair_count, feasible_same_family_pair_count, feasible_scene_count = zero, zero, zero, zero
 
     listwise_weight = float(util_cfg.get("listwise_weight", 1.0))
-    L_rank = listwise_weight * L_listwise + rank_weight * L_swap_rank
+    L_rank = (
+        listwise_weight * L_listwise
+        + legacy_rank_weight * L_swap_rank
+        + feasible_rank_weight * L_feasible_rank
+    )
 
     # A small residual norm is the preservation prior: when the continuous
     # teacher utility provides no evidence to move an atom, the zero-init V64.3.7
@@ -412,6 +523,8 @@ def _budgeted_decisive_margin_utility_loss(
 
     ref_capture = (utility * reference_mask.float()).sum(dim=1) / mass.squeeze(1).clamp_min(eps)
     topm_capture = (utility * deployment_topm.float()).sum(dim=1) / mass.squeeze(1).clamp_min(eps)
+    oracle_capture = (utility * oracle_topm.float()).sum(dim=1) / mass.squeeze(1).clamp_min(eps)
+    oracle_gap = (oracle_capture - topm_capture).clamp_min(0.0)
     missed_fraction = target_diag["missed_utility"] / target_diag["total_utility"].clamp_min(eps)
     entropy = -(target_dist * torch.log(target_dist.clamp_min(eps))).sum(dim=1)
     denom = scene_weight.sum().clamp_min(1.0)
@@ -427,6 +540,14 @@ def _budgeted_decisive_margin_utility_loss(
         "bdmu_topm_swap_rank_loss": L_swap_rank.detach(),
         "bdmu_topm_swap_rank_pairs": rank_pair_count.detach(),
         "bdmu_topm_swap_rank_scene_fraction": (rank_scene_count / max(float(utility.shape[0]), 1.0)).detach(),
+        "bdmu_hab_oracle_topm_utility_capture": (oracle_capture * scene_weight).sum() / denom,
+        "bdmu_hab_oracle_gap": (oracle_gap * scene_weight).sum() / denom,
+        "bdmu_feasible_admission_rank_loss": L_feasible_rank.detach(),
+        "bdmu_feasible_admission_pairs": feasible_pair_count.detach(),
+        "bdmu_feasible_admission_same_family_pair_fraction": (
+            feasible_same_family_pair_count / feasible_pair_count.clamp_min(1.0)
+        ).detach(),
+        "bdmu_feasible_admission_scene_fraction": (feasible_scene_count / max(float(utility.shape[0]), 1.0)).detach(),
         "bdmu_frontier_rival_count": (target_diag["frontier_count"] * scene_weight).sum() / denom,
         "bdmu_reference_worst_margin_deficit": (target_diag["worst_deficit"] * scene_weight).sum() / denom,
     }
@@ -2072,14 +2193,20 @@ def _fast_topm_mask_torch(
     return topm_mask, soft_interaction
 
 
-def _runtime_hab_topm_hard_mask(
-    outputs: dict[str, torch.Tensor],
+def _runtime_hab_topm_mask_from_scores(
+    scores_t: torch.Tensor,
+    family_logits_t: torch.Tensor | None,
     batch: dict[str, torch.Tensor],
     cfg: dict[str, Any],
 ) -> torch.Tensor:
-    """Exact stop-gradient runtime HAB Top-M mask for sampled training scenes."""
-    logits_t = outputs["proposal_logits"]
-    family_logits_t = outputs.get("family_logits")
+    """Project arbitrary atom scores through the exact deployed HAB Top-M policy.
+
+    The operation is intentionally stop-gradient.  It is used both for the real
+    proposal scores and for teacher-utility oracle projections, so a structured
+    acquisition target cannot silently optimize a set that the hierarchical
+    planner interface is unable to realize.
+    """
+    logits_t = scores_t
     active_t = batch.get("evidence_active", torch.ones_like(logits_t, dtype=torch.bool))
     costs_t = batch.get("evidence_budget_costs", torch.ones_like(logits_t))
     fam_t = batch.get("evidence_family_ids", torch.zeros_like(logits_t, dtype=torch.long))
@@ -2131,6 +2258,17 @@ def _runtime_hab_topm_hard_mask(
         )
         mask[bidx, np.asarray(topm, dtype=np.int64)] = True
     return torch.from_numpy(mask).to(device=logits_t.device, non_blocking=True)
+
+
+def _runtime_hab_topm_hard_mask(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    cfg: dict[str, Any],
+) -> torch.Tensor:
+    """Exact stop-gradient runtime HAB Top-M mask for sampled training scenes."""
+    return _runtime_hab_topm_mask_from_scores(
+        outputs["proposal_logits"], outputs.get("family_logits"), batch, cfg
+    )
 
 def _pairwise_action_from_margin_torch(
     margins: torch.Tensor,
