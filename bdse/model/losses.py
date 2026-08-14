@@ -251,6 +251,18 @@ def _budgeted_decisive_margin_utility_loss(
             "bdmu_feasible_admission_pairs": zero,
             "bdmu_feasible_admission_same_family_pair_fraction": zero,
             "bdmu_feasible_admission_scene_fraction": zero,
+            "bdmu_current_budget_utility_capture": zero,
+            "bdmu_oracle_budget_utility_capture": zero,
+            "bdmu_budget_transmission_gap": zero,
+            "bdmu_budget_transmission_rank_loss": zero,
+            "bdmu_budget_transmission_pairs": zero,
+            "bdmu_budget_transmission_scene_fraction": zero,
+            "bdmu_budget_transmission_positive_fraction": zero,
+            "bdmu_budget_protected_negative_fraction": zero,
+            "bdmu_budget_projection_exact_fraction": zero,
+            "bdmu_budget_projection_topm_violation_fraction": zero,
+            "bdmu_budget_selector_surrogate_jaccard_current": zero,
+            "bdmu_budget_selector_surrogate_jaccard_oracle": zero,
             "bdmu_frontier_rival_count": zero,
             "bdmu_reference_worst_margin_deficit": zero,
         }
@@ -387,6 +399,32 @@ def _budgeted_decisive_margin_utility_loss(
     feasible_cross_family_fallback = bool(util_cfg.get("feasible_admission_cross_family_fallback", True))
     evidence_family_ids = batch.get("evidence_family_ids")
 
+    # V64.3.11 BTP-BDMU: HAP-BDMU proved that a score surrogate can move the
+    # exact HAB Top-M set while *hurting* decisive proposal recall and the teacher
+    # endpoint.  The missing mediator is the fixed B=16 selector.  Project the
+    # HAP utility oracle through the same frozen pair-margin budget selector used
+    # by the immutable BDMU reference, and supervise only admissions that survive
+    # that budget layer.  Current budget-selected evidence is protected from
+    # becoming a negative, implementing a minimum-intervention/no-regression
+    # principle without adding a binary criticality target.
+    budget_transmission_weight = float(util_cfg.get("budget_transmission_rank_weight", 0.0))
+    budget_transmission_margin = float(util_cfg.get("budget_transmission_margin", 0.35))
+    budget_transmission_pos_k = max(1, int(util_cfg.get("budget_transmission_positive_k", 6)))
+    budget_transmission_neg_k = max(1, int(util_cfg.get("budget_transmission_negative_k", 6)))
+    budget_transmission_same_family = bool(util_cfg.get("budget_transmission_same_family", True))
+    budget_transmission_cross_family = bool(util_cfg.get("budget_transmission_cross_family_fallback", False))
+    budget_transmission_protect_current = bool(util_cfg.get("budget_transmission_protect_current_budget", True))
+    budget_projection_source = str(util_cfg.get("budget_transmission_selector_source", "frozen_pair_margin_surrogate")).strip().lower()
+    budget_exact_eval = bool(util_cfg.get("budget_transmission_exact_eval", True))
+    if budget_transmission_weight > 0.0 and budget_projection_source not in {
+        "frozen_pair_margin_surrogate", "pair_margin_surrogate", "frozen_fast_budget"
+    }:
+        raise ValueError(
+            "BTP-BDMU currently requires budget_transmission_selector_source="
+            "frozen_pair_margin_surrogate so training and the immutable BDMU reference "
+            "use the same B=16 projection semantics"
+        )
+
     def _set_difference_rank_loss(
         target_topm: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -503,11 +541,121 @@ def _budgeted_decisive_margin_utility_loss(
     else:
         L_feasible_rank, feasible_pair_count, feasible_same_family_pair_count, feasible_scene_count = zero, zero, zero, zero
 
+    current_budget_mask = reference_mask.detach().bool()
+    oracle_budget_mask = reference_mask.detach().bool()
+    L_budget_transmission = zero
+    budget_transmission_pair_count = zero
+    budget_transmission_scene_count = zero
+    budget_transmission_positive_fraction = zero
+    budget_protected_negative_fraction = zero
+    budget_projection_exact_fraction = zero
+    budget_projection_topm_violation_fraction = zero
+    budget_selector_surrogate_jaccard_current = zero
+    budget_selector_surrogate_jaccard_oracle = zero
+    if budget_transmission_weight > 0.0:
+        budget = float((cfg.get("evidence", {}) or {}).get("budget", 16))
+        fast_current_budget_mask = _fast_pair_margin_surrogate_masks(
+            outputs, batch, cfg, [budget], topm_mask_override=deployment_topm
+        )[budget].detach().bool() & active
+        fast_oracle_budget_mask = _fast_pair_margin_surrogate_masks(
+            outputs, batch, cfg, [budget], topm_mask_override=oracle_topm
+        )[budget].detach().bool() & active
+        current_budget_mask = fast_current_budget_mask
+        oracle_budget_mask = fast_oracle_budget_mask
+
+        # Training keeps the vectorized frozen pair-margin surrogate for speed.
+        # Validation, where gradients are disabled, upgrades C1-B/C2-B to the
+        # exact runtime pair-conditioned B=16 selector with the exact Top-M pool
+        # injected. This prevents a fast-selector surrogate from becoming the
+        # paper's causal mediation endpoint.
+        if budget_exact_eval and not torch.is_grad_enabled():
+            current_budget_mask = _predicted_pair_certificate_masks(
+                outputs, batch, cfg, topm_mask_override=deployment_topm,
+                proposal_scores_override=outputs["proposal_logits"].detach(),
+            ).detach().bool() & active
+            oracle_budget_mask = _predicted_pair_certificate_masks(
+                outputs, batch, cfg, topm_mask_override=oracle_topm,
+                proposal_scores_override=utility.detach(),
+            ).detach().bool() & active
+            budget_projection_exact_fraction = zero.new_tensor(1.0)
+            # Exact mediation requires a strict nested interface: B must be a
+            # subset of the explicitly injected final Top-M pool.  Keep this as
+            # a logged contract rather than relying on selector internals so a
+            # future post-processing regression cannot silently contaminate C1-B/C2-B.
+            current_violation = current_budget_mask & ~deployment_topm.bool() & active
+            oracle_violation = oracle_budget_mask & ~oracle_topm.bool() & active
+            selected_total = (current_budget_mask & active).float().sum() + (oracle_budget_mask & active).float().sum()
+            budget_projection_topm_violation_fraction = (
+                current_violation.float().sum() + oracle_violation.float().sum()
+            ) / selected_total.clamp_min(1.0)
+
+            def _mask_jaccard(a_mask: torch.Tensor, b_mask: torch.Tensor) -> torch.Tensor:
+                inter = (a_mask & b_mask & active).float().sum(dim=1)
+                union = ((a_mask | b_mask) & active).float().sum(dim=1)
+                return torch.where(union > 0, inter / union.clamp_min(1.0), torch.ones_like(union)).mean()
+
+            budget_selector_surrogate_jaccard_current = _mask_jaccard(
+                current_budget_mask, fast_current_budget_mask
+            )
+            budget_selector_surrogate_jaccard_oracle = _mask_jaccard(
+                oracle_budget_mask, fast_oracle_budget_mask
+            )
+
+        # Positives must (a) belong to the realizable HAP utility oracle, (b) be
+        # selected by the frozen B=16 selector under that oracle pool, and (c) be
+        # absent from the current deployed Top-M.  This is the exact missing
+        # transmission event observed in V64.3.10.
+        pos = oracle_budget_mask & oracle_topm & ~deployment_topm & (utility > eps)
+        raw_neg = deployment_topm & ~oracle_topm
+        neg = raw_neg & (~current_budget_mask if budget_transmission_protect_current else torch.ones_like(raw_neg))
+
+        # Keep only the highest-utility transmitted positives and the lowest-utility
+        # replaceable negatives.  The pair tensor stays small and fully vectorized,
+        # avoiding the per-scene/per-atom Python loop that dominated HAP loss time.
+        E = int(utility.shape[1])
+        kp = min(budget_transmission_pos_k, E)
+        kn = min(budget_transmission_neg_k, E)
+        pos_score = utility.masked_fill(~pos, -1.0e9)
+        pos_idx = torch.topk(pos_score, k=kp, dim=1, largest=True).indices
+        pos_keep = torch.zeros_like(pos).scatter(1, pos_idx, True) & pos
+        neg_score = (-utility).masked_fill(~neg, -1.0e9)
+        neg_idx = torch.topk(neg_score, k=kn, dim=1, largest=True).indices
+        neg_keep = torch.zeros_like(neg).scatter(1, neg_idx, True) & neg
+
+        pair_mask = pos_keep[:, :, None] & neg_keep[:, None, :]
+        if budget_transmission_same_family and evidence_family_ids is not None:
+            family_equal = evidence_family_ids[:, :, None].long().eq(evidence_family_ids[:, None, :].long())
+            same_family_mask = pair_mask & family_equal
+            if budget_transmission_cross_family:
+                # Cross-family fallback is intentionally opt-in. V64.3.10 showed
+                # that broad fallback dominated the training pairs and degraded
+                # decisive recall; V64.3.11 main configs keep it disabled.
+                has_same = same_family_mask.any(dim=(1, 2), keepdim=True)
+                pair_mask = torch.where(has_same, same_family_mask, pair_mask)
+            else:
+                pair_mask = same_family_mask
+
+        utility_gap = utility[:, :, None] - utility[:, None, :]
+        pair_mask &= utility_gap > eps
+        score_gap = acquisition_logits[:, :, None] - acquisition_logits[:, None, :]
+        pair_terms = F.softplus(budget_transmission_margin - score_gap)
+        pair_weights = torch.where(pair_mask, utility_gap.clamp_min(0.0), torch.zeros_like(utility_gap))
+        scene_weight_sum = pair_weights.sum(dim=(1, 2))
+        scene_has_pair = scene_weight_sum > eps
+        scene_loss = (pair_terms * pair_weights).sum(dim=(1, 2)) / scene_weight_sum.clamp_min(eps)
+        L_budget_transmission = (scene_loss * scene_has_pair.float()).sum() / scene_has_pair.float().sum().clamp_min(1.0)
+        budget_transmission_pair_count = pair_mask.float().sum()
+        budget_transmission_scene_count = scene_has_pair.float().sum()
+        budget_transmission_positive_fraction = pos.float().sum() / active.float().sum().clamp_min(1.0)
+        protected = raw_neg & current_budget_mask
+        budget_protected_negative_fraction = protected.float().sum() / raw_neg.float().sum().clamp_min(1.0)
+
     listwise_weight = float(util_cfg.get("listwise_weight", 1.0))
     L_rank = (
         listwise_weight * L_listwise
         + legacy_rank_weight * L_swap_rank
         + feasible_rank_weight * L_feasible_rank
+        + budget_transmission_weight * L_budget_transmission
     )
 
     # A small residual norm is the preservation prior: when the continuous
@@ -548,6 +696,18 @@ def _budgeted_decisive_margin_utility_loss(
             feasible_same_family_pair_count / feasible_pair_count.clamp_min(1.0)
         ).detach(),
         "bdmu_feasible_admission_scene_fraction": (feasible_scene_count / max(float(utility.shape[0]), 1.0)).detach(),
+        "bdmu_current_budget_utility_capture": ((utility * current_budget_mask.float()).sum(dim=1) / mass.squeeze(1).clamp_min(eps) * scene_weight).sum() / denom,
+        "bdmu_oracle_budget_utility_capture": ((utility * oracle_budget_mask.float()).sum(dim=1) / mass.squeeze(1).clamp_min(eps) * scene_weight).sum() / denom,
+        "bdmu_budget_transmission_gap": (((utility * oracle_budget_mask.float()).sum(dim=1) - (utility * current_budget_mask.float()).sum(dim=1)).clamp_min(0.0) / mass.squeeze(1).clamp_min(eps) * scene_weight).sum() / denom,
+        "bdmu_budget_transmission_rank_loss": L_budget_transmission.detach(),
+        "bdmu_budget_transmission_pairs": budget_transmission_pair_count.detach(),
+        "bdmu_budget_transmission_scene_fraction": (budget_transmission_scene_count / max(float(utility.shape[0]), 1.0)).detach(),
+        "bdmu_budget_transmission_positive_fraction": budget_transmission_positive_fraction.detach(),
+        "bdmu_budget_protected_negative_fraction": budget_protected_negative_fraction.detach(),
+        "bdmu_budget_projection_exact_fraction": budget_projection_exact_fraction.detach(),
+        "bdmu_budget_projection_topm_violation_fraction": budget_projection_topm_violation_fraction.detach(),
+        "bdmu_budget_selector_surrogate_jaccard_current": budget_selector_surrogate_jaccard_current.detach(),
+        "bdmu_budget_selector_surrogate_jaccard_oracle": budget_selector_surrogate_jaccard_oracle.detach(),
         "bdmu_frontier_rival_count": (target_diag["frontier_count"] * scene_weight).sum() / denom,
         "bdmu_reference_worst_margin_deficit": (target_diag["worst_deficit"] * scene_weight).sum() / denom,
     }
@@ -1090,8 +1250,9 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
 
     for bidx in range(B):
         structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
-        topm, fam_budget, _ = select_topm_atoms_hab(
-            logits[bidx],
+        selector_scores = logits[bidx] if proposal_override_np is None else proposal_override_np[bidx]
+        computed_topm, fam_budget, _ = select_topm_atoms_hab(
+            selector_scores,
             fam_ids_np[bidx],
             active[bidx],
             costs[bidx],
@@ -1103,6 +1264,17 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             enabled=bool(s_cfg.get("hab_enabled", True)),
             min_family_slots=s_cfg.get("min_family_topm_slots", None),
         )
+        if topm_override_np is None:
+            topm = computed_topm
+        else:
+            override = np.asarray(topm_override_np[bidx], dtype=bool).reshape(-1)
+            if override.shape[0] < E:
+                override = np.pad(override, (0, E - override.shape[0]), constant_values=False)
+            topm = np.flatnonzero(override[:E] & active[bidx]).astype(np.int64)
+            if topm.size > M:
+                # Exact overrides should already obey the deployment M contract;
+                # fail closed rather than silently creating an over-budget pool.
+                raise ValueError(f"topm_mask_override selects {topm.size} atoms but proposal_top_m={M}")
         # Mirror the hybrid selector used at deployment: hard/rule atoms that
         # support supervised margins must remain queryable even when proposal
         # logits are still immature.  This is not dense leakage into the final
@@ -1122,7 +1294,7 @@ def _predicted_certificate_masks(outputs: dict[str, torch.Tensor], batch: dict[s
             [int(f) in interaction_family_set for f in fam_ids_np[bidx].tolist()], dtype=bool
         ) & active[bidx] & ~hard_feature_for_pool
         min_soft_topm = int(s_cfg.get("min_soft_interaction_topm_slots", 0))
-        if min_soft_topm > 0 and bool(soft_interaction_pool.any()):
+        if topm_override_np is None and min_soft_topm > 0 and bool(soft_interaction_pool.any()):
             protected_for_pool = structural_safety_mask(
                 hard_feature_for_pool,
                 fam_ids_np[bidx],
@@ -1456,6 +1628,9 @@ def _predicted_pair_certificate_masks(
     scene_indices: torch.Tensor | None = None,
     _numpy_cache: dict[str, Any] | None = None,
     _aocc_scene_caches: list[dict[str, Any]] | None = None,
+    *,
+    topm_mask_override: torch.Tensor | None = None,
+    proposal_scores_override: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Stop-gradient HAB masks for pair-conditioned action supervision.
 
@@ -1469,6 +1644,10 @@ def _predicted_pair_certificate_masks(
         scene_indices = scene_indices.to(device=outputs["J0"].device, dtype=torch.long)
         outputs = _slice_scene_batch(outputs, scene_indices, full_batch_size)
         batch = _slice_scene_batch(batch, scene_indices, full_batch_size)
+        if topm_mask_override is not None:
+            topm_mask_override = topm_mask_override.index_select(0, scene_indices)
+        if proposal_scores_override is not None:
+            proposal_scores_override = proposal_scores_override.index_select(0, scene_indices)
     if "pair_indices" not in batch or ("pair_atom_delta" not in outputs and "g" not in outputs):
         return outputs["J0"].new_zeros(outputs["proposal_logits"].shape, dtype=torch.bool)
     e_cfg = cfg.get("evidence", {})
@@ -1489,6 +1668,8 @@ def _predicted_pair_certificate_masks(
     pair_weights = cache["pair_weights"]
     logits = cache["logits"]
     family_logits_np = cache["family_logits_np"]
+    topm_override_np = None if topm_mask_override is None else topm_mask_override.detach().bool().cpu().numpy()
+    proposal_override_np = None if proposal_scores_override is None else proposal_scores_override.detach().float().cpu().numpy()
     valid = cache["valid"]
     active = cache["active"]
     costs = cache["costs"]
@@ -1512,8 +1693,9 @@ def _predicted_pair_certificate_masks(
 
     for bidx in range(Bsz):
         structural_bypass = bool(s_cfg.get("decision_budget_excludes_structural_safety", False))
-        topm, fam_budget, _ = select_topm_atoms_hab(
-            logits[bidx],
+        selector_scores = logits[bidx] if proposal_override_np is None else proposal_override_np[bidx]
+        computed_topm, fam_budget, _ = select_topm_atoms_hab(
+            selector_scores,
             fam_ids_np[bidx],
             active[bidx],
             costs[bidx],
@@ -1525,12 +1707,23 @@ def _predicted_pair_certificate_masks(
             enabled=bool(s_cfg.get("hab_enabled", True)),
             min_family_slots=s_cfg.get("min_family_topm_slots", None),
         )
+        if topm_override_np is None:
+            topm = computed_topm
+        else:
+            override = np.asarray(topm_override_np[bidx], dtype=bool).reshape(-1)
+            if override.shape[0] < E:
+                override = np.pad(override, (0, E - override.shape[0]), constant_values=False)
+            topm = np.flatnonzero(override[:E] & active[bidx]).astype(np.int64)
+            if topm.size > M:
+                # Exact overrides should already obey the deployment M contract;
+                # fail closed rather than silently creating an over-budget pool.
+                raise ValueError(f"topm_mask_override selects {topm.size} atoms but proposal_top_m={M}")
         # Mirror the hybrid selector used at deployment: hard/rule atoms that
         # support supervised margins must remain queryable even when proposal
         # logits are still immature.  This is not dense leakage into the final
         # certificate; it only expands the Top-M candidate pool before the same
         # budgeted greedy selector runs.
-        if (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and decisive_hard_np is not None:
+        if topm_override_np is None and (not structural_bypass) and bool(s_cfg.get("force_decisive_hard_topm", True)) and decisive_hard_np is not None:
             hard_train = (decisive_hard_np[bidx] if decisive_hard_np is not None else np.zeros((E,), dtype=bool)) & active[bidx]
             forced = np.flatnonzero(hard_train)
             if forced.size:
@@ -1548,13 +1741,17 @@ def _predicted_pair_certificate_masks(
             active[bidx],
             include_feasibility=bool(s_cfg.get("structural_safety_include_feasibility", True)),
         )
-        if min_soft_topm > 0 and bool(soft_interaction_pool.any()):
+        # A supplied override is already the fully finalized canonical runtime
+        # Top-M set (HAB + structural handling + group-aware interaction reserve).
+        # Re-running reservation here can pull atoms from outside the injected
+        # candidate domain and invalidates exact C1-B/C2-B mediation.
+        if topm_override_np is None and min_soft_topm > 0 and bool(soft_interaction_pool.any()):
             topm, _ = reserve_topm_candidates(
                 topm, soft_interaction_pool, logits[bidx], M, min_soft_topm,
                 protected_mask=None if structural_bypass else protected_for_pool,
                 group_ids=group_ids_np[bidx],
             )
-        if structural_bypass:
+        if topm_override_np is None and structural_bypass:
             topm, _ = restrict_topm_to_decision_evidence(
                 topm, active[bidx] & ~protected_for_pool, logits[bidx], M,
                 family_ids=fam_ids_np[bidx],
@@ -1705,7 +1902,7 @@ def _predicted_pair_certificate_masks(
             force_fill_budget=bool(s_cfg.get("force_fill_budget", False)),
             normalize_margins=normalize_margins,
             margin_scale=mscale,
-            proposal_scores=logits[bidx],
+            proposal_scores=selector_scores,
             proposal_fill_weight=float(s_cfg.get("proposal_fill_weight", 0.25)),
             prioritize_mandatory_fill=bool(s_cfg.get("prioritize_mandatory_fill", True)),
             selector_cap_mode=str(s_cfg.get("selector_cap_mode", "legacy_abs")),
@@ -1891,6 +2088,10 @@ def _predicted_pair_certificate_masks_multi_budget(
         scene_indices = scene_indices.to(device=outputs["J0"].device, dtype=torch.long)
         outputs = _slice_scene_batch(outputs, scene_indices, full_batch_size)
         batch = _slice_scene_batch(batch, scene_indices, full_batch_size)
+        if topm_mask_override is not None:
+            topm_mask_override = topm_mask_override.index_select(0, scene_indices)
+        if proposal_scores_override is not None:
+            proposal_scores_override = proposal_scores_override.index_select(0, scene_indices)
     cache = _build_predicted_pair_numpy_cache(outputs, batch, budget_cfgs[0])
     batch_size = int(outputs["J0"].shape[0])
     target_device = outputs["J0"].device

@@ -37,6 +37,7 @@ V64_3_PREFIXES = (
     "v64_3_8_cc_aocc_bdmu",
     "v64_3_9_cc_aocc_af_bdmu",
     "v64_3_10_cc_aocc_hap_bdmu",
+    "v64_3_11_cc_aocc_btp_bdmu",
 )
 V64_3_ALGORITHM_VERSIONS = {
     "V64.3-CC-AOCC-AP-WCCA",
@@ -65,6 +66,7 @@ V64_3_ALGORITHM_VERSIONS = {
     "V64.3.8-CC-AOCC-BDMU-NOCOST-DARM-DBR",
     "V64.3.9-CC-AOCC-AF-BDMU-DARM-DBR",
     "V64.3.10-CC-AOCC-HAP-BDMU-DARM-DBR",
+    "V64.3.11-CC-AOCC-BTP-BDMU-DARM-DBR",
 }
 V64_3_REQUIRED_TRAINABLE = {
     "critical_proposal_adapter",
@@ -127,7 +129,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
     }
     if role == "train":
         v6437_value_isolation = metadata_version.startswith("V64.3.7-")
-        v6438_bdmu_isolation = metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-"))
+        v6438_bdmu_isolation = metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-", "V64.3.11-"))
         checks.update(
             {
                 "literal_winner_flip_criticality_enabled": bool(crit.get("enabled", False)) or v6437_value_isolation or v6438_bdmu_isolation,
@@ -136,7 +138,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
             }
         )
 
-    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64.3.9", "v64.3.10", "v64_3"}
+    strict_v64_3 = expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64.3.9", "v64.3.10", "v64.3.11", "v64_3"}
     if strict_v64_3:
         trainable = {str(x) for x in training_cfg.get("trainable_modules", [])}
         checks.update(
@@ -175,7 +177,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
             }
         )
         if role == "train":
-            if metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-")):
+            if metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-", "V64.3.11-")):
                 loss_weights = training_cfg.get("loss_weights", {}) or {}
                 positive_losses = {
                     str(k)
@@ -197,7 +199,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
                         "v64_3_8_critical_adapter_enabled": bool(critical_adapter.get("enabled", False)),
                     }
                 )
-                if metadata_version.startswith(("V64.3.9-", "V64.3.10-")):
+                if metadata_version.startswith(("V64.3.9-", "V64.3.10-", "V64.3.11-")):
                     checks.update(
                         {
                             "v64_3_9_adaptive_frontier": str(bdmu_cfg.get("rival_mode", "")).strip().lower() == "adaptive_frontier",
@@ -230,12 +232,45 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
                                 bdmu_cfg.get("topm_swap_rank_weight", 0.0)
                             )) <= 1.0e-12,
                         })
+                    if metadata_version.startswith("V64.3.11-"):
+                        checks.update({
+                            "v64_3_11_hab_utility_projection": str(
+                                bdmu_cfg.get("admission_projection_mode", "")
+                            ).strip().lower() in {"exact_hab_utility", "hab_utility_projection", "feasible_hab"},
+                            "v64_3_11_budget_transmission_rank_active": float(
+                                bdmu_cfg.get("budget_transmission_rank_weight", 0.0)
+                            ) > 0.0,
+                            "v64_3_11_broad_listwise_disabled": abs(float(
+                                bdmu_cfg.get("listwise_weight", 0.0)
+                            )) <= 1.0e-12,
+                            "v64_3_11_hap_rank_disabled": abs(float(
+                                bdmu_cfg.get("feasible_admission_rank_weight", 0.0)
+                            )) <= 1.0e-12,
+                            "v64_3_11_legacy_swap_disabled": abs(float(
+                                bdmu_cfg.get("topm_swap_rank_weight", 0.0)
+                            )) <= 1.0e-12,
+                            "v64_3_11_budget_projection_source": str(
+                                bdmu_cfg.get("budget_transmission_selector_source", "")
+                            ).strip().lower() == "frozen_pair_margin_surrogate",
+                            "v64_3_11_exact_budget_projection_eval": bool(
+                                bdmu_cfg.get("budget_transmission_exact_eval", False)
+                            ),
+                            "v64_3_11_same_family_admission": bool(
+                                bdmu_cfg.get("budget_transmission_same_family", False)
+                            ),
+                            "v64_3_11_cross_family_fallback_disabled": not bool(
+                                bdmu_cfg.get("budget_transmission_cross_family_fallback", True)
+                            ),
+                            "v64_3_11_protect_current_budget": bool(
+                                bdmu_cfg.get("budget_transmission_protect_current_budget", False)
+                            ),
+                        })
 
             checks.update(
                 {
                     "v64_3_required_trainable_exact": (
                         (trainable == {"critical_proposal_adapter"} and bool(dbr.get("enabled", False)))
-                        if metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-"))
+                        if metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-", "V64.3.11-"))
                         else (({"decisive_boundary_pair_adapter"}.issubset(trainable) and bool(dbr.get("enabled", False)))
                               if metadata_version.startswith("V64.3.7-")
                               else (({"critical_proposal_adapter"}.issubset(trainable) and
@@ -262,7 +297,7 @@ def _check(path: Path, role: str, expected_family: str | None) -> dict[str, Any]
                         or any(str(x) == "decisive_boundary_pair_adapter." for x in checkpoint_cfg.get("allowed_missing_prefixes", []))
                     ),
                     "v64_3_8_requires_pretrained_dbr_checkpoint": (
-                        (not metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-")))
+                        (not metadata_version.startswith(("V64.3.8-", "V64.3.9-", "V64.3.10-", "V64.3.11-")))
                         or (bool(dbr.get("enabled", False)) and not any(
                             str(x) == "decisive_boundary_pair_adapter."
                             for x in checkpoint_cfg.get("allowed_missing_prefixes", [])
@@ -319,7 +354,7 @@ def main() -> int:
     ap.add_argument("--eval-config", type=Path, required=True)
     ap.add_argument(
         "--expected-family",
-        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64.3.9", "v64.3.10", "v64_3"],
+        choices=["v64", "v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64.3.9", "v64.3.10", "v64.3.11", "v64_3"],
         default="v64",
         help="Use v64.3+ to reject any stale V64.2 config even if generic V64 checks pass.",
     )
@@ -332,7 +367,7 @@ def main() -> int:
         "train": _check(args.train_config, "train", args.expected_family),
         "eval": _check(args.eval_config, "eval", args.expected_family),
     }
-    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64.3.9", "v64.3.10", "v64_3"}
+    strict_v64_3 = args.expected_family in {"v64.3", "v64.3.1", "v64.3.2", "v64.3.3", "v64.3.4", "v64.3.5", "v64.3.6", "v64.3.7", "v64.3.8", "v64.3.9", "v64.3.10", "v64.3.11", "v64_3"}
     train_cond = report["train"].get("critical_proposal_conditioning", "")
     eval_cond = report["eval"].get("critical_proposal_conditioning", "")
     train_signature = report["train"].get("critical_proposal_signature", {})

@@ -56,3 +56,18 @@ def test_pair_certificate_mask_has_safe_missing_group_fallback() -> None:
     mask = _predicted_pair_certificate_masks(outputs, batch, cfg)
     assert mask.shape == outputs["proposal_logits"].shape
     assert int(mask.sum()) == 2
+
+
+def test_pair_certificate_mask_honors_exact_topm_override() -> None:
+    outputs, batch, cfg = _case(include_group_ids=True)
+    override = torch.tensor([[False, False, True, True]], dtype=torch.bool)
+    oracle_scores = torch.tensor([[0.1, 0.2, 2.0, 1.0]], dtype=torch.float32)
+    mask = _predicted_pair_certificate_masks(
+        outputs,
+        batch,
+        cfg,
+        topm_mask_override=override,
+        proposal_scores_override=oracle_scores,
+    )
+    assert int(mask.sum()) == 2
+    assert torch.equal(mask, override)
