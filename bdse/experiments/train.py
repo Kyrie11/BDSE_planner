@@ -1207,6 +1207,7 @@ def _run_validation_open_loop(
                     or key.startswith("residual_flip_")
                     or key.startswith("dual_certificate_")
                     or key.startswith("set_conditioned_residual_")
+                    or key.startswith("decisive_frontier_value_")
                     or key.startswith("base_prior_")
                     or key.startswith("learned_base_")
                     or key.startswith("structural_residual_")
@@ -2188,6 +2189,9 @@ def main() -> None:
     decisive_pair_adapter_reference = _adapter_parameter_snapshot(
         model, prefix="decisive_boundary_pair_adapter"
     )
+    frontier_value_adapter_reference = _adapter_parameter_snapshot(
+        model, prefix="decisive_anchor_frontier_value_adapter"
+    )
 
     log_file = Path(args.log_file) if args.log_file else _checkpoint_stem(args.output).parent / f"{_checkpoint_stem(args.output).name}.train_log.jsonl"
     if is_main and start_epoch == 0:
@@ -2212,6 +2216,12 @@ def main() -> None:
             _adapter_parameter_delta_metrics(
                 model, decisive_pair_adapter_reference,
                 prefix="decisive_boundary_pair_adapter", metric_prefix="decisive_pair_adapter"
+            )
+        )
+        initial_metrics.update(
+            _adapter_parameter_delta_metrics(
+                model, frontier_value_adapter_reference,
+                prefix="decisive_anchor_frontier_value_adapter", metric_prefix="frontier_value_adapter"
             )
         )
         if is_main:
@@ -2369,6 +2379,12 @@ def main() -> None:
             _adapter_parameter_delta_metrics(
                 model, decisive_pair_adapter_reference,
                 prefix="decisive_boundary_pair_adapter", metric_prefix="decisive_pair_adapter"
+            )
+        )
+        epoch_metrics.update(
+            _adapter_parameter_delta_metrics(
+                model, frontier_value_adapter_reference,
+                prefix="decisive_anchor_frontier_value_adapter", metric_prefix="frontier_value_adapter"
             )
         )
         if validation_enabled and ((epoch + 1) % int(args.val_every_n_epochs) == 0):

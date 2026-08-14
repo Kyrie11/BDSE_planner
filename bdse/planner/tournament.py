@@ -750,6 +750,78 @@ def _evidence_action_potential_cost(
     return anchor, corrected, sigma, diag
 
 
+def _decisive_frontier_value_star_residual_numpy(
+    selected_atoms: list[int] | np.ndarray,
+    valid_mask: np.ndarray,
+    anchor_action: int,
+    atom_factors: np.ndarray | None,
+    action_signed_factors: np.ndarray | None,
+    action_context_factors: np.ndarray | None,
+    *,
+    scale: float = 1.0,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Return exact-antisymmetric selected-evidence value residual on one anchor star.
+
+    The residual is pair-specific because the symmetric pair-context gate depends
+    jointly on anchor and challenger.  It therefore does not collapse to the V59
+    global selected-set action potential.  Only already-selected B evidence is
+    pooled and no proposal/selector score is changed.
+    """
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    K = int(valid.shape[0])
+    out = np.zeros((K,), dtype=np.float32)
+    atom = None if atom_factors is None else np.asarray(atom_factors, dtype=np.float32)
+    signed = None if action_signed_factors is None else np.asarray(action_signed_factors, dtype=np.float32)
+    context = None if action_context_factors is None else np.asarray(action_context_factors, dtype=np.float32)
+    if (
+        atom is None or signed is None or context is None or atom.ndim != 2 or signed.ndim != 2
+        or context.ndim != 2 or signed.shape != context.shape or signed.shape[0] < K
+        or atom.shape[1] <= 0 or signed.shape[1] != atom.shape[1]
+        or not (0 <= int(anchor_action) < K)
+    ):
+        return out, {
+            "decisive_frontier_value_active": 0.0,
+            "decisive_frontier_value_complete_star_coverage": 0.0,
+            "decisive_frontier_value_residual_abs_mean": 0.0,
+            "decisive_frontier_value_residual_rms": 0.0,
+        }
+    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+    selected = selected[(selected >= 0) & (selected < atom.shape[0])]
+    if selected.size == 0:
+        return out, {
+            "decisive_frontier_value_active": 0.0,
+            "decisive_frontier_value_complete_star_coverage": 0.0,
+            "decisive_frontier_value_residual_abs_mean": 0.0,
+            "decisive_frontier_value_residual_rms": 0.0,
+        }
+    rank = int(atom.shape[1])
+    # tanh is applied per atom before summation, preserving an exact additive
+    # decomposition into selected-evidence contributions.
+    pooled = np.tanh(atom[selected]).sum(axis=0) / np.sqrt(max(float(selected.size), 1.0))
+    pooled = pooled.astype(np.float32)
+    a = int(anchor_action)
+    ctx_a = context[a][None, :]
+    pair_sym = np.tanh(ctx_a + context[:K] + ctx_a * context[:K]).astype(np.float32)
+    signed_diff = signed[:K] - signed[a][None, :]
+    out = (
+        (pooled[None, :] * pair_sym * signed_diff).sum(axis=1)
+        / np.sqrt(max(float(rank), 1.0))
+    ).astype(np.float32) * float(scale)
+    out[~valid[:K]] = 0.0
+    out[a] = 0.0
+    challengers = valid[:K].copy(); challengers[a] = False
+    vals = out[challengers]
+    return out, {
+        "decisive_frontier_value_active": 1.0,
+        "decisive_frontier_value_complete_star_coverage": 1.0 if bool(challengers.any()) else 0.0,
+        "decisive_frontier_value_selected_atom_count": float(selected.size),
+        "decisive_frontier_value_rank": float(rank),
+        "decisive_frontier_value_residual_abs_mean": float(np.mean(np.abs(vals))) if vals.size else 0.0,
+        "decisive_frontier_value_residual_rms": float(np.sqrt(np.mean(vals * vals))) if vals.size else 0.0,
+        "decisive_frontier_value_scale": float(scale),
+    }
+
+
 def run_pair_conditioned_tournament(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -766,6 +838,10 @@ def run_pair_conditioned_tournament(
     residual_action_variance: np.ndarray | None = None,
     residual_set_atom_factors: np.ndarray | None = None,
     residual_set_action_factors: np.ndarray | None = None,
+    frontier_value_atom_factors: np.ndarray | None = None,
+    frontier_value_action_signed_factors: np.ndarray | None = None,
+    frontier_value_action_context_factors: np.ndarray | None = None,
+    frontier_value_scale: float = 1.0,
     evidence_certificate_fraction: float | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
@@ -868,6 +944,37 @@ def run_pair_conditioned_tournament(
             pair_delta_includes_local=bool(runtime_cfg.get("pair_tournament_pair_delta_includes_local", True)),
         )
         scale = max(float(pair_margin_scale or 1.0), 1e-6) if normalize_margins else 1.0
+        valid_arr = np.asarray(valid_mask, dtype=bool).reshape(-1)
+        finite_anchor = np.asarray(J_anchor, dtype=np.float32).copy()
+        finite_anchor[~valid_arr[: finite_anchor.shape[0]]] = np.inf
+        darm_anchor = int(np.argmin(finite_anchor)) if np.isfinite(finite_anchor).any() else -1
+        frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+        if bool(frontier_runtime_cfg.get("enabled", False)) and darm_anchor >= 0:
+            frontier_star, frontier_diag = _decisive_frontier_value_star_residual_numpy(
+                selected_atoms,
+                valid_mask,
+                darm_anchor,
+                frontier_value_atom_factors,
+                frontier_value_action_signed_factors,
+                frontier_value_action_context_factors,
+                scale=float(frontier_runtime_cfg.get("scale", frontier_value_scale)),
+            )
+            # New value is additive to the frozen DARM+DBR baseline.  This makes
+            # a zero-initialized V64.3.13 checkpoint exactly reproduce V64.3.7
+            # while exposing every valid challenger to the new pair-specific
+            # residual, including edges absent from the sparse runtime graph.
+            for challenger in np.flatnonzero(valid_arr).tolist():
+                if int(challenger) == darm_anchor:
+                    continue
+                delta = float(frontier_star[int(challenger)])
+                M_B[darm_anchor, int(challenger)] = float(M_B[darm_anchor, int(challenger)]) + delta
+                M_B[int(challenger), darm_anchor] = -float(M_B[darm_anchor, int(challenger)])
+            potential_diag.update(frontier_diag)
+        else:
+            potential_diag.update({
+                "decisive_frontier_value_active": 0.0,
+                "decisive_frontier_value_complete_star_coverage": 0.0,
+            })
         M_eval = M_B - epsilon_cal
         scores, darm_anchor = _decisive_anchor_margin_scores(J_anchor, M_B, valid_mask, scale)
         potential_diag["decisive_anchor_margin_active"] = 1.0

@@ -3893,3 +3893,154 @@ The uploaded V64.3.7 BROAD screen was falsely marked invalid by an arbitrary `0.
 Hotfix only: no DARM/DBR model semantics change. Screen validity is separated from promotion, budget-vs-learned-pair-full agreement is diagnostic rather than a hard gate, stale provenance is re-audited from train logs, later ablation arms cannot be skipped by a scientific non-promotion, and `decisive_anchor_margin_*` runtime diagnostics are exported in validation.
 
 Immediate next step: reuse/re-audit BROAD, run only missing LITERAL, compare, then run guarded full pipeline on a non-null winner. Do not modify acquisition before this causal comparison is complete. If full DARM+DBR gain holds, the next acquisition branch should distill fixed-B DARM decisive-margin marginal utility rather than repeat AP-WCCA/FPCCA/CCBR/BCHA or increase B/M.
+
+# V64.3.13 — EAF-DMVR: Evidence-Attributed Frontier Decisive-Margin Value Residual (2026-08-14)
+
+## Trigger: V64.3.12 RET/CET terminally falsifies the proposal-only acquisition branch
+
+V64.3.12 resolves the remaining BTP acquisition hypotheses rather than merely producing another negative screen.
+
+**RET result.** The V64.3.11 diagnosis that BTP trained against a fast B-selector surrogate while C1-B/C2-B promotion used the exact runtime B=16 selector was correct. RET replaces the training mediator with sampled stop-gradient exact runtime B projection and obtains valid exact instrumentation, but selected epoch 1 changes C2-B only `0.3805248 -> 0.3805309`, i.e. **+0.000606pp**, while C2-M improves about `+0.2396pp`. Teacher match changes `17.8% -> 18.2%`, but teacher regret worsens by `181.08`. Therefore train/runtime selector mismatch was a real semantic defect and needed repair, but it was **not the root performance bottleneck**. Do not make RET-v2 by increasing exact-sampled scenes, rank weight, margin, or epochs.
+
+**CET result.** CET activates exact-oracle-controlled current-B exchange, so its hypothesis is genuinely tested rather than blocked by implementation. The selected epoch has a large non-zero controlled-exchange pair fraction, but C2-B changes `0.3805248 -> 0.3763801` (**-0.4145pp**), proposal decisive recall falls about `-2.18pp`, exact-critical Top-M recall about `-0.63pp`, exact-critical selected recall about `-0.32pp`, pair-full match falls `-0.2pp`, and teacher regret worsens despite a noisy `+0.8pp` teacher-match change. Controlled exchange is therefore an **active but harmful mechanism**, not a direction to tune further.
+
+The two-arm causal conclusion is terminal:
+
+- RET = semantics-correct exact target, no C2-B transmission gain;
+- CET = controlled B-set exchange active, negative C2-B/critical-support gain;
+- `exact_acquisition_exhausted=true` and `pivot_to_value_frontier=true` are accepted;
+- **no V64.3.13 acquisition/proposal loss is permitted.**
+
+The old 3.458pp C1-B/C2-B oracle gap should no longer be interpreted as permission to keep inventing selector losses. It is an oracle intervention headroom under a value interface that has now failed to turn semantics-correct acquisition supervision into endpoint value.
+
+## New bottleneck: selected evidence -> decisive value/frontier
+
+The shared V64.3.12 anchor exposes a much larger downstream failure:
+
+- base teacher-winner/rival sign accuracy: `0.62789`;
+- dense teacher-winner/rival sign accuracy: `0.62612`;
+- selected-B pair/tournament teacher-winner/rival sign accuracy: **`0.06082`**;
+- selected pair margin MAE: `1.3320`, signed error `-1.3315`;
+- pair-full action match: `0.174`;
+- local pair-full action match: `0.174`;
+- final teacher match: `0.178`;
+- evidence certificate fraction remains high at about `0.928`.
+
+Runtime frontier coverage is also weak. The teacher winner is inside base Top-2/3/5/6/9 only about `16.9%/21.8%/31.7%/34.6%/48.6%`, and only about `21.9%` of exact-critical boundaries lie inside base Top-9. Thus the current decisive-value problem has two coupled pieces:
+
+1. **pair-value error:** selected evidence is not converted into correct teacher decisive margins;
+2. **frontier-coverage error:** the sparse DARM/DBR rival graph often never exposes the true decisive challenger to downstream correction.
+
+This is consistent with the historical V64.3.5/V64.3.7 evidence: budget-vs-pair-full could already be high while pair-full stayed low, and DARM+DBR improved endpoint with acquisition frozen. The next branch therefore extends the historically positive literal/decisive-boundary value direction rather than repeating acquisition.
+
+## Algorithm: EAF-DMVR
+
+**Evidence-Attributed Frontier Decisive-Margin Value Residual** keeps the paper chain:
+
+`fixed planner-interface budget -> auditable evidence atoms -> budget-feasible decisive-margin marginal utility -> frozen budgeted acquisition -> exact selected B=16 evidence -> evidence-attributed complete decisive frontier -> one-sided margin preservation -> final decision preservation`.
+
+V64.3.13 freezes:
+
+- foundation;
+- proposal/critical-proposal adapter;
+- HAB/family slots;
+- Top-M `M=24`;
+- exact runtime B selector and `B=16`;
+- DARM;
+- DBR;
+- calibrated evidence certificate and one-sided flip guard.
+
+Only `decisive_anchor_frontier_value_adapter` is trainable.
+
+### Complete selected-local anchor frontier
+
+The frozen selected-local value first defines the DARM anchor `a`. EAF-DMVR then exposes the value head to **every valid challenger** `b != a`, not only the sparse runtime pair graph. This removes the historical base-Top-L/rival-edge coverage hole without adding any evidence query or changing the candidate bank.
+
+### Selected-evidence-attributed pair residual
+
+For each already-selected atom `e_i`, the new head produces a bounded atom factor `z_i`; each candidate produces a signed factor `u_a` and context factor `c_a`. With the symmetric pair gate
+
+`c(a,b)=tanh(c_a+c_b+c_a*c_b)`,
+
+the residual is
+
+`r_S(a,b)=sum_{i in S}<tanh(z_i)*c(a,b),u_b-u_a>/sqrt(|S|*d)`.
+
+Properties required by the implementation contract:
+
+- exact antisymmetry: `r_S(a,b)=-r_S(b,a)`;
+- explicit selected-atom additive attribution (for the fixed selected set);
+- only exact runtime-selected B evidence participates;
+- no selector/proposal score is changed;
+- no additional planner evidence query is created;
+- zero-initialized final atom layer makes V64.3.13 an exact step-zero no-op from the promoted V64.3.7 value checkpoint.
+
+This is deliberately **not** V55 Hodge/global action potential, V56 generic evidence-action potential, or V59 generic selected-set potential. The correction is pair-specific and selected-evidence-attributed, and it only fills the complete selected-local anchor frontier.
+
+### Training and one-sided preservation
+
+Training uses the exact B=16 selected mask as stop-gradient input and reconstructs the frozen V64.3.7 DARM+DBR star as the baseline. The EAF residual is additive and is supervised against teacher complete anchor-star margins with:
+
+- boundary-weighted robust margin regression;
+- teacher-winner weighting;
+- pair-sign loss;
+- wrong-anchor teacher-winner correction;
+- correct-anchor strongest-rival preservation.
+
+At runtime the residual is added only to the DARM anchor star. The existing `pair_action_anchor_guard` remains authoritative; a changed winner still needs the configured robust margin/score evidence and the existing certificate policy. V64.3.13 creates no new formal certificate concept.
+
+## V64.3.13 causal screen rules
+
+Instrumentation must show:
+
+- new value adapter parameter delta > `1e-7`;
+- value residual RMS > `1e-6`;
+- exact selected-B training scene fraction and complete anchor-star coverage valid;
+- runtime EAF-DMVR active;
+- critical proposal adapter and DBR parameter deltas remain zero;
+- proposal decisive / exact-critical Top-M / exact-critical selected metrics do not drift beyond `1e-4` from the frozen anchor.
+
+Mechanism gain requires:
+
+- complete-frontier pair-sign accuracy at least `+2pp` over anchor;
+- complete-frontier action match at least `+1pp`;
+- already-correct anchor preservation at least `97%`.
+
+Endpoint gain requires either teacher match `+1pp` with regret no worse than `1%`, or regret improvement at least `2%` with teacher match non-harm (`-0.4pp` tolerance).
+
+Only instrumentation + frozen acquisition + mechanism + endpoint may promote full.
+
+If the head is active and complete frontier is covered but mechanism does not improve, **do not make EAF-DMVR-v2 and do not reopen acquisition**. The next hypothesis is frozen action/evidence representation capacity and the permitted next experiment is a small selective action/evidence representation adapter/unfreeze test. If mechanism improves but endpoint does not, audit frontier-to-final one-sided guard/calibration instead.
+
+## Engineering hardening
+
+Two implementation errors were caught and fixed before delivery:
+
+1. An automated patch initially wrote literal `\\n` text into the new `losses.py` block, producing a syntax-valid but effectively non-executing section. The block was rewritten as real code and a gradient-level test now requires the zero-init output layer to receive non-zero gradient.
+2. Pair-full diagnostics initially received the new B=16-trained EAF factors. This would contaminate the full-evidence ceiling with an out-of-distribution selected-B correction. Pair-full/local-pair-full now preserve frozen V64.3.7 semantics; EAF-DMVR is applied only to the real selected-B deployment tournament. New `decisive_frontier_value_*` diagnostics are exported explicitly.
+
+Final validation:
+
+- `python -m compileall -q bdse`: PASS;
+- V64.3.13 tests: **8/8 PASS**;
+- V64.3.7--V64.3.12 targeted regression: **37/37 PASS**;
+- full repository: **336/336 PASS, 36 warnings**;
+- warnings are existing PyTorch Transformer nested-tensor warnings;
+- train/eval config contract: PASS;
+- V64.3.13 exact-interface contract and adversarial `B subset injected Top-M` fixture: PASS;
+- screen/full launcher shell syntax: PASS.
+
+## V64.3.13 no-repeat constraints
+
+All earlier no-repeat constraints remain. In addition:
+
+- RET/CET/current-B-protection tuning is terminally closed;
+- do not interpret remaining C1-B oracle gap as permission for another proposal loss;
+- do not change B=16 or M=24;
+- do not unfreeze proposal/HAB/family gate during EAF-DMVR screen;
+- do not re-enable V46/V49 arbitrary pair fields;
+- do not repeat V55 Hodge/global action potential;
+- do not repeat V56 generic evidence-action potential;
+- do not repeat V59 generic set-conditioned potential;
+- do not bypass the existing one-sided anchor guard or relax certificate gates to manufacture endpoint gain;
+- if EAF-DMVR mechanism fails with valid instrumentation, the next branch is selective action/evidence representation capacity, not another value-loss variant with the same frozen embeddings.

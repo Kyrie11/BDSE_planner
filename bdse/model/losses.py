@@ -46,6 +46,7 @@ _ACTION_FAMILY_LOSS_NAMES = (
     "residual_winner_correction",
     "certified_residual_winner",
     "residual_boundary_margin_distill",
+    "decisive_frontier_value",
 )
 
 
@@ -4828,6 +4829,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     logits_pair_anchor = None
     logits_pair_full_anchor = None
     primary_selected_mask: torch.Tensor | None = None
+    primary_selected_exact_scene_mask: torch.Tensor | None = None
     primary_anchor_cost: torch.Tensor | None = None
     primary_corrected_cost: torch.Tensor | None = None
     pair_logits_entries: list[tuple[float, float, torch.Tensor]] = []
@@ -4993,6 +4995,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                 )
             pair_logits_entries = [(float(cfg.get("evidence", {}).get("budget", 16)), 1.0, logits_pair)]
             primary_selected_mask = pair_selected_mask
+            primary_selected_exact_scene_mask = torch.ones((int(J0.shape[0]),), dtype=torch.bool, device=J0.device)
             primary_anchor_cost = selected_anchor_cost
             primary_corrected_cost = selected_corrected_cost if use_potential_action else None
         else:
@@ -5176,6 +5179,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
                     logits_pair = budget_logits
                     logits_pair_anchor = budget_anchor_logits
                     primary_selected_mask = pair_selected_mask
+                    primary_selected_exact_scene_mask = exact_scene_mask.clone()
                     primary_anchor_cost = budget_anchor_cost
                     primary_corrected_cost = budget_corrected_cost if use_potential_action else None
                     primary_distance = distance
@@ -5683,6 +5687,198 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
     norm_act = max(pair_act_weight + action_act_weight, 1e-6)
     L_act = (pair_act_weight * L_act_pair + action_act_weight * L_act_action) / norm_act if enable_action_loss else J0.new_tensor(0.0)
 
+    # V64.3.13 Evidence-Attributed Frontier Decisive-Margin Value Residual (EAF-DMVR).
+    # RET/CET terminally exhausted proposal-only acquisition.  The new objective
+    # leaves Top-M/B selection stop-gradient and trains only the selected-B value
+    # interface on the *complete* selected-local anchor star.  This closes the
+    # historical sparse-rival coverage hole without falling back to a generic
+    # global action/set potential.
+    L_decisive_frontier_value = J0.new_tensor(0.0)
+    frontier_value_pair_sign_acc = J0.new_tensor(0.0)
+    frontier_value_action_match = J0.new_tensor(0.0)
+    frontier_value_anchor_wrong_fraction = J0.new_tensor(0.0)
+    frontier_value_wrong_anchor_corrected_fraction = J0.new_tensor(0.0)
+    frontier_value_correct_anchor_preserved_fraction = J0.new_tensor(0.0)
+    frontier_value_residual_rms = J0.new_tensor(0.0)
+    frontier_value_exact_scene_fraction = J0.new_tensor(0.0)
+    frontier_value_complete_star_coverage = J0.new_tensor(0.0)
+    frontier_cfg = train_cfg.get("decisive_frontier_value", {}) or {}
+    frontier_atom = out.get("frontier_value_atom_factors")
+    frontier_signed = out.get("frontier_value_action_signed_factors")
+    frontier_context = out.get("frontier_value_action_context_factors")
+    if (
+        bool(frontier_cfg.get("enabled", False))
+        and frontier_atom is not None
+        and frontier_signed is not None
+        and frontier_context is not None
+        and primary_selected_mask is not None
+        and primary_anchor_cost is not None
+        and batch.get("teacher_J_T") is not None
+    ):
+        Bf, Kf = primary_anchor_cost.shape
+        exact_scene = (
+            primary_selected_exact_scene_mask.bool()
+            if primary_selected_exact_scene_mask is not None
+            else torch.ones((Bf,), dtype=torch.bool, device=J0.device)
+        )
+        exact_scene = exact_scene & valid.any(dim=1)
+        frontier_value_exact_scene_fraction = exact_scene.float().mean()
+        selected_f = primary_selected_mask.float()
+        selected_count = selected_f.sum(dim=1, keepdim=True).clamp_min(1.0)
+        # Bound each atom before summation so the frontier residual remains an
+        # exact sum of auditable per-evidence contributions rather than a generic
+        # nonlinear set potential.
+        bounded_atom = torch.tanh(frontier_atom)
+        pooled = (bounded_atom * selected_f[:, :, None]).sum(dim=1) / torch.sqrt(selected_count)
+
+        with torch.no_grad():
+            anchor_idx = primary_anchor_cost.detach().masked_fill(~valid, float("inf")).argmin(dim=1)
+        row_f = torch.arange(Bf, device=J0.device)
+        rank_f = max(int(frontier_atom.shape[-1]), 1)
+        signed_anchor = frontier_signed[row_f, anchor_idx][:, None, :]
+        context_anchor = frontier_context[row_f, anchor_idx][:, None, :]
+        pair_sym = torch.tanh(
+            context_anchor + frontier_context + context_anchor * frontier_context
+        )
+        signed_diff = frontier_signed - signed_anchor
+        frontier_residual = (
+            pooled[:, None, :] * pair_sym * signed_diff
+        ).sum(dim=-1) / (float(rank_f) ** 0.5)
+        frontier_residual = frontier_residual * float(
+            (cfg.get("model", {}).get("decisive_anchor_frontier_value", {}) or {}).get("scale", 1.0)
+        )
+        frontier_residual = frontier_residual.masked_fill(~valid, 0.0)
+        frontier_residual[row_f, anchor_idx] = 0.0
+
+        # Reconstruct the frozen V64.3.7 DARM+DBR star as the step-zero baseline.
+        # Queried edges receive the frozen DBR correction; missing edges remain
+        # selected-local.  The new residual is then additive, so zero-init is an
+        # exact no-op relative to the promoted value checkpoint.
+        if normalize_pair_losses:
+            scale_f = pair_scale.reshape(Bf, 1).clamp_min(1e-6)
+        else:
+            scale_f = primary_anchor_cost.new_ones((Bf, 1))
+        finite_anchor = torch.where(
+            torch.isfinite(primary_anchor_cost), primary_anchor_cost, torch.zeros_like(primary_anchor_cost)
+        )
+        local_star = (finite_anchor[:, None, :] - finite_anchor[:, :, None]) / scale_f[:, None, :]
+        support_f = (pred_atom_delta * primary_selected_mask[:, :, None].float()).sum(dim=1)
+        if pair_head_residual:
+            support_f = support_f - (local_atom_delta * primary_selected_mask[:, :, None].float()).sum(dim=1)
+        a_f = pairs[..., 0].long().clamp(0, Kf - 1)
+        b_f = pairs[..., 1].long().clamp(0, Kf - 1)
+        pvalid_f = pair_valid.bool() & valid.gather(1, a_f) & valid.gather(1, b_f) & a_f.ne(b_f)
+        edge_val = support_f.masked_fill(~pvalid_f, 0.0)
+        flat_corr = torch.zeros((Bf, Kf * Kf), dtype=J0.dtype, device=J0.device)
+        flat_cnt = torch.zeros_like(flat_corr)
+        lin_ab = a_f * Kf + b_f
+        lin_ba = b_f * Kf + a_f
+        one_f = pvalid_f.to(J0.dtype)
+        flat_corr.scatter_add_(1, lin_ab, edge_val)
+        flat_corr.scatter_add_(1, lin_ba, -edge_val)
+        flat_cnt.scatter_add_(1, lin_ab, one_f)
+        flat_cnt.scatter_add_(1, lin_ba, one_f)
+        corr_matrix = (flat_corr / flat_cnt.clamp_min(1.0)).view(Bf, Kf, Kf)
+        baseline_star = local_star[row_f, anchor_idx, :] + corr_matrix[row_f, anchor_idx, :]
+        corrected_star = baseline_star + frontier_residual
+
+        teacher_cost_f = batch["teacher_J_T"].float()
+        safe_teacher_f = torch.where(
+            valid & torch.isfinite(teacher_cost_f), teacher_cost_f, finite_anchor.detach()
+        )
+        teacher_star = (
+            safe_teacher_f - safe_teacher_f.gather(1, anchor_idx[:, None])
+        ) / scale_f
+        target_clip_f = max(float(frontier_cfg.get("target_clip", 2.5)), 0.0)
+        if target_clip_f > 0.0:
+            teacher_star = teacher_star.clamp(-target_clip_f, target_clip_f)
+        challenger = valid.clone()
+        challenger[row_f, anchor_idx] = False
+        train_mask_f = challenger & exact_scene[:, None]
+        teacher_best_f = target_action.long().clamp(0, Kf - 1)
+        anchor_wrong_f = anchor_idx.ne(teacher_best_f) & exact_scene
+        frontier_value_anchor_wrong_fraction = anchor_wrong_f.float().sum() / exact_scene.float().sum().clamp_min(1.0)
+
+        margin_abs = teacher_star.abs()
+        boundary_tau_f = max(float(frontier_cfg.get("boundary_tau", 0.25)), 1.0e-6)
+        weights_f = 1.0 + float(frontier_cfg.get("boundary_weight", 3.0)) * torch.exp(-margin_abs / boundary_tau_f)
+        weights_f = weights_f + float(frontier_cfg.get("teacher_winner_weight", 7.0)) * (
+            torch.arange(Kf, device=J0.device)[None, :] == teacher_best_f[:, None]
+        ).float()
+        weights_f = weights_f * torch.where(
+            anchor_wrong_f[:, None],
+            torch.full_like(weights_f, float(frontier_cfg.get("anchor_wrong_weight", 2.0))),
+            torch.ones_like(weights_f),
+        )
+        huber_beta_f = max(float(frontier_cfg.get("huber_delta", 0.08)), 1.0e-6)
+        regression_f = F.smooth_l1_loss(
+            corrected_star, teacher_star.detach(), reduction="none", beta=huber_beta_f
+        )
+        reg_loss_f = (regression_f * weights_f * train_mask_f.float()).sum() / (
+            weights_f * train_mask_f.float()
+        ).sum().clamp_min(1.0)
+
+        sign_tau_f = max(float(frontier_cfg.get("sign_tau", 0.06)), 1.0e-6)
+        teacher_sign_f = torch.sign(teacher_star.detach())
+        sign_valid_f = train_mask_f & teacher_sign_f.ne(0.0)
+        sign_term_f = F.softplus(-(teacher_sign_f * corrected_star) / sign_tau_f) * sign_tau_f
+        sign_loss_f = (sign_term_f * weights_f * sign_valid_f.float()).sum() / (
+            weights_f * sign_valid_f.float()
+        ).sum().clamp_min(1.0)
+
+        # One-sided decision preservation: wrong anchors must admit the teacher
+        # winner; already-correct anchors must retain a positive margin to their
+        # strongest teacher rival.
+        teacher_edge = corrected_star.gather(1, teacher_best_f[:, None]).squeeze(1)
+        flip_margin_f = float(frontier_cfg.get("flip_margin", 0.02))
+        flip_loss_f = F.softplus((teacher_edge + flip_margin_f) / sign_tau_f) * sign_tau_f
+        wrong_loss_f = (flip_loss_f * anchor_wrong_f.float()).sum() / anchor_wrong_f.float().sum().clamp_min(1.0)
+
+        teacher_rank_cost = safe_teacher_f.masked_fill(~valid, float("inf")).clone()
+        teacher_rank_cost.scatter_(1, teacher_best_f[:, None], float("inf"))
+        strongest_rival_f = teacher_rank_cost.argmin(dim=1)
+        preserve_edge = corrected_star.gather(1, strongest_rival_f[:, None]).squeeze(1)
+        preserve_margin_f = float(frontier_cfg.get("preserve_margin", 0.015))
+        correct_scene_f = anchor_idx.eq(teacher_best_f) & exact_scene
+        preserve_loss_f = F.softplus((preserve_margin_f - preserve_edge) / sign_tau_f) * sign_tau_f
+        preserve_loss_f = (preserve_loss_f * correct_scene_f.float()).sum() / correct_scene_f.float().sum().clamp_min(1.0)
+
+        L_decisive_frontier_value = (
+            reg_loss_f
+            + float(frontier_cfg.get("sign_weight", 0.5)) * sign_loss_f
+            + float(frontier_cfg.get("wrong_anchor_weight", 2.0)) * wrong_loss_f
+            + float(frontier_cfg.get("correct_anchor_preserve_weight", 1.0)) * preserve_loss_f
+        )
+
+        with torch.no_grad():
+            comparable_f = sign_valid_f
+            frontier_value_pair_sign_acc = (
+                ((corrected_star * teacher_star) > 0.0).float() * comparable_f.float()
+            ).sum() / comparable_f.float().sum().clamp_min(1.0)
+            valid_scores_f = -corrected_star
+            mask_val_f = -1.0e9
+            valid_scores_f = valid_scores_f.masked_fill(~valid, mask_val_f)
+            valid_scores_f[row_f, anchor_idx] = 0.0
+            pred_action_f = valid_scores_f.argmax(dim=1)
+            frontier_value_action_match = (
+                pred_action_f.eq(teacher_best_f) & exact_scene
+            ).float().sum() / exact_scene.float().sum().clamp_min(1.0)
+            wrong_denom_f = anchor_wrong_f.float().sum().clamp_min(1.0)
+            frontier_value_wrong_anchor_corrected_fraction = (
+                pred_action_f.eq(teacher_best_f) & anchor_wrong_f
+            ).float().sum() / wrong_denom_f
+            correct_denom_f = correct_scene_f.float().sum().clamp_min(1.0)
+            frontier_value_correct_anchor_preserved_fraction = (
+                pred_action_f.eq(teacher_best_f) & correct_scene_f
+            ).float().sum() / correct_denom_f
+            frontier_value_residual_rms = torch.sqrt(
+                (frontier_residual.square() * train_mask_f.float()).sum() / train_mask_f.float().sum().clamp_min(1.0)
+                + 1.0e-12
+            )
+            frontier_value_complete_star_coverage = (
+                challenger.float().sum(dim=1) / valid.float().sum(dim=1).sub(1.0).clamp_min(1.0)
+            )[exact_scene].mean() if bool(exact_scene.any()) else J0.new_tensor(0.0)
+
     # Optional post-hoc-style calibration surrogate: penalize pair margin residuals
     # above the configured epsilon_cal so the validation quantile has a training signal.
     if eps_cal > 0:
@@ -5743,6 +5939,7 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         + float(lw.get("proposal_logit_stability", 0.0)) * L_proposal_logit_stability
         + float(lw.get("exact_winner_flip_critical_proposal", 0.0)) * L_exact_winner_flip_critical_proposal
         + float(lw.get("budgeted_decisive_margin_utility", 0.0)) * L_budgeted_decisive_margin_utility
+        + float(lw.get("decisive_frontier_value", 0.0)) * L_decisive_frontier_value
         + float(lw.get("action", 1.0)) * L_act
         + float(lw.get("full_action", 1.0)) * L_full_action
         + float(lw.get("full_margin", 0.5)) * L_full_margin
@@ -5803,6 +6000,15 @@ def compute_bdse_losses(outputs: dict[str, torch.Tensor], batch: dict[str, torch
         "L_proposal_logit_stability": L_proposal_logit_stability,
         "L_exact_winner_flip_critical_proposal": L_exact_winner_flip_critical_proposal,
         "L_budgeted_decisive_margin_utility": L_budgeted_decisive_margin_utility,
+        "L_decisive_frontier_value": L_decisive_frontier_value,
+        "frontier_value_pair_sign_acc": frontier_value_pair_sign_acc,
+        "frontier_value_action_match": frontier_value_action_match,
+        "frontier_value_anchor_wrong_fraction": frontier_value_anchor_wrong_fraction,
+        "frontier_value_wrong_anchor_corrected_fraction": frontier_value_wrong_anchor_corrected_fraction,
+        "frontier_value_correct_anchor_preserved_fraction": frontier_value_correct_anchor_preserved_fraction,
+        "frontier_value_residual_rms": frontier_value_residual_rms,
+        "frontier_value_exact_scene_fraction": frontier_value_exact_scene_fraction,
+        "frontier_value_complete_star_coverage": frontier_value_complete_star_coverage,
         **bdmu_diag,
         # V64.3.4 audit fix: ACRA has been part of
         # L_exact_winner_flip_critical_proposal since V64.3.3, but the standalone

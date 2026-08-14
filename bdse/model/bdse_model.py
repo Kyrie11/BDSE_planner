@@ -403,6 +403,60 @@ class _DecisiveBoundaryPairResidual(_LiteralBoundaryPairResidual):
     """
 
 
+class _DecisiveAnchorFrontierValueResidual(nn.Module):
+    """V64.3.13 evidence-attributed anchor-frontier value residual.
+
+    This module is deliberately *not* a global action potential.  It produces a
+    pair-specific correction only on the selected-local anchor star.  A normalized sum of per-atom factors from the already-selected B evidence is multiplied by a
+    symmetric pair-context gate and an antisymmetric action-difference factor:
+
+        r_S(a,b) = sum_{i in S} < tanh(z_i) * c(a,b), u(b)-u(a) > / sqrt(|S| rank).
+
+    This decomposition preserves atom-level auditability. c(a,b)=c(b,a), so
+    r_S(a,b)=-r_S(b,a) exactly.  The atom factor head is
+    zero-initialized, making the entire V64.3.13 path an exact step-zero no-op
+    while still allowing gradients to enter the new module immediately.  The
+    fixed B evidence set is only an input to value estimation; the module never
+    changes proposal/HAB/selector scores or the planner-interface evidence budget.
+    """
+
+    def __init__(self, hidden_dim: int, rank: int, *, zero_init: bool = True) -> None:
+        super().__init__()
+        h = int(hidden_dim)
+        r = max(1, int(rank))
+        self.rank = r
+        self.atom_head = nn.Sequential(
+            nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.SiLU(), nn.Linear(h, r)
+        )
+        self.action_signed_head = nn.Sequential(
+            nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.SiLU(), nn.Linear(h, r)
+        )
+        self.action_context_head = nn.Sequential(
+            nn.LayerNorm(h * 2), nn.Linear(h * 2, h), nn.SiLU(), nn.Linear(h, r)
+        )
+        if bool(zero_init):
+            nn.init.zeros_(self.atom_head[-1].weight)
+            nn.init.zeros_(self.atom_head[-1].bias)
+
+    def factors(
+        self,
+        scene_h: torch.Tensor,
+        action_h: torch.Tensor,
+        evidence_h: torch.Tensor,
+        action_valid: torch.Tensor,
+        evidence_valid: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        scene_e = scene_h[:, None, :].expand(-1, evidence_h.shape[1], -1)
+        scene_a = scene_h[:, None, :].expand(-1, action_h.shape[1], -1)
+        atom = self.atom_head(torch.cat([evidence_h, scene_e], dim=-1))
+        signed = self.action_signed_head(torch.cat([action_h, scene_a], dim=-1))
+        context = self.action_context_head(torch.cat([action_h, scene_a], dim=-1))
+        atom = atom.masked_fill(~evidence_valid[:, :, None].bool(), 0.0)
+        signed = signed.masked_fill(~action_valid[:, :, None].bool(), 0.0)
+        context = context.masked_fill(~action_valid[:, :, None].bool(), 0.0)
+        return atom, signed, context
+
+
 def _confidence_shrunk_residual_pair_delta_np(
     local: np.ndarray,
     residual: np.ndarray,
@@ -767,6 +821,22 @@ class BDSEModel(nn.Module):
             )
         else:
             self.decisive_boundary_pair_adapter = None
+
+        # V64.3.13 Evidence-Attributed Frontier Decisive-Margin Value Residual (EAF-DMVR).
+        # Acquisition is frozen after RET/CET terminally failed.  This adapter
+        # consumes only the finally selected B evidence set and complete
+        # selected-local anchor frontier, so it targets the downstream pair-value
+        # error without creating another proposal/selector surrogate.
+        frontier_cfg = mcfg.get("decisive_anchor_frontier_value", {}) or {}
+        self.decisive_anchor_frontier_value_scale = float(frontier_cfg.get("scale", 1.0))
+        if bool(frontier_cfg.get("enabled", False)):
+            self.decisive_anchor_frontier_value_adapter = _DecisiveAnchorFrontierValueResidual(
+                h,
+                int(frontier_cfg.get("rank", min(48, h))),
+                zero_init=bool(frontier_cfg.get("zero_init", True)),
+            )
+        else:
+            self.decisive_anchor_frontier_value_adapter = None
 
         # V56 DCIP: evidence-attributable, globally integrable residual action
         # potential.  Each queried atom contributes a signed correction h_i(a)
@@ -1370,6 +1440,20 @@ class BDSEModel(nn.Module):
             "action_set_summary": u_A,
         }
 
+    def decisive_anchor_frontier_value_factors(
+        self, context: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        adapter = self.decisive_anchor_frontier_value_adapter
+        if adapter is None:
+            return None, None, None
+        return adapter.factors(
+            context["scene"],
+            context["action_h"],
+            context["evidence_h"],
+            context["action_valid"],
+            context["evidence_valid"],
+        )
+
     def set_residual_factors(self, context: dict[str, torch.Tensor]) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if self.set_residual_rank <= 0 or self.residual_set_atom_head is None or self.residual_set_action_head is None:
             return None, None
@@ -1825,6 +1909,9 @@ class BDSEModel(nn.Module):
             residual_action_var = torch.zeros((B, E, K), dtype=J0.dtype, device=J0.device)
             pair_out = None
         set_atom_factors, set_action_factors = self.set_residual_factors(ctx)
+        frontier_atom_factors, frontier_action_signed_factors, frontier_action_context_factors = (
+            self.decisive_anchor_frontier_value_factors(ctx)
+        )
         out = {
             "J0": J0,
             "g": local,
@@ -1833,6 +1920,9 @@ class BDSEModel(nn.Module):
             "residual_action_var": residual_action_var,
             "residual_set_atom_factors": set_atom_factors,
             "residual_set_action_factors": set_action_factors,
+            "frontier_value_atom_factors": frontier_atom_factors,
+            "frontier_value_action_signed_factors": frontier_action_signed_factors,
+            "frontier_value_action_context_factors": frontier_action_context_factors,
             "proposal_logits": ctx["proposal_logits"],
             "selector_logits": ctx["proposal_logits"],
             # V64.3.3: keep the explicit acquisition residual in the training
@@ -2045,6 +2135,20 @@ class BDSEModel(nn.Module):
         set_action_factors_np = (
             set_action_factors_t[0].detach().cpu().numpy().astype(np.float32)
             if set_action_factors_t is not None else None
+        )
+        with torch.inference_mode():
+            frontier_atom_t, frontier_signed_t, frontier_context_t = self.decisive_anchor_frontier_value_factors(ctx)
+        frontier_atom_np = (
+            frontier_atom_t[0].detach().cpu().numpy().astype(np.float32)
+            if frontier_atom_t is not None else None
+        )
+        frontier_signed_np = (
+            frontier_signed_t[0].detach().cpu().numpy().astype(np.float32)
+            if frontier_signed_t is not None else None
+        )
+        frontier_context_np = (
+            frontier_context_t[0].detach().cpu().numpy().astype(np.float32)
+            if frontier_context_t is not None else None
         )
         flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
         # v12: an evidence-free, robustly normalized decision prior becomes part
@@ -2629,6 +2733,10 @@ class BDSEModel(nn.Module):
             "residual_action_var": residual_action_var_sparse,
             "residual_set_atom_factors": set_atom_factors_np,
             "residual_set_action_factors": set_action_factors_np,
+            "frontier_value_atom_factors": frontier_atom_np,
+            "frontier_value_action_signed_factors": frontier_signed_np,
+            "frontier_value_action_context_factors": frontier_context_np,
+            "frontier_value_scale": float(self.decisive_anchor_frontier_value_scale),
             "certificate_pair_atom_delta": certificate_selector_delta,
             "certificate_pair_atom_var": certificate_selector_var,
             "certificate_rival_pair_atom_delta": certificate_rival_delta,

@@ -12,6 +12,7 @@ _DEFAULT_ALLOWED_MISSING_PREFIXES = (
     "residual_action_var_head.",
     "residual_set_atom_head.",
     "residual_set_action_head.",
+    "decisive_anchor_frontier_value_adapter.",
 )
 
 

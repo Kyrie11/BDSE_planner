@@ -1028,6 +1028,10 @@ class BDSEPlannerCore:
                 residual_action_variance=pred.get("residual_action_var", None),
                 residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
                 residual_set_action_factors=pred.get("residual_set_action_factors", None),
+                frontier_value_atom_factors=pred.get("frontier_value_atom_factors", None),
+                frontier_value_action_signed_factors=pred.get("frontier_value_action_signed_factors", None),
+                frontier_value_action_context_factors=pred.get("frontier_value_action_context_factors", None),
+                frontier_value_scale=float(pred.get("frontier_value_scale", 1.0)),
                 evidence_certificate_fraction=selection.diagnostics.get(
                     "evidence_certificate_fraction",
                     selection.diagnostics.get("aocc_certified_pair_fraction", None),

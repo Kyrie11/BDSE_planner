@@ -737,6 +737,7 @@ def main() -> None:
                 or key.startswith("residual_flip_")
                 or key.startswith("dual_certificate_")
                 or key.startswith("set_conditioned_residual_")
+                or key.startswith("decisive_frontier_value_")
                 or key.startswith("base_prior_")
                 or key.startswith("learned_base_")
                 or key.startswith("structural_residual_")

@@ -1,0 +1,74 @@
+V64.3.13 EAF-DMVR engineering validation
+Date: 2026-08-14
+
+Algorithm isolation
+- Acquisition BDMU/proposal/HAB training: terminally disabled.
+- Fixed planner evidence budget: B=16.
+- Fixed proposal Top-M: M=24.
+- Frozen: foundation, critical proposal adapter, DARM, DBR, selector/family interfaces.
+- Trainable: decisive_anchor_frontier_value_adapter only.
+- Warm start: promoted V64.3.7 DARM+DBR-LITERAL checkpoint; new EAF head is allowed missing and zero-initialized.
+
+Engineering fixes made during audit
+1. Repaired an automated-patch artifact where literal "\\n" text could make the new losses block syntactically valid but non-executing.
+   Added a gradient-level test requiring non-zero gradient at the zero-init final atom layer.
+2. Removed EAF-DMVR factors from pair-full/local-pair-full diagnostic calls.
+   EAF-DMVR is trained for exact selected B=16 and is now applied only to the selected-B runtime tournament.
+3. Exported decisive_frontier_value_* runtime diagnostics into train/open-loop validation.
+4. Cleaned V64.3.13 closed-loop experiment metadata inherited from V64.3.12.
+
+Validation executed
+
+A. Compile
+  python -m compileall -q bdse
+  RESULT: PASS
+
+B. V64.3.13 unit/contract tests
+  python -m pytest -q bdse/tests/test_v64_3_13_eaf_dmvr.py
+  RESULT: 8 passed, 2 warnings
+
+C. Historical targeted regressions
+  python -m pytest -q \
+    bdse/tests/test_v64_3_7_darm_dbr.py \
+    bdse/tests/test_v64_3_8_bdmu.py \
+    bdse/tests/test_v64_3_9_af_bdmu.py \
+    bdse/tests/test_v64_3_10_hap_bdmu.py \
+    bdse/tests/test_v64_3_11_btp_bdmu.py \
+    bdse/tests/test_v64_3_12_cet_bdmu.py
+  RESULT: 37 passed, 3 warnings
+
+D. Full repository regression
+  python -m pytest -q
+  RESULT: 336 passed, 36 warnings in 23.39s
+  WARNING CLASS: existing PyTorch Transformer nested-tensor warnings; no new test failures.
+
+E. Train/eval configuration contract
+  python -m bdse.tools.validate_v64_pipeline_config \
+    --train-config bdse/configs/v64_3_13_eaf_dmvr_daepc_train_2gpu.yaml \
+    --eval-config bdse/configs/v64_3_13_eaf_dmvr_cl.yaml \
+    --expected-family v64.3.13
+  RESULT: PASS
+
+F. Exact EAF-DMVR interface contract
+  python -m bdse.tools.check_v64_3_13_eaf_dmvr_contract \
+    --config bdse/configs/v64_3_13_eaf_dmvr_daepc_screen_2gpu.yaml
+  RESULT: PASS
+  Adversarial exact-budget fixture: injected_topm=[2,3], selected_budget=[2,3], outside_topm=[], PASS.
+
+G. Launcher/command syntax
+  bash -n RUN_V64_3_13_EAF_DMVR_SCREEN_2GPU.sh
+  bash -n RUN_V64_3_13_EAF_DMVR_FULL_TRAIN_2GPU.sh
+  bash -n NEXT_COMMANDS_V64_3_13_EAF_DMVR.txt
+  RESULT: PASS
+
+H. New semantic unit contracts
+- zero-init is exact no-op and receives gradient: PASS
+- EAF pair residual exact antisymmetry: PASS
+- selected-atom additive decomposition: PASS
+- zero EAF factors preserve runtime action/scores exactly: PASS
+- complete anchor star can correct challenger missing from sparse pair graph: PASS
+- only new value head trainable / acquisition frozen: PASS
+- warm-start checkpoint may omit only new head: PASS
+- screen promotion/failure routing: PASS
+
+Final status: ENGINEERING PASS. GPU experiment is still required to establish scientific efficacy; no screen/full/test/closed-loop claim is made here.
