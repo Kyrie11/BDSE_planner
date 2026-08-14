@@ -5768,3 +5768,22 @@ All earlier no-repeat constraints remain. In addition:
 - do not repeat V59 generic set-conditioned potential;
 - do not bypass the existing one-sided anchor guard or relax certificate gates to manufacture endpoint gain;
 - if EAF-DMVR mechanism fails with valid instrumentation, the next branch is selective action/evidence representation capacity, not another value-loss variant with the same frozen embeddings.
+
+## 2026-08-14 engineering hotfix after first V64.3.13 screen launch
+
+This patch is **engineering-only** and does not change EAF-DMVR, DARM/DBR, HAB, proposal, B=16/M=24 budgets, losses, promotion gates, or the execution protocol.
+
+Observed failure during the pre-training validation (`val-loss -1`):
+
+`UnboundLocalError: local variable 'topm_mask_override' referenced before assignment`
+
+Root cause: `_predicted_pair_certificate_masks_multi_budget(...)` accepts only `outputs`, `batch`, `budget_cfgs`, and optional `scene_indices`.  A stale block copied from the single-budget selector helper attempted to slice non-existent local variables `topm_mask_override` and `proposal_scores_override` whenever `scene_indices` was provided.  V64.3.13 uses sampled exact-selector scenes, so this previously untested branch was exercised immediately.
+
+Fix:
+
+- remove only the stale undefined-variable slicing block from the multi-budget helper;
+- preserve the existing `outputs`/`batch` scene slicing and exact runtime selector implementation unchanged;
+- add a regression comparing multi-budget subset selection with repeated exact single-budget calls;
+- add a second regression for the actual V64.3.13 `spawn` process backend with subset/reordered scenes, requiring bitwise-equal masks to the sequential exact backend.
+
+Causal/algorithm contract after the fix is unchanged: acquisition remains terminally frozen, only `decisive_anchor_frontier_value_adapter` is trainable, and exact selected B=16 remains the value-head input.

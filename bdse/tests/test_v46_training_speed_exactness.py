@@ -254,3 +254,51 @@ def test_threaded_multi_budget_exact_masks_equal_sequential() -> None:
     actual = _predicted_pair_certificate_masks_multi_budget(outputs, batch, par_cfgs)
     for sequential, threaded in zip(expected, actual):
         assert torch.equal(sequential, threaded)
+
+
+def test_multi_budget_exact_masks_scene_subset_equal_repeated_calls() -> None:
+    """Regression: scene slicing must not touch undefined override locals.
+
+    V64.3.13 validation samples exact-selector scenes and therefore exercises
+    ``scene_indices`` in the multi-budget helper.  The helper owns only
+    ``outputs``/``batch``; Top-M/proposal overrides belong to the single-budget
+    selector entry point and must not leak into this path.
+    """
+    outputs, batch, cfg = _selector_case()
+    cfgs = [_config_with_evidence_budget(cfg, budget) for budget in (1.0, 2.0, 4.0)]
+    scene_indices = torch.tensor([1], dtype=torch.long)
+    expected = [
+        _predicted_pair_certificate_masks(
+            outputs, batch, local_cfg, scene_indices=scene_indices
+        )
+        for local_cfg in cfgs
+    ]
+    actual = _predicted_pair_certificate_masks_multi_budget(
+        outputs, batch, cfgs, scene_indices=scene_indices
+    )
+    assert len(actual) == len(expected)
+    for expected_mask, actual_mask in zip(expected, actual):
+        assert torch.equal(expected_mask, actual_mask)
+
+
+def test_process_multi_budget_exact_masks_scene_subset_equal_sequential() -> None:
+    """V64.3.13 screen uses the spawn-process exact-selector backend."""
+    outputs, batch, cfg = _selector_case()
+    scene_indices = torch.tensor([1, 0], dtype=torch.long)
+    seq_cfgs = [_config_with_evidence_budget(cfg, budget) for budget in (1.0, 2.0)]
+    for local_cfg in seq_cfgs:
+        local_cfg.setdefault("training", {})["deployment_selector_cpu_workers"] = 1
+        local_cfg["training"]["deployment_selector_cpu_backend"] = "sequential"
+    expected = _predicted_pair_certificate_masks_multi_budget(
+        outputs, batch, seq_cfgs, scene_indices=scene_indices
+    )
+
+    proc_cfgs = [copy.deepcopy(local_cfg) for local_cfg in seq_cfgs]
+    for local_cfg in proc_cfgs:
+        local_cfg.setdefault("training", {})["deployment_selector_cpu_workers"] = 2
+        local_cfg["training"]["deployment_selector_cpu_backend"] = "process"
+    actual = _predicted_pair_certificate_masks_multi_budget(
+        outputs, batch, proc_cfgs, scene_indices=scene_indices
+    )
+    for sequential, processed in zip(expected, actual):
+        assert torch.equal(sequential, processed)

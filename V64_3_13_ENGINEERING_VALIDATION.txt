@@ -72,3 +72,43 @@ H. New semantic unit contracts
 - screen promotion/failure routing: PASS
 
 Final status: ENGINEERING PASS. GPU experiment is still required to establish scientific efficacy; no screen/full/test/closed-loop claim is made here.
+
+I. Post-launch engineering hotfix (2026-08-14)
+Observed traceback:
+  _predicted_pair_certificate_masks_multi_budget(...)
+  -> if topm_mask_override is not None
+  -> UnboundLocalError
+
+Root cause:
+- `topm_mask_override` and `proposal_scores_override` are valid keyword-only parameters of
+  `_predicted_pair_certificate_masks` (single-budget helper), but they are not parameters or locals
+  of `_predicted_pair_certificate_masks_multi_budget`.
+- A stale four-line copy of the single-budget scene-slicing logic remained in the multi-budget
+  helper. The branch activates only when `scene_indices` is not None, which is exactly the sampled
+  exact-selector path used by V64.3.13 validation/training.
+
+Fix:
+- removed only the stale four-line undefined-variable block;
+- retained scene slicing of `outputs` and `batch`;
+- no selector objective, Top-M, B=16, EAF-DMVR loss, DARM/DBR, or runtime tournament logic changed.
+
+New regression coverage:
+1. multi-budget exact masks on a scene subset equal repeated single-budget exact calls;
+2. spawn-process multi-budget exact masks on a reordered scene subset equal sequential exact masks.
+
+Additional audit:
+- all 421 YAML files parse successfully;
+- all top-level shell launchers pass `bash -n`;
+- V64.3.13 train/eval pipeline contract: PASS;
+- V64.3.13 exact-interface contract including injected Top-M/B subset fixture: PASS;
+- source scan/manual review found no second production-path undefined-local defect of this class.
+
+J. Final post-hotfix regression
+- `python -m compileall -q bdse tools`: PASS
+- all top-level `*.sh` via `bash -n`: PASS
+- `python -m pytest -q`: **338 passed, 36 warnings in 19.80s**
+- warning classes unchanged: PyTorch Transformer nested-tensor warnings only.
+
+Final engineering status: PASS for locally reproducible/static/unit/contract paths. The exact failing
+sampled-scene multi-budget selector path is now covered for both sequential and the V64.3.13 spawn-process
+backend. Full GPU/data-cache execution remains to be rerun on the user's server with the unchanged prior commands.

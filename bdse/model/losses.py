@@ -2260,10 +2260,6 @@ def _predicted_pair_certificate_masks_multi_budget(
         scene_indices = scene_indices.to(device=outputs["J0"].device, dtype=torch.long)
         outputs = _slice_scene_batch(outputs, scene_indices, full_batch_size)
         batch = _slice_scene_batch(batch, scene_indices, full_batch_size)
-        if topm_mask_override is not None:
-            topm_mask_override = topm_mask_override.index_select(0, scene_indices)
-        if proposal_scores_override is not None:
-            proposal_scores_override = proposal_scores_override.index_select(0, scene_indices)
     cache = _build_predicted_pair_numpy_cache(outputs, batch, budget_cfgs[0])
     batch_size = int(outputs["J0"].shape[0])
     target_device = outputs["J0"].device
