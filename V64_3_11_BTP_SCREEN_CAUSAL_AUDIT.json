@@ -1,0 +1,46 @@
+{
+  "audit": "v64_3_11_btp_screen_causal_audit",
+  "source": "uploaded outputs_v64_3_11_btp_bdmu_screen_2gpu_v1",
+  "anchor": {
+    "c1_hab_oracle_capture": 0.5046560913324356,
+    "c2_topm_capture": 0.4785755127668381,
+    "c1_budget_oracle_capture": 0.41510510444641113,
+    "c2_budget_capture": 0.38052479922771454,
+    "budget_oracle_gap": 0.034580305218696594,
+    "teacher_match": 0.178,
+    "teacher_regret": 20133.338315877467,
+    "pairfull_teacher_match": 0.174,
+    "surrogate_exact_jaccard_current": 0.7749015986919403,
+    "surrogate_exact_jaccard_oracle": 0.7688054740428925,
+    "protected_negative_fraction": 0.7673158943653107
+  },
+  "selected_epoch": 1,
+  "selected": {
+    "c2_topm_capture": 0.4816560298204422,
+    "c2_budget_capture": 0.37858694791793823,
+    "topm_delta": 0.003080517053604126,
+    "budget_delta": -0.0019378513097763062,
+    "budget_oracle_gap_closure": -0.05603916152621362,
+    "teacher_match": 0.182,
+    "teacher_delta": 0.0040000000000000036,
+    "teacher_regret": 20272.511576385707,
+    "teacher_regret_relative_gain": -0.006912577453610142,
+    "pairfull_teacher_match": 0.174,
+    "proposal_decisive": 0.7532519157936451,
+    "critical_topm": 0.2373417721518987,
+    "critical_selected": 0.1550632911392405,
+    "surrogate_exact_jaccard_current": 0.7725683152675629,
+    "surrogate_exact_jaccard_oracle": 0.7688054740428925,
+    "protected_negative_fraction": 0.7470279932022095
+  },
+  "exact_c2_budget_deltas_by_epoch": [-0.0025032758712768555, -0.0019378513097763062, -0.004777759313583374, -0.002879917621612549],
+  "train_exact_projection_fraction_by_epoch": [0.0, 0.0, 0.0, 0.0],
+  "train_protected_negative_fraction_by_epoch": [0.8921309000651042, 0.8712249755859375, 0.8522952880859375, 0.8460969645182291],
+  "diagnosis": {
+    "primary": "BTP training optimizes a fast B-selector surrogate while exact C1-B/C2-B promotion uses the runtime pair-conditioned B=16 selector; measured validation set Jaccard is only about 0.77.",
+    "secondary": "Blanket current-B protection removes most displaced negatives, making executable transmission exchanges sparse.",
+    "capacity": "Exact C1-B leaves 3.458pp headroom, so the existing acquisition stop rule does not justify an immediate value/frontier pivot before exact-target training is tested.",
+    "long_term": "Pair-full teacher match remains 17.4%, so decisive value/frontier is still the likely next global ceiling if exact transmission is cleared."
+  },
+  "recommended_experiment": "V64.3.12 RET vs CET two-arm exact-runtime transmission screen"
+}

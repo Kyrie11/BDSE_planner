@@ -1,0 +1,39 @@
+V64.3.12 RET/CET-BDMU changed files relative to uploaded V64.3.11 BTP-BDMU
+
+Modified:
+- ALGORITHM_UPDATE_LOG.md
+- bdse/model/losses.py
+- bdse/tools/validate_v64_pipeline_config.py
+
+Added algorithm/config:
+- bdse/configs/v64_3_12_cc_aocc_ret_bdmu_daepc_screen_2gpu.yaml
+- bdse/configs/v64_3_12_cc_aocc_ret_bdmu_daepc_train_2gpu.yaml
+- bdse/configs/v64_3_12_cc_aocc_ret_bdmu_cl.yaml
+- bdse/configs/v64_3_12_cc_aocc_cet_bdmu_daepc_screen_2gpu.yaml
+- bdse/configs/v64_3_12_cc_aocc_cet_bdmu_daepc_train_2gpu.yaml
+- bdse/configs/v64_3_12_cc_aocc_cet_bdmu_cl.yaml
+
+Added executable protocol/tools:
+- RUN_V64_3_12_RET_BDMU_SCREEN_2GPU.sh
+- RUN_V64_3_12_CET_BDMU_SCREEN_2GPU.sh
+- RUN_V64_3_12_RET_CET_SCREEN_MATRIX_2GPU.sh
+- RUN_V64_3_12_RET_BDMU_FULL_TRAIN_2GPU.sh
+- RUN_V64_3_12_CET_BDMU_FULL_TRAIN_2GPU.sh
+- bdse/tools/check_v64_3_12_cet_bdmu_contract.py
+- bdse/tools/check_v64_3_12_ret_cet_bdmu_screen.py
+- bdse/tools/compare_v64_3_12_ret_cet_screens.py
+- bdse/tests/test_v64_3_12_cet_bdmu.py
+
+Added delivery/provenance:
+- NEXT_COMMANDS_V64_3_12_RET_CET_BDMU.txt
+- ALGORITHM_UPDATE_LOG_V64_3_12.md
+- V64_3_11_BTP_DIAGNOSIS_AND_V64_3_12_RET_CET_DESIGN.md
+- V64_3_11_BTP_SCREEN_CAUSAL_AUDIT.json
+- V64_3_12_ENGINEERING_VALIDATION.txt
+- V64_3_12_RET_CET_CHANGED_FILES.txt
+
+Removed stale engineering backups:
+- bdse/model/bdse_model.py.v10.bak
+- bdse/planner/tournament.py.v10.bak
+
+Final archive excludes __pycache__, *.pyc and .pytest_cache.

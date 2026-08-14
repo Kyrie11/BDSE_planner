@@ -263,6 +263,10 @@ def _budgeted_decisive_margin_utility_loss(
             "bdmu_budget_projection_topm_violation_fraction": zero,
             "bdmu_budget_selector_surrogate_jaccard_current": zero,
             "bdmu_budget_selector_surrogate_jaccard_oracle": zero,
+            "bdmu_budget_exact_candidate_scene_fraction": zero,
+            "bdmu_budget_current_oracle_jaccard": zero,
+            "bdmu_budget_controlled_exchange_negative_fraction": zero,
+            "bdmu_budget_controlled_exchange_pair_fraction": zero,
             "bdmu_frontier_rival_count": zero,
             "bdmu_reference_worst_margin_deficit": zero,
         }
@@ -399,14 +403,14 @@ def _budgeted_decisive_margin_utility_loss(
     feasible_cross_family_fallback = bool(util_cfg.get("feasible_admission_cross_family_fallback", True))
     evidence_family_ids = batch.get("evidence_family_ids")
 
-    # V64.3.11 BTP-BDMU: HAP-BDMU proved that a score surrogate can move the
-    # exact HAB Top-M set while *hurting* decisive proposal recall and the teacher
-    # endpoint.  The missing mediator is the fixed B=16 selector.  Project the
-    # HAP utility oracle through the same frozen pair-margin budget selector used
-    # by the immutable BDMU reference, and supervise only admissions that survive
-    # that budget layer.  Current budget-selected evidence is protected from
-    # becoming a negative, implementing a minimum-intervention/no-regression
-    # principle without adding a binary criticality target.
+    # V64.3.12 RET/CET-BDMU.  V64.3.11 established non-trivial exact C1-B
+    # headroom, but training optimized a fast B-selector surrogate whose measured
+    # set Jaccard to the exact runtime selector was only ~0.77.  RET therefore
+    # uses the exact runtime B selector as a stop-gradient training target on a
+    # rotating actionable scene subset.  CET additionally permits a current-B
+    # atom to become a negative *only* when the exact oracle-B intervention
+    # removes it, yielding an auditable budget-exchange criterion rather than
+    # blanket unprotection.  DARM/DBR/foundation and B/M remain frozen.
     budget_transmission_weight = float(util_cfg.get("budget_transmission_rank_weight", 0.0))
     budget_transmission_margin = float(util_cfg.get("budget_transmission_margin", 0.35))
     budget_transmission_pos_k = max(1, int(util_cfg.get("budget_transmission_positive_k", 6)))
@@ -414,15 +418,30 @@ def _budgeted_decisive_margin_utility_loss(
     budget_transmission_same_family = bool(util_cfg.get("budget_transmission_same_family", True))
     budget_transmission_cross_family = bool(util_cfg.get("budget_transmission_cross_family_fallback", False))
     budget_transmission_protect_current = bool(util_cfg.get("budget_transmission_protect_current_budget", True))
-    budget_projection_source = str(util_cfg.get("budget_transmission_selector_source", "frozen_pair_margin_surrogate")).strip().lower()
+    budget_allow_controlled_exchange = bool(
+        util_cfg.get("budget_transmission_allow_controlled_budget_exchange", False)
+    )
+    budget_controlled_exchange_weight = max(
+        0.0, float(util_cfg.get("budget_transmission_controlled_exchange_weight", 0.5))
+    )
+    budget_projection_source = str(
+        util_cfg.get("budget_transmission_selector_source", "frozen_pair_margin_surrogate")
+    ).strip().lower()
     budget_exact_eval = bool(util_cfg.get("budget_transmission_exact_eval", True))
-    if budget_transmission_weight > 0.0 and budget_projection_source not in {
-        "frozen_pair_margin_surrogate", "pair_margin_surrogate", "frozen_fast_budget"
+    allowed_budget_sources = {
+        "frozen_pair_margin_surrogate", "pair_margin_surrogate", "frozen_fast_budget",
+        "exact_runtime_sampled", "sampled_exact_runtime", "runtime_exact_sampled",
+    }
+    if budget_transmission_weight > 0.0 and budget_projection_source not in allowed_budget_sources:
+        raise ValueError(
+            "Unknown budget_transmission_selector_source=" + repr(budget_projection_source)
+        )
+    if budget_allow_controlled_exchange and budget_projection_source not in {
+        "exact_runtime_sampled", "sampled_exact_runtime", "runtime_exact_sampled"
     }:
         raise ValueError(
-            "BTP-BDMU currently requires budget_transmission_selector_source="
-            "frozen_pair_margin_surrogate so training and the immutable BDMU reference "
-            "use the same B=16 projection semantics"
+            "Controlled budget exchange requires sampled exact runtime B targets; "
+            "a surrogate B-set cannot establish controlled displacement of current transmitted evidence"
         )
 
     def _set_difference_rank_loss(
@@ -552,6 +571,10 @@ def _budgeted_decisive_margin_utility_loss(
     budget_projection_topm_violation_fraction = zero
     budget_selector_surrogate_jaccard_current = zero
     budget_selector_surrogate_jaccard_oracle = zero
+    budget_exact_candidate_scene_fraction = zero
+    budget_current_oracle_jaccard = zero
+    budget_controlled_exchange_negative_fraction = zero
+    budget_controlled_exchange_pair_fraction = zero
     if budget_transmission_weight > 0.0:
         budget = float((cfg.get("evidence", {}) or {}).get("budget", 16))
         fast_current_budget_mask = _fast_pair_margin_surrogate_masks(
@@ -560,58 +583,158 @@ def _budgeted_decisive_margin_utility_loss(
         fast_oracle_budget_mask = _fast_pair_margin_surrogate_masks(
             outputs, batch, cfg, [budget], topm_mask_override=oracle_topm
         )[budget].detach().bool() & active
+
+        # Metric masks are exact on validation and retain the historical fast
+        # approximation on non-exact training rows.  Ranking targets are kept in
+        # separate masks so a non-sampled row can never silently fall back to the
+        # surrogate when exact-runtime training is requested.
         current_budget_mask = fast_current_budget_mask
         oracle_budget_mask = fast_oracle_budget_mask
+        target_current_budget_mask = fast_current_budget_mask
+        target_oracle_budget_mask = fast_oracle_budget_mask
+        target_scene_mask = torch.ones(
+            (int(utility.shape[0]),), dtype=torch.bool, device=utility.device
+        )
 
-        # Training keeps the vectorized frozen pair-margin surrogate for speed.
-        # Validation, where gradients are disabled, upgrades C1-B/C2-B to the
-        # exact runtime pair-conditioned B=16 selector with the exact Top-M pool
-        # injected. This prevents a fast-selector surrogate from becoming the
-        # paper's causal mediation endpoint.
+        actionable_scene = has & (
+            oracle_topm & ~deployment_topm & (utility > eps)
+        ).any(dim=1)
+        budget_exact_candidate_scene_fraction = actionable_scene.float().mean()
+
+        def _mask_jaccard_rows(
+            a_mask: torch.Tensor, b_mask: torch.Tensor, row_mask: torch.Tensor | None = None
+        ) -> torch.Tensor:
+            inter = (a_mask & b_mask & active).float().sum(dim=1)
+            union = ((a_mask | b_mask) & active).float().sum(dim=1)
+            vals = torch.where(
+                union > 0, inter / union.clamp_min(1.0), torch.ones_like(union)
+            )
+            if row_mask is None:
+                return vals.mean()
+            w = row_mask.float()
+            return (vals * w).sum() / w.sum().clamp_min(1.0)
+
+        def _exact_budget_pair_for_rows(
+            row_indices: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            if row_indices.numel() == 0:
+                shape = (0, int(active.shape[1]))
+                empty = torch.zeros(shape, dtype=torch.bool, device=utility.device)
+                return empty, empty
+            row_indices = row_indices.to(device=utility.device, dtype=torch.long)
+            active_small = active.index_select(0, row_indices)
+            # The selector is discrete and intentionally stop-gradient.  Use the
+            # existing scene-slicing entry point so exact-target tests and future
+            # selector adapters observe precisely the same public semantics.
+            with torch.no_grad():
+                current_small = _predicted_pair_certificate_masks(
+                    outputs, batch, cfg, scene_indices=row_indices,
+                    topm_mask_override=deployment_topm,
+                    proposal_scores_override=outputs["proposal_logits"].detach(),
+                ).detach().bool() & active_small
+                oracle_small = _predicted_pair_certificate_masks(
+                    outputs, batch, cfg, scene_indices=row_indices,
+                    topm_mask_override=oracle_topm,
+                    proposal_scores_override=utility.detach(),
+                ).detach().bool() & active_small
+            return current_small, oracle_small
+
+        exact_training_source = budget_projection_source in {
+            "exact_runtime_sampled", "sampled_exact_runtime", "runtime_exact_sampled"
+        }
         if budget_exact_eval and not torch.is_grad_enabled():
-            current_budget_mask = _predicted_pair_certificate_masks(
-                outputs, batch, cfg, topm_mask_override=deployment_topm,
-                proposal_scores_override=outputs["proposal_logits"].detach(),
-            ).detach().bool() & active
-            oracle_budget_mask = _predicted_pair_certificate_masks(
-                outputs, batch, cfg, topm_mask_override=oracle_topm,
-                proposal_scores_override=utility.detach(),
-            ).detach().bool() & active
+            exact_rows = torch.arange(int(utility.shape[0]), device=utility.device, dtype=torch.long)
+            exact_current, exact_oracle = _exact_budget_pair_for_rows(exact_rows)
+            current_budget_mask = exact_current
+            oracle_budget_mask = exact_oracle
+            target_current_budget_mask = exact_current
+            target_oracle_budget_mask = exact_oracle
+            target_scene_mask = torch.ones_like(actionable_scene)
             budget_projection_exact_fraction = zero.new_tensor(1.0)
-            # Exact mediation requires a strict nested interface: B must be a
-            # subset of the explicitly injected final Top-M pool.  Keep this as
-            # a logged contract rather than relying on selector internals so a
-            # future post-processing regression cannot silently contaminate C1-B/C2-B.
-            current_violation = current_budget_mask & ~deployment_topm.bool() & active
-            oracle_violation = oracle_budget_mask & ~oracle_topm.bool() & active
-            selected_total = (current_budget_mask & active).float().sum() + (oracle_budget_mask & active).float().sum()
+        elif exact_training_source:
+            exact_sampling_domain = (
+                actionable_scene
+                if bool(util_cfg.get("budget_transmission_exact_candidate_only", True))
+                else has
+            )
+            exact_rows = _budget_transmission_exact_scene_indices(
+                exact_sampling_domain, util_cfg, train_cfg
+            )
+            exact_current, exact_oracle = _exact_budget_pair_for_rows(exact_rows)
+            target_current_budget_mask = torch.zeros_like(fast_current_budget_mask)
+            target_oracle_budget_mask = torch.zeros_like(fast_oracle_budget_mask)
+            target_scene_mask = torch.zeros_like(actionable_scene)
+            if exact_rows.numel() > 0:
+                target_current_budget_mask.index_copy_(0, exact_rows, exact_current)
+                target_oracle_budget_mask.index_copy_(0, exact_rows, exact_oracle)
+                target_scene_mask[exact_rows] = True
+            budget_projection_exact_fraction = zero.new_tensor(
+                float(exact_rows.numel()) / max(float(utility.shape[0]), 1.0)
+            )
+        else:
+            exact_rows = torch.empty((0,), dtype=torch.long, device=utility.device)
+
+        if (budget_exact_eval and not torch.is_grad_enabled()) or exact_training_source:
+            # Audit the exact projection only on rows where it actually ran.
+            audit_rows = target_scene_mask
+            current_violation = (
+                target_current_budget_mask & ~deployment_topm.bool() & active & audit_rows[:, None]
+            )
+            oracle_violation = (
+                target_oracle_budget_mask & ~oracle_topm.bool() & active & audit_rows[:, None]
+            )
+            selected_total = (
+                (target_current_budget_mask & active & audit_rows[:, None]).float().sum()
+                + (target_oracle_budget_mask & active & audit_rows[:, None]).float().sum()
+            )
             budget_projection_topm_violation_fraction = (
                 current_violation.float().sum() + oracle_violation.float().sum()
             ) / selected_total.clamp_min(1.0)
-
-            def _mask_jaccard(a_mask: torch.Tensor, b_mask: torch.Tensor) -> torch.Tensor:
-                inter = (a_mask & b_mask & active).float().sum(dim=1)
-                union = ((a_mask | b_mask) & active).float().sum(dim=1)
-                return torch.where(union > 0, inter / union.clamp_min(1.0), torch.ones_like(union)).mean()
-
-            budget_selector_surrogate_jaccard_current = _mask_jaccard(
-                current_budget_mask, fast_current_budget_mask
+            budget_selector_surrogate_jaccard_current = _mask_jaccard_rows(
+                target_current_budget_mask, fast_current_budget_mask, audit_rows
             )
-            budget_selector_surrogate_jaccard_oracle = _mask_jaccard(
-                oracle_budget_mask, fast_oracle_budget_mask
+            budget_selector_surrogate_jaccard_oracle = _mask_jaccard_rows(
+                target_oracle_budget_mask, fast_oracle_budget_mask, audit_rows
             )
 
-        # Positives must (a) belong to the realizable HAP utility oracle, (b) be
-        # selected by the frozen B=16 selector under that oracle pool, and (c) be
-        # absent from the current deployed Top-M.  This is the exact missing
-        # transmission event observed in V64.3.10.
-        pos = oracle_budget_mask & oracle_topm & ~deployment_topm & (utility > eps)
-        raw_neg = deployment_topm & ~oracle_topm
-        neg = raw_neg & (~current_budget_mask if budget_transmission_protect_current else torch.ones_like(raw_neg))
+        budget_current_oracle_jaccard = _mask_jaccard_rows(
+            target_current_budget_mask, target_oracle_budget_mask, target_scene_mask
+        )
 
-        # Keep only the highest-utility transmitted positives and the lowest-utility
-        # replaceable negatives.  The pair tensor stays small and fully vectorized,
-        # avoiding the per-scene/per-atom Python loop that dominated HAP loss time.
+        # Exact transmitted positive: admitted by the utility-oracle HAB pool,
+        # selected by the B=16 runtime selector under that pool, and absent from
+        # the current Top-M.  Only exact-sampled rows are eligible in RET/CET.
+        pos = (
+            target_oracle_budget_mask & oracle_topm & ~deployment_topm
+            & (utility > eps) & target_scene_mask[:, None]
+        )
+        raw_neg = deployment_topm & ~oracle_topm & target_scene_mask[:, None]
+        slack_neg = raw_neg & ~target_current_budget_mask
+        controlled_exchange_neg = (
+            raw_neg & target_current_budget_mask & ~target_oracle_budget_mask
+        )
+        if budget_allow_controlled_exchange:
+            # CET: replacing current transmitted evidence is legal only if the
+            # same exact runtime selector drops that evidence under the oracle
+            # Top-M intervention.  This is a controlled interface criterion,
+            # not broad unprotection of the current B-set.
+            neg = slack_neg | controlled_exchange_neg
+            protected = raw_neg & target_current_budget_mask & ~controlled_exchange_neg
+        else:
+            neg = slack_neg if budget_transmission_protect_current else raw_neg
+            protected = raw_neg & target_current_budget_mask if budget_transmission_protect_current else torch.zeros_like(raw_neg)
+
+        budget_transmission_positive_fraction = pos.float().sum() / (
+            active & target_scene_mask[:, None]
+        ).float().sum().clamp_min(1.0)
+        budget_protected_negative_fraction = protected.float().sum() / raw_neg.float().sum().clamp_min(1.0)
+        budget_controlled_exchange_negative_fraction = (
+            controlled_exchange_neg.float().sum() / raw_neg.float().sum().clamp_min(1.0)
+        )
+
+        # Keep only high-utility positives and low-utility replaceable negatives.
+        # Same-family competition is still mandatory because frozen HAB family
+        # slots determine which score comparisons can cross the actual Top-M boundary.
         E = int(utility.shape[1])
         kp = min(budget_transmission_pos_k, E)
         kn = min(budget_transmission_neg_k, E)
@@ -624,12 +747,11 @@ def _budgeted_decisive_margin_utility_loss(
 
         pair_mask = pos_keep[:, :, None] & neg_keep[:, None, :]
         if budget_transmission_same_family and evidence_family_ids is not None:
-            family_equal = evidence_family_ids[:, :, None].long().eq(evidence_family_ids[:, None, :].long())
+            family_equal = evidence_family_ids[:, :, None].long().eq(
+                evidence_family_ids[:, None, :].long()
+            )
             same_family_mask = pair_mask & family_equal
             if budget_transmission_cross_family:
-                # Cross-family fallback is intentionally opt-in. V64.3.10 showed
-                # that broad fallback dominated the training pairs and degraded
-                # decisive recall; V64.3.11 main configs keep it disabled.
                 has_same = same_family_mask.any(dim=(1, 2), keepdim=True)
                 pair_mask = torch.where(has_same, same_family_mask, pair_mask)
             else:
@@ -637,18 +759,30 @@ def _budgeted_decisive_margin_utility_loss(
 
         utility_gap = utility[:, :, None] - utility[:, None, :]
         pair_mask &= utility_gap > eps
+        controlled_pair_mask = pair_mask & controlled_exchange_neg[:, None, :]
         score_gap = acquisition_logits[:, :, None] - acquisition_logits[:, None, :]
         pair_terms = F.softplus(budget_transmission_margin - score_gap)
-        pair_weights = torch.where(pair_mask, utility_gap.clamp_min(0.0), torch.zeros_like(utility_gap))
+        pair_weights = torch.where(
+            pair_mask, utility_gap.clamp_min(0.0), torch.zeros_like(utility_gap)
+        )
+        if budget_allow_controlled_exchange and budget_controlled_exchange_weight != 1.0:
+            exchange_scale = torch.where(
+                controlled_pair_mask,
+                pair_weights.new_tensor(budget_controlled_exchange_weight),
+                pair_weights.new_tensor(1.0),
+            )
+            pair_weights = pair_weights * exchange_scale
         scene_weight_sum = pair_weights.sum(dim=(1, 2))
         scene_has_pair = scene_weight_sum > eps
         scene_loss = (pair_terms * pair_weights).sum(dim=(1, 2)) / scene_weight_sum.clamp_min(eps)
-        L_budget_transmission = (scene_loss * scene_has_pair.float()).sum() / scene_has_pair.float().sum().clamp_min(1.0)
+        L_budget_transmission = (
+            scene_loss * scene_has_pair.float()
+        ).sum() / scene_has_pair.float().sum().clamp_min(1.0)
         budget_transmission_pair_count = pair_mask.float().sum()
         budget_transmission_scene_count = scene_has_pair.float().sum()
-        budget_transmission_positive_fraction = pos.float().sum() / active.float().sum().clamp_min(1.0)
-        protected = raw_neg & current_budget_mask
-        budget_protected_negative_fraction = protected.float().sum() / raw_neg.float().sum().clamp_min(1.0)
+        budget_controlled_exchange_pair_fraction = (
+            controlled_pair_mask.float().sum() / pair_mask.float().sum().clamp_min(1.0)
+        )
 
     listwise_weight = float(util_cfg.get("listwise_weight", 1.0))
     L_rank = (
@@ -708,6 +842,10 @@ def _budgeted_decisive_margin_utility_loss(
         "bdmu_budget_projection_topm_violation_fraction": budget_projection_topm_violation_fraction.detach(),
         "bdmu_budget_selector_surrogate_jaccard_current": budget_selector_surrogate_jaccard_current.detach(),
         "bdmu_budget_selector_surrogate_jaccard_oracle": budget_selector_surrogate_jaccard_oracle.detach(),
+        "bdmu_budget_exact_candidate_scene_fraction": budget_exact_candidate_scene_fraction.detach(),
+        "bdmu_budget_current_oracle_jaccard": budget_current_oracle_jaccard.detach(),
+        "bdmu_budget_controlled_exchange_negative_fraction": budget_controlled_exchange_negative_fraction.detach(),
+        "bdmu_budget_controlled_exchange_pair_fraction": budget_controlled_exchange_pair_fraction.detach(),
         "bdmu_frontier_rival_count": (target_diag["frontier_count"] * scene_weight).sum() / denom,
         "bdmu_reference_worst_margin_deficit": (target_diag["worst_deficit"] * scene_weight).sum() / denom,
     }
@@ -1472,6 +1610,39 @@ def _deployment_selector_scene_indices(
     rank = int(train_cfg.get("global_rank", 0))
     start = (step * count + rank * count) % batch_size
     return (torch.arange(count, device=device, dtype=torch.long) + start) % batch_size
+
+
+def _budget_transmission_exact_scene_indices(
+    candidate_scene_mask: torch.Tensor,
+    util_cfg: dict[str, Any],
+    train_cfg: dict[str, Any],
+) -> torch.Tensor:
+    """Select a rotating subset of *actionable* scenes for exact B supervision.
+
+    V64.3.11 trained BTP with a fast budget-selector surrogate but promoted with
+    the exact runtime B selector.  The screen measured only ~0.77 surrogate/exact
+    set Jaccard, so V64.3.12 moves the stop-gradient exact selector into training.
+    Exact CPU selection is spent only on scenes where the fixed BDMU utility
+    oracle actually changes the canonical HAB Top-M pool; non-actionable scenes
+    cannot produce a transmission ranking pair and therefore receive no selector
+    call.  The subset rotates deterministically across optimizer steps/ranks.
+    """
+    mask = candidate_scene_mask.detach().bool().reshape(-1)
+    device = mask.device
+    idx = torch.nonzero(mask, as_tuple=False).squeeze(1)
+    if idx.numel() == 0:
+        return idx
+    cadence = max(1, int(util_cfg.get("budget_transmission_exact_every_n_steps", 1)))
+    step = int(train_cfg.get("global_step", 0))
+    if step % cadence != 0:
+        return idx[:0]
+    count = int(util_cfg.get("budget_transmission_exact_scenes_per_rank", 4))
+    if count <= 0 or count >= int(idx.numel()):
+        return idx
+    rank = int(train_cfg.get("global_rank", 0))
+    start = (step * count + rank * count) % int(idx.numel())
+    pos = (torch.arange(count, device=device, dtype=torch.long) + start) % int(idx.numel())
+    return idx.index_select(0, pos)
 
 
 def _build_predicted_pair_numpy_cache(
