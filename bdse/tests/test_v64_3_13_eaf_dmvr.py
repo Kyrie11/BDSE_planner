@@ -200,3 +200,27 @@ def test_v64_3_13_screen_failure_pivots_to_representation_not_acquisition() -> N
     assert not r["mechanism_gain"]
     assert not r["full_promotion"]
     assert r["next_action"] == "selective_action_evidence_representation_capacity_test"
+
+
+def test_v64_3_13_screen_never_selects_endpoint_gain_with_invalid_exact_scene_training() -> None:
+    from bdse.tools.check_v64_3_13_eaf_dmvr_screen import build
+    anchor = _frontier_screen_row(-1, sign=0.46, action=0.258, teacher=0.178, regret=20133.0, delta=0.0)
+    noisy = _frontier_screen_row(1, sign=0.735, action=0.352, teacher=0.178, regret=14605.0, delta=0.003)
+    noisy["val_frontier_value_exact_scene_fraction"] = 0.259375
+    exact = _frontier_screen_row(3, sign=0.692, action=0.234, teacher=0.152, regret=14756.0, delta=0.003)
+    # Match the uploaded V64.3.13 screen pathology: runtime EAF metrics were
+    # missing from the metric plumbing, so the re-audit must select the only
+    # exact-scene training epoch and request a runtime replay rather than let a
+    # noisy endpoint epoch drive the branch.
+    for row in (noisy, exact):
+        row.pop("val_decisive_frontier_value_active", None)
+        row.pop("val_decisive_frontier_value_complete_star_coverage", None)
+        row.pop("val_decisive_frontier_value_residual_rms", None)
+    exact["val_frontier_value_correct_anchor_preserved_fraction"] = 0.0375
+    r = build([anchor, noisy, exact])
+    assert r["selected_epoch"] == 3
+    assert r["training_instrumentation_valid"]
+    assert not r["runtime_instrumentation_valid"]
+    assert r["value_estimation_gain"]
+    assert r["preservation_interface_failure"]
+    assert r["next_action"] == "replay_selected_epoch_with_runtime_frontier_instrumentation_then_eaf_ocfi"

@@ -670,6 +670,7 @@ def main() -> None:
     parser.add_argument("--max-scenarios", type=int, default=None)
     parser.add_argument("--output", type=str, default="outputs/open_loop_bdse_metrics.json")
     parser.add_argument("--per-sample-output", type=str, default=None, help="Optional JSONL with one diagnostic row per sample for failure slicing.")
+    parser.add_argument("--scenario-token-file", type=str, default=None, help="Optional newline-delimited scenario tokens; only matching samples are evaluated.")
     parser.add_argument("--disable-dense-diagnostic", action="store_true", help="Skip diagnostic-only dense full-interface scoring.")
     parser.add_argument(
         "--device",
@@ -693,6 +694,13 @@ def main() -> None:
             raise ValueError("On-the-fly open-loop evaluation supports one split; use --preprocessed-dir for multiple split folders.")
         dataset = NuPlanBDSEDataset(cfg, split=args.split[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
     metric_means = OnlineMetricMean()
+    scenario_token_filter: set[str] | None = None
+    if args.scenario_token_file:
+        token_path = Path(args.scenario_token_file)
+        scenario_token_filter = {x.strip() for x in token_path.read_text(encoding="utf-8").splitlines() if x.strip()}
+        if not scenario_token_filter:
+            raise ValueError(f"scenario token filter is empty: {token_path}")
+    evaluated_scenario_count = 0
     per_sample_file = None
     if args.per_sample_output:
         per_sample_path = Path(args.per_sample_output)
@@ -700,6 +708,10 @@ def main() -> None:
         per_sample_file = per_sample_path.open("w", encoding="utf-8", buffering=1024 * 1024)
     planner_latencies_ms: list[float] = []
     for sample in tqdm(dataset.iter_samples(), total=len(dataset)):
+        sample_token = str(getattr(sample, "scenario_token", ""))
+        if scenario_token_filter is not None and sample_token not in scenario_token_filter:
+            continue
+        evaluated_scenario_count += 1
         # Keep the sparse certificate stage and the optional dense diagnostic in
         # one model cache scope.  The dense path can then reuse the identical scene,
         # action and evidence encodings without changing any planner output.
@@ -738,6 +750,8 @@ def main() -> None:
                 or key.startswith("dual_certificate_")
                 or key.startswith("set_conditioned_residual_")
                 or key.startswith("decisive_frontier_value_")
+                or key.startswith("decisive_frontier_ocfi_")
+                or key.startswith("decisive_anchor_margin_")
                 or key.startswith("base_prior_")
                 or key.startswith("learned_base_")
                 or key.startswith("structural_residual_")
@@ -868,6 +882,28 @@ def main() -> None:
             diag.values["harmful_pair_potential_intervention_rate"] = float(anchor_correct and not deployed_correct)
             diag.details["selected_local_anchor_action"] = int(selected_local_anchor_action)
 
+            # EAF-OCFI split-calibration target.  Orientation matches the runtime
+            # guard: positive means the raw proposed challenger is better than the
+            # selected-local/DARM anchor.
+            raw_anchor = int(tour_diag.get("pair_action_anchor_raw_anchor_action", selected_local_anchor_action))
+            raw_proposed = int(tour_diag.get("pair_action_anchor_raw_proposed_action", int(tour.action_index)))
+            if (
+                raw_proposed != raw_anchor
+                and 0 <= raw_anchor < len(sample.teacher.J_T)
+                and 0 <= raw_proposed < len(sample.teacher.J_T)
+                and np.isfinite(sample.teacher.J_T[raw_anchor])
+                and np.isfinite(sample.teacher.J_T[raw_proposed])
+            ):
+                normalized = bool(tour_diag.get("normalized_margins", cfg.get("model", {}).get("pair_margin_normalized", False)))
+                mscale = max(float(tour_diag.get("margin_scale", pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 1.0)))) if normalized else 1.0, 1.0e-6)
+                teacher_edge_margin = float(sample.teacher.J_T[raw_anchor] - sample.teacher.J_T[raw_proposed]) / mscale
+                raw_pred_margin = float(tour_diag.get("pair_action_anchor_raw_margin", float("nan")))
+                diag.values["decisive_frontier_value_teacher_proposed_vs_anchor_margin"] = teacher_edge_margin
+                if np.isfinite(raw_pred_margin):
+                    diag.values["decisive_frontier_value_proposed_margin_overestimation"] = raw_pred_margin - teacher_edge_margin
+            diag.details["raw_frontier_anchor_action"] = int(raw_anchor)
+            diag.details["raw_frontier_proposed_action"] = int(raw_proposed)
+
         if pair_full_action >= 0:
             teacher_action = int(sample.teacher.a_star)
             budget_action = int(tour.action_index)
@@ -919,6 +955,8 @@ def main() -> None:
                 "full_action": int(diag.details.get("full_action", -1)),
                 "sparse_full_action": int(diag.details.get("sparse_full_action", -1)),
                 "selected_local_anchor_action": int(diag.details.get("selected_local_anchor_action", -1)),
+                "raw_frontier_anchor_action": int(diag.details.get("raw_frontier_anchor_action", -1)),
+                "raw_frontier_proposed_action": int(diag.details.get("raw_frontier_proposed_action", -1)),
                 "pair_full_action": int(diag.details.get("pair_full_action", -1)),
                 "local_pair_full_action": int(diag.details.get("local_pair_full_action", -1)),
                 "fallback_would_trigger": bool(qdiag.get("fallback_would_trigger", False)),
@@ -930,6 +968,8 @@ def main() -> None:
         per_sample_file.close()
     summary = metric_means.result()
     summary["device"] = str(device)
+    summary["evaluated_scenario_count"] = int(evaluated_scenario_count)
+    summary["scenario_token_filter_count"] = int(len(scenario_token_filter)) if scenario_token_filter is not None else 0
     if planner_latencies_ms:
         latency = np.asarray(planner_latencies_ms, dtype=np.float64)
         summary.update(

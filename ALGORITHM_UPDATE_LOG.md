@@ -5768,3 +5768,134 @@ All earlier no-repeat constraints remain. In addition:
 - do not repeat V59 generic set-conditioned potential;
 - do not bypass the existing one-sided anchor guard or relax certificate gates to manufacture endpoint gain;
 - if EAF-DMVR mechanism fails with valid instrumentation, the next branch is selective action/evidence representation capacity, not another value-loss variant with the same frozen embeddings.
+
+# V64.3.14 — EAF-OCFI: Evidence-Attributed Frontier with One-Sided Calibrated Frontier Intervention (2026-08-14)
+
+## Trigger: V64.3.13 learns frontier value signal but over-intervenes on the frozen anchor
+
+The uploaded V64.3.13 EAF-DMVR screen was re-audited before opening a new algorithm branch. The original checker selected epoch 1 even though its exact-scene frontier training fraction was only `0.259375`; epoch 3 is the only trained epoch with `frontier_value_exact_scene_fraction=1.0`. The checker is therefore repaired to prioritize causal instrumentation validity before noisy endpoint movement and to separate training EAF instrumentation from runtime EAF instrumentation.
+
+On the valid epoch 3, relative to the epoch -1 anchor:
+
+- complete-frontier pair-sign accuracy: `0.460124 -> 0.692461` (**+23.23pp**);
+- complete-frontier wrong-anchor correction: `0.221354 -> 0.257174` (**+3.58pp**);
+- complete-frontier action match: `0.257813 -> 0.233984` (**-2.38pp**);
+- correct-anchor preservation: `0.218750 -> 0.037500` (**-18.13pp**);
+- teacher match: `0.178 -> 0.152` (**-2.6pp**);
+- teacher regret: `20133.34 -> 14756.02` (**26.71% lower**);
+- raw residual flip proposal rate: `0.422 -> 0.930`;
+- deployed residual flip rate: `0.176 -> 0.586`;
+- guard-allowed flip rate: `0.194 -> 0.606`;
+- beneficial intervention: `0.018 -> 0.076`;
+- harmful intervention: `0.008 -> 0.092`;
+- pair-full/local-pair-full stay exactly `0.174`;
+- proposal decisive recall, exact-critical Top-M/selected recall, and evidence certificate remain unchanged.
+
+This is **not** sufficient evidence for the V64.3.13 fallback hypothesis “frozen representation capacity is insufficient.” The complete-frontier pair-sign gain is large, so the frozen action/evidence representation contains learnable decisive-pair signal. The failure is more specifically localized to:
+
+`fixed selected B evidence -> informative complete-frontier value -> OVER-AGGRESSIVE frontier intervention -> broken one-sided anchor preservation`.
+
+A second engineering issue was found: runtime EAF diagnostics were inserted into query diagnostics but `compute_bdse_diagnostics()` did not propagate `decisive_frontier_value_*` to aggregate validation metrics. Hence old V64.3.13 logs contain NaN runtime EAF instrumentation. This plumbing is repaired and the next screen begins with a raw replay of the selected EAF checkpoint.
+
+## Algorithm: EAF-OCFI
+
+V64.3.14 is deliberately **evaluation/calibration-only**. It reuses the frozen V64.3.13 EAF checkpoint and changes no learned representation, acquisition score, B-set, M-set, DARM value, DBR value, or pair-full ceiling.
+
+The paper/mainline remains:
+
+`fixed planner-interface budget -> auditable evidence atoms -> budget-feasible decisive-margin utility -> terminally frozen acquisition -> exact selected B=16 evidence -> evidence-attributed complete decisive frontier -> one-sided calibrated intervention -> final decision preservation`.
+
+### Exact EAF contribution decomposition
+
+V64.3.13 already computes the selected-evidence residual
+
+`r_S(a,b)=sum_i <tanh(z_i)*c(a,b), u_b-u_a>/sqrt(|S|d)`.
+
+V64.3.14 retains the exact per-atom term
+
+`c_i(a,b)=<tanh(z_i), c(a,b)*(u_b-u_a)>/sqrt(|S|d)`
+
+and verifies that `sum_i c_i = r_S`. It then defines an auditable attribution energy
+
+`A_S(a,b)=sqrt(sum_i c_i(a,b)^2)`.
+
+`A_S` is **not claimed to be epistemic variance**. It is a heteroscedastic normalization scale built from the same already-selected evidence contributions; it adds no evidence query.
+
+### One-sided proposal-conditioned split calibration
+
+For the raw EAF challenger actually proposed against the frozen selected-local/DARM anchor, orient margins so positive means the challenger should win. On group-disjoint validation calibration scenes:
+
+`error_j = M_hat_j - M_teacher_j`.
+
+Main attribution branch:
+
+`score_j = error_j / max(A_j, A_floor)`.
+
+The finite-sample split quantile uses order statistic `ceil((n+1)(1-alpha))` and is clamped to `q>=0`, so calibration can never relax the legacy guard.
+
+At runtime:
+
+`M_robust = M_hat - q*max(A_S,A_floor) - beta_old*sigma_old - epsilon_old`.
+
+A frontier challenger may replace the anchor only when this robust one-sided margin clears the existing `flip_margin`, the score condition, and the unchanged evidence-certificate condition.
+
+### Constant-radius control
+
+The same deterministic calibration/evaluation split also evaluates `normalization=none`, i.e. `A_S=1`. This is an explicit novelty control rather than a second tuning branch.
+
+If constant calibration works but attribution scaling does not, do **not** claim evidence-attribution-specific novelty. If neither works, do not sweep alpha/threshold; proceed to the selective representation-capacity test already authorized by V64.3.13. Acquisition remains frozen in all cases.
+
+## V64.3.14 causal screen
+
+1. Re-audit the uploaded V64.3.13 train log with the repaired checker; for the current result this selects epoch 3.
+2. Raw runtime replay of the frozen EAF checkpoint with OCFI disabled. Require EAF active, complete-star coverage, residual RMS, and attribution-scale RMS instrumentation.
+3. Deterministic scenario-token group split on the same val replay; default 40% calibration / 60% evaluation, `alpha=0.10`.
+4. Fit attribution-scaled and constant one-sided quantiles on byte-identical calibration groups.
+5. Evaluate both gates on byte-identical held-out val groups.
+6. Require B=16, M=24, selected-local anchor, pair-full, local-pair-full, and evidence certificate to remain frozen.
+7. Preservation gain requires harmful-intervention reduction >= `1pp`, beneficial-intervention retention >= `50%`, and deployed-flip reduction > 0.
+8. Endpoint gain requires teacher match >= `+0.5pp` with regret non-harm, or regret >= `2%` improvement with teacher-match non-harm (`-0.4pp` tolerance).
+9. Only a promoted attribution-scaled branch is paper-facing. A constant-only pass is evidence for generic calibration, not for the attribution mechanism.
+10. Do not run test/closed-loop from this screen directly; first perform a separate full-val calibration/reproduction after promotion.
+
+## No-repeat constraints added by V64.3.14
+
+All V64.3.13 no-repeat constraints remain. In addition:
+
+- do not make EAF-DMVR-v2 while the current pair-sign signal is already positive;
+- do not unfreeze action/evidence representation before the OCFI causal test;
+- do not tune `alpha`, conformal quantile, or flip threshold as endpoint-performance knobs after screen failure;
+- do not relax `require_evidence_certificate_before_residual_flip` or its required fraction;
+- do not apply EAF/OCFI to pair-full or local-pair-full diagnostics;
+- do not describe generic conformal calibration as the algorithm novelty;
+- if attribution OCFI fails after valid instrumentation, the next permitted branch is the previously specified **small selective action/evidence representation capacity test**, with acquisition still terminally frozen.
+
+## Engineering changes
+
+- `bdse/planner/tournament.py`: exact per-selected-atom EAF decomposition; attribution RSS scale; EAF-specific one-sided intervention radius integrated inside the existing anchor guard; `q=0` exact no-op; no-op when EAF is intentionally absent from pair-full diagnostics.
+- `bdse/metrics/bdse_metrics.py`: propagate `decisive_frontier_value_*`, `decisive_frontier_ocfi_*`, and `decisive_anchor_margin_*` instrumentation.
+- `bdse/experiments/evaluate_open_loop.py`: runtime OCFI instrumentation, proposal-conditioned teacher edge target, per-sample raw anchor/challenger IDs, and scenario-token filtering for group-disjoint replay.
+- `bdse/experiments/train.py`: repaired frontier instrumentation propagation and calibration-target diagnostics for future reproducible replays.
+- `bdse/tools/check_v64_3_13_eaf_dmvr_screen.py`: corrected epoch selection and separate value-estimation vs preservation-interface audit.
+- added `bdse/tools/calibrate_v64_3_14_eaf_ocfi.py`.
+- added `bdse/tools/check_v64_3_14_eaf_ocfi_contract.py`.
+- added `bdse/tools/check_v64_3_14_eaf_ocfi_screen.py`.
+- added `bdse/configs/v64_3_14_eaf_ocfi_raw_calibration.yaml`; it has no trainable modules and no positive training losses.
+- added `RUN_V64_3_14_EAF_OCFI_SCREEN_2GPU.sh` and `NEXT_COMMANDS_V64_3_14_EAF_OCFI.txt`.
+- added V64.3.14 unit tests plus a V64.3.13 invalid-epoch-selection regression test.
+
+Current local sandbox cannot execute the new GPU screen because the user `/data0/...` caches are not mounted and the compact uploaded V64.3.13 output archive does not contain the selected `.pt` checkpoint. The delivered launcher requires the original server output/checkpoint and has strict STOP behavior rather than manufacturing a result.
+
+## V64.3.14 final engineering validation
+
+After the final attribution-arithmetic and novelty-control hardening:
+
+- V64.3.7--V64.3.14 targeted regression: **53/53 PASS**;
+- full repository: **346/346 PASS, 36 warnings**;
+- `python -m compileall -q bdse`: **PASS**;
+- `check_v64_3_14_eaf_ocfi_contract.py` on the raw calibration config: **PASS (15/15 contract checks)**;
+- root launcher/bash syntax: **PASS**;
+- V64.3.14 unit tests explicitly verify that the deployed EAF residual keeps the exact V64.3.13 floating-point reduction path, while the per-atom attribution sum is numerically equivalent and is side information only;
+- the constant-radius control is now a strict novelty control: parity with attribution is not counted as attribution-specific gain.
+
+No new warning class was introduced. The 36 warnings are the pre-existing PyTorch Transformer nested-tensor warnings already seen in earlier revisions.

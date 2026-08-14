@@ -1208,6 +1208,7 @@ def _run_validation_open_loop(
                     or key.startswith("dual_certificate_")
                     or key.startswith("set_conditioned_residual_")
                     or key.startswith("decisive_frontier_value_")
+                    or key.startswith("decisive_frontier_ocfi_")
                     or key.startswith("base_prior_")
                     or key.startswith("learned_base_")
                     or key.startswith("structural_residual_")
@@ -1340,6 +1341,23 @@ def _run_validation_open_loop(
                 diag.values["pair_potential_deployed_flip_rate"] = float(int(tour.action_index) != selected_local_anchor_action)
                 diag.values["beneficial_pair_potential_intervention_rate"] = float((not anchor_correct) and deployed_correct)
                 diag.values["harmful_pair_potential_intervention_rate"] = float(anchor_correct and not deployed_correct)
+                # EAF-OCFI calibration target for the exact raw proposed edge.
+                raw_anchor = int(tour_diag.get("pair_action_anchor_raw_anchor_action", selected_local_anchor_action))
+                raw_proposed = int(tour_diag.get("pair_action_anchor_raw_proposed_action", int(tour.action_index)))
+                if (
+                    raw_proposed != raw_anchor
+                    and 0 <= raw_anchor < len(sample.teacher.J_T)
+                    and 0 <= raw_proposed < len(sample.teacher.J_T)
+                    and np.isfinite(sample.teacher.J_T[raw_anchor])
+                    and np.isfinite(sample.teacher.J_T[raw_proposed])
+                ):
+                    normalized = bool(tour_diag.get("normalized_margins", cfg.get("model", {}).get("pair_margin_normalized", False)))
+                    mscale = max(float(tour_diag.get("margin_scale", pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 1.0)))) if normalized else 1.0, 1.0e-6)
+                    teacher_edge_margin = float(sample.teacher.J_T[raw_anchor] - sample.teacher.J_T[raw_proposed]) / mscale
+                    raw_pred_margin = float(tour_diag.get("pair_action_anchor_raw_margin", float("nan")))
+                    diag.values["decisive_frontier_value_teacher_proposed_vs_anchor_margin"] = teacher_edge_margin
+                    if np.isfinite(raw_pred_margin):
+                        diag.values["decisive_frontier_value_proposed_margin_overestimation"] = raw_pred_margin - teacher_edge_margin
 
             if pair_full_action >= 0:
                 teacher_action = int(sample.teacher.a_star)

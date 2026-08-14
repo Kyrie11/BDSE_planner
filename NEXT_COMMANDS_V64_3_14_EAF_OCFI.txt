@@ -1,0 +1,57 @@
+# V64.3.14 EAF-OCFI — next commands
+# Evidence-Attributed Frontier with One-Sided Calibrated Frontier Intervention
+#
+# Current causal conclusion from the uploaded V64.3.13 screen:
+# - acquisition is still frozen and unchanged;
+# - complete-frontier EAF pair-sign improves strongly, so do NOT jump directly
+#   to representation-capacity unfreezing;
+# - the raw frontier intervention over-flips the selected-local/DARM anchor;
+# - first test the value -> one-sided preservation interface.
+#
+# IMPORTANT: execute only Phase 0 + the V64.3.14 screen below now.
+# Do NOT run held-out test or closed-loop before this screen promotes.
+
+set -euo pipefail
+cd /path/to/bdse_v64_3_14_eaf_ocfi
+
+# User-provided nuPlan DB-set caches.
+export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+export BDSE_TEST_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2
+
+# Point to the ORIGINAL V64.3.13 server output containing checkpoints.
+# The compact uploaded outputs_v64_3_13 archive contains logs/provenance but no .pt.
+export EAF_V64_3_13_ROOT=outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1
+
+# Optional: if the checkpoint tree is elsewhere, set EAF_CKPT explicitly.
+# The fixed re-audit of the uploaded result selects epoch 3 -> epoch_0004.pt.
+# export EAF_CKPT=/absolute/path/to/bdse_v64_saqa_bcc.epoch_0004.pt
+
+# Two GPUs are used only for the two held-out OCFI evaluations in parallel.
+export GPU0=0
+export GPU1=1
+
+# Keep the screen identical across the attribution and constant controls.
+export VAL_SCENARIOS=500
+export OCFI_ALPHA=0.10
+export OCFI_CALIBRATION_FRACTION=0.40
+export OCFI_SPLIT_SEED=v64.3.14-eaf-ocfi-v1
+export OUT_ROOT=outputs_v64_3_14_eaf_ocfi_screen_2gpu_v1
+
+bash RUN_V64_3_14_EAF_OCFI_SCREEN_2GPU.sh
+
+# Main report after the screen:
+cat "$OUT_ROOT/provenance/v64_3_14_eaf_ocfi_screen.json"
+
+# Interpretation is strict:
+# 1) attribution-scaled OCFI full_promotion=true:
+#      only then do a separate full-val calibration/reproduction; test/CL still frozen.
+# 2) constant OCFI passes but attribution does not:
+#      calibration helps, but the evidence-attribution mechanism is not supported;
+#      do not make the paper-facing attribution novelty claim.
+# 3) OCFI reduces harmful intervention but endpoint still does not improve:
+#      value is not sufficiently decisive after preservation is fixed -> next small
+#      experiment is selective action/evidence representation capacity.
+# 4) OCFI does not reduce harmful intervention:
+#      do not tune alpha/threshold as a performance knob; move to representation
+#      capacity diagnosis. Acquisition remains terminally frozen in every branch.

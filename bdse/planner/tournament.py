@@ -759,7 +759,7 @@ def _decisive_frontier_value_star_residual_numpy(
     action_context_factors: np.ndarray | None,
     *,
     scale: float = 1.0,
-) -> tuple[np.ndarray, dict[str, float]]:
+) -> tuple[np.ndarray, dict[str, Any]]:
     """Return exact-antisymmetric selected-evidence value residual on one anchor star.
 
     The residual is pair-specific because the symmetric pair-context gate depends
@@ -796,21 +796,41 @@ def _decisive_frontier_value_star_residual_numpy(
         }
     rank = int(atom.shape[1])
     # tanh is applied per atom before summation, preserving an exact additive
-    # decomposition into selected-evidence contributions.
-    pooled = np.tanh(atom[selected]).sum(axis=0) / np.sqrt(max(float(selected.size), 1.0))
-    pooled = pooled.astype(np.float32)
+    # decomposition into selected-evidence contributions.  V64.3.14 additionally
+    # keeps the root-sum-square energy of those *same* atom contributions as a
+    # heteroscedastic calibration scale.  This is not a new evidence query and it
+    # is not presented as an epistemic variance estimate; split conformal
+    # calibration below learns how much over-estimation is compatible with this
+    # auditable attribution scale.
+    bounded_selected = np.tanh(atom[selected]).astype(np.float32)
     a = int(anchor_action)
     ctx_a = context[a][None, :]
     pair_sym = np.tanh(ctx_a + context[:K] + ctx_a * context[:K]).astype(np.float32)
     signed_diff = signed[:K] - signed[a][None, :]
+    pair_vec = pair_sym * signed_diff
+
+    # Keep the V64.3.13 residual arithmetic itself unchanged.  The attribution
+    # decomposition is diagnostic/calibration side information only; it must not
+    # perturb the learned value through a different floating-point reduction
+    # order before OCFI is even enabled.
+    pooled = bounded_selected.sum(axis=0) / np.sqrt(max(float(selected.size), 1.0))
+    pooled = pooled.astype(np.float32)
     out = (
         (pooled[None, :] * pair_sym * signed_diff).sum(axis=1)
         / np.sqrt(max(float(rank), 1.0))
     ).astype(np.float32) * float(scale)
+
+    denom = np.sqrt(max(float(selected.size * rank), 1.0))
+    atom_contrib = np.einsum("nr,kr->nk", bounded_selected, pair_vec, optimize=True).astype(np.float32)
+    atom_contrib = atom_contrib * (float(scale) / denom)
+    attribution_scale = np.sqrt(np.sum(atom_contrib * atom_contrib, axis=0)).astype(np.float32)
     out[~valid[:K]] = 0.0
+    attribution_scale[~valid[:K]] = 0.0
     out[a] = 0.0
+    attribution_scale[a] = 0.0
     challengers = valid[:K].copy(); challengers[a] = False
     vals = out[challengers]
+    attr_vals = attribution_scale[challengers]
     return out, {
         "decisive_frontier_value_active": 1.0,
         "decisive_frontier_value_complete_star_coverage": 1.0 if bool(challengers.any()) else 0.0,
@@ -818,7 +838,12 @@ def _decisive_frontier_value_star_residual_numpy(
         "decisive_frontier_value_rank": float(rank),
         "decisive_frontier_value_residual_abs_mean": float(np.mean(np.abs(vals))) if vals.size else 0.0,
         "decisive_frontier_value_residual_rms": float(np.sqrt(np.mean(vals * vals))) if vals.size else 0.0,
+        "decisive_frontier_value_attribution_scale_mean": float(np.mean(attr_vals)) if attr_vals.size else 0.0,
+        "decisive_frontier_value_attribution_scale_rms": float(np.sqrt(np.mean(attr_vals * attr_vals))) if attr_vals.size else 0.0,
         "decisive_frontier_value_scale": float(scale),
+        # Private runtime-only vector consumed by the one-sided intervention
+        # guard.  It is stripped from scalar diagnostics automatically.
+        "_decisive_frontier_value_attribution_scale_star": attribution_scale,
     }
 
 
@@ -890,6 +915,10 @@ def run_pair_conditioned_tournament(
         "decisive_anchor_margin_active": 0.0,
         "decisive_anchor_margin_anchor_action": -1.0,
     }
+    # Runtime-only per-challenger EAF attribution scale.  It is defined from the
+    # exact same selected-B atom contributions as the frontier residual and is
+    # consumed only by the V64.3.14 one-sided intervention certificate.
+    frontier_attribution_scale_star: np.ndarray | None = None
     if use_evidence_action_potential:
         J_anchor, J_corrected, residual_sigma, potential_diag = _evidence_action_potential_cost(
             predicted_base_cost,
@@ -969,6 +998,9 @@ def run_pair_conditioned_tournament(
                 delta = float(frontier_star[int(challenger)])
                 M_B[darm_anchor, int(challenger)] = float(M_B[darm_anchor, int(challenger)]) + delta
                 M_B[int(challenger), darm_anchor] = -float(M_B[darm_anchor, int(challenger)])
+            frontier_attribution_scale_star = frontier_diag.pop(
+                "_decisive_frontier_value_attribution_scale_star", None
+            )
             potential_diag.update(frontier_diag)
         else:
             potential_diag.update({
@@ -1068,9 +1100,55 @@ def run_pair_conditioned_tournament(
         residual_beta_uncertainty = float(
             dual_cfg.get("residual_beta_uncertainty", tc.get("beta_uncertainty", 0.0))
         )
+
+        # V64.3.14 EAF-OCFI: calibrate the *intervention* rather than changing the
+        # learned frontier value.  A challenger is allowed to replace the frozen
+        # selected-local/DARM anchor only when a split-conformal lower bound on
+        # its predicted margin stays positive.  The calibration scale is derived
+        # from the already-computed per-atom EAF attribution energy, so this adds
+        # no evidence query and preserves the B=16/M=24 interface contract.
+        frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+        ocfi_cfg = frontier_runtime_cfg.get("one_sided_intervention", {}) or {}
+        ocfi_enabled = bool(ocfi_cfg.get("enabled", False))
+        ocfi_requires_frontier = bool(ocfi_cfg.get("require_frontier_active", True))
+        frontier_is_active = bool(float(potential_diag.get("decisive_frontier_value_active", 0.0)) >= 0.5)
+        ocfi_mode = str(ocfi_cfg.get("normalization", "attribution")).strip().lower()
+        ocfi_floor = max(float(ocfi_cfg.get("attribution_scale_floor", 1.0e-3)), 1.0e-9)
+        proposed_attr_scale = 0.0
+        if (
+            frontier_attribution_scale_star is not None
+            and proposed_action != anchor_action
+            and 0 <= proposed_action < len(frontier_attribution_scale_star)
+        ):
+            proposed_attr_scale = float(frontier_attribution_scale_star[proposed_action])
+        if ocfi_mode in {"none", "constant", "unnormalized"}:
+            ocfi_scale = 1.0
+        else:
+            ocfi_scale = max(proposed_attr_scale, ocfi_floor)
+        ocfi_quantile_raw = ocfi_cfg.get("calibration_quantile", None)
+        if ocfi_enabled:
+            if ocfi_quantile_raw is None or not np.isfinite(float(ocfi_quantile_raw)):
+                raise ValueError(
+                    "runtime.decisive_frontier_value.one_sided_intervention is enabled but "
+                    "calibration_quantile is missing/non-finite; run the V64.3.14 split-calibration tool first"
+                )
+            ocfi_quantile = max(float(ocfi_quantile_raw), 0.0)
+        else:
+            ocfi_quantile = 0.0
+        # Pair-full/local-pair-full diagnostics intentionally omit the EAF head.
+        # OCFI must therefore be an exact no-op on those frozen ceilings rather
+        # than blocking their legacy DBR intervention simply because the frontier
+        # is absent by design.
+        ocfi_applies = bool(ocfi_enabled and frontier_is_active)
+        ocfi_additive_radius = max(float(ocfi_cfg.get("additive_radius", 0.0)), 0.0)
+        ocfi_radius = (ocfi_quantile * ocfi_scale + ocfi_additive_radius) if ocfi_applies else 0.0
         if proposed_action != anchor_action:
             robust_margin -= residual_beta_uncertainty * residual_sigma
             robust_margin -= residual_epsilon
+            robust_margin -= ocfi_radius
+        ocfi_frontier_pass = True
+        if ocfi_applies and ocfi_requires_frontier:
+            ocfi_frontier_pass = frontier_is_active
         score_gain = float(scores[proposed_action] - scores[anchor_action]) if proposed_action != anchor_action else float("inf")
         flip_margin = float(guard_cfg.get("flip_margin", runtime_cfg.get("pair_residual_trust", {}).get("flip_margin", 0.05)))
         score_margin = float(guard_cfg.get("score_margin", 0.0))
@@ -1090,7 +1168,9 @@ def run_pair_conditioned_tournament(
             (not require_evidence_certificate)
             or (np.isfinite(evidence_certificate_value) and evidence_certificate_value + 1.0e-9 >= min_evidence_certificate)
         )
-        margin_certificate_pass = robust_margin >= flip_margin and score_gain >= score_margin
+        margin_certificate_pass = (
+            robust_margin >= flip_margin and score_gain >= score_margin and ocfi_frontier_pass
+        )
         allow_flip = proposed_action == anchor_action or (margin_certificate_pass and evidence_certificate_pass)
         if not allow_flip:
             action = int(anchor_action)
@@ -1107,6 +1187,18 @@ def run_pair_conditioned_tournament(
             "pair_action_anchor_residual_sigma": float(residual_sigma),
             "pair_action_anchor_residual_beta_uncertainty": float(residual_beta_uncertainty),
             "pair_action_anchor_residual_epsilon_cal": float(residual_epsilon),
+            "decisive_frontier_ocfi_enabled": float(ocfi_enabled),
+            "decisive_frontier_ocfi_active": float(ocfi_applies),
+            "decisive_frontier_ocfi_frontier_active": float(frontier_is_active),
+            "decisive_frontier_ocfi_frontier_requirement_pass": float(ocfi_frontier_pass),
+            "decisive_frontier_ocfi_normalization_attribution": float(ocfi_mode not in {"none", "constant", "unnormalized"}),
+            "decisive_frontier_ocfi_proposed_attribution_scale": float(proposed_attr_scale),
+            "decisive_frontier_ocfi_effective_scale": float(ocfi_scale),
+            "decisive_frontier_ocfi_attribution_scale_floor": float(ocfi_floor),
+            "decisive_frontier_ocfi_calibration_quantile": float(ocfi_quantile),
+            "decisive_frontier_ocfi_calibration_radius": float(ocfi_radius),
+            "decisive_frontier_ocfi_frontier_only_lcb": float(raw_margin - ocfi_radius) if proposed_action != anchor_action else float("inf"),
+            "decisive_frontier_ocfi_one_sided_lcb": float(robust_margin),
             "pair_action_anchor_robust_margin": float(robust_margin),
             "pair_action_anchor_score_gain": float(score_gain),
             "pair_action_anchor_guard_blocked_flip": bool(proposed_action != anchor_action and not allow_flip),
