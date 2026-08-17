@@ -1209,6 +1209,8 @@ def _run_validation_open_loop(
                     or key.startswith("set_conditioned_residual_")
                     or key.startswith("decisive_frontier_value_")
                     or key.startswith("decisive_frontier_ocfi_")
+                    or key.startswith("decisive_frontier_eair_")
+                    or key.startswith("decisive_frontier_raer_")
                     or key.startswith("base_prior_")
                     or key.startswith("learned_base_")
                     or key.startswith("structural_residual_")

@@ -1,0 +1,15 @@
+# V64.3.16 EAF-RAER — next execution commands
+# Run from the repository root.  This is a SCREEN only; it deliberately stops before test/closed-loop.
+
+# Optional overrides if your paths differ:
+# export BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+# export BDSE_VAL_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2
+# export EAF_V64_3_13_ROOT=outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1
+# export GPU0=0
+# export GPU1=1
+
+bash RUN_V64_3_16_EAF_RAER_SCREEN_2GPU.sh
+
+# Only if the launcher prints PASS SCREEN / full_promotion=true:
+# Do NOT run test or closed-loop yet.  Return the complete outputs_v64_3_16_eaf_raer_screen_2gpu_v1 directory/zip for attribution.
+# The next allowed stage is an independently frozen full-val reproduction designed after reviewing that screen.

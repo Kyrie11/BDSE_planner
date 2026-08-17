@@ -847,6 +847,202 @@ def _decisive_frontier_value_star_residual_numpy(
     }
 
 
+
+
+_RAER_FEATURE_NAMES = [
+    "raw_margin",
+    "attribution_scale",
+    "frontier_residual_rms",
+    "frontier_residual_abs_mean",
+    "frontier_attribution_scale_rms",
+    "frontier_attribution_scale_mean",
+    "evidence_certificate_fraction",
+    "valid_action_count_norm",
+    "margin_over_attribution",
+    "attribution_over_frontier_rms",
+    "raw_margin_z",
+    "attribution_z",
+    "raw_margin_rank",
+    "attribution_rank",
+    "margin_below_raw_top",
+]
+
+
+def _rank01(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Deterministic [0,1] ascending rank among masked entries (ties average-free)."""
+    x = np.asarray(values, dtype=np.float64).reshape(-1)
+    m = np.asarray(mask, dtype=bool).reshape(-1)[: x.shape[0]]
+    out = np.zeros_like(x, dtype=np.float64)
+    idx = np.flatnonzero(m)
+    if idx.size <= 1:
+        if idx.size == 1:
+            out[idx[0]] = 1.0
+        return out
+    order = idx[np.argsort(x[idx], kind="mergesort")]
+    out[order] = np.arange(order.size, dtype=np.float64) / float(order.size - 1)
+    return out
+
+
+def _decisive_frontier_raer_features(
+    margin_star: np.ndarray,
+    attribution_star: np.ndarray | None,
+    valid_mask: np.ndarray,
+    anchor_action: int,
+    potential_diag: dict[str, Any],
+    evidence_certificate_fraction: float | None,
+    cfg: dict[str, Any],
+) -> tuple[np.ndarray, list[str]]:
+    """Runtime-only per-challenger features for V64.3.16 EAF-RAER.
+
+    Every feature is computed from the already-selected B evidence, frozen EAF
+    frontier value/attribution, the unchanged evidence certificate, and the
+    candidate validity mask.  No teacher/future label is consumed here.
+    """
+    margins = np.asarray(margin_star, dtype=np.float64).reshape(-1)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)[: margins.shape[0]]
+    K = int(margins.shape[0])
+    a = int(anchor_action)
+    challengers = valid.copy()
+    if 0 <= a < K:
+        challengers[a] = False
+    attr = np.zeros((K,), dtype=np.float64)
+    if attribution_star is not None:
+        tmp = np.asarray(attribution_star, dtype=np.float64).reshape(-1)
+        attr[: min(K, tmp.size)] = tmp[: min(K, tmp.size)]
+    attrs = attr[challengers]
+    vals = margins[challengers]
+    margin_mean = float(np.mean(vals)) if vals.size else 0.0
+    margin_std = max(float(np.std(vals)) if vals.size else 0.0, 1.0e-6)
+    attr_mean_local = float(np.mean(attrs)) if attrs.size else 0.0
+    attr_std = max(float(np.std(attrs)) if attrs.size else 0.0, 1.0e-6)
+    top_margin = float(np.max(vals)) if vals.size else 0.0
+    frontier_residual_rms = float(potential_diag.get("decisive_frontier_value_residual_rms", 0.0))
+    frontier_residual_abs_mean = float(potential_diag.get("decisive_frontier_value_residual_abs_mean", 0.0))
+    frontier_attr_rms = float(potential_diag.get("decisive_frontier_value_attribution_scale_rms", 0.0))
+    frontier_attr_mean = float(potential_diag.get("decisive_frontier_value_attribution_scale_mean", 0.0))
+    cert = float(evidence_certificate_fraction) if evidence_certificate_fraction is not None and np.isfinite(float(evidence_certificate_fraction)) else 0.0
+    raer_cfg = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("reliability_aware_extremal_reranking", {}) or {})
+    attr_eps = max(float(raer_cfg.get("ratio_floor", 1.0e-3)), 1.0e-9)
+    valid_norm = float(valid.sum()) / max(float(raer_cfg.get("valid_action_normalizer", 32.0)), 1.0)
+    margin_rank = _rank01(margins, challengers)
+    attr_rank = _rank01(attr, challengers)
+    mat = np.zeros((K, len(_RAER_FEATURE_NAMES)), dtype=np.float64)
+    for b in np.flatnonzero(challengers).tolist():
+        m = float(margins[b])
+        at = float(attr[b])
+        vals_b = [
+            m,
+            at,
+            frontier_residual_rms,
+            frontier_residual_abs_mean,
+            frontier_attr_rms,
+            frontier_attr_mean,
+            cert,
+            valid_norm,
+            m / max(at, attr_eps),
+            at / max(frontier_attr_rms, attr_eps),
+            (m - margin_mean) / margin_std,
+            (at - attr_mean_local) / attr_std,
+            float(margin_rank[b]),
+            float(attr_rank[b]),
+            top_margin - m,
+        ]
+        mat[b] = np.asarray(vals_b, dtype=np.float64)
+    return mat, list(_RAER_FEATURE_NAMES)
+
+
+def _apply_decisive_frontier_raer(
+    raw_action: int,
+    anchor_action: int,
+    margin_matrix: np.ndarray,
+    attribution_star: np.ndarray | None,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    potential_diag: dict[str, Any],
+    evidence_certificate_fraction: float | None,
+    cfg: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """Reliability-aware extremal re-ranking before the one-sided flip guard."""
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    frontier_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+    raer_cfg = frontier_cfg.get("reliability_aware_extremal_reranking", {}) or {}
+    enabled = bool(raer_cfg.get("enabled", False))
+    instrument = bool(raer_cfg.get("instrument_features", True))
+    frontier_active = bool(float(potential_diag.get("decisive_frontier_value_active", 0.0)) >= 0.5)
+    M = np.asarray(margin_matrix, dtype=np.float64)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    a = int(anchor_action)
+    margin_star = M[:, a].copy() if 0 <= a < M.shape[1] else np.zeros((len(valid),), dtype=np.float64)
+    feat, names = _decisive_frontier_raer_features(
+        margin_star, attribution_star, valid, a, potential_diag, evidence_certificate_fraction, cfg
+    )
+    probs = np.ones((len(valid),), dtype=np.float64)
+    utility = np.maximum(margin_star, 0.0)
+    selected = int(raw_action)
+    applies = bool(enabled and frontier_active and 0 <= a < len(valid))
+    if applies:
+        cfg_names = list(raer_cfg.get("feature_names", []))
+        mean = np.asarray(raer_cfg.get("feature_mean", []), dtype=np.float64).reshape(-1)
+        std = np.asarray(raer_cfg.get("feature_std", []), dtype=np.float64).reshape(-1)
+        weights = np.asarray(raer_cfg.get("weights", []), dtype=np.float64).reshape(-1)
+        if cfg_names != names or len(names) != len(mean) or len(names) != len(std) or len(names) != len(weights):
+            raise ValueError(
+                "EAF-RAER enabled but feature schema/mean/std/weights are inconsistent; "
+                "fit the V64.3.16 train-only readout before enabling re-ranking"
+            )
+        z = (feat - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
+        logits = z @ weights + float(raer_cfg.get("bias", 0.0))
+        probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -40.0, 40.0)))
+        utility = probs * np.maximum(margin_star, 0.0)
+        eligible = valid.copy()
+        eligible[a] = False
+        # Preserve the pre-existing structural safety contract: if any unflagged
+        # valid action exists, RAER cannot resurrect a safety-flagged challenger.
+        flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)[: len(valid)]
+        # Include the anchor in the safety-existence test.  If the anchor is the
+        # only unflagged action, RAER must abstain rather than resurrect a flagged
+        # challenger after the legacy safety guard has already protected it.
+        safe_exists = bool(np.any(valid & ~flags))
+        if safe_exists:
+            eligible &= ~flags
+        min_prob = float(raer_cfg.get("min_probability", 0.5))
+        if bool(raer_cfg.get("require_positive_raw_margin", True)):
+            eligible &= margin_star > 0.0
+        eligible &= probs >= min_prob
+        eligible &= np.isfinite(utility)
+        if bool(np.any(eligible)):
+            cand = np.flatnonzero(eligible)
+            selected = int(cand[int(np.argmax(utility[cand]))])
+        else:
+            selected = a
+    selected_prob = float(probs[selected]) if 0 <= selected < len(probs) else 1.0
+    raw_prob = float(probs[int(raw_action)]) if 0 <= int(raw_action) < len(probs) else 1.0
+    diag: dict[str, Any] = {
+        "decisive_frontier_raer_enabled": float(enabled),
+        "decisive_frontier_raer_instrument_features": float(instrument),
+        "decisive_frontier_raer_active": float(applies),
+        "decisive_frontier_raer_raw_top_action": float(raw_action),
+        "decisive_frontier_raer_selected_action": float(selected),
+        "decisive_frontier_raer_proposal_changed": float(int(selected) != int(raw_action)),
+        "decisive_frontier_raer_selected_probability": selected_prob,
+        "decisive_frontier_raer_raw_top_probability": raw_prob,
+        "decisive_frontier_raer_selected_utility": float(utility[selected]) if 0 <= selected < len(utility) else 0.0,
+        "decisive_frontier_raer_min_probability": float(raer_cfg.get("min_probability", 0.5)),
+        # Private arrays are exported only when explicitly requested by the
+        # train-split edge instrumentation path; scalar metric aggregation ignores them.
+        "_decisive_frontier_raer_anchor_action": int(a),
+        "_decisive_frontier_raer_raw_margin_star": np.asarray(margin_star, dtype=np.float32),
+        "_decisive_frontier_raer_attribution_scale_star": np.zeros_like(margin_star, dtype=np.float32)
+            if attribution_star is None else np.asarray(attribution_star, dtype=np.float32).reshape(-1)[: len(margin_star)],
+        "_decisive_frontier_raer_raw_top_action": int(raw_action),
+        "_decisive_frontier_raer_feature_matrix": np.asarray(feat, dtype=np.float32),
+        "_decisive_frontier_raer_feature_names": names,
+        "_decisive_frontier_raer_probability_star": np.asarray(probs, dtype=np.float32),
+        "_decisive_frontier_raer_utility_star": np.asarray(utility, dtype=np.float32),
+    }
+    return selected, diag
+
+
 def run_pair_conditioned_tournament(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -1082,6 +1278,19 @@ def run_pair_conditioned_tournament(
             candidate_trajectories=candidate_trajectories,
             margins=anchor_M,
         )
+        raw_eaf_action = int(action)
+        raer_action, raer_diag = _apply_decisive_frontier_raer(
+            raw_eaf_action,
+            anchor_action,
+            M_B,
+            frontier_attribution_scale_star,
+            valid_mask,
+            runtime_safety_flags,
+            potential_diag,
+            evidence_certificate_fraction,
+            cfg,
+        )
+        action = int(raer_action)
         proposed_action = int(action)
         raw_margin = float(M_B[proposed_action, anchor_action]) if proposed_action != anchor_action else float("inf")
         residual_sigma = (
@@ -1237,8 +1446,12 @@ def run_pair_conditioned_tournament(
             # guard.  Keeping it immutable prevents structural tie-breaking from
             # being misreported as a learned residual intervention.
             "pair_action_anchor_raw_anchor_action": int(anchor_action),
+            # Keep the frozen V64.3.13 EAF argmax separate from the V64.3.16
+            # pre-guard re-ranked proposal so causal comparisons remain auditable.
+            "pair_action_anchor_raw_eaf_proposed_action": int(raw_eaf_action),
             "pair_action_anchor_raw_proposed_action": int(proposed_action),
             "pair_action_anchor_proposed_action": int(proposed_action),
+            **raer_diag,
             "pair_action_anchor_raw_margin": float(raw_margin),
             "pair_action_anchor_residual_sigma": float(residual_sigma),
             "pair_action_anchor_residual_beta_uncertainty": float(residual_beta_uncertainty),

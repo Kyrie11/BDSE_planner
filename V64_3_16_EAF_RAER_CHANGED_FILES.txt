@@ -1,0 +1,15 @@
++ ALGORITHM_CHANGELOG.md
+M ALGORITHM_UPDATE_LOG.md
++ NEXT_COMMANDS_V64_3_16_EAF_RAER.txt
++ RUN_V64_3_16_EAF_RAER_SCREEN_2GPU.sh
++ V64_3_15_EAF_EAIR_POSTMORTEM_AND_V64_3_16_EAF_RAER.md
++ V64_3_16_ENGINEERING_VALIDATION.txt
++ bdse/configs/v64_3_16_design_exclude_v64_3_15_discovery_tokens.txt
++ bdse/configs/v64_3_16_eaf_raer_raw.yaml
+M bdse/experiments/evaluate_open_loop.py
+M bdse/experiments/train.py
+M bdse/planner/tournament.py
++ bdse/tests/test_v64_3_16_eaf_raer.py
++ bdse/tools/check_v64_3_16_eaf_raer_contract.py
++ bdse/tools/check_v64_3_16_eaf_raer_screen.py
++ bdse/tools/fit_v64_3_16_eaf_raer.py

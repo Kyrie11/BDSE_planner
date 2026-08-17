@@ -668,9 +668,13 @@ def main() -> None:
     parser.add_argument("--preprocessed-dir", type=str, default=None)
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-scenarios", type=int, default=None)
+    parser.add_argument("--max-scenarios-strategy", choices=["first", "uniform", "uniform_blocks"], default="first", help="Deterministic cache subsampling strategy for preprocessed data before any token-filter replay.")
+    parser.add_argument("--max-scenarios-block-size", type=int, default=32)
     parser.add_argument("--output", type=str, default="outputs/open_loop_bdse_metrics.json")
     parser.add_argument("--per-sample-output", type=str, default=None, help="Optional JSONL with one diagnostic row per sample for failure slicing.")
-    parser.add_argument("--scenario-token-file", type=str, default=None, help="Optional newline-delimited scenario tokens; only matching samples are evaluated.")
+    parser.add_argument("--scenario-token-file", type=str, default=None, help="Optional newline-delimited scenario tokens; only matching samples are evaluated. When set, --max-scenarios caps matched tokens rather than truncating the cache before filtering.")
+    parser.add_argument("--require-all-scenario-tokens", action="store_true", help="Fail if any requested scenario token is not evaluated (after the optional matched-token cap).")
+    parser.add_argument("--frontier-edge-output", type=str, default=None, help="Optional JSONL with one runtime-visible decisive-frontier edge row per valid challenger; teacher margin is label-only and used only by offline train-split readout fitting.")
     parser.add_argument("--disable-dense-diagnostic", action="store_true", help="Skip diagnostic-only dense full-interface scoring.")
     parser.add_argument(
         "--device",
@@ -687,21 +691,37 @@ def main() -> None:
     core = BDSEPlannerCore(model=model, cfg=cfg)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
-    if args.preprocessed_dir:
-        dataset = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios)
-    else:
-        if len(args.split) != 1:
-            raise ValueError("On-the-fly open-loop evaluation supports one split; use --preprocessed-dir for multiple split folders.")
-        dataset = NuPlanBDSEDataset(cfg, split=args.split[0], max_files=args.max_files, max_scenarios=args.max_scenarios, use_devkit=True)
-    metric_means = OnlineMetricMean()
     scenario_token_filter: set[str] | None = None
     if args.scenario_token_file:
         token_path = Path(args.scenario_token_file)
         scenario_token_filter = {x.strip() for x in token_path.read_text(encoding="utf-8").splitlines() if x.strip()}
         if not scenario_token_filter:
             raise ValueError(f"scenario token filter is empty: {token_path}")
+    # IMPORTANT: a scenario-token replay must filter the full requested split first.
+    # The previous V64.3.15 path truncated the cache to the first --max-scenarios
+    # entries before applying the token filter, silently dropping frozen fresh-val
+    # tokens that lived later in cache order.  With a token filter, max_scenarios
+    # is instead applied to matched tokens in the loop below.
+    dataset_cap = None if scenario_token_filter is not None else args.max_scenarios
+    if args.preprocessed_dir:
+        dataset = PreprocessedBDSEDataset(
+            args.preprocessed_dir, split=args.split, max_scenarios=dataset_cap,
+            max_scenarios_strategy=args.max_scenarios_strategy,
+            max_scenarios_block_size=args.max_scenarios_block_size,
+        )
+    else:
+        if len(args.split) != 1:
+            raise ValueError("On-the-fly open-loop evaluation supports one split; use --preprocessed-dir for multiple split folders.")
+        dataset = NuPlanBDSEDataset(cfg, split=args.split[0], max_files=args.max_files, max_scenarios=dataset_cap, use_devkit=True)
+    metric_means = OnlineMetricMean()
     evaluated_scenario_count = 0
+    evaluated_tokens: set[str] = set()
     per_sample_file = None
+    frontier_edge_file = None
+    if args.frontier_edge_output:
+        frontier_edge_path = Path(args.frontier_edge_output)
+        frontier_edge_path.parent.mkdir(parents=True, exist_ok=True)
+        frontier_edge_file = frontier_edge_path.open("w", encoding="utf-8", buffering=1024 * 1024)
     if args.per_sample_output:
         per_sample_path = Path(args.per_sample_output)
         per_sample_path.parent.mkdir(parents=True, exist_ok=True)
@@ -711,7 +731,10 @@ def main() -> None:
         sample_token = str(getattr(sample, "scenario_token", ""))
         if scenario_token_filter is not None and sample_token not in scenario_token_filter:
             continue
+        if scenario_token_filter is not None and args.max_scenarios is not None and evaluated_scenario_count >= int(args.max_scenarios):
+            break
         evaluated_scenario_count += 1
+        evaluated_tokens.add(sample_token)
         # Keep the sparse certificate stage and the optional dense diagnostic in
         # one model cache scope.  The dense path can then reuse the identical scene,
         # action and evidence encodings without changing any planner output.
@@ -751,6 +774,8 @@ def main() -> None:
                 or key.startswith("set_conditioned_residual_")
                 or key.startswith("decisive_frontier_value_")
                 or key.startswith("decisive_frontier_ocfi_")
+                or key.startswith("decisive_frontier_eair_")
+                or key.startswith("decisive_frontier_raer_")
                 or key.startswith("decisive_anchor_margin_")
                 or key.startswith("base_prior_")
                 or key.startswith("learned_base_")
@@ -944,6 +969,48 @@ def main() -> None:
             diag.values["teacher_action_match_not_fully_certified"] = float(budget_correct) if not fully_certified else float("nan")
             diag.details["pair_full_action"] = int(pair_full_action)
             diag.details["local_pair_full_action"] = int(local_pair_full_action)
+        if frontier_edge_file is not None:
+            edge_anchor = int(tour_diag.get("_decisive_frontier_raer_anchor_action", -1))
+            edge_margins = np.asarray(tour_diag.get("_decisive_frontier_raer_raw_margin_star", []), dtype=np.float64).reshape(-1)
+            edge_attr = np.asarray(tour_diag.get("_decisive_frontier_raer_attribution_scale_star", []), dtype=np.float64).reshape(-1)
+            edge_valid = np.asarray(sample.candidates.valid_mask, dtype=bool).reshape(-1)
+            raw_top = int(tour_diag.get("_decisive_frontier_raer_raw_top_action", -1))
+            raer_selected = int(tour_diag.get("decisive_frontier_raer_selected_action", raw_top))
+            edge_features = tour_diag.get("_decisive_frontier_raer_feature_matrix", None)
+            edge_probs = np.asarray(tour_diag.get("_decisive_frontier_raer_probability_star", []), dtype=np.float64).reshape(-1)
+            edge_utility = np.asarray(tour_diag.get("_decisive_frontier_raer_utility_star", []), dtype=np.float64).reshape(-1)
+            feature_names = list(tour_diag.get("_decisive_frontier_raer_feature_names", []))
+            if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
+                normalized = bool(tour_diag.get("normalized_margins", cfg.get("model", {}).get("pair_margin_normalized", False)))
+                mscale = max(float(tour_diag.get("margin_scale", pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 1.0)))) if normalized else 1.0, 1.0e-6)
+                mat = None if edge_features is None else np.asarray(edge_features, dtype=np.float64)
+                for challenger in np.flatnonzero(edge_valid).tolist():
+                    challenger = int(challenger)
+                    if challenger == edge_anchor:
+                        continue
+                    if not (0 <= challenger < len(sample.teacher.J_T)):
+                        continue
+                    teacher_margin = float(sample.teacher.J_T[edge_anchor] - sample.teacher.J_T[challenger]) / mscale
+                    row = {
+                        "scenario_token": sample_token,
+                        "timestamp_us": int(getattr(sample, "timestamp_us", 0) or 0),
+                        "anchor_action": edge_anchor,
+                        "challenger_action": challenger,
+                        "raw_top_action": raw_top,
+                        "raer_selected_action": raer_selected,
+                        "is_raw_top": float(challenger == raw_top),
+                        "is_raer_selected": float(challenger == raer_selected),
+                        "teacher_better": float(teacher_margin > 0.0),
+                        "teacher_margin": teacher_margin,
+                        "raw_margin": float(edge_margins[challenger]),
+                        "attribution_scale": float(edge_attr[challenger]),
+                        "raer_probability": float(edge_probs[challenger]) if edge_probs.size == edge_valid.size else float("nan"),
+                        "raer_utility": float(edge_utility[challenger]) if edge_utility.size == edge_valid.size else float("nan"),
+                    }
+                    if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):
+                        for j, name in enumerate(feature_names):
+                            row[f"feature_{name}"] = float(mat[challenger, j])
+                    frontier_edge_file.write(json.dumps(row, sort_keys=True) + "\n")
         metric_means.update(diag)
         if args.per_sample_output:
             row = {
@@ -966,6 +1033,19 @@ def main() -> None:
             per_sample_file.write(json.dumps(row, sort_keys=True) + "\n")
     if per_sample_file is not None:
         per_sample_file.close()
+    if frontier_edge_file is not None:
+        frontier_edge_file.close()
+    expected_token_count = 0
+    if scenario_token_filter is not None:
+        expected_token_count = len(scenario_token_filter)
+        if args.max_scenarios is not None:
+            expected_token_count = min(expected_token_count, max(0, int(args.max_scenarios)))
+        if args.require_all_scenario_tokens and len(evaluated_tokens) != expected_token_count:
+            missing = sorted(scenario_token_filter - evaluated_tokens)[:20]
+            raise RuntimeError(
+                f"scenario-token replay incomplete: evaluated {len(evaluated_tokens)}/{expected_token_count}; "
+                f"first missing tokens={missing}"
+            )
     summary = metric_means.result()
     summary["device"] = str(device)
     summary["evaluated_scenario_count"] = int(evaluated_scenario_count)
