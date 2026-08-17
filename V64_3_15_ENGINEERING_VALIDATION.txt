@@ -1,0 +1,79 @@
+V64.3.15 EAF-EAIR ENGINEERING VALIDATION
+========================================
+Date: 2026-08-14
+
+Scope
+-----
+- V64.3.14 OCFI postmortem and top-challenger reliability audit
+- frozen V64.3.13 EAF value integration
+- EAIR runtime feature instrumentation + reliability gate
+- TRAIN-only reliability fitter
+- fresh-validation design exclusion / paired screen launcher
+- config/screen contracts
+- regression against V64.3.6--V64.3.14
+
+Static checks
+-------------
+PASS  python -m compileall -q bdse
+PASS  bash -n for every root *.sh launcher
+PASS  v64_3_15_eaf_eair_raw config contract
+PASS  smoke-fitted EAIR config contract
+PASS  V64.3.14 design exclusion file: 500 unique scenario tokens
+
+V64.3.15 focused unit tests
+---------------------------
+4/4 PASS
+- same frozen EAF margins with EAIR allow/block decisions
+- exact no-op when EAF is absent from pair-full/local-pair-full ceiling
+- runtime feature instrumentation contract
+- synthetic separable TRAIN-only fitter capacity
+
+V64.3.6--V64.3.15 targeted regression
+--------------------------------------
+62/62 PASS, 6 warnings
+Warnings are the existing PyTorch Transformer nested-tensor / norm_first warning class.
+
+Full repository regression
+--------------------------
+The complete 87-file repository suite exceeds the environment's single-command wall-clock limit,
+so it was executed as three fixed alphabetical file partitions covering every test file exactly once:
+
+Partition 1:  85/85 PASS,  9 warnings
+Partition 2: 109/109 PASS,  2 warnings
+Partition 3: 156/156 PASS, 25 warnings
+TOTAL:       350/350 PASS, 36 warnings
+
+No test was omitted or duplicated across the three partitions. The 36 warnings are the same existing
+PyTorch Transformer nested-tensor warning class seen in previous versions; no new warning class or
+engineering failure was introduced.
+
+Fitter smoke test on the uploaded V64.3.14 raw replay
+------------------------------------------------------
+This is an engineering smoke test only, NOT a V64.3.15 scientific result:
+- proposal edges: 478
+- positive fraction: 0.560669
+- deterministic internal holdout edges: 94
+- internal holdout AUC: 0.756373
+- accuracy at fixed threshold 0.5: 0.670213
+- fitted config contract: PASS
+
+Causal/interface invariants checked in code/tests
+--------------------------------------------------
+- planner evidence budget remains B=16
+- selector min_selected_atoms remains 16
+- proposal Top-M remains M=24
+- OCFI is disabled in V64.3.15
+- acquisition branch remains terminally frozen after V64.3.12
+- DARM/DBR and frozen V64.3.13 EAF value are not retrained by V64.3.15
+- EAIR adds no evidence query and cannot create a new challenger
+- probability threshold is fixed at 0.5 and is not validation-tuned
+- legacy evidence-certificate requirement is not relaxed
+- EAIR is an exact no-op when the EAF frontier is intentionally absent from pair-full/local-pair-full
+- all 500 V64.3.14 design scenes are excluded from the V64.3.15 promotion screen
+
+Environment limitation
+----------------------
+The local sandbox does not contain the user's /data0 nuPlan train/val caches or the original selected
+V64.3.13 .pt checkpoint. Therefore the new V64.3.15 GPU screen itself is intentionally not fabricated
+here. The delivered launcher performs the TRAIN-only fit and fresh-val paired screen on the user's server
+and hard-STOPs before full/test/closed-loop if promotion criteria fail.

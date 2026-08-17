@@ -1168,8 +1168,64 @@ def run_pair_conditioned_tournament(
             (not require_evidence_certificate)
             or (np.isfinite(evidence_certificate_value) and evidence_certificate_value + 1.0e-9 >= min_evidence_certificate)
         )
+
+        # V64.3.15 EAF-EAIR: the V64.3.14 screen showed that a single global
+        # over-prediction radius suppresses both beneficial and harmful EAF
+        # interventions.  Treat attribution magnitude as *decision support*, not
+        # as an uncertainty scale, and learn a tiny standardized logistic readout
+        # that predicts whether the raw EAF challenger is teacher-better than the
+        # frozen DARM anchor.  The readout consumes only runtime-available EAF
+        # statistics and changes no evidence query, acquisition score, B/M budget,
+        # pair-full diagnostic, or EAF value itself.
+        eair_cfg = frontier_runtime_cfg.get("learned_intervention_reliability", {}) or {}
+        eair_enabled = bool(eair_cfg.get("enabled", False))
+        eair_instrument = bool(eair_cfg.get("instrument_features", True))
+        valid_count_eair = float(np.asarray(valid_mask, dtype=bool).sum())
+        frontier_residual_rms = float(potential_diag.get("decisive_frontier_value_residual_rms", 0.0))
+        frontier_residual_abs_mean = float(potential_diag.get("decisive_frontier_value_residual_abs_mean", 0.0))
+        frontier_attr_rms = float(potential_diag.get("decisive_frontier_value_attribution_scale_rms", 0.0))
+        frontier_attr_mean = float(potential_diag.get("decisive_frontier_value_attribution_scale_mean", 0.0))
+        attr_eps = max(float(eair_cfg.get("ratio_floor", 1.0e-3)), 1.0e-9)
+        eair_features = {
+            "raw_margin": float(raw_margin if np.isfinite(raw_margin) else 0.0),
+            "proposed_attribution_scale": float(proposed_attr_scale),
+            "frontier_residual_rms": frontier_residual_rms,
+            "frontier_residual_abs_mean": frontier_residual_abs_mean,
+            "frontier_attribution_scale_rms": frontier_attr_rms,
+            "frontier_attribution_scale_mean": frontier_attr_mean,
+            "evidence_certificate_fraction": float(evidence_certificate_value) if np.isfinite(evidence_certificate_value) else 0.0,
+            "valid_action_count_norm": valid_count_eair / max(float(eair_cfg.get("valid_action_normalizer", 32.0)), 1.0),
+            "margin_over_attribution": float(raw_margin if np.isfinite(raw_margin) else 0.0) / max(float(proposed_attr_scale), attr_eps),
+            "proposed_over_frontier_attribution": float(proposed_attr_scale) / max(frontier_attr_rms, attr_eps),
+        }
+        eair_prob = 1.0
+        eair_logit = float("inf")
+        eair_pass = True
+        eair_applies = bool(eair_enabled and frontier_is_active)
+        if eair_applies and proposed_action != anchor_action:
+            names = list(eair_cfg.get("feature_names", []))
+            mean = np.asarray(eair_cfg.get("feature_mean", []), dtype=np.float64).reshape(-1)
+            std = np.asarray(eair_cfg.get("feature_std", []), dtype=np.float64).reshape(-1)
+            weights = np.asarray(eair_cfg.get("weights", []), dtype=np.float64).reshape(-1)
+            if not names or len(names) != len(mean) or len(names) != len(std) or len(names) != len(weights):
+                raise ValueError("EAF-EAIR enabled but feature_names/mean/std/weights have inconsistent lengths")
+            try:
+                x = np.asarray([float(eair_features[name]) for name in names], dtype=np.float64)
+            except KeyError as exc:
+                raise ValueError(f"EAF-EAIR unknown runtime feature: {exc.args[0]}") from exc
+            if not np.all(np.isfinite(x)):
+                raise ValueError("EAF-EAIR runtime feature vector contains non-finite values")
+            z = (x - mean) / np.maximum(std, 1.0e-6)
+            eair_logit = float(np.dot(weights, z) + float(eair_cfg.get("bias", 0.0)))
+            eair_prob = float(1.0 / (1.0 + np.exp(-np.clip(eair_logit, -40.0, 40.0))))
+            eair_pass = bool(eair_prob >= float(eair_cfg.get("min_probability", 0.5)))
+        # Pair-full/local-pair-full intentionally omit EAF.  Like OCFI, EAIR
+        # must be an exact no-op when the frontier is absent by design.
+        eair_frontier_pass = True if not eair_applies else ((not bool(eair_cfg.get("require_frontier_active", True))) or frontier_is_active)
+        eair_pass = bool(eair_pass and eair_frontier_pass)
+
         margin_certificate_pass = (
-            robust_margin >= flip_margin and score_gain >= score_margin and ocfi_frontier_pass
+            robust_margin >= flip_margin and score_gain >= score_margin and ocfi_frontier_pass and eair_pass
         )
         allow_flip = proposed_action == anchor_action or (margin_certificate_pass and evidence_certificate_pass)
         if not allow_flip:
@@ -1199,6 +1255,23 @@ def run_pair_conditioned_tournament(
             "decisive_frontier_ocfi_calibration_radius": float(ocfi_radius),
             "decisive_frontier_ocfi_frontier_only_lcb": float(raw_margin - ocfi_radius) if proposed_action != anchor_action else float("inf"),
             "decisive_frontier_ocfi_one_sided_lcb": float(robust_margin),
+            "decisive_frontier_eair_enabled": float(eair_enabled),
+            "decisive_frontier_eair_instrument_features": float(eair_instrument),
+            "decisive_frontier_eair_active": float(eair_applies),
+            "decisive_frontier_eair_probability": float(eair_prob),
+            "decisive_frontier_eair_logit": float(eair_logit) if np.isfinite(eair_logit) else 40.0,
+            "decisive_frontier_eair_pass": float(eair_pass),
+            "decisive_frontier_eair_min_probability": float(eair_cfg.get("min_probability", 0.5)),
+            "decisive_frontier_eair_feature_raw_margin": float(eair_features["raw_margin"]),
+            "decisive_frontier_eair_feature_proposed_attribution_scale": float(eair_features["proposed_attribution_scale"]),
+            "decisive_frontier_eair_feature_frontier_residual_rms": float(eair_features["frontier_residual_rms"]),
+            "decisive_frontier_eair_feature_frontier_residual_abs_mean": float(eair_features["frontier_residual_abs_mean"]),
+            "decisive_frontier_eair_feature_frontier_attribution_scale_rms": float(eair_features["frontier_attribution_scale_rms"]),
+            "decisive_frontier_eair_feature_frontier_attribution_scale_mean": float(eair_features["frontier_attribution_scale_mean"]),
+            "decisive_frontier_eair_feature_evidence_certificate_fraction": float(eair_features["evidence_certificate_fraction"]),
+            "decisive_frontier_eair_feature_valid_action_count_norm": float(eair_features["valid_action_count_norm"]),
+            "decisive_frontier_eair_feature_margin_over_attribution": float(eair_features["margin_over_attribution"]),
+            "decisive_frontier_eair_feature_proposed_over_frontier_attribution": float(eair_features["proposed_over_frontier_attribution"]),
             "pair_action_anchor_robust_margin": float(robust_margin),
             "pair_action_anchor_score_gain": float(score_gain),
             "pair_action_anchor_guard_blocked_flip": bool(proposed_action != anchor_action and not allow_flip),
