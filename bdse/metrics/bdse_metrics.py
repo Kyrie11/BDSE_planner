@@ -499,6 +499,8 @@ def compute_bdse_diagnostics(
                 or str(k).startswith("decisive_frontier_value_")
                 or str(k).startswith("decisive_frontier_ocfi_")
                 or str(k).startswith("decisive_frontier_eair_")
+                or str(k).startswith("decisive_frontier_raer_")
+                or str(k).startswith("decisive_frontier_daler_")
             )
             and isinstance(v, (int, float, np.integer, np.floating, bool, np.bool_))
             and np.isfinite(float(v))

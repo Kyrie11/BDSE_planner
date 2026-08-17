@@ -1,0 +1,46 @@
+V64.3.17 EAF-DALER engineering validation
+Date: 2026-08-17
+
+1. python -m compileall -q bdse
+   PASS
+
+2. Raw config contract
+   python -m bdse.tools.check_v64_3_17_eaf_daler_contract --config bdse/configs/v64_3_17_eaf_daler_raw.yaml --expect raw
+   PASS
+
+3. Launcher shell syntax
+   bash -n RUN_V64_3_17_EAF_DALER_SCREEN_2GPU.sh
+   PASS
+
+4. V64.3.6--V64.3.17 targeted regression
+   77 passed, 6 warnings
+   Warnings: pre-existing PyTorch Transformer nested_tensor / norm_first warning class only.
+
+5. Full repository regression
+   365 passed, 36 warnings
+   Warnings: pre-existing PyTorch Transformer nested_tensor / norm_first warning class only; no new warning class observed.
+
+6. Legacy utility-refinement behavioral equivalence
+   Deterministic randomized replay against uploaded V64.3.16 implementation, 5000 tournament cases.
+   Selected action differences: 0 / 5000.
+   Public diagnostic differences: 0 / 5000.
+
+7. DALER safety/deployment tests
+   - explicit anchor abstention: PASS
+   - runner-up recovery operator: PASS
+   - below-final-flip-margin challenger excluded: PASS
+   - exact utility-equivalence mask reused: PASS
+   - evidence-certificate failure closes to anchor: PASS
+   - all-flagged bank abstains from learned DALER and is left to frozen structural guard: PASS
+   - runtime DALER features finite: PASS
+   - synthetic anchor-augmented listwise learning: PASS
+
+8. Data isolation
+   V64.3.17 exclusion list: 1700 lines / 1700 unique tokens.
+   Contains all 1200 prior V64.3.16 design exclusions and all 500 inspected V64.3.16 fresh-screen tokens.
+   Next screen selection is scenario identity + fixed SHA256 hash only.
+
+9. Leakage audit
+   No runtime teacher/future label use found in DALER.
+   Teacher costs are used only for TRAIN-only fitter labels/targets and evaluation diagnostics.
+   Runtime fitted config contains feature normalization, linear weights/bias, fixed anchor logit, and frozen execution constraints.

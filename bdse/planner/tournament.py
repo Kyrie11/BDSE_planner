@@ -261,7 +261,7 @@ def _trajectory_utility_cost_np(
     return out.astype(np.float32)
 
 
-def _apply_certificate_utility_refinement(
+def _certificate_utility_refinement_context(
     scores: np.ndarray,
     action: int,
     valid_mask: np.ndarray,
@@ -269,20 +269,17 @@ def _apply_certificate_utility_refinement(
     cfg: dict[str, Any],
     candidate_trajectories: np.ndarray | None = None,
     margins: np.ndarray | None = None,
-) -> tuple[int, dict[str, Any]]:
-    """Lexicographic action refinement: certificate first, utility second.
+) -> dict[str, Any]:
+    """Compute the frozen deployment-equivalence set used by utility refinement.
 
-    BDSE's budgeted tournament score is treated as a safety/decision certificate.
-    When several valid unflagged candidates are within ``score_slack`` of the best
-    certificate score, their evidence distinction is too small to justify picking
-    a low-progress action.  Within that certified equivalence set, choose the
-    lowest deployment utility cost.  This is not a post-hoc rule override: actions
-    outside the certificate band remain ineligible.
+    V64.3.17 reuses this exact set for DALER instead of reconstructing a looser
+    challenger set after the legacy action has already been refined.  Keeping one
+    implementation prevents a train/runtime semantic drift: the same score band,
+    safety rule, top-k restriction, pair certificate and utility finiteness rule
+    define both the legacy deployment refinement and DALER eligibility.
     """
     tc = cfg.get("tournament", {}) if isinstance(cfg, dict) else {}
     uc = tc.get("utility_refinement", {}) or {}
-    if not bool(uc.get("enabled", False)):
-        return int(action), {"utility_refinement_enabled": False}
     scores = np.asarray(scores, dtype=np.float32).reshape(-1)
     n = int(scores.shape[0])
     valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
@@ -294,8 +291,20 @@ def _apply_certificate_utility_refinement(
     valid = valid[:n]
     flags = flags[:n]
     finite = valid & np.isfinite(scores)
+    empty_mask = np.zeros((n,), dtype=bool)
+    inf_cost = np.full((n,), np.inf, dtype=np.float32)
+    out: dict[str, Any] = {
+        "utility_refinement_enabled": bool(uc.get("enabled", False)),
+        "_utility_refinement_eligible_mask": empty_mask,
+        "_utility_refinement_cost": inf_cost,
+    }
+    if not bool(uc.get("enabled", False)):
+        out.update({"utility_refinement_applied": False, "utility_refinement_reason": "disabled"})
+        return out
     if not bool(finite.any()):
-        return int(action), {"utility_refinement_enabled": True, "utility_refinement_applied": False, "utility_refinement_reason": "no_finite"}
+        out.update({"utility_refinement_applied": False, "utility_refinement_reason": "no_finite"})
+        return out
+
     best_score = float(np.max(scores[finite]))
     slack = max(float(uc.get("score_slack", 0.25)), 0.0)
     eligible = finite & (scores >= best_score - slack)
@@ -323,44 +332,93 @@ def _apply_certificate_utility_refinement(
                 if int(c) == current_for_cert:
                     cert_mask[int(c)] = True
                 else:
-                    # M[c,current] > 0 means candidate c is pair-certified better
-                    # than the current certificate action.  A small negative
-                    # tolerance permits near-tie utility refinement but prevents
-                    # utility from overriding a decisive evidence margin.
-                    cert_mask[int(c)] = bool(np.isfinite(M[int(c), current_for_cert]) and float(M[int(c), current_for_cert]) >= -tol)
+                    cert_mask[int(c)] = bool(
+                        np.isfinite(M[int(c), current_for_cert])
+                        and float(M[int(c), current_for_cert]) >= -tol
+                    )
             if bool(cert_mask.any()):
                 eligible = eligible & cert_mask
                 pair_cert_used = True
                 pair_cert_kept = int(eligible.sum())
+
     if int(eligible.sum()) <= 0:
-        return int(action), {"utility_refinement_enabled": True, "utility_refinement_applied": False, "utility_refinement_reason": "empty_band", "utility_score_slack": float(slack)}
+        out.update({
+            "utility_refinement_applied": False,
+            "utility_refinement_reason": "empty_band",
+            "utility_score_slack": float(slack),
+            "utility_pair_certificate_used": bool(pair_cert_used),
+            "utility_pair_certificate_enabled": bool(uc.get("pair_certificate_enabled", False)),
+            "utility_pair_margin_tolerance": float(max(float(uc.get("pair_margin_tolerance", 0.05)), 0.0)),
+            "utility_pair_certificate_kept": int(pair_cert_kept),
+        })
+        return out
+
     utility_cost = _trajectory_utility_cost_np(candidate_trajectories, valid, flags, cfg)
-    cand = np.flatnonzero(eligible & np.isfinite(utility_cost)).astype(np.int64)
+    candidate_mask = eligible & np.isfinite(utility_cost)
+    cand = np.flatnonzero(candidate_mask).astype(np.int64)
+    out.update({
+        "_utility_refinement_eligible_mask": np.asarray(candidate_mask, dtype=bool),
+        "_utility_refinement_cost": np.asarray(utility_cost, dtype=np.float32),
+        "utility_score_slack": float(slack),
+        "utility_pair_certificate_used": bool(pair_cert_used),
+        "utility_pair_certificate_enabled": bool(uc.get("pair_certificate_enabled", False)),
+        "utility_pair_margin_tolerance": float(max(float(uc.get("pair_margin_tolerance", 0.05)), 0.0)),
+        "utility_pair_certificate_kept": int(pair_cert_kept),
+    })
     if cand.size == 0:
-        return int(action), {"utility_refinement_enabled": True, "utility_refinement_applied": False, "utility_refinement_reason": "no_utility"}
-    # Stable deterministic tie-break: utility cost, then higher certificate score, then index.
+        out.update({"utility_refinement_applied": False, "utility_refinement_reason": "no_utility"})
+        return out
+
     best_util = int(sorted(cand.tolist(), key=lambda a: (float(utility_cost[a]), -float(scores[a]), int(a)))[0])
     current = int(action) if 0 <= int(action) < n else int(np.argmax(np.where(finite, scores, -np.inf)))
     min_improvement = float(uc.get("min_utility_improvement", 0.0))
-    applied = bool(best_util != current and float(utility_cost[best_util]) <= float(utility_cost[current]) - min_improvement)
+    applied = bool(
+        best_util != current
+        and float(utility_cost[best_util]) <= float(utility_cost[current]) - min_improvement
+    )
     chosen = int(best_util) if applied else int(current)
-    diag = {
-        "utility_refinement_enabled": True,
+    out.update({
         "utility_refinement_applied": bool(applied),
         "utility_refinement_action_before": int(current),
         "utility_refinement_action_after": int(chosen),
-        "utility_score_slack": float(slack),
         "utility_band_size": int(cand.size),
         "utility_best_score": float(scores[best_util]),
         "utility_current_score": float(scores[current]) if 0 <= current < n else float("nan"),
         "utility_best_cost": float(utility_cost[best_util]),
         "utility_current_cost": float(utility_cost[current]) if 0 <= current < n and np.isfinite(utility_cost[current]) else float("inf"),
-        "utility_pair_certificate_used": bool(pair_cert_used),
-        "utility_pair_certificate_enabled": bool(uc.get("pair_certificate_enabled", False)),
-        "utility_pair_margin_tolerance": float(max(float(uc.get("pair_margin_tolerance", 0.05)), 0.0)),
-        "utility_pair_certificate_kept": int(pair_cert_kept),
-    }
-    return chosen, diag
+        "_utility_refinement_chosen_action": int(chosen),
+    })
+    return out
+
+
+def _apply_certificate_utility_refinement(
+    scores: np.ndarray,
+    action: int,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    cfg: dict[str, Any],
+    candidate_trajectories: np.ndarray | None = None,
+    margins: np.ndarray | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Lexicographic action refinement: certificate first, utility second.
+
+    The selection arithmetic is intentionally delegated to
+    :func:`_certificate_utility_refinement_context` so V64.3.17 DALER can consume
+    exactly the same deployment-equivalence mask without changing legacy output.
+    """
+    ctx = _certificate_utility_refinement_context(
+        scores,
+        action,
+        valid_mask,
+        runtime_safety_flags,
+        cfg,
+        candidate_trajectories=candidate_trajectories,
+        margins=margins,
+    )
+    if not bool(ctx.get("utility_refinement_enabled", False)):
+        return int(action), ctx
+    chosen = int(ctx.get("_utility_refinement_chosen_action", action))
+    return chosen, ctx
 
 def run_tournament(
     predicted_base_cost: np.ndarray,
@@ -1043,6 +1101,297 @@ def _apply_decisive_frontier_raer(
     return selected, diag
 
 
+
+_DALER_FEATURE_NAMES = [
+    "raw_margin",
+    "attribution_scale",
+    "frontier_residual_rms",
+    "frontier_residual_abs_mean",
+    "frontier_attribution_scale_rms",
+    "frontier_attribution_scale_mean",
+    "evidence_certificate_fraction",
+    "valid_action_count_norm",
+    "margin_over_attribution",
+    "attribution_over_frontier_rms",
+    "raw_margin_z",
+    "attribution_z",
+    "raw_margin_rank",
+    "attribution_rank",
+    "margin_below_frontier_max",
+    "is_legacy_selected",
+    "margin_minus_legacy_selected",
+    "attribution_minus_legacy_selected",
+    "eaf_score_gain_vs_anchor",
+    "eaf_score_minus_legacy_selected",
+    "utility_cost_minus_legacy_selected",
+    "guard_margin_excess",
+    "eaf_score_rank",
+    "utility_cost_rank",
+    "executable_candidate_fraction",
+]
+
+
+def _decisive_frontier_daler_executable_mask(
+    margin_star: np.ndarray,
+    scores: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    anchor_action: int,
+    evidence_certificate_fraction: float | None,
+    utility_refinement_diag: dict[str, Any] | None,
+    cfg: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return DALER's exact frozen-deployment challenger masks.
+
+    ``guard_mask`` implements the existing one-sided anchor guard prerequisites;
+    ``utility_mask`` is the exact legacy utility-equivalence set.  ``executable``
+    is their conjunction.  No learned score and no teacher label participates.
+    """
+    margins = np.asarray(margin_star, dtype=np.float64).reshape(-1)
+    scores_arr = np.asarray(scores, dtype=np.float64).reshape(-1)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)[: margins.shape[0]]
+    flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    if flags.shape[0] < len(valid):
+        flags = np.pad(flags, (0, len(valid) - flags.shape[0]), constant_values=False)
+    flags = flags[: len(valid)]
+    a = int(anchor_action)
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    frontier_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+    daler_cfg = frontier_cfg.get("deployment_aligned_listwise_extremal_reliability", {}) or {}
+    guard_cfg = runtime_cfg.get("pair_action_anchor_guard", {}) or {}
+    dual_cfg = runtime_cfg.get("dual_certificate", {}) or {}
+
+    guard_mask = valid.copy()
+    if 0 <= a < len(guard_mask):
+        guard_mask[a] = False
+    safe_exists = bool(np.any(valid & ~flags))
+    if safe_exists:
+        guard_mask &= ~flags
+    elif bool(daler_cfg.get("require_safe_available_for_learned_intervention", True)):
+        # The planner has a separate frozen continuous structural-risk guard for
+        # all-flagged candidate banks.  DALER has no access to that guard's risk
+        # pool here, so learning a pre-structural re-ranking would create a hidden
+        # train/deployment mismatch.  Abstain and leave these scenes entirely to
+        # the existing structural guard instead.
+        guard_mask &= False
+
+    flip_margin = float(guard_cfg.get("flip_margin", runtime_cfg.get("pair_residual_trust", {}).get("flip_margin", 0.05)))
+    score_margin = float(guard_cfg.get("score_margin", 0.0))
+    guard_mask &= np.isfinite(margins) & (margins >= flip_margin)
+    if 0 <= a < scores_arr.size and np.isfinite(scores_arr[a]):
+        score_gain = scores_arr[: len(valid)] - float(scores_arr[a])
+        guard_mask &= np.isfinite(score_gain) & (score_gain >= score_margin)
+    else:
+        guard_mask &= False
+
+    require_evidence = bool(
+        dual_cfg.get("enabled", False)
+        and dual_cfg.get("require_evidence_certificate_before_residual_flip", False)
+    )
+    min_evidence = float(dual_cfg.get("min_evidence_certificate_fraction_for_residual_flip", 1.0))
+    cert = float(evidence_certificate_fraction) if evidence_certificate_fraction is not None else float("nan")
+    evidence_pass = bool(
+        (not require_evidence)
+        or (np.isfinite(cert) and cert + 1.0e-9 >= min_evidence)
+    )
+    if not evidence_pass:
+        guard_mask &= False
+
+    utility_mask = np.ones_like(guard_mask, dtype=bool)
+    require_utility = bool(daler_cfg.get("require_utility_equivalence", True))
+    if require_utility:
+        raw = None if utility_refinement_diag is None else utility_refinement_diag.get("_utility_refinement_eligible_mask", None)
+        if raw is None:
+            utility_mask = np.zeros_like(guard_mask, dtype=bool)
+        else:
+            tmp = np.asarray(raw, dtype=bool).reshape(-1)
+            utility_mask = np.zeros_like(guard_mask, dtype=bool)
+            utility_mask[: min(len(utility_mask), len(tmp))] = tmp[: min(len(utility_mask), len(tmp))]
+    if 0 <= a < len(utility_mask):
+        utility_mask[a] = False
+    executable = guard_mask & utility_mask
+    return executable, guard_mask, utility_mask
+
+
+def _decisive_frontier_daler_features(
+    margin_star: np.ndarray,
+    attribution_star: np.ndarray | None,
+    scores: np.ndarray,
+    valid_mask: np.ndarray,
+    anchor_action: int,
+    legacy_action: int,
+    potential_diag: dict[str, Any],
+    evidence_certificate_fraction: float | None,
+    utility_refinement_diag: dict[str, Any] | None,
+    executable_mask: np.ndarray,
+    cfg: dict[str, Any],
+) -> tuple[np.ndarray, list[str]]:
+    """Runtime-only V64.3.17 deployment-aligned listwise reliability features."""
+    margins = np.asarray(margin_star, dtype=np.float64).reshape(-1)
+    scores_arr = np.asarray(scores, dtype=np.float64).reshape(-1)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)[: margins.shape[0]]
+    K = int(margins.shape[0]); a = int(anchor_action); legacy = int(legacy_action)
+    challengers = valid.copy()
+    if 0 <= a < K:
+        challengers[a] = False
+    attr = np.zeros((K,), dtype=np.float64)
+    if attribution_star is not None:
+        tmp = np.asarray(attribution_star, dtype=np.float64).reshape(-1)
+        attr[: min(K, tmp.size)] = tmp[: min(K, tmp.size)]
+    vals = margins[challengers]; attrs = attr[challengers]
+    margin_mean = float(np.mean(vals)) if vals.size else 0.0
+    margin_std = max(float(np.std(vals)) if vals.size else 0.0, 1.0e-6)
+    attr_mean = float(np.mean(attrs)) if attrs.size else 0.0
+    attr_std = max(float(np.std(attrs)) if attrs.size else 0.0, 1.0e-6)
+    frontier_max = float(np.max(vals)) if vals.size else 0.0
+    frontier_residual_rms = float(potential_diag.get("decisive_frontier_value_residual_rms", 0.0))
+    frontier_residual_abs_mean = float(potential_diag.get("decisive_frontier_value_residual_abs_mean", 0.0))
+    frontier_attr_rms = float(potential_diag.get("decisive_frontier_value_attribution_scale_rms", 0.0))
+    frontier_attr_mean = float(potential_diag.get("decisive_frontier_value_attribution_scale_mean", 0.0))
+    cert = float(evidence_certificate_fraction) if evidence_certificate_fraction is not None and np.isfinite(float(evidence_certificate_fraction)) else 0.0
+    daler_cfg = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("deployment_aligned_listwise_extremal_reliability", {}) or {})
+    attr_eps = max(float(daler_cfg.get("ratio_floor", 1.0e-3)), 1.0e-9)
+    valid_norm = float(valid.sum()) / max(float(daler_cfg.get("valid_action_normalizer", 32.0)), 1.0)
+    margin_rank = _rank01(margins, challengers)
+    attr_rank = _rank01(attr, challengers)
+    score_rank = _rank01(scores_arr[:K], challengers)
+
+    util = np.full((K,), np.nan, dtype=np.float64)
+    if utility_refinement_diag is not None:
+        raw_u = utility_refinement_diag.get("_utility_refinement_cost", None)
+        if raw_u is not None:
+            tmp = np.asarray(raw_u, dtype=np.float64).reshape(-1)
+            util[: min(K, tmp.size)] = tmp[: min(K, tmp.size)]
+    util_rank_mask = challengers & np.isfinite(util)
+    utility_rank = _rank01(util, util_rank_mask)
+
+    legacy_margin = float(margins[legacy]) if 0 <= legacy < K and legacy != a and np.isfinite(margins[legacy]) else 0.0
+    legacy_attr = float(attr[legacy]) if 0 <= legacy < K and legacy != a and np.isfinite(attr[legacy]) else 0.0
+    legacy_score = float(scores_arr[legacy]) if 0 <= legacy < scores_arr.size and np.isfinite(scores_arr[legacy]) else (float(scores_arr[a]) if 0 <= a < scores_arr.size and np.isfinite(scores_arr[a]) else 0.0)
+    legacy_util = float(util[legacy]) if 0 <= legacy < K and np.isfinite(util[legacy]) else 0.0
+    anchor_score = float(scores_arr[a]) if 0 <= a < scores_arr.size and np.isfinite(scores_arr[a]) else 0.0
+    flip_margin = float(((cfg.get("runtime", {}) or {}).get("pair_action_anchor_guard", {}) or {}).get("flip_margin", ((cfg.get("runtime", {}) or {}).get("pair_residual_trust", {}) or {}).get("flip_margin", 0.05)))
+    exec_fraction = float(np.asarray(executable_mask, dtype=bool).sum()) / max(float(challengers.sum()), 1.0)
+
+    mat = np.zeros((K, len(_DALER_FEATURE_NAMES)), dtype=np.float64)
+    for b in np.flatnonzero(challengers).tolist():
+        m = float(margins[b]); at = float(attr[b]); sc = float(scores_arr[b]) if b < scores_arr.size and np.isfinite(scores_arr[b]) else anchor_score
+        udelta = float(util[b] - legacy_util) if np.isfinite(util[b]) else 0.0
+        vals_b = [
+            m, at, frontier_residual_rms, frontier_residual_abs_mean,
+            frontier_attr_rms, frontier_attr_mean, cert, valid_norm,
+            m / max(at, attr_eps), at / max(frontier_attr_rms, attr_eps),
+            (m - margin_mean) / margin_std, (at - attr_mean) / attr_std,
+            float(margin_rank[b]), float(attr_rank[b]), frontier_max - m,
+            float(b == legacy), m - legacy_margin, at - legacy_attr,
+            sc - anchor_score, sc - legacy_score, udelta, m - flip_margin,
+            float(score_rank[b]), float(utility_rank[b]), exec_fraction,
+        ]
+        mat[b] = np.asarray(vals_b, dtype=np.float64)
+    return mat, list(_DALER_FEATURE_NAMES)
+
+
+def _apply_decisive_frontier_daler(
+    legacy_action: int,
+    anchor_action: int,
+    margin_matrix: np.ndarray,
+    attribution_star: np.ndarray | None,
+    scores: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    potential_diag: dict[str, Any],
+    evidence_certificate_fraction: float | None,
+    utility_refinement_diag: dict[str, Any] | None,
+    cfg: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """Anchor-augmented listwise extremal reliability on executable challengers."""
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    frontier_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+    daler_cfg = frontier_cfg.get("deployment_aligned_listwise_extremal_reliability", {}) or {}
+    enabled = bool(daler_cfg.get("enabled", False))
+    instrument = bool(daler_cfg.get("instrument_features", True))
+    frontier_active = bool(float(potential_diag.get("decisive_frontier_value_active", 0.0)) >= 0.5)
+    M = np.asarray(margin_matrix, dtype=np.float64)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    a = int(anchor_action); legacy = int(legacy_action)
+    margin_star = M[:, a].copy() if 0 <= a < M.shape[1] else np.zeros((len(valid),), dtype=np.float64)
+    executable, guard_mask, utility_mask = _decisive_frontier_daler_executable_mask(
+        margin_star, scores, valid, runtime_safety_flags, a,
+        evidence_certificate_fraction, utility_refinement_diag, cfg,
+    )
+    feat, names = _decisive_frontier_daler_features(
+        margin_star, attribution_star, scores, valid, a, legacy, potential_diag,
+        evidence_certificate_fraction, utility_refinement_diag, executable, cfg,
+    )
+    logits = np.zeros((len(valid),), dtype=np.float64)
+    probs = np.full((len(valid),), 0.5, dtype=np.float64)
+    selected = legacy
+    applies = bool(enabled and frontier_active and 0 <= a < len(valid))
+    anchor_logit = float(daler_cfg.get("anchor_logit", 0.0))
+    if applies:
+        cfg_names = list(daler_cfg.get("feature_names", []))
+        mean = np.asarray(daler_cfg.get("feature_mean", []), dtype=np.float64).reshape(-1)
+        std = np.asarray(daler_cfg.get("feature_std", []), dtype=np.float64).reshape(-1)
+        weights = np.asarray(daler_cfg.get("weights", []), dtype=np.float64).reshape(-1)
+        if cfg_names != names or len(names) != len(mean) or len(names) != len(std) or len(names) != len(weights):
+            raise ValueError(
+                "EAF-DALER enabled but feature schema/mean/std/weights are inconsistent; "
+                "fit the V64.3.17 train-only listwise readout before enabling selection"
+            )
+        z = (feat - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
+        logits = z @ weights + float(daler_cfg.get("bias", 0.0))
+        logits = np.clip(logits, -40.0, 40.0)
+        probs = 1.0 / (1.0 + np.exp(-(logits - anchor_logit)))
+        cand = np.flatnonzero(executable & np.isfinite(logits)).astype(np.int64)
+        if cand.size:
+            util_cost = np.full((len(valid),), np.inf, dtype=np.float64)
+            if utility_refinement_diag is not None and utility_refinement_diag.get("_utility_refinement_cost", None) is not None:
+                tmp = np.asarray(utility_refinement_diag["_utility_refinement_cost"], dtype=np.float64).reshape(-1)
+                util_cost[: min(len(valid), len(tmp))] = tmp[: min(len(valid), len(tmp))]
+            # Stable tie-break: reliability logit, preserve legacy if tied, stronger
+            # frozen EAF margin, lower deployment utility cost, then index.
+            best = sorted(
+                cand.tolist(),
+                key=lambda b: (
+                    -float(logits[b]),
+                    -int(b == legacy),
+                    -float(margin_star[b]),
+                    float(util_cost[b]) if np.isfinite(util_cost[b]) else float("inf"),
+                    int(b),
+                ),
+            )[0]
+            selected = int(best) if float(logits[best]) > anchor_logit + 1.0e-12 else a
+        else:
+            selected = a
+    selected_logit = float(logits[selected]) if 0 <= selected < len(logits) and selected != a else anchor_logit
+    selected_prob = float(probs[selected]) if 0 <= selected < len(probs) and selected != a else 0.5
+    diag: dict[str, Any] = {
+        "decisive_frontier_daler_enabled": float(enabled),
+        "decisive_frontier_daler_instrument_features": float(instrument),
+        "decisive_frontier_daler_active": float(applies),
+        "decisive_frontier_daler_legacy_selected_action": float(legacy),
+        "decisive_frontier_daler_selected_action": float(selected),
+        "decisive_frontier_daler_proposal_changed": float(int(selected) != int(legacy)),
+        "decisive_frontier_daler_anchor_fallback": float(int(selected) == int(a)),
+        "decisive_frontier_daler_selected_logit": selected_logit,
+        "decisive_frontier_daler_selected_probability_vs_anchor": selected_prob,
+        "decisive_frontier_daler_anchor_logit": anchor_logit,
+        "decisive_frontier_daler_executable_candidate_count": float(np.asarray(executable, dtype=bool).sum()),
+        "_decisive_frontier_daler_anchor_action": int(a),
+        "_decisive_frontier_daler_legacy_selected_action": int(legacy),
+        "_decisive_frontier_daler_raw_margin_star": np.asarray(margin_star, dtype=np.float32),
+        "_decisive_frontier_daler_attribution_scale_star": np.zeros_like(margin_star, dtype=np.float32)
+            if attribution_star is None else np.asarray(attribution_star, dtype=np.float32).reshape(-1)[: len(margin_star)],
+        "_decisive_frontier_daler_feature_matrix": np.asarray(feat, dtype=np.float32),
+        "_decisive_frontier_daler_feature_names": names,
+        "_decisive_frontier_daler_logit_star": np.asarray(logits, dtype=np.float32),
+        "_decisive_frontier_daler_probability_star": np.asarray(probs, dtype=np.float32),
+        "_decisive_frontier_daler_executable_mask": np.asarray(executable, dtype=bool),
+        "_decisive_frontier_daler_guard_mask": np.asarray(guard_mask, dtype=bool),
+        "_decisive_frontier_daler_utility_equivalence_mask": np.asarray(utility_mask, dtype=bool),
+    }
+    return selected, diag
+
 def run_pair_conditioned_tournament(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -1290,7 +1639,25 @@ def run_pair_conditioned_tournament(
             evidence_certificate_fraction,
             cfg,
         )
-        action = int(raer_action)
+        daler_action, daler_diag = _apply_decisive_frontier_daler(
+            raw_eaf_action,
+            anchor_action,
+            M_B,
+            frontier_attribution_scale_star,
+            scores,
+            valid_mask,
+            runtime_safety_flags,
+            potential_diag,
+            evidence_certificate_fraction,
+            utility_refinement_diag,
+            cfg,
+        )
+        frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+        raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))
+        daler_enabled_runtime = bool((frontier_runtime_cfg.get("deployment_aligned_listwise_extremal_reliability", {}) or {}).get("enabled", False))
+        if raer_enabled_runtime and daler_enabled_runtime:
+            raise ValueError("RAER and DALER are mutually exclusive causal arms; enable at most one")
+        action = int(daler_action if daler_enabled_runtime else raer_action)
         proposed_action = int(action)
         raw_margin = float(M_B[proposed_action, anchor_action]) if proposed_action != anchor_action else float("inf")
         residual_sigma = (
@@ -1452,6 +1819,7 @@ def run_pair_conditioned_tournament(
             "pair_action_anchor_raw_proposed_action": int(proposed_action),
             "pair_action_anchor_proposed_action": int(proposed_action),
             **raer_diag,
+            **daler_diag,
             "pair_action_anchor_raw_margin": float(raw_margin),
             "pair_action_anchor_residual_sigma": float(residual_sigma),
             "pair_action_anchor_residual_beta_uncertainty": float(residual_beta_uncertainty),

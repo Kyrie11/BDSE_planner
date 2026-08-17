@@ -6219,3 +6219,279 @@ All V64.3.15 no-repeat constraints remain. Additionally:
 - V64.3.6--V64.3.16 targeted regression: **68/68 PASS**;
 - full repository: **356/356 PASS, 36 warnings**;
 - warnings remain the historical PyTorch Transformer nested-tensor/`norm_first` warning class; no new warning class observed.
+
+---
+
+# V64.3.16 postmortem + V64.3.17 EAF-DALER (2026-08-17)
+
+## V64.3.16 result: RAER has reliability signal but does not validate the extremal-recovery mechanism
+
+The uploaded `outputs_v64_3_16_eaf_raer_screen_2gpu_v1` is a valid fresh-screen result. Its final screen flags are:
+
+- `instrumentation_valid = true`;
+- `capacity_signal = true`;
+- `preservation_gain = true`;
+- `endpoint_gain = true`;
+- `extremal_reranking_mechanism = false`;
+- `full_promotion = false`.
+
+Fresh 500-scene endpoint results:
+
+- DARM / selected-local anchor: match `14.40%`, regret `29065.54`;
+- raw EAF: match `11.40%`, regret `17435.90`, flip `57.0%`, beneficial `5.6%`, harmful `8.6%`;
+- scalar EAIR: match `17.80%`, regret `18574.57`, flip `35.6%`, beneficial `4.2%`, harmful `0.8%`;
+- RAER: match `16.40%`, regret `17720.59`, flip `40.8%`, beneficial `4.0%`, harmful `2.0%`.
+
+The raw EAF regret remains about `40.0%` lower than the DARM anchor, so the frozen complete-frontier value contains substantial information and must not be discarded merely because exact match is lower.
+
+RAER reliability also generalizes:
+
+- train deterministic scene-group holdout AUC `0.7151`;
+- fresh all-frontier AUC `0.7012` over `13,292` challenger edges;
+- scalar EAIR train holdout AUC `0.7665`.
+
+Therefore the next branch is **not** broad representation/acquisition unfreezing.
+
+## Refined causal attribution: filtering succeeds, alternative recovery fails
+
+The original V64.3.16 screen reported `raer_selected_teacher_better_rate=39.66%`, but that statistic counts anchor fallback as a zero-valued selected challenger. On the 464 raw non-anchor proposal scenes:
+
+- RAER falls back to anchor: `235/464 = 50.65%`;
+- keeps the legacy EAF challenger: `209/464 = 45.04%`;
+- chooses a different non-anchor challenger: only `20/464 = 4.31%`.
+
+Conditional quality makes the real failure clear:
+
+- kept-legacy challenger teacher-better precision: `83.25%`;
+- all RAER-selected non-anchor challenger precision: `80.35%`;
+- **alternative challenger precision: only `50.0%`**;
+- raw challengers rejected to anchor are teacher-better `58.30%` of the time.
+
+RAER's final action is identical to scalar EAIR in `465/500 = 93.0%` scenes. Thus V64.3.16 is primarily a good filtering/abstention mechanism with a small permissive runner-up branch; it has **not** demonstrated successful all-challenger extremal recovery.
+
+## V64.3.16 train/deployment mismatch discovered
+
+RAER eligibility uses positive raw EAF margin plus fixed `p>=0.5`, but the frozen final one-sided guard requires the stronger deployment conditions: `margin >= 0.015`, non-negative EAF score gain, and the unchanged evidence certificate.
+
+On the current fresh proposal scenes:
+
+- `28.88%` of legacy raw EAF proposals have non-positive DARM-anchor star margin because the frozen utility-refinement step can choose an action inside its certificate-equivalent band even when that action is not the positive star-margin extremum;
+- `30.39%` are below the final `0.015` flip-margin requirement;
+- RAER still has a `3.2%` post-selection final-guard blocked-flip rate.
+
+This is an operator/eligibility semantic mismatch. The next method should learn only over actions that the frozen deployment stack can actually execute.
+
+## Current B-accounting correction
+
+The V64.3.16 result gives a broader exact-budget distribution than the V64.3.15-derived design note. Current replay:
+
+- train: `2438/3000 = 81.27%` exact B=16, selected count range `6--16`;
+- fresh validation: `435/500 = 87.0%` exact B=16;
+- validation discovery: `2193/2500 = 87.72%` exact B=16.
+
+In all three sets there are **zero** scenes with `proposal_candidate_atom_count >=16` but selected budget different from 16. Every B<16 case is caused by fewer than 16 eligible proposal atoms.
+
+The faithful interface claim remains:
+
+`B <= 16; exact B=16 whenever at least 16 eligible proposal atoms exist`.
+
+Do not claim unconditional exact B=16 and do not create filler atoms.
+
+## New data contamination boundary
+
+The V64.3.16 fresh 500 scenes have now been inspected in detail and used to design V64.3.17. They are design data from this point forward.
+
+V64.3.17 freezes `bdse/configs/v64_3_17_design_exclude_v64_3_16_screen_tokens.txt` with **1700 unique validation tokens**:
+
+- all 1200 V64.3.16 pre-existing design exclusions;
+- all 500 V64.3.16 fresh-screen tokens;
+- no overlap or duplicates.
+
+The V64.3.17 screen selects a new 500-scene set only by scenario identity and fixed SHA256 hash after the 1700-token exclusion. No teacher label, match, regret, or reliability statistic participates in scene selection.
+
+## Design-only evidence for the next branch
+
+A non-promotional replay on the now-contaminated V64.3.16 fresh set tested whether scene-level anchor-augmented listwise ordering is a plausible next mechanism. Because V64.3.16 edge files lack the exact future V64.3.17 utility-equivalence/safety mask, this replay approximates executable edges as `raw_margin>=0.015` and evidence certificate `=1` and uses the V64.3.16 RAER features plus `is_raw_top`.
+
+Train-only fit / already-seen validation diagnostics:
+
+- train approximate executable edges `38630`, positive fraction `72.57%`;
+- seen-val approximate executable edges `6532`;
+- executable-edge AUC `0.6970`;
+- proposal changed `54.53%`;
+- fallback `47.84%`;
+- conditional non-anchor precision `80.58%`;
+- alternative recovery `6.68%`;
+- alternative recovery precision `77.42%`;
+- alternative teacher margin mean `1.153`.
+
+These values are **design-only**. They cannot be published, promoted, or used to tune thresholds/objective weights. They only justify spending a new fresh causal screen on a listwise operator.
+
+# V64.3.17 algorithm: EAF-DALER
+
+**Evidence-Attributed Deployment-Aligned Listwise Extremal Reliability (EAF-DALER)**
+
+The mainline is now:
+
+`fixed planner-interface evidence cap B<=16`
+`-> auditable evidence atoms`
+`-> terminally frozen acquisition, M=24`
+`-> frozen selected evidence`
+`-> frozen EAF complete DARM-anchor frontier value`
+`-> exact selected-evidence attribution`
+`-> frozen deployment-executable challenger set`
+`-> anchor-augmented scene-level listwise evidence-attributed reliability`
+`-> extremal selection / explicit anchor abstention`
+`-> unchanged one-sided + evidence certificate`
+`-> unchanged all-flagged structural risk guard`
+`-> final decision preservation`.
+
+The novelty statement is upgraded to:
+
+**evidence-attributed, deployment-aligned listwise reliability for extremal decision selection under a fixed planner-interface evidence budget.**
+
+The method remains intentionally small architecturally; novelty is the evidence/deployment-aware decision operator, not the linear readout.
+
+## V64.3.17 exact learned-intervention candidate set
+
+DALER considers only challengers satisfying the frozen runtime deployment prerequisites:
+
+1. valid candidate;
+2. at least one unflagged valid action exists and the challenger is unflagged;
+3. raw frozen EAF DARM-anchor margin is at least the existing `flip_margin=0.015`;
+4. frozen EAF score gain over the anchor satisfies the existing score margin;
+5. unchanged evidence certificate passes;
+6. challenger belongs to the exact frozen certificate-constrained utility-equivalence set.
+
+All-flagged scenes are excluded from learned DALER intervention. They remain owned by the pre-existing continuous structural-risk guard, because DALER does not receive that guard's risk pool and must not learn a pre-structural choice that deployment will overwrite.
+
+The utility-equivalence mask is not reconstructed approximately. V64.3.17 refactors the existing legacy utility-refinement implementation into a shared `_certificate_utility_refinement_context`, and both legacy selection and DALER consume the same score-band / safety / top-k / pair-certificate / finite-utility set.
+
+## V64.3.17 listwise objective
+
+For each executable challenger `b`, DALER computes a standardized shared linear reliability logit from frozen runtime EAF/attribution/deployment features. The DARM anchor is an explicit pseudo-item with fixed logit zero.
+
+The train-only scene target is:
+
+- the executable challenger with maximum positive teacher margin over the anchor, if one exists;
+- otherwise the anchor.
+
+The primary objective is anchor-augmented scene-level listwise cross entropy over `{anchor} U executable challengers`.
+
+A fixed class-balanced edge BCE term with weight **1.0** retains absolute teacher-better semantics. This weight is pre-registered; the fitter exits if another value is requested. There is no validation threshold sweep.
+
+Runtime selection is simply argmax over challenger reliability logits and the fixed anchor logit zero. The `p * positive_margin` RAER utility is removed.
+
+## V64.3.17 runtime feature structure
+
+The 25-feature schema contains:
+
+- challenger DARM-anchor EAF margin and selected-evidence attribution scale;
+- frontier residual/attribution global statistics;
+- unchanged evidence-certificate fraction and normalized valid-action count;
+- margin/attribution ratios;
+- within-frontier margin/attribution z-scores and ranks;
+- gap below frontier maximum;
+- `is_legacy_selected`;
+- margin/attribution differences relative to the frozen legacy EAF action;
+- EAF score gain vs anchor and score difference vs legacy action;
+- deployment utility-cost difference vs legacy action;
+- margin excess above the frozen final guard;
+- EAF-score rank, utility-cost rank, and executable candidate fraction.
+
+All features are runtime-only. Teacher cost exists only in train labels and evaluation diagnostics.
+
+## V64.3.17 screen
+
+The next screen uses four causal arms on one identical, newly selected, fresh 500-scene validation set:
+
+1. raw frozen EAF;
+2. scalar EAIR control;
+3. frozen V64.3.16 RAER control;
+4. V64.3.17 DALER.
+
+Train replay is 3000 scenes. Validation discovery is increased to 4000 scenes to leave enough eligible tokens after the 1700-token exclusion. All readouts are fitted on TRAIN only.
+
+Primary DALER promotion gates:
+
+- train internal holdout exact-executable-edge AUC >= `0.65`;
+- fresh exact-executable-edge AUC >= `0.65`;
+- proposal changed >= `3%`;
+- alternative recovery >= `1.5%`;
+- alternative recovery precision >= `65%` and >= frozen RAER alternative precision `+10pp` when RAER precision is defined;
+- alternative teacher-margin mean > `0`;
+- post-selection final-guard block rate <= `0.1%`;
+- harmful intervention absolute reduction vs raw >= `5pp`;
+- beneficial retention >= `35%`, beneficial > harmful;
+- deployed flip >= `3%` and below raw;
+- teacher match >= anchor `+0.5pp`;
+- DALER regret <= `1.02 * raw EAF regret`;
+- paired gain over RAER: either match >= RAER `+0.5pp` with regret <= `1.01 * RAER`, or regret <= `0.99 * RAER` with match >= RAER `-0.5pp`;
+- complete frontier and all frozen interface metrics unchanged.
+
+A screen pass only authorizes an independent full-val reproduction. Test and closed-loop remain forbidden until that reproduction passes.
+
+## V64.3.17 pre-registered failure branches
+
+- exact-executable fresh AUC low -> structured per-atom/query-conditioned evidence reliability representation; keep acquisition/B/M frozen;
+- AUC good but alternative precision/recovery fails -> scene-listwise feature/objective diagnosis; no threshold sweep;
+- mechanism/alignment succeed but regret endpoint fails -> train-only teacher-improvement magnitude / robust listwise ordering term on the same frozen executable frontier;
+- post-selection guard block >0.1% -> engineering stop; fix candidate/guard semantic alignment before any model iteration;
+- preservation fails -> audit certificate/structural interaction; do not relax the certificate;
+- all gates pass -> freeze exact config, independent full-val reproduction, then test/closed-loop only after reproduction.
+
+## V64.3.17 no-repeat constraints
+
+All previous no-repeat constraints remain. Additionally:
+
+- do not use any of the 1700 excluded validation tokens for promotion;
+- do not tune the anchor logit, probability threshold, auxiliary BCE weight, or screen gates on fresh validation;
+- do not let learned DALER operate on all-flagged scenes unless the frozen structural-risk pool is explicitly brought into the causal model in a later pre-registered version;
+- do not create a second approximate implementation of utility-equivalence; use the shared frozen context;
+- do not interpret the current design-only listwise replay as evidence of V64.3.17 promotion;
+- do not claim unconditional exact B=16;
+- do not edit the paper to claim DALER results until fresh screen + independent full-val reproduction support them.
+
+## V64.3.17 engineering changes
+
+- `bdse/planner/tournament.py`
+  - shared certificate utility-refinement context with exact legacy-equivalence mask;
+  - DALER executable-set construction;
+  - all-flagged learned-intervention abstention;
+  - 25-feature runtime-only DALER representation;
+  - anchor-augmented DALER extremal operator;
+  - RAER/DALER mutual-exclusion check.
+- `bdse/experiments/evaluate_open_loop.py`
+  - DALER edge fields/features/logits/executable masks;
+  - prefers DALER frontier arrays with RAER fallback;
+  - retains repaired exact token replay behavior.
+- `bdse/experiments/train.py`, `bdse/metrics/bdse_metrics.py`
+  - DALER diagnostic-prefix propagation.
+- `bdse/tools/fit_v64_3_17_eaf_daler.py`
+  - train-only anchor-augmented listwise fitter and deterministic scene holdout.
+- `bdse/tools/check_v64_3_17_eaf_daler_contract.py`
+  - strict model/objective/B/M/certificate/utility/safety contract.
+- `bdse/tools/check_v64_3_17_eaf_daler_screen.py`
+  - four-arm paired screen with exact-executable/alternative-recovery/alignment gates;
+  - missing required frozen metrics now fail rather than being silently omitted.
+- `bdse/configs/v64_3_17_eaf_daler_raw.yaml`
+  - frozen raw instrumentation config.
+- `bdse/configs/v64_3_17_design_exclude_v64_3_16_screen_tokens.txt`
+  - 1700 unique design exclusions.
+- `RUN_V64_3_17_EAF_DALER_SCREEN_2GPU.sh`
+  - train-only fitting, fresh hash-selected four-arm screen, hard STOP before full/test/closed-loop.
+- `bdse/tests/test_v64_3_17_eaf_daler.py`
+  - runner-up recovery, anchor abstention, final-margin eligibility, exact utility mask, evidence-certificate fail-close, all-flagged abstention, finite runtime features, legacy utility-refactor preservation, and synthetic listwise-learning tests.
+
+### V64.3.17 engineering validation
+
+Final validation after implementation:
+
+- `python -m compileall -q bdse`: PASS;
+- raw V64.3.17 DALER contract: PASS;
+- launcher `bash -n`: PASS;
+- V64.3.6--V64.3.17 targeted regression after the final hardening patch: **77/77 PASS, 6 warnings**;
+- complete repository final regression: **365/365 PASS, 36 warnings**;
+- V64.3.16 vs refactored V64.3.17 utility-refinement randomized equivalence replay: **5000/5000 identical actions and 5000/5000 identical public diagnostics**;
+- exclusion audit: **1700/1700 unique**, includes all prior 1200 design tokens and all current 500 inspected fresh tokens;
+- no runtime teacher/future leakage found in the DALER path.

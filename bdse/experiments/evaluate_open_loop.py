@@ -776,6 +776,7 @@ def main() -> None:
                 or key.startswith("decisive_frontier_ocfi_")
                 or key.startswith("decisive_frontier_eair_")
                 or key.startswith("decisive_frontier_raer_")
+                or key.startswith("decisive_frontier_daler_")
                 or key.startswith("decisive_anchor_margin_")
                 or key.startswith("base_prior_")
                 or key.startswith("learned_base_")
@@ -970,9 +971,9 @@ def main() -> None:
             diag.details["pair_full_action"] = int(pair_full_action)
             diag.details["local_pair_full_action"] = int(local_pair_full_action)
         if frontier_edge_file is not None:
-            edge_anchor = int(tour_diag.get("_decisive_frontier_raer_anchor_action", -1))
-            edge_margins = np.asarray(tour_diag.get("_decisive_frontier_raer_raw_margin_star", []), dtype=np.float64).reshape(-1)
-            edge_attr = np.asarray(tour_diag.get("_decisive_frontier_raer_attribution_scale_star", []), dtype=np.float64).reshape(-1)
+            edge_anchor = int(tour_diag.get("_decisive_frontier_daler_anchor_action", tour_diag.get("_decisive_frontier_raer_anchor_action", -1)))
+            edge_margins = np.asarray(tour_diag.get("_decisive_frontier_daler_raw_margin_star", tour_diag.get("_decisive_frontier_raer_raw_margin_star", [])), dtype=np.float64).reshape(-1)
+            edge_attr = np.asarray(tour_diag.get("_decisive_frontier_daler_attribution_scale_star", tour_diag.get("_decisive_frontier_raer_attribution_scale_star", [])), dtype=np.float64).reshape(-1)
             edge_valid = np.asarray(sample.candidates.valid_mask, dtype=bool).reshape(-1)
             raw_top = int(tour_diag.get("_decisive_frontier_raer_raw_top_action", -1))
             raer_selected = int(tour_diag.get("decisive_frontier_raer_selected_action", raw_top))
@@ -980,6 +981,14 @@ def main() -> None:
             edge_probs = np.asarray(tour_diag.get("_decisive_frontier_raer_probability_star", []), dtype=np.float64).reshape(-1)
             edge_utility = np.asarray(tour_diag.get("_decisive_frontier_raer_utility_star", []), dtype=np.float64).reshape(-1)
             feature_names = list(tour_diag.get("_decisive_frontier_raer_feature_names", []))
+            daler_selected = int(tour_diag.get("decisive_frontier_daler_selected_action", raw_top))
+            daler_features = tour_diag.get("_decisive_frontier_daler_feature_matrix", None)
+            daler_logits = np.asarray(tour_diag.get("_decisive_frontier_daler_logit_star", []), dtype=np.float64).reshape(-1)
+            daler_probs = np.asarray(tour_diag.get("_decisive_frontier_daler_probability_star", []), dtype=np.float64).reshape(-1)
+            daler_exec = np.asarray(tour_diag.get("_decisive_frontier_daler_executable_mask", []), dtype=bool).reshape(-1)
+            daler_guard = np.asarray(tour_diag.get("_decisive_frontier_daler_guard_mask", []), dtype=bool).reshape(-1)
+            daler_utility_mask = np.asarray(tour_diag.get("_decisive_frontier_daler_utility_equivalence_mask", []), dtype=bool).reshape(-1)
+            daler_feature_names = list(tour_diag.get("_decisive_frontier_daler_feature_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
                 normalized = bool(tour_diag.get("normalized_margins", cfg.get("model", {}).get("pair_margin_normalized", False)))
                 mscale = max(float(tour_diag.get("margin_scale", pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 1.0)))) if normalized else 1.0, 1.0e-6)
@@ -1006,10 +1015,21 @@ def main() -> None:
                         "attribution_scale": float(edge_attr[challenger]),
                         "raer_probability": float(edge_probs[challenger]) if edge_probs.size == edge_valid.size else float("nan"),
                         "raer_utility": float(edge_utility[challenger]) if edge_utility.size == edge_valid.size else float("nan"),
+                        "daler_selected_action": daler_selected,
+                        "is_daler_selected": float(challenger == daler_selected),
+                        "daler_logit": float(daler_logits[challenger]) if daler_logits.size == edge_valid.size else float("nan"),
+                        "daler_probability_vs_anchor": float(daler_probs[challenger]) if daler_probs.size == edge_valid.size else float("nan"),
+                        "daler_executable": float(daler_exec[challenger]) if daler_exec.size == edge_valid.size else 0.0,
+                        "daler_guard_executable": float(daler_guard[challenger]) if daler_guard.size == edge_valid.size else 0.0,
+                        "daler_utility_equivalent": float(daler_utility_mask[challenger]) if daler_utility_mask.size == edge_valid.size else 0.0,
                     }
                     if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):
                         for j, name in enumerate(feature_names):
                             row[f"feature_{name}"] = float(mat[challenger, j])
+                    dmat = None if daler_features is None else np.asarray(daler_features, dtype=np.float64)
+                    if dmat is not None and dmat.ndim == 2 and dmat.shape[0] == edge_valid.size and dmat.shape[1] == len(daler_feature_names):
+                        for j, name in enumerate(daler_feature_names):
+                            row[f"daler_feature_{name}"] = float(dmat[challenger, j])
                     frontier_edge_file.write(json.dumps(row, sort_keys=True) + "\n")
         metric_means.update(diag)
         if args.per_sample_output:
