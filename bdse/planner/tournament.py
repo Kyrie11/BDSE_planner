@@ -1787,6 +1787,7 @@ def _apply_decisive_frontier_icer(
     # but diagnostic serialization still exposes the arrays for schema stability.
     scalar_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
     profile_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
+    incumbent_retention_margin = np.zeros((len(valid),), dtype=np.float64)
     selected = legacy
     baseline = legacy
     flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
@@ -1850,26 +1851,74 @@ def _apply_decisive_frontier_icer(
         if dominance_policy == "scalar_only":
             profile_dominance_logits = np.zeros_like(scalar_dominance_logits)
             dominance_logits = scalar_dominance_logits.copy()
+            dominance_positive = np.isfinite(scalar_dominance_logits) & (scalar_dominance_logits > 0.0)
         elif dominance_policy == "dual_equal_mean":
             profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
             dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
+            dominance_positive = np.isfinite(dominance_logits) & (dominance_logits > 0.0)
+        elif dominance_policy == "dual_positive_consensus_mean":
+            # V64.3.21: a signed-attribution view is corroborating evidence, not
+            # a compensating term.  Both independently trained TRAIN-only views
+            # must cross their semantic zero-log-odds boundary; only then is
+            # their equal mean used for extremal ranking.  This is a structural
+            # consensus rule, not a validation-tuned threshold.
+            profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
+            dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
+            dominance_positive = (
+                np.isfinite(scalar_dominance_logits) & np.isfinite(profile_dominance_logits)
+                & (scalar_dominance_logits > 0.0) & (profile_dominance_logits > 0.0)
+            )
         else:
             raise ValueError(f"unknown EAF-ICER dominance_policy={dominance_policy}")
 
+        # V64.3.21 selection-conditioned incumbent retention.  The historical
+        # all-edge support head is still the absolute support gate for *new*
+        # alternatives, but it is no longer asked to veto an already admissible
+        # extremal incumbent.  A dedicated TRAIN-only linear margin readout is
+        # fit only on frozen raw-EAF incumbents and predicts the normalized
+        # teacher margin J(anchor)-J(incumbent).  Zero is therefore a semantic
+        # preserve-vs-anchor boundary and requires no validation threshold.
+        retention_policy = str(icer_cfg.get("incumbent_retention_policy", "generic_support")).strip().lower()
+        if retention_policy in {"selected_incumbent_scalar_margin_mse", "selected_incumbent_profile_margin_mse"}:
+            stored_base = list(icer_cfg.get("retention_feature_names", []))
+            expected_base = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[:18] if retention_policy == "selected_incumbent_scalar_margin_mse" else _ICER_DOMINANCE_PROFILE_BASE_NAMES)
+            rmean = np.asarray(icer_cfg.get("retention_feature_mean", []), dtype=np.float64).reshape(-1)
+            rstd = np.asarray(icer_cfg.get("retention_feature_std", []), dtype=np.float64).reshape(-1)
+            rw = np.asarray(icer_cfg.get("retention_weights", []), dtype=np.float64).reshape(-1)
+            if stored_base != expected_base or len(rmean) != len(expected_base) or len(rstd) != len(expected_base) or len(rw) != len(expected_base):
+                raise ValueError("EAF-ICER incumbent retention margin schema/mean/std/weights are inconsistent")
+            fpos = {str(n): i for i, n in enumerate(names)}
+            if any(n not in fpos for n in expected_base):
+                raise ValueError("EAF-ICER incumbent retention profile features missing from runtime schema")
+            rx = feat[:, [fpos[n] for n in expected_base]]
+            rz = (rx - rmean[None, :]) / np.maximum(rstd[None, :], 1.0e-6)
+            incumbent_retention_margin = np.clip(rz @ rw + float(icer_cfg.get("retention_bias", 0.0)), -40.0, 40.0)
+        elif retention_policy == "preserve_admissible_incumbent":
+            incumbent_retention_margin = np.ones((len(valid),), dtype=np.float64)
+        elif retention_policy == "generic_support":
+            incumbent_retention_margin = support_logits.copy()
+        else:
+            raise ValueError(f"unknown EAF-ICER incumbent_retention_policy={retention_policy}")
 
         support_ok = admissible & np.isfinite(support_logits) & (support_logits > 0.0)
         legacy_admissible = bool(0 <= legacy < len(valid) and admissible[legacy])
         legacy_supported = bool(legacy_admissible and support_ok[legacy])
+        legacy_retained = bool(
+            legacy_admissible
+            and np.isfinite(incumbent_retention_margin[legacy])
+            and incumbent_retention_margin[legacy] >= 0.0
+        )
         # When the frozen incumbent itself is deployment-admissible, every
-        # alternative replacement is incumbent-contrastive even if the support
-        # head would otherwise abstain on the incumbent.  This prevents an
-        # anchor-relative branch from silently bypassing the dominance claim.
+        # alternative replacement remains incumbent-contrastive.  V64.3.21
+        # makes the baseline asymmetric: only the selected-incumbent margin head
+        # may demote an admissible incumbent to the anchor; generic edge support
+        # continues to gate alternatives but cannot veto the incumbent itself.
         if legacy_admissible:
-            baseline = int(legacy if legacy_supported else a)
+            baseline = int(legacy if legacy_retained else a)
             alternative = support_ok.copy()
             if 0 <= legacy < len(alternative):
                 alternative[legacy] = False
-            cand = np.flatnonzero(alternative & np.isfinite(dominance_logits) & (dominance_logits > 0.0)).astype(np.int64)
+            cand = np.flatnonzero(alternative & dominance_positive).astype(np.int64)
             if cand.size:
                 best = sorted(
                     cand.tolist(),
@@ -1913,8 +1962,12 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_selected_support_logit": support_selected,
         "decisive_frontier_icer_selected_dominance_logit": dominance_selected,
         "decisive_frontier_icer_legacy_support_logit": float(support_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
+        "decisive_frontier_icer_legacy_retention_margin": float(incumbent_retention_margin[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
         "decisive_frontier_icer_dominance_policy_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_equal_mean"),
+        "decisive_frontier_icer_dominance_policy_dual_positive_consensus": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_positive_consensus_mean"),
+        "decisive_frontier_icer_incumbent_retention_profile_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_profile_margin_mse"),
+        "decisive_frontier_icer_incumbent_retention_scalar_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_scalar_margin_mse"),
         "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
         "decisive_frontier_icer_safe_domain_active": float(bool(safe_available)),
         "decisive_frontier_icer_all_flagged_domain": float(bool(all_flagged_domain)),
@@ -1931,6 +1984,7 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_dominance_logit_star": np.asarray(dominance_logits, dtype=np.float32),
         "_decisive_frontier_icer_scalar_dominance_logit_star": np.asarray(scalar_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
         "_decisive_frontier_icer_profile_dominance_logit_star": np.asarray(profile_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
+        "_decisive_frontier_icer_incumbent_retention_margin_star": np.asarray(incumbent_retention_margin, dtype=np.float32),
         "_decisive_frontier_icer_admissible_mask": np.asarray(admissible, dtype=bool),
     }
     return int(selected), diag

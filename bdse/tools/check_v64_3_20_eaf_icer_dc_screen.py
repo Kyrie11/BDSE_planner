@@ -43,7 +43,14 @@ def main() -> None:
         raise SystemExit("paired row token identity mismatch")
 
     all_flagged = [t for t in tokens if _f(rr[t], "all_actions_safety_flagged_rate", 0.0) >= 0.5]
-    safe_domain = [t for t in tokens if t not in set(all_flagged)]
+    all_flagged_set = set(all_flagged)
+    safe_domain = [t for t in tokens if t not in all_flagged_set]
+    safe_set = set(safe_domain)
+    # V64.3.21 audit correction: learned ICER is deliberately disabled in the
+    # all-flagged delegated domain, so recovery/guard-cleanup gates must be
+    # computed only on the safe-available learned-intervention domain.
+    se_safe = _icer_edge_diag(Path(a.v20_scalar_edge_output), safe_set)
+    de_safe = _icer_edge_diag(Path(a.v20_dual_edge_output), safe_set)
     def frac(xs: list[bool]) -> float:
         return float(sum(bool(x) for x in xs) / len(xs)) if xs else float("nan")
 
@@ -77,7 +84,7 @@ def main() -> None:
     instrumentation = de["scene_count"] >= 480 and de["admissible_edge_count"] >= 2048 and de["direct_counterfactual_dominance_edge_count"] >= 512 and _f(d_m, "decisive_frontier_value_complete_star_coverage") >= .99 and all(frozen.values())
     candidate_support = de["multi_admissible_proposal_rate"] >= .25 and de["admissible_candidates_per_proposal_mean"] >= 3.0
     fresh_signal = de["support_auc"] >= .65 and de["direct_counterfactual_dominance_auc"] >= .70
-    recovery = de["alternative_recovery_rate"] >= .03 and de["alternative_recovery_precision"] >= .80 and de["direct_incumbent_replacement_rate"] >= .02 and de["direct_incumbent_replacement_precision"] >= .60 and de["direct_incumbent_opportunity_capture_rate"] >= .08 and de["selected_nonanchor_teacher_better_rate"] >= .80 and de["alternative_teacher_margin_mean"] > 0.0
+    recovery = de_safe["alternative_recovery_rate"] >= .03 and de_safe["alternative_recovery_precision"] >= .80 and de_safe["direct_incumbent_replacement_rate"] >= .02 and de_safe["direct_incumbent_replacement_precision"] >= .60 and de_safe["direct_incumbent_opportunity_capture_rate"] >= .08 and de_safe["selected_nonanchor_teacher_better_rate"] >= .80 and de_safe["alternative_teacher_margin_mean"] > 0.0
     # The scalar V20 operator must preserve V19 safe-domain mechanism exactly; the
     # only allowed semantic difference is all-flagged structural-domain delegation.
     mechanism_identity = all(
@@ -93,7 +100,9 @@ def main() -> None:
         and D["match"] >= S["match"] - .005
         and D["harmful"] <= S["harmful"] + .005
     )
-    deployment_alignment = D["guard_block"] <= .001
+    safe_guard_block = frac([_f(dr[t], "pair_action_anchor_guard_blocked_flip", 0.0) >= 0.5 for t in safe_domain])
+    delegated_guard_block = frac([_f(dr[t], "pair_action_anchor_guard_blocked_flip", 0.0) >= 0.5 for t in all_flagged])
+    deployment_alignment = safe_guard_block <= .001
     retention = D["beneficial"] / max(R["beneficial"], 1e-12) if R["beneficial"] > 0 else float("nan")
     preservation = R["harmful"] - D["harmful"] >= .05 and retention >= .35 and D["beneficial"] > D["harmful"] and D["flip"] >= .03 and D["flip"] < R["flip"]
     anchor_match = _f(raw_m, "selected_local_anchor_action_match"); anchor_regret = _f(raw_m, "selected_local_anchor_teacher_regret")
@@ -128,7 +137,8 @@ def main() -> None:
         "preservation_gain": preservation,
         "endpoint_gain": endpoint,
         "structural_domain_diagnostics": structural,
-        "edge_diagnostics": {"v19_scalar_control": v19e, "v20_scalar": se, "v20_dual": de},
+        "edge_diagnostics": {"v19_scalar_control": v19e, "v20_scalar": se, "v20_dual": de, "v20_scalar_safe_domain": se_safe, "v20_dual_safe_domain": de_safe},
+        "domain_aware_guard_diagnostics": {"safe_domain_scene_count": float(len(safe_domain)), "all_flagged_scene_count": float(len(all_flagged)), "safe_domain_guard_block_rate": safe_guard_block, "delegated_all_flagged_guard_block_rate": delegated_guard_block},
         "metrics": {"anchor": {"match": anchor_match, "regret": anchor_regret}, "raw": R, "v19_scalar_control": V19, "v20_scalar": S, "v20_dual": D, "dual_beneficial_retention_vs_raw": retention},
         "frozen_interface": frozen,
         "thresholds": {
@@ -146,7 +156,7 @@ def main() -> None:
             "regret_vs_raw_tolerance": .02,
         },
         "next_action": next_action,
-        "interpretation": "V64.3.20 changes no learned head. It tests whether V19's mechanism-level success becomes a full endpoint success once all-flagged scenes preserve the frozen raw proposal and are delegated to the unchanged continuous structural-risk guard. Signed selected-evidence attribution remains incremental only if dual improves direct dominance discrimination without material replacement-precision/capture or endpoint harm.",
+        "interpretation": "V64.3.20 changes no learned head. Recovery and post-selection guard-cleanup are domain-aware: all-flagged scenes are delegated structural-domain controls and are excluded from learned-safe-domain mechanism gates. It tests whether V19's mechanism-level success becomes a full endpoint success once all-flagged scenes preserve the frozen raw proposal and are delegated to the unchanged continuous structural-risk guard.",
     }
     p = Path(a.output); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))

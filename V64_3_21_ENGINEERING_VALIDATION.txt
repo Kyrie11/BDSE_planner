@@ -1,0 +1,50 @@
+V64.3.21 EAF-ICER-MCR engineering validation
+=============================================
+
+1. Corrected V20 uploaded screen re-audit
+   - historical STOP remains valid
+   - historical NEXT_ACTION domain accounting corrected
+   - corrected classification: Case E
+   - safe-domain direct replacement precision: 0.6097560976
+   - safe-domain direct opportunity capture: 0.3225806452
+   - safe-domain selected-nonanchor teacher-better: 0.8089887640
+   - safe-domain guard-block rate: 0.0
+   - all-flagged scenes: 28; delegated all-flagged guard blocks: 5 (not learned cleanup)
+
+2. Data isolation
+   - V20 previous design exclusion: 3200 unique validation tokens
+   - uploaded V20 fresh: 500 unique tokens
+   - overlap: 0
+   - V21 exclusion: 3700 unique validation tokens
+   - next selection uses token identity + fixed SHA256 only
+   - TRAIN-only retention fitter reads frozen V18 TRAIN frontier only
+   - runtime has no teacher/J_T/future input
+
+3. Real TRAIN fit smoke
+   - final-guard-admissible selected incumbents: 1674
+   - internal holdout: 301 scenes
+   - scalar retention AUC: 0.7930170398; sign accuracy: 0.7840531561
+   - profile retention AUC: 0.7676244571; sign accuracy: 0.7674418605
+   - scalar/profile/consensus config contracts: PASS
+
+4. Frozen behavior equivalence
+   - 5000 randomized V20-dual tournament cases
+   - old V20 code versus V21 code using frozen V20 config
+   - differing cases: 0
+   - old/new result SHA256: ee15642daacbba31011736523edbe23f6f9a15c74557ca3aa157bc3c277fcb4d
+
+5. Regression
+   - targeted V64.3.6--V64.3.21: 101/101 PASS
+   - full repository: 389/389 PASS
+   - warnings: 36, all pre-existing Transformer nested_tensor/norm_first warnings
+   - no new warning class
+
+6. Static/syntax/contract
+   - python compile for new/modified modules: PASS
+   - RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh bash -n: PASS
+   - all-flagged branch diagnostics initialized: PASS
+   - scalar/profile retention schema checks: PASS
+   - frozen support/scalar-dominance/profile-dominance semantic identity: PASS
+   - fixed zero threshold and L2 contract: PASS
+
+No full/test/closed-loop run is authorized by this engineering validation.

@@ -1008,6 +1008,7 @@ def main() -> None:
             icer_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_dominance_logit_star", []), dtype=np.float64).reshape(-1)
             icer_scalar_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_scalar_dominance_logit_star", []), dtype=np.float64).reshape(-1)
             icer_profile_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_profile_dominance_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_retention_margin = np.asarray(tour_diag.get("_decisive_frontier_icer_incumbent_retention_margin_star", []), dtype=np.float64).reshape(-1)
             icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
             icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
@@ -1054,6 +1055,7 @@ def main() -> None:
                         "icer_dominance_logit": float(icer_dominance_logits[challenger]) if icer_dominance_logits.size == edge_valid.size else float("nan"),
                         "icer_scalar_dominance_logit": float(icer_scalar_dominance_logits[challenger]) if icer_scalar_dominance_logits.size == edge_valid.size else float("nan"),
                         "icer_profile_dominance_logit": float(icer_profile_dominance_logits[challenger]) if icer_profile_dominance_logits.size == edge_valid.size else float("nan"),
+                        "icer_incumbent_retention_margin": float(icer_retention_margin[challenger]) if icer_retention_margin.size == edge_valid.size else float("nan"),
                         "icer_admissible": float(icer_admissible[challenger]) if icer_admissible.size == edge_valid.size else 0.0,
                     }
                     if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):

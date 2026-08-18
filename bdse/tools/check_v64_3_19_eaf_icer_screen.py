@@ -35,8 +35,10 @@ def _auc(y: list[int], s: list[float]) -> float:
     return float((ranks[yy == 1].sum() - pos * (pos + 1) / 2.0) / (pos * neg))
 
 
-def _icer_edge_diag(path: Path) -> dict[str, float]:
+def _icer_edge_diag(path: Path, allowed_tokens: set[str] | None = None) -> dict[str, float]:
     rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    if allowed_tokens is not None:
+        rows = [r for r in rows if str(r.get("scenario_token", "")) in allowed_tokens]
     groups: dict[str, list[dict[str, Any]]] = {}
     support_y: list[int] = []; support_s: list[float] = []
     for r in rows:

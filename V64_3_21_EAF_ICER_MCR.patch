@@ -1,0 +1,5214 @@
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/ALGORITHM_CHANGELOG.md ./ALGORITHM_CHANGELOG.md
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/ALGORITHM_CHANGELOG.md	2026-08-18 08:41:50.000000000 +0000
++++ ./ALGORITHM_CHANGELOG.md	2026-08-18 14:10:43.283487155 +0000
+@@ -7298,3 +7298,257 @@
+ - 5000 randomized safe-domain ICER cases: **0 action / admissible-mask / support-logit / dominance-logit differences** between V19 and V20 policy;
+ - launcher `bash -n`: PASS;
+ - raw/scalar/dual V20 contract checks: PASS.
++
++# V64.3.21 — EAF-ICER-MCR: selection-conditioned magnitude retention + corroborated incumbent dominance after V64.3.20 double-domain audit
++
++## V64.3.20 uploaded screen: the official NEXT_ACTION is a checker domain-accounting false diagnosis
++
++The uploaded V64.3.20 screen printed:
++
++`NEXT_ACTION=V19_mechanism_failed_to_reproduce_in_safe_domain_do_not_tune_thresholds_audit_operator_or_data_identity`
++
++and correctly stopped before full/test/closed-loop.  Re-auditing the exact rows/edges shows that the STOP itself is appropriate, but the **reason string is not**.
++
++The V20 checker used all ICER edge rows in the learned-recovery gate and used the global final-guard-block rate.  V20 deliberately disables learned ICER in all-actions-safety-flagged scenes and delegates those scenes to the frozen structural-risk guard.  Therefore those delegated scenes must not be counted as failures of the learned safe-domain recovery mechanism.
++
++After domain-aware accounting:
++
++- all-flagged scenes: **28**;
++- V20 structural delegation: **100%**;
++- V20 final action identity with raw in all-flagged domain: **100%**;
++- V20-scalar selected/final identity with frozen V19-scalar in safe domain: **100%**;
++- safe-domain post-selection guard-block rate: **0%**;
++- the reported global 1% guard-block rate consists of **5/28 delegated all-flagged scenes**, not learned safe-domain cleanup;
++- safe-domain V20-dual support AUC: **0.7351**;
++- safe-domain direct dominance AUC: **0.7584**;
++- safe-domain direct incumbent replacement precision: **60.98%**;
++- safe-domain direct opportunity capture: **32.26%**;
++- safe-domain selected-nonanchor teacher-better rate: **80.90%**;
++- alternative precision: **87.80%**.
++
++Thus the corrected pre-registered logic is:
++
++- instrumentation: PASS;
++- candidate support: PASS;
++- deployment-complete structural semantics: PASS;
++- safe-domain V19 mechanism identity: PASS;
++- fresh support/dominance signal: PASS;
++- direct incumbent recovery: PASS;
++- signed-profile incremental composite support: PASS;
++- safe-domain deployment alignment: PASS;
++- preservation: PASS;
++- endpoint: **FAIL**;
++- full promotion: **FALSE**.
++
++This is exactly the previously defined **Case E**: mechanism/semantics/preservation pass, regret endpoint still fails.  The corrected next action is teacher-improvement magnitude / robust extremal ordering on the same frozen deployment-complete frontier.  V20 still remains a STOP screen; no full/test/closed-loop is authorized.
++
++The V21 code fixes the historical V20 checker so learned-recovery and post-selection guard-cleanup gates are computed on the safe-available domain only.  All-flagged structural behavior remains separately reported.
++
++## V64.3.20 endpoint attribution: direct replacement is not the remaining bottleneck
++
++Fresh 500-scene endpoint summary:
++
++| arm | teacher match | teacher regret | beneficial | harmful | flip |
++|---|---:|---:|---:|---:|---:|
++| DARM anchor | 14.2% | 25247.70 | - | - | - |
++| raw EAF | 15.6% | **15496.66** | 8.6% | 7.2% | 55.0% |
++| frozen V19 scalar | 19.4% | 16482.96 | 6.8% | **1.6%** | 35.6% |
++| V20 ICER-DC scalar | 19.0% | 16420.18 | 6.8% | 2.0% | 37.4% |
++| V20 ICER-DC dual | **19.6%** | 16387.74 | **7.4%** | 2.0% | 37.4% |
++
++V20 fixes the V19 all-flagged semantic bug: all 28 all-flagged scenes are raw-final-action identical, so their V20-vs-raw regret contribution is exactly zero.
++
++The remaining dual-vs-raw regret gap is concentrated in one safe-domain branch:
++
++| V20-dual path | scenes | total V20-dual - raw teacher regret |
++|---|---:|---:|
++| direct admissible incumbent -> alternative | **82** | **-41211.95** |
++| admissible incumbent -> anchor | **88** | **+486752.07** |
++| raw incumbent inadmissible / anchor-relative branch | 169 | 0 |
++| keep legacy | 133 | 0 |
++| all-flagged delegated | 28 | 0 |
++
++Therefore the direct incumbent-replacement mechanism remains net beneficial.  The unstable branch is the **generic anchor-support head used as a hard veto over an already final-guard-admissible raw incumbent**.
++
++This branch is not stable across inspected fresh splits:
++
++- V19 fresh: admissible incumbent -> anchor contributes approximately **-96001.71** regret versus raw;
++- V20 fresh: the same operator role contributes **+486752.07**.
++
++The selected-incumbent teacher-better prevalence itself does not collapse; the failure is in using an all-edge support classifier as an extremal incumbent-retention decision.  This is the Case-E magnitude problem that V21 targets.
++
++## V64.3.21 main algorithm: EAF-ICER-MCR
++
++Name:
++
++**Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Magnitude-aware Corroborated Reliability**.
++
++The headline novelty remains:
++
++> **evidence-attributed incumbent-contrastive reliability for deployment-admissible extremal recovery under a fixed planner-interface evidence budget**.
++
++V21 does not replace this novelty.  It makes the evidence burden asymmetric and selection-conditioned so that an already admissible extremal incumbent is not treated like a generic frontier edge.
++
++Frozen mainline:
++
++**fixed planner-interface evidence cap B<=16
++-> auditable evidence atoms
++-> terminally frozen M=24 acquisition
++-> selected B<=16 evidence
++-> frozen EAF complete DARM-anchor frontier value
++-> exact selected-evidence attribution
++-> complete deployment-admissible frontier
++-> selected-incumbent retention magnitude + incumbent-contrastive reliability
++-> corroborated alternative extremal recovery / anchor abstention
++-> unchanged one-sided/evidence certificate
++-> unchanged structural-risk guard
++-> final decision preservation**.
++
++### 1. Selection-conditioned incumbent retention magnitude
++
++If the frozen raw-EAF incumbent is final-guard-admissible, V21 no longer lets the generic all-edge support classifier veto it.
++
++A dedicated TRAIN-only linear readout is fit **only on raw-EAF selected incumbents that are final-guard-admissible**.  Its target is:
++
++`J_T(anchor) - J_T(incumbent)`
++
++normalized by a positive TRAIN-only RMS scale.  The normalization never translates zero, so:
++
++- predicted margin >= 0: retain the admissible incumbent as the baseline;
++- predicted margin < 0: anchor becomes the baseline.
++
++The objective is fixed linear MSE + L2=1e-3.  The zero boundary is semantic and is not validation tuned.
++
++This is deliberately a magnitude objective, not another generic classifier: V20 shows that a small number of wrong incumbent vetoes can dominate endpoint regret.
++
++Two retention representations are emitted from one deterministic TRAIN-only fit:
++
++- `scalar-retention`: first 18 registered non-atom incumbent-relative evidence features;
++- `profile-retention`: the same 18 plus 12 exact signed selected-atom contribution statistics.
++
++The scalar/profile retention comparison is a mandatory ablation.  TRAIN internal holdout currently shows profile retention has slightly lower normalized MSE but scalar retention has higher sign AUC, so no signed-profile retention claim is pre-declared.
++
++### 2. Corroborated incumbent-relative dominance
++
++V19/V20 `dual_equal_mean` allows a strongly positive scalar view to compensate for a negative signed-profile view, or vice versa.  Because extremal action selection is sensitive to a small number of high-score false positives, V21 main uses a fixed corroboration rule:
++
++- alternative must satisfy the frozen generic anchor-support logit > 0;
++- scalar incumbent-dominance logit > 0;
++- signed-profile incumbent-dominance logit > 0;
++- only corroborated alternatives are ranked by the equal mean of the two dominance logits.
++
++No view weight or threshold is tuned.  Both zero boundaries are the TRAIN-only semantic log-odds boundaries already frozen in V19.
++
++Design-only analysis on the already-inspected V19/V20 fresh splits showed that this `both-positive -> equal-mean` rule raises direct replacement precision by roughly 3--4pp on both inspected splits at a moderate opportunity-capture cost.  Those inspected results are diagnosis only and are excluded from V21 promotion.
++
++### 3. Deployment-complete all-flagged behavior remains frozen
++
++All-actions-safety-flagged scenes still bypass learned ICER/MCR, preserve the exact raw proposal, and delegate to the unchanged structural-risk guard.  V21 does not learn a magnitude head or dominance decision in that domain.
++
++## V64.3.21 causal experiment: double-fresh replication, not pooled rescue
++
++The central V19/V20 lesson is cross-split stability.  V21 therefore selects **1000 completely new validation tokens** by identity + fixed SHA256 only, then deterministically partitions them into two disjoint 500-scene blocks A and B.
++
++Each block independently runs five arms:
++
++1. raw EAF;
++2. frozen V20 ICER-DC dual control;
++3. V21 scalar-retention + old dual-equal-mean dominance;
++4. V21 profile-retention + old dual-equal-mean dominance;
++5. V21 profile-retention + both-positive corroborated dominance (main).
++
++Causal comparisons:
++
++- `V20 -> scalar-retention mean`: selection-conditioned magnitude objective;
++- `scalar-retention mean -> profile-retention mean`: exact signed selected-evidence contribution to incumbent retention;
++- `profile-retention mean -> profile-retention consensus`: corroborated two-view extremal operator;
++- `raw -> consensus`: complete preservation + endpoint.
++
++A pooled 1000-scene success cannot rescue a failed 500-scene block.  **Both A and B must independently pass**.
++
++Per-block hard evidence includes:
++
++- complete frozen-interface instrumentation;
++- all-flagged delegation and raw-final identity;
++- safe-domain post-selection guard block <=0.1%;
++- healthy multi-admissible frontier;
++- support AUC >=0.65 and direct dominance AUC >=0.70;
++- profile selected-incumbent retention AUC/sign accuracy >=0.65;
++- admissible-incumbent -> anchor total regret delta versus raw <=0;
++- direct incumbent replacement precision >=60%;
++- direct opportunity capture >=8%;
++- safe-domain selected non-anchor teacher-better >=80%;
++- corroborated direct precision >= profile-mean precision +1pp with capture drop <=6pp;
++- harmful absolute reduction versus raw >=5pp and beneficial retention >=35%;
++- teacher match >= DARM anchor +0.5pp;
++- regret <=1.02x raw.
++
++Passing both blocks authorizes **only one frozen independent full-validation reproduction**.  Test/closed-loop remain forbidden until full-val reproduces.
++
++## V64.3.21 data discipline
++
++The inspected V20 fresh set is now permanent design data.
++
++- prior exclusion: 3200 validation tokens;
++- V20 fresh: 500 unique, zero overlap with prior exclusion;
++- V21 exclusion: **3700 unique validation tokens**;
++- V21 fresh: 1000 new label-free hash-selected tokens, split 500/500;
++- no teacher/match/regret/reliability label participates in token selection;
++- TRAIN retention fit uses only frozen V18 TRAIN frontier edges;
++- no validation or test labels enter the fitted config.
++
++## V64.3.21 no-repeat constraints
++
++All previous terminal constraints remain.  In addition:
++
++- do not interpret the original V20 `mechanism_failed` next_action literally; the domain-aware correction classifies V20 as Case E;
++- do not tune the 60% direct precision gate or any support/dominance/retention zero threshold;
++- do not refit V19 support or dominance heads;
++- do not change B/M, selector, acquisition, EAF value checkpoint, certificate, safety mask, or structural guard;
++- do not restore generic support as the hard veto for an already admissible incumbent if V21 retention is being evaluated;
++- do not tune scalar/profile consensus weights; the main rule is both positive then equal mean;
++- do not claim signed-profile retention gain unless it reproduces against scalar retention on untouched data;
++- do not pool A/B to hide a failed replication block;
++- do not use any of the 3700 design-excluded tokens for promotion;
++- do not run full/test/closed-loop from the screen launcher.
++
++If selected-incumbent magnitude fails on fresh data, audit selection conditioning/representation on TRAIN-only data; do not return to selector/acquisition/threshold tuning.  If magnitude and recovery both pass but corroboration does not, keep the profile-mean operator rather than tuning view weights.  If both fresh blocks pass mechanism/preservation but endpoint still fails, only then continue the Case-E branch with a more explicit regret-tail / improvement-magnitude ordering objective on the same frozen frontier.
++
++## V64.3.21 engineering changes
++
++- `bdse/planner/tournament.py`
++  - adds selection-conditioned scalar/profile incumbent-retention margin policies;
++  - generic support remains mandatory for alternatives but no longer unconditionally vetoes an admissible incumbent under MCR;
++  - adds `dual_positive_consensus_mean` dominance policy;
++  - preserves V20 all-flagged deployment-complete delegation;
++  - exposes retention-margin and policy diagnostics.
++- `bdse/experiments/evaluate_open_loop.py`
++  - exports per-edge incumbent-retention margin for auditable TRAIN/fresh diagnostics.
++- `bdse/tools/fit_v64_3_21_eaf_icer_mcr.py`
++  - deterministic TRAIN-only selected-incumbent linear MSE fit;
++  - emits scalar-retention, profile-retention mean, and profile-retention consensus configs from one fit;
++  - fixed L2 and zero semantic boundary; no validation tuning.
++- `bdse/tools/check_v64_3_21_eaf_icer_mcr_contract.py`
++  - verifies frozen V20/V19 support/dominance heads, retention schema, fixed objectives/zero boundaries, and deployment-complete policy.
++- `bdse/tools/check_v64_3_21_eaf_icer_mcr_split.py`
++  - domain-aware per-block mechanism/path/preservation/endpoint audit.
++- `bdse/tools/check_v64_3_21_eaf_icer_mcr_screen.py`
++  - requires both independent 500-scene blocks to pass; no pooled rescue.
++- `bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py`
++  - fixes historical all-flagged/safe-domain accounting bug.
++- `bdse/configs/v64_3_21_design_exclude_v64_3_20_screen_tokens.txt`
++  - 3700-token permanent design exclusion.
++- `RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh`
++  - one TRAIN-only fit, 1000 label-free fresh tokens, two disjoint 500-scene replications, five causal arms per block, pre-deserialization token filtering, hard STOP before full/test/closed-loop.
++- `bdse/tests/test_v64_3_21_eaf_icer_mcr.py`
++  - retention-baseline semantics, two-view corroboration, all-flagged delegation, zero-preserving ridge, domain-filtered edge diagnostics, and exclusion-set tests.
++
++Engineering verification after final implementation:
++
++- V64.3.6--V64.3.21 targeted regression: **101/101 PASS**;
++- full repository: **389/389 PASS**;
++- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first` warnings;
++- real frozen V18 TRAIN frontier fit: **1674** admissible selected incumbents; scalar/profile configs and contracts PASS;
++- V20 historical screen re-audit with corrected domain accounting: Case E, endpoint-only fail;
++- 5000 randomized frozen V20 dual cases through old V20 versus V21 code: **0 differences**, identical output SHA256;
++- launcher `bash -n`: PASS.
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/NEXT_COMMANDS_V64_3_21_EAF_ICER_MCR.txt ./NEXT_COMMANDS_V64_3_21_EAF_ICER_MCR.txt
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/NEXT_COMMANDS_V64_3_21_EAF_ICER_MCR.txt	1970-01-01 00:00:00.000000000 +0000
++++ ./NEXT_COMMANDS_V64_3_21_EAF_ICER_MCR.txt	2026-08-18 14:04:12.286413356 +0000
+@@ -0,0 +1,8 @@
++# V64.3.21 EAF-ICER-MCR — next allowed execution only.
++# Do NOT tune thresholds, B/M, acquisition, certificate, support/dominance heads, or view weights.
++# Do NOT run test or closed-loop even if the double-fresh screen passes.
++
++bash RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh
++
++# If STOP SCREEN appears, archive the entire outputs_v64_3_21_eaf_icer_mcr_screen_2gpu_v1 directory and return it for causal attribution.
++# If BOTH fresh 500-scene blocks pass, the only next allowed stage is ONE independent frozen full-val reproduction.
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh ./RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh	1970-01-01 00:00:00.000000000 +0000
++++ ./RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh	2026-08-18 14:04:12.284276057 +0000
+@@ -0,0 +1,122 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++
++# V64.3.21 EAF-ICER-MCR double-fresh causal replication.
++# Case-E follow-up only: candidate semantics, B/M, acquisition, EAF value,
++# final certificate/guards, V19 support head and V19 scalar/profile dominance heads
++# are frozen. New TRAIN-only learning is restricted to the raw selected incumbent:
++# predict J_T(anchor)-J_T(incumbent) with fixed-zero MSE margin semantics.
++# The main extremal operator additionally requires scalar AND signed-profile
++# dominance views to be positive before equal-mean ranking. No threshold/weight sweep.
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export V18_SCREEN_ROOT="${V18_SCREEN_ROOT:-outputs_v64_3_18_eaf_dacer_screen_2gpu_v1}"
++export TRAIN_EDGES="${TRAIN_EDGES:-$V18_SCREEN_ROOT/provenance/train_raw_eaf_frontier_edges.jsonl}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_21_eaf_icer_mcr_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_21_design_exclude_v64_3_20_screen_tokens.txt}"
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.21-eaf-icer-mcr-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"
++V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++SCALAR_RET_CONFIG="$OUT_ROOT/configs/v64_3_21_mcr_scalar_retention_mean.yaml"
++PROFILE_MEAN_CONFIG="$OUT_ROOT/configs/v64_3_21_mcr_profile_retention_mean.yaml"
++CONSENSUS_CONFIG="$OUT_ROOT/configs/v64_3_21_mcr_profile_retention_consensus.yaml"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs" "$OUT_ROOT/configs"
++TIMING="$OUT_ROOT/provenance/v64_3_21_stage_timing.tsv"; : > "$TIMING"; ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
++stage_end(){ local now; now=$(date +%s); printf '%s\t%s\n' "$STAGE_NAME" "$((now-STAGE_START))" >> "$TIMING"; }
++
++[[ -d "$BDSE_VAL_CACHE" ]] || { echo "STOP: missing val cache $BDSE_VAL_CACHE" >&2; exit 2; }
++[[ -s "$TRAIN_EDGES" ]] || { echo "STOP: missing frozen V18 TRAIN frontier $TRAIN_EDGES" >&2; exit 2; }
++[[ -s "$DESIGN_EXCLUDE_TOKENS" ]] || { echo "STOP: missing V21 design exclusion" >&2; exit 2; }
++[[ "$(wc -l < "$DESIGN_EXCLUDE_TOKENS")" -eq 3700 ]] || { echo "STOP DATA: V21 exclusion must be exactly 3700 inspected validation tokens" >&2; exit 2; }
++for f in "$RAW_CONFIG" "$V20_CONFIG"; do [[ -s "$f" ]] || { echo "STOP: missing config $f" >&2; exit 2; }; done
++
++stage_start prerequisites
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_21 --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit.json" > "$OUT_ROOT/logs/v64_3_13_eaf_dmvr_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False): raise SystemExit('STOP: V64.3.13 prerequisites invalid')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH + 1))").pt"; fi
++export EAF_CKPT; [[ -s "$EAF_CKPT" ]] || { echo "STOP: missing EAF checkpoint $EAF_CKPT" >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q bdse/tests/test_v64_3_21_eaf_icer_mcr.py bdse/tests/test_v64_3_20_eaf_icer_dc.py bdse/tests/test_v64_3_19_eaf_icer.py bdse/tests/test_v64_3_18_eaf_dacer.py bdse/tests/test_v64_3_17_eaf_daler.py bdse/tests/test_v64_3_16_eaf_raer.py bdse/tests/test_v64_3_15_eaf_eair.py bdse/tests/test_v64_3_14_eaf_ocfi.py bdse/tests/test_v64_3_13_eaf_dmvr.py bdse/tests/test_v64_3_12_cet_bdmu.py bdse/tests/test_v64_3_11_btp_bdmu.py bdse/tests/test_v64_3_10_hap_bdmu.py bdse/tests/test_v64_3_9_af_bdmu.py bdse/tests/test_v64_3_8_bdmu.py bdse/tests/test_v64_3_7_darm_dbr.py bdse/tests/test_v64_3_6_bcha_lbpr.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++stage_end
++
++stage_start train_only_retention_fit
++python -m bdse.tools.fit_v64_3_21_eaf_icer_mcr \
++  --train-frontier-edges "$TRAIN_EDGES" --base-v20-dual-config "$V20_CONFIG" \
++  --output-scalar-retention-config "$SCALAR_RET_CONFIG" --output-mean-config "$PROFILE_MEAN_CONFIG" --output-consensus-config "$CONSENSUS_CONFIG" \
++  --output-report "$OUT_ROOT/provenance/v64_3_21_train_only_retention_fit.json" | tee "$OUT_ROOT/logs/v64_3_21_retention_fit.out"
++python -m bdse.tools.check_v64_3_21_eaf_icer_mcr_contract --config "$SCALAR_RET_CONFIG" --expect mcr-scalar-retention --frozen-v20-dual-config "$V20_CONFIG" --output "$OUT_ROOT/provenance/v64_3_21_scalar_retention_contract.json"
++python -m bdse.tools.check_v64_3_21_eaf_icer_mcr_contract --config "$PROFILE_MEAN_CONFIG" --expect mcr-mean --frozen-v20-dual-config "$V20_CONFIG" --output "$OUT_ROOT/provenance/v64_3_21_profile_mean_contract.json"
++python -m bdse.tools.check_v64_3_21_eaf_icer_mcr_contract --config "$CONSENSUS_CONFIG" --expect mcr-consensus --frozen-v20-dual-config "$V20_CONFIG" --output "$OUT_ROOT/provenance/v64_3_21_consensus_contract.json"
++stage_end
++
++stage_start fresh_token_selection
++TOK1000="$OUT_ROOT/provenance/val_screen_fresh_1000_tokens.txt"; TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"; TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"
++python -m bdse.tools.select_fresh_preprocessed_tokens --preprocessed-dir "$BDSE_VAL_CACHE" --split val --exclude-tokens "$DESIGN_EXCLUDE_TOKENS" --count 1000 --hash-seed "$FRESH_HASH_SEED" --output "$TOK1000" --audit-output "$OUT_ROOT/provenance/v64_3_21_fresh_1000_audit.json" > "$OUT_ROOT/logs/fresh_token_selection.out"
++head -n 500 "$TOK1000" > "$TOKA"; tail -n 500 "$TOK1000" > "$TOKB"
++python - "$TOK1000" "$TOKA" "$TOKB" <<'PY'
++import sys
++all=[x.strip() for x in open(sys.argv[1]) if x.strip()]; A=[x.strip() for x in open(sys.argv[2]) if x.strip()]; B=[x.strip() for x in open(sys.argv[3]) if x.strip()]
++assert len(all)==len(set(all))==1000 and len(A)==len(set(A))==500 and len(B)==len(set(B))==500 and not set(A)&set(B) and set(A)|set(B)==set(all)
++print('PASS fresh double-block identity: 1000 unique = 500 A + 500 B, overlap 0')
++PY
++stage_end
++
++run_eval(){
++  local gpu="$1" cfg="$2" split="$3" tag="$4"; local tok="$TOKA"; [[ "$split" == B ]] && tok="$TOKB"
++  CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop --config "$cfg" --checkpoint "$EAF_CKPT" --split val --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios 500 --scenario-token-file "$tok" --require-all-scenario-tokens --output "$OUT_ROOT/provenance/${split}_${tag}_metrics.json" --per-sample-output "$OUT_ROOT/provenance/${split}_${tag}_rows.jsonl" --frontier-edge-output "$OUT_ROOT/provenance/${split}_${tag}_edges.jsonl" --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${split}_${tag}.out" 2>&1
++}
++run_pair(){ local stage="$1"; shift; stage_start "$stage"; "$@"; stage_end; }
++
++# Five two-GPU waves = 10 strict paired evaluations, no pooled rescue.
++stage_start fresh_wave_1; run_eval "$GPU0" "$RAW_CONFIG" A raw & P0=$!; run_eval "$GPU1" "$V20_CONFIG" A v20 & P1=$!; S=0; wait "$P0"||S=1; wait "$P1"||S=1; [[ $S -eq 0 ]]||exit 2; stage_end
++stage_start fresh_wave_2; run_eval "$GPU0" "$SCALAR_RET_CONFIG" A scalar_retention & P0=$!; run_eval "$GPU1" "$PROFILE_MEAN_CONFIG" A profile_mean & P1=$!; S=0; wait "$P0"||S=1; wait "$P1"||S=1; [[ $S -eq 0 ]]||exit 2; stage_end
++stage_start fresh_wave_3; run_eval "$GPU0" "$CONSENSUS_CONFIG" A consensus & P0=$!; run_eval "$GPU1" "$RAW_CONFIG" B raw & P1=$!; S=0; wait "$P0"||S=1; wait "$P1"||S=1; [[ $S -eq 0 ]]||exit 2; stage_end
++stage_start fresh_wave_4; run_eval "$GPU0" "$V20_CONFIG" B v20 & P0=$!; run_eval "$GPU1" "$SCALAR_RET_CONFIG" B scalar_retention & P1=$!; S=0; wait "$P0"||S=1; wait "$P1"||S=1; [[ $S -eq 0 ]]||exit 2; stage_end
++stage_start fresh_wave_5; run_eval "$GPU0" "$PROFILE_MEAN_CONFIG" B profile_mean & P0=$!; run_eval "$GPU1" "$CONSENSUS_CONFIG" B consensus & P1=$!; S=0; wait "$P0"||S=1; wait "$P1"||S=1; [[ $S -eq 0 ]]||exit 2; stage_end
++
++stage_start paired_identity
++python - "$OUT_ROOT/provenance" "$TOKA" "$TOKB" <<'PY'
++import json,sys,pathlib
++root=pathlib.Path(sys.argv[1])
++for split,tokfile in [('A',sys.argv[2]),('B',sys.argv[3])]:
++    want=[x.strip() for x in open(tokfile) if x.strip()]
++    for tag in ['raw','v20','scalar_retention','profile_mean','consensus']:
++        rows=[json.loads(x) for x in open(root/f'{split}_{tag}_rows.jsonl') if x.strip()]; got=[str(r['scenario_token']) for r in rows]
++        if len(got)!=500 or set(got)!=set(want): raise SystemExit(f'STOP DATA: {split}/{tag} token mismatch')
++        m=json.load(open(root/f'{split}_{tag}_metrics.json'))
++        if not m.get('scenario_token_prefilter_active',False): raise SystemExit(f'STOP SPEED: {split}/{tag} pre-load token filter inactive')
++print('PASS paired token identity + pre-deserialization filtering: 10/10 arms')
++PY
++stage_end
++
++stage_start double_fresh_screen
++for split in A B; do
++python -m bdse.tools.check_v64_3_21_eaf_icer_mcr_split --split-name "$split" \
++  --raw-metrics "$OUT_ROOT/provenance/${split}_raw_metrics.json" --raw-rows "$OUT_ROOT/provenance/${split}_raw_rows.jsonl" \
++  --v20-metrics "$OUT_ROOT/provenance/${split}_v20_metrics.json" --v20-rows "$OUT_ROOT/provenance/${split}_v20_rows.jsonl" --v20-edges "$OUT_ROOT/provenance/${split}_v20_edges.jsonl" \
++  --scalar-retention-metrics "$OUT_ROOT/provenance/${split}_scalar_retention_metrics.json" --scalar-retention-rows "$OUT_ROOT/provenance/${split}_scalar_retention_rows.jsonl" --scalar-retention-edges "$OUT_ROOT/provenance/${split}_scalar_retention_edges.jsonl" \
++  --profile-mean-metrics "$OUT_ROOT/provenance/${split}_profile_mean_metrics.json" --profile-mean-rows "$OUT_ROOT/provenance/${split}_profile_mean_rows.jsonl" --profile-mean-edges "$OUT_ROOT/provenance/${split}_profile_mean_edges.jsonl" \
++  --consensus-metrics "$OUT_ROOT/provenance/${split}_consensus_metrics.json" --consensus-rows "$OUT_ROOT/provenance/${split}_consensus_rows.jsonl" --consensus-edges "$OUT_ROOT/provenance/${split}_consensus_edges.jsonl" \
++  --output "$OUT_ROOT/provenance/v64_3_21_split_${split}_screen.json" | tee "$OUT_ROOT/logs/v64_3_21_split_${split}_screen.out"
++done
++SCREEN="$OUT_ROOT/provenance/v64_3_21_eaf_icer_mcr_double_fresh_screen.json"
++python -m bdse.tools.check_v64_3_21_eaf_icer_mcr_screen --split-a-report "$OUT_ROOT/provenance/v64_3_21_split_A_screen.json" --split-b-report "$OUT_ROOT/provenance/v64_3_21_split_B_screen.json" --output "$SCREEN" | tee "$OUT_ROOT/logs/v64_3_21_double_fresh_screen.out"
++stage_end
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"
++
++python - "$SCREEN" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1])); print('DOUBLE_FRESH_PASS=',r.get('both_independent_500_scene_blocks_pass')); print('NEXT_ACTION=',r.get('next_action'))
++if not r.get('full_promotion_to_independent_full_val_reproduction',False): raise SystemExit('STOP SCREEN: do not run full/test/closed-loop; follow next_action')
++print('PASS DOUBLE-FRESH SCREEN ONLY. Next allowed stage: one frozen independent full-val reproduction. Test/closed-loop remain forbidden until that reproduction passes.')
++PY
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/V64_3_20_EAF_ICER_DC_POSTMORTEM_AND_V64_3_21_EAF_ICER_MCR.md ./V64_3_20_EAF_ICER_DC_POSTMORTEM_AND_V64_3_21_EAF_ICER_MCR.md
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/V64_3_20_EAF_ICER_DC_POSTMORTEM_AND_V64_3_21_EAF_ICER_MCR.md	1970-01-01 00:00:00.000000000 +0000
++++ ./V64_3_20_EAF_ICER_DC_POSTMORTEM_AND_V64_3_21_EAF_ICER_MCR.md	2026-08-18 14:11:50.413195616 +0000
+@@ -0,0 +1,241 @@
++# V64.3.20 EAF-ICER-DC postmortem and V64.3.21 EAF-ICER-MCR design
++
++## Executive conclusion
++
++The uploaded V64.3.20 run must remain a **STOP screen**, but its printed `NEXT_ACTION=V19_mechanism_failed_to_reproduce...` is not the correct causal diagnosis. The checker mixed all-actions-safety-flagged scenes—where V20 deliberately disables learned intervention and delegates to the structural-risk guard—into learned-safe-domain recovery and global guard-cleanup gates.
++
++After correcting that accounting, V64.3.20 is **Case E** from the V20 pre-registration:
++
++- candidate semantics: PASS;
++- multi-challenger support: PASS;
++- support/dominance signal: PASS;
++- V19 safe-domain operator identity: PASS;
++- deployment-complete all-flagged semantics: PASS;
++- direct incumbent recovery: PASS;
++- preservation: PASS;
++- endpoint regret: **FAIL**.
++
++Therefore the previous rule—*only enter teacher-improvement magnitude / robust extremal ordering in Case E*—was correct. The next algorithm should not reopen acquisition, B/M, certificates, or thresholds.
++
++## 1. Corrected V20 screen attribution
++
++### Endpoint
++
++| arm | match | regret | beneficial | harmful | flip |
++|---|---:|---:|---:|---:|---:|
++| DARM anchor | 14.2% | 25247.70 | - | - | - |
++| raw EAF | 15.6% | **15496.66** | 8.6% | 7.2% | 55.0% |
++| frozen V19 scalar | 19.4% | 16482.96 | 6.8% | **1.6%** | 35.6% |
++| V20 scalar | 19.0% | 16420.18 | 6.8% | 2.0% | 37.4% |
++| V20 dual | **19.6%** | 16387.74 | **7.4%** | 2.0% | 37.4% |
++
++V20 dual preserves the key preservation gain but misses the pre-registered regret tolerance (`<=1.02 x raw`).
++
++### The official mechanism failure is a checker artifact
++
++There are 28 all-flagged scenes. V20 delegates all 28 to the structural-risk path and final action identity versus raw is 100%. V20-scalar is also 100% identical to frozen V19-scalar in the safe-available domain.
++
++The old checker nevertheless counted delegated scenes in learned recovery. Domain-aware re-audit gives for V20 dual safe-domain only:
++
++- support AUC: **0.7351**;
++- direct dominance AUC: **0.7584**;
++- direct replacement precision: **60.98%**;
++- direct opportunity capture: **32.26%**;
++- selected non-anchor teacher-better: **80.90%**;
++- alternative precision: **87.80%**;
++- safe-domain post-selection guard block: **0%**.
++
++The global 1% guard-block rate is exactly five delegated all-flagged scenes. It is not learned safe-domain cleanup.
++
++Hence the correct next-action classification is endpoint-only Case E.
++
++## 2. The real remaining bottleneck
++
++Per-scene V20-dual versus raw decomposition:
++
++| path | scenes | total regret delta |
++|---|---:|---:|
++| direct admissible incumbent -> alternative | 82 | **-41,211.95** |
++| admissible incumbent -> anchor | 88 | **+486,752.07** |
++| raw incumbent inadmissible / anchor-relative | 169 | 0 |
++| keep legacy | 133 | 0 |
++| all-flagged delegated | 28 | 0 |
++
++So direct alternative recovery is not the endpoint bottleneck. It is net beneficial.
++
++The unstable operation is using the generic all-edge anchor-support classifier as a hard veto over an already deployment-admissible selected incumbent. On the previous V19 fresh split this branch was beneficial (about -96k regret); on V20 fresh it reverses to about +487k. This is a cross-split extremal-calibration problem concentrated in incumbent retention.
++
++The new causal statement is:
++
++> reliability has generalized well enough to recover alternatives, but an already admissible selected incumbent needs a **selection-conditioned, regret-sensitive evidence burden** before it can be demoted to the anchor.
++
++## 3. Mainline and novelty decision
++
++Keep the paper mainline:
++
++`fixed planner-interface evidence budget -> auditable selected evidence -> frozen complete EAF frontier -> exact selected-evidence attribution -> deployment-admissible incumbent-contrastive reliability -> evidence-supported extremal recovery -> unchanged certificate/structural guard -> decision preservation`.
++
++Keep the headline novelty:
++
++> **evidence-attributed incumbent-contrastive reliability for deployment-admissible extremal recovery under a fixed planner-interface evidence budget**.
++
++V20 does not falsify this mechanism. On the contrary, direct incumbent replacement still reproduces at roughly 61% precision and 32% opportunity capture. What has not yet reproduced is the complete conversion from mechanism to endpoint because incumbent demotion has an asymmetric tail cost.
++
++V21 therefore refines the mechanism rather than changing the story: **asymmetric evidence burden** for preserve/replace/anchor decisions.
++
++## 4. V64.3.21 EAF-ICER-MCR
++
++Full name:
++
++**Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Magnitude-aware Corroborated Reliability**.
++
++### 4.1 Selection-conditioned incumbent retention
++
++For a raw-EAF incumbent that already satisfies the final-guard-admissible contract, generic edge support is no longer allowed to veto it directly.
++
++A TRAIN-only linear MSE readout is fit only on raw selected incumbents that are final-guard-admissible. Target:
++
++`J_T(anchor) - J_T(incumbent)`.
++
++The target is divided by a positive TRAIN RMS scale only, preserving zero exactly. Runtime:
++
++- predicted margin >= 0 -> incumbent remains baseline;
++- predicted margin < 0 -> anchor becomes baseline.
++
++No validation threshold is used. L2 is fixed at `1e-3`.
++
++Two representations are emitted:
++
++- scalar retention: 18 registered non-atom incumbent-relative evidence statistics;
++- profile retention: those 18 plus 12 exact signed selected-atom contribution statistics.
++
++The real V18 TRAIN frontier contains 1674 eligible selected incumbents. Fixed internal holdout diagnostics:
++
++- scalar retention AUC: **0.7930**, sign accuracy **0.7841**;
++- profile retention AUC: **0.7676**, sign accuracy **0.7674**;
++- profile normalized MSE is slightly lower than scalar.
++
++These are TRAIN-only design diagnostics. They justify testing both representations; they do not establish a signed-profile retention claim.
++
++### 4.2 Corroborated incumbent dominance
++
++V20 dual uses an equal mean of scalar and signed-profile dominance logits. V21 main changes eligibility, not weights:
++
++- alternative support logit > 0;
++- scalar direct-dominance logit > 0;
++- signed-profile direct-dominance logit > 0;
++- only then rank by their equal mean.
++
++This makes the signed attribution view corroborating evidence rather than a compensating term. All boundaries remain zero; no threshold or mixture-weight sweep is permitted.
++
++### 4.3 Structural domain remains frozen
++
++All-flagged scenes continue to preserve the raw proposal and delegate to the unchanged structural-risk guard. V21 learns nothing in that domain.
++
++## 5. Why this is the appropriate Case-E branch
++
++V20 shows:
++
++- semantic candidate/frontier problems are already fixed;
++- direct alternative replacement is net beneficial;
++- all-flagged deployment semantics are now correct;
++- preservation is strong;
++- endpoint error is dominated by the incumbent-to-anchor path.
++
++Therefore it would be causally wrong to change selector, acquisition, budget, safety/evidence certificates, or direct-dominance thresholds. The only justified new learning is a selection-conditioned improvement-magnitude readout for the incumbent, plus a structural corroboration rule for high-score alternative false positives.
++
++## 6. V21 experiment: two independent fresh replications
++
++V21 permanently excludes all 3700 already inspected validation tokens, selects 1000 new tokens by identity + fixed SHA256 only, and deterministically splits them into two disjoint 500-scene blocks A/B.
++
++Each block runs five arms:
++
++1. raw EAF;
++2. frozen V20 dual;
++3. scalar-retention + old dual-mean dominance;
++4. profile-retention + old dual-mean dominance;
++5. profile-retention + positive-consensus dominance.
++
++The experiment separately tests:
++
++- magnitude objective: V20 -> scalar retention;
++- signed selected-evidence retention contribution: scalar retention -> profile retention;
++- robust evidence corroboration: profile mean -> profile consensus;
++- final mechanism: raw -> consensus.
++
++**Both blocks must pass independently. Pooled 1000-scene metrics cannot rescue a failed block.**
++
++Primary per-block gates include:
++
++- frozen interface and complete frontier instrumentation;
++- all-flagged raw identity and safe-domain zero hidden guard cleanup;
++- support AUC >=0.65, direct dominance AUC >=0.70;
++- profile retention AUC/sign accuracy >=0.65;
++- total regret delta of admissible-incumbent->anchor branch <=0;
++- direct replacement precision >=60%, opportunity capture >=8%;
++- safe selected-nonanchor teacher-better >=80%;
++- consensus direct precision >= profile-mean +1pp, capture loss <=6pp;
++- harmful reduction >=5pp and beneficial retention >=35%;
++- match >= anchor +0.5pp;
++- regret <=1.02x raw.
++
++Passing the double-fresh screen permits only one frozen independent full-validation reproduction. It does not permit test or closed-loop.
++
++## 7. Designs retained vs. discarded
++
++Retain in the main mechanism:
++
++- V18 final-guard-admissible complete frontier;
++- V19 support/dominance decomposition;
++- V20 structural-domain delegation;
++- direct incumbent precision/capture as mechanism metrics;
++- exact signed selected-evidence attribution as a structured evidence view;
++- V21 selection-conditioned magnitude and corroborated dominance if fresh replication supports them.
++
++Keep as mandatory ablations:
++
++- scalar versus profile selected-incumbent retention;
++- profile mean versus profile positive-consensus dominance;
++- frozen V20 control.
++
++Do not retry:
++
++- OCFI radius/alpha or probability-threshold sweeps;
++- BTP/RET/CET/AF/HAP;
++- reopening selector/acquisition or increasing B/M;
++- relaxing evidence/safety/structural guards;
++- restoring V17 utility-equivalence hard mask;
++- generic all-edge support as an unqualified veto over an already admissible incumbent;
++- broad EAF unfreezing before this double-fresh causal screen.
++
++## 8. Engineering audit
++
++Implemented and checked:
++
++- historical V20 checker is domain-aware; replaying the uploaded V20 output now returns Case E and the correct magnitude-ordering next action;
++- retention teacher target is only consumed in TRAIN-only fitter; runtime config contains only fixed feature normalization/weights/bias;
++- scalar/profile dominance and anchor-support heads remain byte-for-byte semantically frozen from V20/V19;
++- all-flagged delegation remains unchanged;
++- retention diagnostics are initialized on every branch and exported per edge;
++- all scenario token filtering remains before NPZ deserialization;
++- V21 design exclusion is 3700 unique validation tokens;
++- launcher uses two disjoint 500-token files and hard paired-identity checks;
++- old V20 dual behavior through the modified V21 tournament was replayed on 5000 randomized cases: zero action/score/diagnostic differences, identical SHA256.
++
++Regression:
++
++- targeted V64.3.6--V64.3.21: **101/101 PASS**;
++- full repository: **389/389 PASS**;
++- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first` warnings;
++- real TRAIN fit + all three V21 config contracts: PASS;
++- launcher shell syntax: PASS.
++
++## 9. Decision rule after the next run
++
++If both fresh blocks pass, freeze V21 and run exactly one independent full-val reproduction.
++
++If selected-incumbent magnitude fails, do not change alternative dominance or B/M; audit incumbent-conditioning/representation using TRAIN-only data.
++
++If magnitude/recovery pass but corroboration fails, keep profile-mean as candidate and do not tune view weights.
++
++If mechanism/preservation pass on both blocks but endpoint still fails, only then extend the same Case-E branch to explicit regret-tail / teacher-improvement magnitude ordering on the same frozen frontier.
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/V64_3_20_UPLOADED_RESULT_CAUSAL_AUDIT.json ./V64_3_20_UPLOADED_RESULT_CAUSAL_AUDIT.json
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/V64_3_20_UPLOADED_RESULT_CAUSAL_AUDIT.json	1970-01-01 00:00:00.000000000 +0000
++++ ./V64_3_20_UPLOADED_RESULT_CAUSAL_AUDIT.json	2026-08-18 14:09:28.896858173 +0000
+@@ -0,0 +1,99 @@
++{
++  "audit": "v64_3_20_uploaded_result_causal_audit_corrected_domain_accounting",
++  "corrected_case": "E",
++  "corrected_checker_full_promotion": false,
++  "corrected_gates": {
++    "candidate_support_valid": true,
++    "deployment_alignment_invariant": true,
++    "deployment_complete_structural_domain_support": true,
++    "endpoint_gain": false,
++    "fresh_counterfactual_signal": true,
++    "instrumentation_valid": true,
++    "preservation_gain": true,
++    "signed_profile_incremental_support": true,
++    "v19_safe_domain_mechanism_identity": true
++  },
++  "corrected_next_action": "V20_deployment_semantics_and_recovery_pass_but_endpoint_still_fails_now_audit_teacher_improvement_magnitude_ordering_without_selector_budget_or_threshold_changes",
++  "data_use": "design_only_after_inspection; all V20 500 fresh tokens permanently excluded from V21 promotion",
++  "domain_guard": {
++    "all_flagged_scene_count": 28.0,
++    "delegated_all_flagged_guard_block_rate": 0.17857142857142858,
++    "safe_domain_guard_block_rate": 0.0,
++    "safe_domain_scene_count": 472.0
++  },
++  "key_conclusion": "Direct incumbent-to-alternative replacements remain net beneficial; endpoint regret failure is dominated by the unstable admissible-incumbent-to-anchor veto path. V20 structural delegation itself is correct.",
++  "metrics": {
++    "anchor": {
++      "teacher_action_match": 0.142,
++      "teacher_regret": 25247.70155393243
++    },
++    "raw": {
++      "beneficial_pair_potential_intervention_rate": 0.086,
++      "harmful_pair_potential_intervention_rate": 0.072,
++      "pair_action_anchor_guard_blocked_flip": 0.348,
++      "pair_potential_deployed_flip_rate": 0.55,
++      "teacher_action_match": 0.156,
++      "teacher_regret": 15496.657364608343
++    },
++    "v19_scalar_control": {
++      "beneficial_pair_potential_intervention_rate": 0.068,
++      "harmful_pair_potential_intervention_rate": 0.016,
++      "pair_action_anchor_guard_blocked_flip": 0.0,
++      "pair_potential_deployed_flip_rate": 0.356,
++      "teacher_action_match": 0.194,
++      "teacher_regret": 16482.964223029023
++    },
++    "v20_dual": {
++      "beneficial_pair_potential_intervention_rate": 0.074,
++      "harmful_pair_potential_intervention_rate": 0.02,
++      "pair_action_anchor_guard_blocked_flip": 0.01,
++      "pair_potential_deployed_flip_rate": 0.374,
++      "teacher_action_match": 0.196,
++      "teacher_regret": 16387.73759441003
++    },
++    "v20_scalar": {
++      "beneficial_pair_potential_intervention_rate": 0.068,
++      "harmful_pair_potential_intervention_rate": 0.02,
++      "pair_action_anchor_guard_blocked_flip": 0.01,
++      "pair_potential_deployed_flip_rate": 0.374,
++      "teacher_action_match": 0.19,
++      "teacher_regret": 16420.183048714614
++    }
++  },
++  "official_uploaded_next_action": "V19_mechanism_failed_to_reproduce_in_safe_domain_do_not_tune_thresholds_audit_operator_or_data_identity",
++  "original_checker_full_promotion": false,
++  "safe_domain_dual_mechanism": {
++    "alternative_recovery_precision": 0.8780487804878049,
++    "alternative_recovery_rate": 0.18850574712643678,
++    "alternative_teacher_margin_mean": 1.547461071800929,
++    "direct_counterfactual_dominance_auc": 0.758401742583647,
++    "direct_incumbent_opportunity_capture_rate": 0.3225806451612903,
++    "direct_incumbent_replacement_precision": 0.6097560975609756,
++    "direct_incumbent_replacement_rate": 0.3082706766917293,
++    "selected_nonanchor_teacher_better_rate": 0.8089887640449438,
++    "support_auc": 0.7350567939371907
++  },
++  "v20_dual_vs_raw_path_decomposition": {
++    "admissible_incumbent_to_anchor": {
++      "scene_count": 88,
++      "total_dual_minus_raw_teacher_regret": 486752.06566708535
++    },
++    "all_flagged_delegated": {
++      "scene_count": 28,
++      "total_dual_minus_raw_teacher_regret": 0.0
++    },
++    "direct_incumbent_to_alternative": {
++      "scene_count": 82,
++      "total_dual_minus_raw_teacher_regret": -41211.95076624657
++    },
++    "inadmissible_incumbent_anchor_relative": {
++      "scene_count": 169,
++      "total_dual_minus_raw_teacher_regret": 0.0
++    },
++    "keep_legacy": {
++      "scene_count": 133,
++      "total_dual_minus_raw_teacher_regret": 0.0
++    }
++  },
++  "why_official_next_action_is_wrong": "V20 checker mixed all-flagged delegated structural-domain scenes into learned-safe-domain selected-nonanchor and global guard-block gates."
++}
+\ No newline at end of file
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/V64_3_21_ENGINEERING_VALIDATION.txt ./V64_3_21_ENGINEERING_VALIDATION.txt
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/V64_3_21_ENGINEERING_VALIDATION.txt	1970-01-01 00:00:00.000000000 +0000
++++ ./V64_3_21_ENGINEERING_VALIDATION.txt	2026-08-18 14:11:50.413934114 +0000
+@@ -0,0 +1,50 @@
++V64.3.21 EAF-ICER-MCR engineering validation
++=============================================
++
++1. Corrected V20 uploaded screen re-audit
++   - historical STOP remains valid
++   - historical NEXT_ACTION domain accounting corrected
++   - corrected classification: Case E
++   - safe-domain direct replacement precision: 0.6097560976
++   - safe-domain direct opportunity capture: 0.3225806452
++   - safe-domain selected-nonanchor teacher-better: 0.8089887640
++   - safe-domain guard-block rate: 0.0
++   - all-flagged scenes: 28; delegated all-flagged guard blocks: 5 (not learned cleanup)
++
++2. Data isolation
++   - V20 previous design exclusion: 3200 unique validation tokens
++   - uploaded V20 fresh: 500 unique tokens
++   - overlap: 0
++   - V21 exclusion: 3700 unique validation tokens
++   - next selection uses token identity + fixed SHA256 only
++   - TRAIN-only retention fitter reads frozen V18 TRAIN frontier only
++   - runtime has no teacher/J_T/future input
++
++3. Real TRAIN fit smoke
++   - final-guard-admissible selected incumbents: 1674
++   - internal holdout: 301 scenes
++   - scalar retention AUC: 0.7930170398; sign accuracy: 0.7840531561
++   - profile retention AUC: 0.7676244571; sign accuracy: 0.7674418605
++   - scalar/profile/consensus config contracts: PASS
++
++4. Frozen behavior equivalence
++   - 5000 randomized V20-dual tournament cases
++   - old V20 code versus V21 code using frozen V20 config
++   - differing cases: 0
++   - old/new result SHA256: ee15642daacbba31011736523edbe23f6f9a15c74557ca3aa157bc3c277fcb4d
++
++5. Regression
++   - targeted V64.3.6--V64.3.21: 101/101 PASS
++   - full repository: 389/389 PASS
++   - warnings: 36, all pre-existing Transformer nested_tensor/norm_first warnings
++   - no new warning class
++
++6. Static/syntax/contract
++   - python compile for new/modified modules: PASS
++   - RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh bash -n: PASS
++   - all-flagged branch diagnostics initialized: PASS
++   - scalar/profile retention schema checks: PASS
++   - frozen support/scalar-dominance/profile-dominance semantic identity: PASS
++   - fixed zero threshold and L2 contract: PASS
++
++No full/test/closed-loop run is authorized by this engineering validation.
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/configs/v64_3_21_design_exclude_v64_3_20_screen_tokens.txt ./bdse/configs/v64_3_21_design_exclude_v64_3_20_screen_tokens.txt
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/configs/v64_3_21_design_exclude_v64_3_20_screen_tokens.txt	1970-01-01 00:00:00.000000000 +0000
++++ ./bdse/configs/v64_3_21_design_exclude_v64_3_20_screen_tokens.txt	2026-08-18 14:03:09.178657596 +0000
+@@ -0,0 +1,3700 @@
++0002a432e9845e32
++00814c6af085579c
++00bea42e7e515b28
++00d8cd2d3fff5915
++010fe154bd4b54fe
++011b4fba362e5419
++012c0c9dd4d257ba
++0139fd5be9ac5b00
++013b0ff8ddb9560d
++013f45ba458556c3
++014d12aac6865d53
++01602e046c4753b0
++016cbbfb33145e9f
++016f9f0863cd56f9
++017ed832e4f35d2a
++0192f5b15d695743
++019c20b7f1105937
++01a7f8cbae1c5bd3
++01e2399224d5513d
++01feffdc81e053e8
++0207d5ee1e92521d
++022763ad69fd5553
++023d2da098e854f7
++02485fdc1b675055
++026d0c5463cb58d3
++02784fe8f3655b39
++028635cd16d4501a
++0294a55f45df5c3a
++02a6823557e8547a
++02cd424494ee5075
++02ed8d9b05ea51c2
++03163be445ab5756
++0317b5f6ca155438
++0318a714cf1550c1
++032c89d702f15459
++03333323145a5bf8
++0383de2431475771
++0391aaca09045bb8
++0394ab39712d5eea
++03d8b1850afa57be
++03df4ddef6bd5f72
++03ee3359684e5582
++03f77996d03151bf
++041e4eaa310e5e00
++0423624c4fd354c7
++042bc8736c1a53f8
++0451050da016527c
++047788e100d95d03
++047d5b3b3a5c5e19
++0481674b51395c0f
++0499067ac5a152e6
++04aaaf21b34c5c2d
++04b87da60b0c53c0
++04e1fad0ff0f5514
++051d56b3d0e85c49
++0523807854e05175
++053ad0c4ba6c554d
++053dec5345bd54ce
++054e03f1c8c4521c
++05723139afb257a3
++0588e1c64739502e
++058c67c236a15544
++058e688d94b75e3c
++05ba235c78a75dd2
++05c8a5fadb8e5042
++05ce656dc7ee5cfc
++05df9c7a70c859d4
++05ff258a30475bf9
++06139b2300f45570
++061c43a6ca3b5228
++063713b1ff3351e8
++063de03c471c5ed8
++069d255b007752b1
++06a3538fde335f09
++06c9c953adc653ff
++06eed2b0a472527a
++06f6d387648554d2
++06f7d61921a95108
++06f99604bf305b77
++0702d69aa5a55615
++070e5fa8484b554d
++0717f620ecb658aa
++072f763dc6ad5a69
++073aba1c80e2564e
++0756b445c58754d3
++0758dbcb73795bfb
++076d8759fe8254dc
++0775db85895557af
++0776db16712a59fa
++0789f2ba16985a43
++079a8b51f2e053c7
++07a66c09373652e2
++07b29c35871c596a
++07c628090057558a
++07f90df4322c554a
++080b7ecf82a35741
++0849b1cf61485722
++08629267b7215135
++0863376a0728507e
++0871f88da5cf5bb6
++0884e973f23e5b4f
++0899a976cd195a8d
++08fdf1aa246f586d
++0902b7df7326540d
++0905eba77d2c510d
++090861915187562a
++092609deb30b5f57
++0935f42581985761
++0949e1a3eec55782
++095fdf94706250bc
++09b054ad66fb5047
++09c0f9e769605a2b
++09c350e3b42c5c36
++09d3ca808d695423
++09ddbfd92ca054a3
++09e2e9c3512f5085
++09f80bb437715937
++09f88f222b425ca0
++0a03ae9e54ac5b4b
++0a261ca3c0bc52e0
++0a3367245a0152b9
++0a554b9a19255436
++0a57d387d05d5670
++0a64a68c1ce55b99
++0a80fec01a985883
++0a90b297477251e7
++0a940bd200795970
++0ac06ecb2af45110
++0ad7219b6ade5236
++0ae13d7353a8591b
++0af164f535f058a6
++0af510a6515855fc
++0b0411fc76815adf
++0b2273bc50675661
++0b31a648f6645780
++0b3d7f6906245560
++0b40a47cb44e5b60
++0b7472ebafe85e8b
++0b798fabc715516e
++0b99de76f1af54b4
++0b9aa455990850f4
++0ba73232f2795aed
++0c0cfc92af655bf8
++0c35c89dbc795663
++0c7606a2f4dd57f9
++0c7624a4bf8051f7
++0c8fa072704e5cc7
++0cb19d3d8cd45bf9
++0cc8b1ff530953ec
++0ce0d356b4655570
++0cf91f47248250ba
++0d042ee407625b4c
++0d3cb332b7765100
++0d3f292d3a985433
++0d48a9ee02ba5ff8
++0d50a84f18e05089
++0d542c2608ce5f4b
++0d6bf5c60f7d5d34
++0d6d9b675cfe5299
++0d6ecfd78927599a
++0d826f0affcf5749
++0d9efcb08b8751c4
++0dc4e29ad4be5219
++0dc77369b8ef573b
++0dcd01c3a0175f37
++0dd046353cdc52fe
++0dd5f4cc756f53f9
++0dd6ca09284d509b
++0dff07d0cce75e16
++0e10de21dbc15c18
++0e18f84f6605552e
++0e20dbd67822560b
++0e2503580481519d
++0e34999cac055b5e
++0e3cdc3974b35aaf
++0e41ad8a13055a00
++0e44f645576c53b7
++0e5264877a6a52dd
++0e5360fd451e594a
++0e617c552a175f16
++0e83a939a7995127
++0e85e87f72675f5c
++0ec0feaf3f52510e
++0eea6b858a805738
++0ef0c16646805b2b
++0efa599f035e557b
++0f1ee80aae175b4c
++0f21338f747d56d4
++0f27f5b5172f563f
++0f45589cd8a15a87
++0f4d02de05145cf1
++0f6bc8e6bfd858d6
++0f86307826fe554a
++0f8a423f8798547a
++0fc7cf968b6e56b4
++0fe4a8253d665082
++0fed46f93cfb53de
++0ff6989d5cb659b2
++0ffbf5add3ff5f5d
++100dfffd7f965bb8
++1015a16be2435430
++103cf72096fe594f
++10606ec18e975451
++1062ab6fd418568d
++106a749426af5552
++107045b4cc61501c
++107cc81ac72c54be
++10800fc3498e5c93
++1089cfe55aeb53df
++108ab38cd8725aca
++109a42a5c4335851
++109b15fa029b52cc
++10a0ac3d26c45424
++10cc5bdda7b45385
++10cf6e40633951b3
++10f4787882a4543b
++1116ddeb13365306
++1120ac2244a75f70
++1124ef0f6e685180
++113eed8299455bd1
++1171604ee5325deb
++11747d458b70519c
++117ec918a83453ef
++11e8db7462425785
++11fa86143d915569
++11fd9bfae2955fe5
++12223c6f1d255e2c
++127ba1ff6cd35d9b
++127dae3f28de5cc3
++128ead0be9165c70
++12ce910d76e65082
++12ef9eff5ab25f49
++1339528f26045bd9
++13422008a2a9583e
++134c7e637d475771
++1350be865bed5f3b
++1359974ad1ba5d06
++137670b6696d5093
++138ae4f9fa8a5f5c
++13c7435f9cda514c
++13ea6d228dde5241
++13f29a2bcdea5851
++13f41da862fb5121
++1408a87dd2e4523b
++142b5046724a5b27
++143abae4b38e5fd6
++144a36a364a95d85
++14568ffa4dba5e6e
++145fdc5907ee56bc
++1488fd584ef15708
++148d93f4f6325f03
++149c9b885059564b
++14a45c4758e553cc
++14d70076b6f75d55
++14d880662f955513
++14e2883a4a0b572e
++14e38fc4c49f5fe0
++15113f03b0235b82
++153364ba21995de1
++1540578101dc52a8
++15416947b62a540e
++159dbf4702575dba
++15af0500082e5dd0
++15c5a1d987055ef8
++15cf4544e3145eef
++15dc3eadca315984
++15e5982b15ed5262
++161dd3cd0d11505c
++165dbfe8004e59ec
++1664500c99105079
++1691dcf3291458b1
++1698a8e0f98e5fbd
++169e9eb563c65b28
++16c7bdcd18025f23
++16d2d56d6cc4541e
++16d7e327fd4e5b34
++16f6f2c467b15310
++173c3df14b1e5ea0
++176266fe03a35d16
++17631870866b5edb
++1769adc04c5c5005
++17749ef27d5458ca
++17819c923108575f
++1785ada2326350cf
++17b0fd7bf32a50ef
++184ba36d520650e6
++1876ee52e78551cc
++187b436cfa2859d4
++1884b25a3c62571b
++18ab4896a4f25a96
++18b81059f2765f4d
++18bee136e4c05894
++18c74e3ff47d5982
++18f5cf6fa7f75c42
++18f68a33674f5042
++190522916b0e51c0
++1920b454f07f542d
++192f717626cb5e6c
++1983694e1dfa506d
++199028368cba50a1
++19cbb9f964025bb5
++19e8c0607c3c593b
++1a0789e46a5f5903
++1a4b0f1c1c475aee
++1a51565d91955433
++1a8bb2c6b7f45fe2
++1a8c40b527845b5f
++1a940f216c78509f
++1aa169d4d2fd5829
++1aa23be102d8598e
++1ab57daf5a635dc5
++1aba54a3640b5d27
++1ad6bc5b81d553d5
++1ada34bbb539556e
++1adf24606e6e543d
++1af15a0be055581a
++1b45d4eeaec65bb0
++1b8c41bc5f245050
++1bb244c31d2853a3
++1beb3b1055525cf2
++1bf48df9c5275139
++1bf9ed9086d15984
++1bfe7696be9c5b70
++1c52174b11f15634
++1c6055e7f5f051c9
++1c6f61e99a8c5608
++1c7e4130c7b75e22
++1c8e952af42057b7
++1ca44c63cb77564b
++1ca693f0fc895403
++1ca6a8b9aed4578b
++1cde7dca00c857c6
++1ce8b46ba7ee555c
++1ce8dbd88ead5300
++1cf0b2e607a051e7
++1d650b5388d25271
++1d794f95c0f2573d
++1d8927889e795a6c
++1d93732d600c5ce4
++1d94309d9b635baa
++1db995d6cfdf5edf
++1dd485d1630b5310
++1dfb78e4b1215fe0
++1e0043e6bf415c2f
++1e01e2d76dd957c4
++1e089d1f737f5881
++1e0a5a1e5d0f5e6b
++1e0db907b9d056c6
++1e32a37f5904555d
++1e4577c4794052d7
++1e4d923a9d1451e4
++1e5866dd88ed564e
++1e5939461b12512d
++1e5baf3e2cfa5877
++1e72f67d7891555c
++1e7ccc2f408e551c
++1ea187eab007596d
++1eaaae5b7fcc5c71
++1eafa0ba24015b8c
++1eb897bfbf9e548f
++1ec37ab97a50543c
++1ec61921aebd57ec
++1ecd609ca1e159d2
++1edf9b0f5b1256ff
++1ee0cb289dab5205
++1ee3977cc3b65216
++1f39cbb3386e5c46
++1f45ae2cdc2c59e9
++1f60650197e55bf4
++1f8c330bf49e5f41
++1fba0f4bb8d3574c
++1fbcfb89912b51a1
++1fbf020938f55370
++1fc13de28cde585e
++1fcb714890965a7d
++1fd4d62584365268
++1ff136877ea751ac
++200437733bcf55c9
++2097b8f7d19b52f2
++209bfd5851fa5be1
++20c9671fe9c7597a
++20e4721b64a8587b
++20ebcae8d7245bbf
++2109df691b6f56df
++21239a4adcca519f
++214dab908ce05d23
++215e9ce8f9485a12
++21803aaa4d25535a
++21826bc5cb4c556b
++218d8a75aeb756b6
++21b357aa278155f3
++21da7fb1767557d9
++21dc4bcfcca7512d
++21e1aa09ccfb5dcf
++21f344256cd253a8
++21f62196ac92562e
++22059058be205363
++221636c832a95e7c
++221f35a11f855909
++22a413829b165a12
++22b2474035d95fa4
++22b501c6534b52b8
++22bf12b2f1845e8f
++22db48979e29543f
++2311810c1d765f53
++231a98aaa43353f2
++232c0dfd68cc5829
++238142838cc05082
++2383ec5a94315ebc
++238bf73febe55fb2
++23a3da7b40f05b30
++23b7fe327e555d33
++23bbd7608e415491
++23c15f974b725070
++23e19353e4715930
++23ef3a795ffd554f
++2418c32f003d5164
++2418dd003d5e5fbf
++242cb8602b7a5d0a
++24368d872c8059b1
++246b55213fa154e5
++2482dd9618c35851
++248e21b0c6485b68
++249c1a0e9f1b595a
++24a5d776c8fb5f01
++24b2ba92f3db5af7
++24b4cf89812c53d6
++24b68f07079e5ca0
++24baffd5b9bd5f40
++2502d910ddfa5894
++2507230c184d5784
++2513dc8607d55d4b
++251c1887c2095d48
++2547fec5f41c5f57
++256776036ed05fc6
++256e155561cc5da4
++2570804cf2875db0
++2571cf0444395fa0
++25a40138f9ed5a5b
++25ba4a347a6b5d71
++25bc0b9f04d153e9
++25e20cdeb7295e23
++25e9f0208a4656a9
++25f131de2df059c8
++25f5d49a4acd5ad6
++2639c4957f9459d5
++2679d309816859fe
++2679e9262610559c
++26949c528ad452d0
++26976ecdc2675bba
++26d5d92263cc5791
++26de03899c47544a
++270a8f771b025ee1
++271574a9b33552c8
++2738fbaf724f566b
++273a64620d805034
++273e44cc8c0d57c2
++276ce8fb498859f4
++2783da9637265b83
++27a27de7a0615da1
++27b7d5fcb8965acf
++27b8a1f8f9945b51
++27bd39258e705f8c
++28077bd7685a5500
++280c6dd98e7956ce
++283472c0c92452eb
++2842476f6747597b
++28a680f5c691524b
++28a6ac45be195bfb
++28b6da4b80195f89
++28bae61314785487
++28cedc237dae575d
++2912dd60f68955a4
++2917ab2316e45964
++29189571cd265071
++29368ba046ff54f2
++2949d9e335c45db9
++294db262548d5451
++295641b581365958
++296eccd675635b47
++2994d12a3d085372
++2996f687ee8e59ed
++29a203c82047579e
++29d7610f01db593b
++2a0c548ef28f56e7
++2a44f70341125c96
++2a5abf7c0d465166
++2a66d9dba10c582a
++2aa81fa0ddad52a1
++2ac73768f9625fa3
++2adc38b6d1e95fb6
++2ade9913eefa578b
++2ae6e49e7415561a
++2af6341706075a37
++2afc4589b0185eba
++2b2650c2d1835ad4
++2b280755afff553e
++2b315ec8c3375586
++2b393e433d3d5839
++2b4aae0e22e454a3
++2ba5cc48c1c65618
++2ba95744cce75c4c
++2badaa97545d5f07
++2bc212c949f05371
++2bdc708f17845e90
++2be3b4b718825639
++2bf6ed6f9b5b5ec6
++2bfd68530dcb5f07
++2bff899f5c835e64
++2c03d37e73fb5cfd
++2c211296b8815ad2
++2c6587c823065a91
++2c76ab9c2e615e93
++2c9303d0049e58e8
++2c996847126a5563
++2ca0938efc6e584e
++2cba1864f12c508f
++2cc8c6051df5557a
++2cdc983fed715671
++2ce3b7521c1259d1
++2ce43af9542f5046
++2ced74c93d9d5cd0
++2d2637db14e95e58
++2d63c761e5775e68
++2d6f423b59ff5c1a
++2da967a4dcfa5b22
++2daad06e562057ac
++2db07600dead50c5
++2db1f3a0f5ae5ab6
++2dc9720db7285e93
++2df7d123c8695f83
++2e0bf453ae89586a
++2e19579446b6524b
++2e2f43ba57365fcf
++2e4fdb09cac55efe
++2e67986455ec577c
++2e8ea80616ed5a0f
++2ec4b145ef325cd8
++2ec54dbe90345dbc
++2ed1960a330d5cc4
++2edaab1c57c0544b
++2efa83c017c154d8
++2efbe868c198507c
++2f0b7548b5fb58c2
++2f4220c388355dfb
++2f4e733d6d3850da
++2f81b143be8153a6
++2facae77e24751e7
++2fb7c01bbc06555a
++2ffb72f70f0c57e1
++2ffc7b9d93845a83
++2ffe71f33d535d0f
++3008f60890275e60
++3018be88b1c159bb
++30347cae84755c8a
++30433cfa441652cc
++305547e21afb5e8e
++309053d859ea586f
++3091adb45fdb53b5
++30afcef2b59f5d52
++30beee9455db5dc0
++30c5e85758c15db3
++30e5da72103054d2
++30e9ad8529bb55c9
++30f6fea891c15df2
++3104e1114c1c54ab
++31178a73f9eb58bb
++312152db2a0e5f6d
++31522fe41732537f
++31663b9fc34054eb
++316f86b685fc54ba
++31707e23e3975ae3
++318b4546725e538c
++31afe2442ee05412
++31babf585fff58d2
++31c3fa27bd955a93
++31dccbd24fda556b
++320237def493555d
++3216b3bd8bec58b6
++32199948a8715b16
++321b210b7eb55c10
++326d908f1a545b02
++3290c942c67f55c3
++3294cf94c0ce5fe6
++329a2af874085783
++32af8e90d322545f
++32e7e033ba465f8a
++33092ebe42525522
++33281dfd2de3502e
++333aadd36eef5ca1
++3342c2d274175572
++335b847770305f63
++336000b23a165481
++3393429a9b805386
++33c69b1c86ac57d0
++33c8a36be05d5775
++33ed0c34b7595f74
++33ed216c37085b43
++33ed65f99c9650b7
++33f4a0393790597b
++341d28b7910c5926
++3420fc33aa3255b7
++3427711dc8175e18
++343c25d327ad52c0
++3451bc1235fd5b28
++34538bb5f66453a9
++345a068fb9c953a7
++34629bd6a0965ca3
++34809cc5e2c25a49
++348f0e58acb553c9
++34aab78206e45886
++34b6465892fd5b13
++34d853b435055653
++34e1b71e0d1f53c1
++34e67cd656db55df
++350390c4d02d51d1
++3513c2be5d4e5fd3
++3540ff9401335f9b
++355c3c77c3985891
++35741423c7775522
++35764d5914915ef0
++3587a14e368b5c20
++35b99df2f9b65aa3
++35beb85b6f5b51cf
++35c5a4a1251956ce
++35d2bb1aa2dc5a02
++3618d46ab09456f9
++361b9b655b2b535a
++3657384b4d505368
++365d8b19e21856fa
++367dc5bc825a555c
++3682da982e795166
++3695c4520e235339
++369cdf01731c5560
++36d11559f27e5642
++36d2e587f4cf58ed
++36d6fbb863cc5607
++37490731326e5540
++3756c7c2739657d0
++375bf841a64259df
++3775b35bd19b5192
++3789ad8bd1165ed7
++37c6447ef5c2535c
++380cf3eabb495f6f
++383b5544cfeb5fef
++384ad082ff0f5d54
++38557e9b5d4b5581
++38639c08d44b5874
++387ef539ef665823
++38ae0c94d7bf5bdb
++38d1b895835d5cae
++38ee16dfd81653b7
++39752acb4d5c5c34
++39a4bf4073785ad4
++39d0f8bf35a95386
++39d50bc5815b569f
++39f0ea98e77756e2
++39f7b3c3c47454a8
++3a0130fdf86f5e18
++3a321a5e9bae50b8
++3a330280c25f5986
++3a7baea164a95247
++3a9f0e9245a258c0
++3aa06960fca05026
++3ac4b59ef6015443
++3ad5d320e1ac5a05
++3aea2482463c5d2c
++3b37b123510a580e
++3b428cbc643d5504
++3bcf47cdb2b55881
++3bdad5f47ff95717
++3c05d25832635dc1
++3c241d90905053eb
++3c2774bb7f005331
++3c73295969585e19
++3c86cac6c3755329
++3ca56231a3c75505
++3cc0bc649fcf5cb4
++3ccdd70d80f756cd
++3cd3fbd57b4555d1
++3cd4eb826b9f52c4
++3d09c36d007e5b50
++3d1a163f98d85242
++3d1de7782aed5f7e
++3d31639e44a650e1
++3d4d64d89edb54cd
++3d4ddaedf3ec5254
++3d9a1d8c737c5a91
++3db9c325b3b154f6
++3dcf8539c24e58ff
++3ddd25944899591e
++3e1c137a87d85f62
++3e2d9322c2735047
++3e2d97e071f15946
++3e337cd3dd995b1b
++3e3a3b56eaff5d64
++3e4917396a255a8b
++3e500f97f9365926
++3e8ff52039025d74
++3ea9299e9d7b547e
++3eabccb083275b69
++3eae1cf73485522c
++3ebc5e52067457a6
++3ed58a96881e57ce
++3ede1ac359e959a0
++3f065b3f8a5b54da
++3f1dce474d0d5de5
++3f34c59dd95a5605
++3f89ab06429053a2
++3fc7da4c9d4b55b5
++3fcfb4a1a6bc591d
++3fe08c4125fa59bf
++4012290afacc5f3f
++4023a39a3c475356
++402b20757dce5681
++404558f6b6ea5596
++4052a3876cb05401
++4057777391425f2b
++40c309a647b85a77
++40f92601b9a5566f
++4106ce8ef4855ae2
++411cccaa0fb75d3f
++416e78bdb130578e
++41776aeccc6c5d83
++417feb2e743553b8
++41889c7ee88c5383
++41bfe9baaddc5353
++420fb8e35aa5542f
++4264428ce598555d
++42b16a7843f3576d
++42e1834fd2f65ad8
++43140e32c7c05926
++432fa269f2f0566b
++4334b767efcf5c89
++433b5b9e31db5070
++4363004220af5bc2
++436adb3bb6cf5f74
++437de6a551015487
++438af4d8b37d5d18
++43ccade9e15e5a46
++43d7351022c252b3
++43da2043f2c95f88
++43e4df0b83965ff6
++440aeac491e05221
++4413ea1a6ccc5dc4
++4421e317677a589c
++443d9b4bb4c05e0e
++44489e5789875e05
++4453432fefc55a69
++44714b25125d5bf3
++44734a71189b52a9
++449397faaee05fb1
++44a4030e0aca5685
++44a6692ed4af5772
++44af54b390a45c9a
++44dd102806fa55e2
++4504434b8d7c57c0
++450ec97141cc5a9a
++4513c1f0e5575b02
++4536429218e45558
++453bb5038d765832
++4559fe93a82a5540
++456b17a6bfad59bc
++45790bb9ea085985
++45847c639bab58d7
++458adc4d8323588f
++459ddeaf79db5a5d
++459f089cafdc585f
++45a1db965e6855f8
++45b5c43033905eef
++45b8544e07915595
++45d1e0f7345c5566
++45d213bd17c956dc
++45d47f41c82c56bc
++45d66f882c8b54a2
++45faafcb807255a5
++45fb47a12a7252aa
++46054d85395a556e
++462fd36438e250c3
++4658ab10ced559c5
++46a4bae217145115
++46c0c1e2df7e576a
++4701dd939b7d5a8a
++47060578ecce5aa2
++470e47aa1396544e
++471b7e3d04ae564f
++471e693316075abd
++473a456b13a154fe
++473e33c60c02586c
++4749d5da77b45167
++475ef45632595748
++47641e72d9025031
++476cd8fdb6445b7a
++477f1123659753d7
++4781fbc1f0d1546a
++4785bd6917c85319
++47882bd503365a1b
++478ebe126ad9595d
++479330400c5f5bbb
++47bf4b74089b5d03
++47dec6a2e66b55f2
++47dfa0de758056ec
++47f8a59e5e615e77
++4801959bbd4f513b
++4818010227c755f3
++481ab095c2435532
++481c8c97fe4e52e0
++4827ed643831552d
++482947e0e24f5cf1
++483734a1cd3251c3
++4840d38b003a55c2
++4859352d317a5846
++48598718364758df
++48610f5ec833590f
++4862fe84afd55f99
++48667602264e548e
++486c08f3b5295ab7
++488727d5d1405822
++48a1647f834f546a
++48aaa64e75ce5592
++48b410b2e1465506
++48b5b5b77d585e26
++48cac1fe4cac5ac7
++48cfe66e2f2b57b8
++490027d208e55095
++4906993d850455c7
++49141d42ece55866
++49305cd2d08f5084
++49528aaa44c459e0
++49681d2b12a45949
++4969c7417dbe5c75
++497c1c6876bf58ba
++49853ede1ccc5cd6
++498a95cd67fc5e23
++498bffb199d85416
++498c6eb2dadb55d8
++49b8c9f5e1f654fd
++49cdc9b05fe855f7
++49d1c31535615df4
++49f5a75cdcd157f5
++4a147e248ef652fb
++4a2b4e71c1515e12
++4a2f23d857ab5964
++4a4ba0890f875e5d
++4a581a3a8ac951ac
++4a955ef3fbd154f5
++4aa30a691eb55742
++4aa89f5f5c485fbb
++4ab124411bd95397
++4ab538d89b2057d0
++4ab8deec346b5604
++4aba929296b857c5
++4ac25a3ebe555c07
++4acc0de4a8c45b0f
++4ae4b9138fe051f3
++4afca6acb7225299
++4b06e7ee929b5091
++4b1c7de73ff25c86
++4b371128168a5427
++4b500ecd5cee5e78
++4b5682cf675c586f
++4b65070e822453f8
++4b7e736fe11e56d0
++4b9c891cf0f55c42
++4b9eecd278665419
++4bbbcca598bb5001
++4bc0ff5b2eca56de
++4bc3605ad0bc522e
++4c0f7dd30a0c5a3e
++4c17b3b560575d50
++4c180fbb4fe056ef
++4c3223b523d35e82
++4c33905d08ca5a30
++4c439bfe3eb25939
++4c787b845b155b11
++4c8589bacf715da3
++4c97b87838fb5565
++4cbd50a7ce125928
++4d081c07ae605b27
++4d134be3c33f5664
++4d3341e368d95970
++4d9330ce9da153d7
++4dcbc2b629525390
++4ddf4fe71cc35839
++4de09833beb9590d
++4de94f852b245591
++4df8dd00d2bd5c9b
++4e07547572565fc0
++4e2bd047746a58f0
++4e58617d81865126
++4e7a3ef119e35c9a
++4e95ed13de3554a8
++4e9f2a337b1d51a1
++4ea04d3bd30d594e
++4eb84fc82efe5771
++4ecbf1e7ad7052cf
++4eecf58fe2fd5164
++4ef15fe741635ef6
++4ef4e998878d5f0b
++4efb452b04f15b62
++4f04fd5497d251ba
++4f1263fe4dab59bd
++4f3b2678ebb75102
++4f432f716b3b5da4
++4f48e600e93a5449
++4f508102c4a1501d
++4f7fb6f7a6c75b37
++4f886b5eb7945412
++4f89685fd29b5ec1
++4f9863bce7415ac8
++4fa98346645b5194
++4fad1fb38f1f5c44
++4fb2819b0f0f54d6
++4fbe22c062705d0c
++4fc3e12a540653ca
++4fc4c40cefbf5897
++5009b788718f59ce
++500bca7ea29e5fc7
++500d5193f1495b72
++501396cf08635001
++5047323671b65f6c
++504c0784d95a5e22
++5055ca7132e25f75
++5075751a0ecc5c51
++50856c50f3b2510d
++508e266bde1755e6
++50a447943b705c11
++50ae88be9f075961
++50c663d18e4d52f2
++50d5ba90107e5c61
++50d6edc5c0005f19
++50e8e5c424ac5c17
++50fc7d02928e5047
++51058e5d0fe85949
++5114aaa5629a5218
++5119751f65e2543d
++513b1ceca1c559c2
++513e04fd81a3566c
++514e7e3fda9757f5
++5154ba2d88be51fa
++515c13fb500d5862
++51652afdecd55b3d
++51717f23f6ee5516
++51769283092354f2
++5176c3c630355621
++5179facfcb0e59c6
++519ac580b519503d
++51be6a2778525cd2
++51c27ee846145943
++51d057df682f500b
++51d1ee37046b541f
++521ac27f242f5a71
++522f115ff6e95548
++5235ae92bd225dfd
++52391ba1bbad503b
++52417b6d83a05df1
++52442b44588e5327
++5250604c1631512f
++5260672e01e05756
++52932e46dd805a45
++529a0e3f54ac5d69
++52ab50550257580b
++52b3662c48bf5b46
++52b919f0a64f5e81
++52d84044a2245ea8
++52fb5b4f44095100
++53051e2e8a1859fb
++53065716581f5669
++5327e5dd2aed5e57
++532e60a56a2753b7
++5333057ff3ba5e74
++53358adc23725887
++5347d72bd8e35e87
++5374b265460552f2
++53785b6942ba55d7
++53849677d5a256c2
++5388abf9eefb5378
++539f3ed9c1225197
++53b43a17fe5c505b
++53e0cafce299569f
++53fce431e1f35b23
++54147aa3b91c52f0
++542b6890b93b5320
++5448e385af0c5403
++547cc79695f751e9
++54895e1c21c9542d
++5494ec9d2efd5709
++5497dcfc385c5f0e
++54a018b876df566a
++54ce3561d4a45f32
++54e5d57ea4795930
++54e915381ac955d1
++54f4d577662e53fc
++551af62cf903591f
++555137c366be5fad
++5552b5a038f35b3c
++55558a42a9ef5e12
++556652aaccf95f60
++5590091c72935597
++55a9d0ab8c7354e5
++55c58beb472b589b
++55f147701d965dc9
++55fae7de755254b1
++560c17500f455b8e
++5655c040e27c5d7c
++566537cb97245316
++5668da055e8e5117
++568e92491b6059c6
++56a4d45184db58a7
++56f6a57b9f1a5735
++571a3a3a45b65e42
++57367f570bf1574a
++5751c6908f885ef0
++57524cec824c5cc6
++5766318e48ef5c61
++57758583d2805909
++577ece979bec5aef
++57b18f6220de5daf
++57d1d49e05675372
++57f000360ade594b
++57f028e77756569c
++580af3cecc5f51f5
++581a96dc21765dac
++5831462af6445e29
++5837942163495df8
++584f0b1fb5dd56de
++5878bb0d2a985ded
++587d64b77c2d59e2
++58823d41525a5b5b
++58ae56b380755f76
++5906a1876c6f51c6
++591729b520b75787
++5959368d4e345c69
++59ba59bda2fa5f45
++59bed00c696f5ceb
++59eedbdddb465424
++59fcbbcc9d915b4c
++5a0e93ed0fda52e3
++5a2e11ddd13f503f
++5a67f22042965e46
++5a8e34bdd2885798
++5b22a80a9ff756d3
++5b3fa9f3f6ba55e7
++5b7aa00978635c06
++5b9323b16c3b57ea
++5ba9b16e86a65f20
++5bc3a9454f5e58bb
++5c0efb187c625499
++5c4dc773317e5cde
++5c7ee88bef1159ea
++5c927690d8a85361
++5c963fb947185536
++5ccbe8f7b7835a87
++5ce9d36b0a9751d2
++5d182080975359ba
++5d258037b1a355b8
++5d76ff9b273457cd
++5d91ff45ef9d568f
++5da3c8f1cf4e5217
++5dc0efea117952ea
++5dd02c18c4d656b2
++5dd5406f509454e2
++5def184e34a65998
++5e23e2c0968b5a2c
++5e3e103eca7356cf
++5e5cfddf0f795f6a
++5e623788df395779
++5e87c645b17c5fb2
++5e9d4d244c835094
++5eafff716d865a17
++5ee29a2cd9ac5a6a
++5f2ab55b66dd5e67
++5f3739b465f150dd
++5f3d76e98e225ca3
++5f3fda71358a51e9
++5f5fcca183ee5f83
++5f81dd905ea850af
++5f94f11dec4054fa
++5fa650f2048b59f5
++5fc6c47a518c50a7
++5fe53175eef5559a
++5ff271debed951eb
++5ffd714f0ef6538e
++6052f112847d522e
++6066ecb5127c5047
++608ca4d591e15923
++60b647c5eea3543b
++60ca28b777565374
++60d79f5eeb8256e6
++60ec141899f65a92
++60f4308868a95271
++611ab64105b45b92
++611f1ab894ef51f9
++612bafa314125485
++615d1d5d62ef55ad
++617b63db80e750d7
++61c8c3f6070c59a3
++61d7d24415ff548b
++61de83cdc9075f5f
++61ea02ecbecc5886
++61f3656e7a265127
++6225a995d621510e
++6234316ae8af5580
++623ee6a98fe353f6
++6245d7d61c14521e
++62939cbc62465516
++62e6e0680cad52ba
++62fff73f2ead5637
++632ddf61f8b05938
++6330fd755cad5a7f
++637b0d808fff5ee9
++63822a90598e5bdb
++63d9325c287d5c3c
++63e7b7221f9c5fcf
++63f81717603958d9
++642724b6dc4e5697
++643bf04f68d65432
++6456faedc3e0520a
++64f72427f2b8585b
++650016a046605b2d
++6573125ddfce51aa
++658d63264ae352d1
++65dde19bf3d35248
++65ebbeb3c14d5655
++65fa8e58d29e5f56
++660f320f373d5228
++664a15ddbf285aac
++666064ec09765939
++667463e267e65035
++66808a4a01465a00
++66a95682cd3252b1
++66ad920fac2455ea
++66e6ac5f585e50b1
++66ff613544d95bd0
++6708776aac8c56e6
++670e6d902df359ca
++674a0ae0f99f5420
++679ad70c55f858a6
++67a68ed9085b5ccf
++67c4ebc7762f5a07
++67d396d42b765b2a
++67dd5302d14055d0
++67f2b58cc78a5f00
++680300fcfada5f8f
++680a655b0f7b54db
++68230438ba785a7e
++6829f5d34bfd5343
++684d28654dee5f44
++68589339ebdc53a2
++689a32d9b72653a0
++68a71c2010e15acd
++68b21f09da0d5959
++68bdae1bda505d61
++68be25e0ef5a5a09
++68c689b8c6d459ed
++691c933690da59a3
++69388d9fab5f5dd5
++693ea13d4de150b5
++69438f4b8cf55e16
++694cc8d803c85fb4
++69963fbb4f855591
++69a0d2510eaa570e
++69a9bd32a63b5359
++69bf836e64115488
++69c0780dc176562b
++69c9f96202ef535d
++69d0b84f659d5570
++69d3c73732dc592f
++69de8d8a859c5dc0
++69fa65df802a5029
++6a595898f18854e9
++6a7a99ffdc8852cc
++6a7baf946d695a61
++6aa4adcdbf105e64
++6aa694a28264537f
++6aa755a5dfec5825
++6acacf398506558f
++6b01e930dc925d9f
++6b2a20a1e6fc5fa1
++6b3ded2049855541
++6b641fea1868544c
++6b78955d07b5578e
++6be0d68200e45f7f
++6be70f37ca0d55ea
++6beacd27c71355d0
++6c1027bd4f7c515e
++6c21af3890015463
++6c2ea88530a25e6e
++6c375325b1e25c72
++6c3d76c658fc5001
++6c50e05f98b05ef3
++6c8a3e14464c5a0d
++6cc45fb4334f58d5
++6cd7c6d9b86155df
++6d1910c4979d5bdb
++6d280f1b5b555173
++6d30cb80152b53a5
++6d41b7556d975d70
++6d59f2ed44645ddc
++6d617848878b538e
++6d727901105156cb
++6d740aa9a9b556b2
++6d82642b7788596e
++6dbfb3dfb9a150cc
++6de79e604f7e5313
++6e090943e744591c
++6e158592279f5bb9
++6e22d7f6365853c4
++6e41e136c47e5437
++6e4fa4ca9ed75936
++6e745fae8076599e
++6ecbfdb7b3705d62
++6ece1ba28e2d5b25
++6efbc1c93e9854bb
++6f1843659b0b57c8
++6f5e3af3cd6b5574
++6f67b1a748c251ea
++6f7ca28b021053e4
++6fbcb8d3c4d350cd
++6fccbb2f8a8c5479
++6feac1191d465b92
++6ff09ba2e3345536
++700404f60a1a5e6e
++701884f976165dd8
++70212d029b5e56ae
++70451657633e5112
++70a449b8745256e9
++70c019f5564d592f
++70d0d25c6c2059bc
++7126608aaefd56a6
++7128ad8c60275de4
++713ba5be51f85c91
++718775397c9c567c
++718b9eb1bf7a5e8e
++71a03b023a3a5c37
++71b3127b3234545e
++71e5c852cd0453cb
++71fe4360066d59fa
++720068eae82551a2
++720ff72ed3a95bc2
++721d67221cd65749
++722d83fd61915611
++7237b0274dfd5eab
++726c2d1b681054fc
++729369040d325493
++72a0ab290e5e5bdd
++72be6f5926ca59d4
++72c29c6364d75f1e
++72eedbab01055e45
++72f8515ea1cf5417
++7327a9b4daf45a0f
++734c9c45e6cd5a95
++7374c7d20d8f5bee
++738de7501d375b96
++73a55de4d6055fe7
++73a8e116cee550df
++73b25588578a5b6b
++741953de225d565b
++74291fa216ae5f80
++745428e383f159fa
++7478b63853e95b1f
++748dbf7e8a5b51f6
++74be11e6d4c55cd1
++74c477522b9b58af
++74ceacd5f8f75d59
++74d2638fea4e523e
++74e7020b38195231
++75180c6f2cd35e8f
++7532dcec300956da
++7548e5c6bfd35e9f
++756da33b9c595b23
++758fee31af305c08
++759b92262e2f5801
++75a4398347cd54a6
++75bc9997f223599d
++75bf4d5e8edc5327
++75e55b4969345749
++75f052b74d255ff3
++7610b9c054975ee6
++7620709474ac5cf4
++7632486f0e9c5784
++76451a5cca1b5aec
++7655592a5728508c
++765604f33816554f
++76d17fe49935522d
++7701482bc08a53e0
++77296b6b46195d8d
++7741bbc5d1955412
++7742bb50f9e056b6
++775876f3e93b5c98
++775e9d7f0334515c
++776db81936f15f9e
++7779be3b9aad5981
++778713d6c42e5844
++778baef9555e571d
++7790621070d055a4
++7792269aa2665830
++77aa95daee3a51eb
++77ad521c90935df4
++77b58e01c6d75bcd
++77ce6f8bb8ab5fd8
++77d5c23a0dfc5790
++77dc975c016d5ab0
++7802e5ccfa0658d8
++7817f382726f5b28
++783751c493f25ffa
++783d36277cd754e5
++785575f45a2f5a30
++786931e7e1b65f6b
++7884dd48d4425a8b
++788c11d08f295710
++7894d60323ac5fc8
++78a98843b27e5b4a
++78bb4e4988555206
++78bd31b1010959b8
++78c539f78a3b5f31
++78dd16bc5da15a93
++79083382f5095245
++790e0ab1b4a55673
++791dbe3647735e8c
++792e0396442f555d
++795a78648ce351e2
++7972cbe9f0fb5552
++7974d4675a005c7c
++799206e1b34f59b3
++7993b6e580115638
++79a7fab68080547d
++79bd82df735f5d0e
++79bf439cf92e507c
++79c6238cf0e452b9
++79e579c6149f5811
++7a1980739829511d
++7a8050366ec554ab
++7a958b84e7525179
++7aa835ba28d050bd
++7aa95c7122a2580f
++7aac5cd9b5255dc6
++7ac71ef146385131
++7adf68e01b7f5d98
++7ae6a7a3d957590b
++7af8a71677d254b8
++7b0d5a151943598b
++7b1852780bec532d
++7b23b900cc7e5181
++7b3ee9ac1ed354d0
++7b516099bae95578
++7b7da348bb4f5223
++7b85ab0985285169
++7bb9aeb02829586a
++7bda52d26d4d524b
++7bef899d165556c5
++7c3e347eb1e35008
++7c6c111e41335c2b
++7c8bd59154155209
++7cc024ac8c5a5904
++7cc7ef6a9e3a518a
++7cea3e9f74e3551d
++7cf3b14482055bb4
++7cf5afefd61654dd
++7cfeca5a10f55318
++7d0e6125fa37562a
++7d1ef154e6b6589b
++7d439bc1ae8952bd
++7d53813c790b52a5
++7d562c54eb275981
++7d5ad8f48ad6502e
++7dc7806b18ee50e5
++7dc78fb643fd5451
++7de1a4b181ad5043
++7e1d7e37058e5a98
++7e1f9de3917b5602
++7e22114ea6105ab0
++7e3c89d18c8f5543
++7e42711bdf315aaa
++7e4bd51782545248
++7e4d34016d6d5d77
++7e8c3aa7d7845d42
++7ec463d131c95582
++7ec69a13b2dc5848
++7ed589f0c543515f
++7f099571d17f58bc
++7f104846b4725b3a
++7f1193c56ba35bf8
++7f168fba7cf55737
++7f3063999edc58fb
++7f35d0dddd3c5ddf
++7f3cc10c28225a7a
++7f4bc53f48fe5f49
++7f4ca58db79956d7
++7f6693484d215d39
++7fa14e5996705792
++7faccc2baecd5308
++7fc87a4c91b55918
++8045b6dc93a05d96
++805267ecc8315a87
++8053caca54d65512
++8058231122215ea4
++807c324134165ce2
++808f2717f6285c9f
++8099aa1dff655da5
++809afdd80113566f
++80a8ebb8e6ee555c
++80d575db5d815200
++80d77920c8235806
++80e0c7a9c49354e6
++8108df44512a5919
++812a0bbed8b0577f
++812bde40cd7d5414
++812df852e64e5071
++8154ae672b5b5304
++815de112b0ee5f72
++81629c012e9759ab
++81861168811b5317
++8190f6c2a2435bc5
++819bc5a146155e5b
++81ab87155fc553d8
++81b82913ee535309
++81c13d4d68995a37
++81e4320d09715c17
++821259f166d65878
++821c0c3fd7305429
++823afc29a7a35f79
++8243cc57ec5a5ea0
++8257fbabaed65165
++8261b32a70b550ac
++82638716c2fc51b8
++826f7b2e11995082
++82a21b54197b50e4
++82b1f9e73cc65b28
++82c4d2dfafc55ac0
++82cd619e1033589f
++82d4953c72965bf4
++82df0be3ebf65e55
++82f39b1b0bf75d5b
++8307a02288c25416
++8310d2a7ef285aa5
++83172e2ba8f95c60
++83321d25a1bd5286
++83325f89ecae5341
++8336bbdc00e35ed8
++83470d3155a9548a
++835bb23b5555584f
++835d327d018853af
++8365a521d3c65119
++8375c4672f295513
++8383a445e4a75596
++8387b1f02f66599f
++8389535feab654ca
++8391351a4990511d
++839503e819915285
++839b3d80e1b35e33
++83d9205205dc54f5
++83e478de4f0954f2
++83ebf72312fd5baf
++83fe50c45c0e5f79
++840c721e2ca250e1
++841c200eea025a53
++8425218fdcff5081
++84336efcdc4a5bf0
++843996c423bb5a1f
++84422134c60c5296
++84437fe1ce225f7c
++84a0e1901ede5714
++84a16b2271e559c5
++84e8e5d246925a9c
++84f1db492c8656e7
++84f58e635c0d5c34
++84f90e2acce35852
++856d587ebbcc598e
++8580bf88cd14587b
++85ba193c5f8d5544
++85dd093d5dff56ad
++85fd927bddb3527b
++861195b6513b5b79
++861c7fb3a3965761
++861de740abd056d6
++86264d4f248a5f6c
++862e10ea67c95c78
++863a16a9754d5395
++8656e8c6fdd957b8
++865e9afa3d3c5a8d
++8660066af9955b42
++868d1d1c730f571d
++868e7de448955374
++86d6db8d6e44570c
++86ed0c523bbf5617
++86f21454a1e85381
++8702f6b378fe58b9
++87098614dfae5bbc
++871b2c0381bf5e20
++87278d941ce8564f
++87381bece0c55680
++874068f243b358cd
++874fb11bcf315ff2
++874fdacb892f569b
++875bef8ecbf1529c
++877f9165e1265e30
++878cc651f19b5cc5
++87a30408e61c5de2
++87b4987f51395503
++87d5ff7601395eff
++87f8550dfcf65dcd
++883818cd43da543d
++88613bee1f9b5477
++887459e883e75cc1
++8877215e94635f87
++887da9fd02f75c9f
++8885d63e4264576b
++888d060b664f58b2
++88947c392a08559e
++88bedae24aa45536
++88c091ebd12e53dd
++88e17ffc25a45484
++88e6a99122f753b3
++88f4b6ec343f5ad1
++88fe44e17a0e5c63
++8906b60fe1a9595a
++89176e7b39a2537f
++892091faa02d5f38
++8949f0ac69da5f9b
++895a49701dd056bc
++89831bd1b6df5b59
++8993ac5b9fb056fa
++89baaaf704e4550f
++89c1801c701b5329
++89c954c0167b577b
++89eee4d159e35e64
++8a0a5344d8d65b82
++8a13ff495759580f
++8a19dce8b91557f6
++8a299aac83a05b55
++8a40ad9a23eb5895
++8a48f1eed44d54d3
++8a588142819e50b0
++8a5a8cf3c9cb514b
++8a746130a7b45258
++8ad4dcaa3d915229
++8ae4e46fc9665484
++8ae9a9a81a91561c
++8b023f04b5285910
++8b10d99849fa591b
++8b221725a93f53d6
++8b3061aecc6550b8
++8b3f9e823c215e07
++8b413a80a33850a6
++8b6e66baa2ca51be
++8ba023440a3f556d
++8ba6b4ed786d524e
++8bd81ca8983857de
++8c3b17ed8f015943
++8c430b00efbd5ef0
++8c49292f04db50c7
++8c49e483d829560b
++8c6ae540760e5c9b
++8c7e60b1c2375844
++8c8eccd945bc578e
++8c9c4977d3155899
++8cba178be6c45b39
++8cbe1df45a195ad2
++8cd7d1135ff2574a
++8cf0c8191ce85a24
++8d0a05a5ad695de1
++8d1245575dd651ab
++8d16a74c29e85f9c
++8d1c5a2bf26c545c
++8d3e67c5ce7c54d0
++8d4f6358313c5381
++8d50b5124a425163
++8dad4790a8bf5560
++8db8f329c27d5a8c
++8dc118af3dae5311
++8dce56fe3e7853e6
++8ddff47e0bad5932
++8de147459383589c
++8dea79b689c450cb
++8defdb3803aa5745
++8df85bd901f85003
++8e092dd66f3454af
++8e325ac79e4d5d46
++8e55219404ab5e81
++8e574d7561885111
++8e62a982200a5173
++8e63742abfc957d8
++8e7c306863785ad0
++8e7d51d3f2e953f6
++8eab9bfbe71e5c0d
++8eb2c23fac5f5fb4
++8eb5b65752135ed4
++8ee7345a8dbf5e32
++8eefa06ce38b5eb8
++8efaa0b6bb6e5fec
++8f06bb1c8d6552d0
++8f3430639a755af4
++8f47a99c3ea45ae5
++8f785618d8685808
++8f93e9927e3b572a
++8f9fee5b7d4052f8
++8fd3b4551f595c9e
++8fe8c287e991546a
++90039560207e521d
++900963bb272e5e99
++901502ae6c8f562d
++901bd7ac7d4759fd
++905845fd895d5702
++906a21b1b754558b
++90767f39199c5a94
++909a30165e9c5882
++90b5764409355076
++90d99526519d5300
++90fbf7fdeadf5a36
++913807af4a1251a8
++9139f742a9fe5304
++913ac832d1f15afd
++9155afef981f5669
++916fdf01b3ce5f66
++9182f97707cd5e15
++918fa5d02cb75168
++91a6986ba1135e0d
++91b2b3ae114a5d27
++91b6f4182b205c84
++91c1369f675c5fe6
++91ed1256a8515b8a
++9214acc3eaa7581d
++9240059f2aa4517b
++92462818fed85eac
++9246b40c13ff5fc7
++924c9b9047aa5209
++927a819abfd95ac8
++9284eb7f47325f27
++929623561f345fa0
++92a9503b8dd65c1b
++92b483b91b945fc9
++92bc01e61b0957d1
++92d6ba3b03da569f
++92ece588aafd5556
++9324e1812a6459e8
++932d53ca4fe55eb7
++933beb9ece785f52
++933d7d14bda855ac
++933fca08fda450f5
++934067957b6d5281
++9348b8ecba045e54
++93525476627e519f
++93695572026059fe
++93786d802fe25e9f
++939bdadd5fe45d0d
++93aa3df64d765fb5
++93b06a3788f85590
++93cf139a3a4b5f6c
++93ea0f1630835927
++93f4256064145a27
++93fef46409635a8f
++9415e7b133e95b24
++9417e05a74d650fa
++941a0dc7398a5e45
++943a6194c73953b9
++9449296ffc1554f6
++94721c52ace559ca
++94934f65307f5778
++94c376849a965b4f
++94e6b3f10ef25297
++94f415be191759b9
++95188febeb8c5354
++95304673827d591d
++953c2a584bcd5916
++955a2f63b5ec5d01
++9570d713ff145775
++95c06ea643025d07
++95ce438f9a355bb2
++95cf514d571c59f3
++95e569a216955a93
++95ec72ff380a5e41
++96115da5e9b55c18
++964b81a106e55dd8
++965a1f6ac416578d
++968722d51b245c90
++9694e9ab67895d65
++96ae875eeeb0563f
++96c8ff06980e5124
++96db88dfd1215736
++96f28783c1d65491
++96f36014c3525eb4
++96fa3ccebe125027
++96ffe7bb3c285e8f
++9710bad5d0ae54f2
++97257861d29e5e0a
++9728d2c821ad53a8
++974dea332a105a41
++9755b97133365003
++975b9483045b551e
++975ed2bcb0b45b16
++9762ed593eb65da9
++9765fc7606d55f59
++97680ee50b345fcc
++978d78043b92586c
++97d822ba3b635f96
++97ec249b8b8b5ebf
++98026aba4d475928
++9809770087d851ff
++980ea1b2a6055205
++9819169eca705eef
++98251051efd55321
++9869e134ef5c5a54
++98aa2f1cbc2855c4
++98b99c37067f52d8
++98cc6dec8636573e
++98cf396f2517525c
++98d1098caddd51dc
++98f94da5863f561a
++98fbe730b3e958fb
++9912b5b67844540f
++9914ee43626d5d46
++992aecbf78c9599b
++99309b8d582b52a7
++994404ff6c2f5373
++994cbdb5de545014
++994d4361f51d532f
++99517dcda75350b9
++99686121e6ed5f98
++999469b3974d5dd8
++99961eb8d1705a2a
++99abdd0622965d9c
++99b33e5abb435aa3
++99ba60217f455c02
++9a00da28c4e15566
++9a170b8785285ea8
++9a421de97c4f52a2
++9a601b3b656450f2
++9a6dbdb6f4365481
++9a7c4920fded58ed
++9a849f5777885058
++9a883c51b6915f08
++9aba39e0f7565530
++9ad157597276514b
++9aee808152355553
++9b1ea770011e56a5
++9b469198a8285d73
++9b66840aacda588b
++9b7002d894525af6
++9b818de80b4c50b8
++9b82d586d2ff54f6
++9b91bf264ee75dbf
++9b92c1d774035b10
++9bb4214dc5ec57d8
++9bb80fd47d085b57
++9bbc30232f4e571a
++9bbfa3650aee55be
++9bc040c6bb475c56
++9bc5ea26cd835283
++9bcbd5f84ce05dd3
++9bd18d091deb575e
++9becc41e13705451
++9c02c176584456aa
++9c07dfc651205387
++9c3e449802a75a00
++9c3ea6e8172e54f3
++9c434f7e8a3a5d8d
++9c7d72a8bbfa57e6
++9c96b0d129a15a1b
++9c993f1428dc5b49
++9cc5e07e842e52cb
++9d2d9e808b4b543a
++9d3f45c8e1d55c1d
++9d461e98490f5053
++9d55321a600e5d5e
++9d76d0cf494156b4
++9d834867afaf5008
++9d8664d173af59ec
++9da3dbab77a558f9
++9db1b1017f4c5a0f
++9dbcbd8d1cda5149
++9dc9070ae9bb5f33
++9dd3e4147b3e5a90
++9de95718dd7a5d02
++9e14bcefd96654be
++9e75046412a45748
++9e7edb3ff4325884
++9e94d9783b4f532c
++9efc0313e1a65a0b
++9f04fe20ec7d5353
++9f2ffee54fcd57d4
++9f3120f0842f58e3
++9f47e010b0b55996
++9f4d7823918a5876
++9f63cb03fb345590
++9f7a76c8be915759
++9f7ef42b8570504d
++9f802eb9dabd5237
++9fbe1b8105da5d8d
++9fc97991b2355433
++9fe23ff655525f75
++a017e8d90ec35e5a
++a06bc025d7035f93
++a072b41bbb655f48
++a0860eb467005239
++a0a67e0060cc5e29
++a0aeb66cd4da5e02
++a0b03a5548805474
++a0b85b56ddea5445
++a0df2c4f8ce05cd0
++a0e33678a58e5c64
++a10c74aba05055be
++a10ce3d97cba5b7a
++a133a1c711555cc3
++a13717fb4e015e0a
++a13bc60f81f05709
++a13d208933305b82
++a167a93115da5d51
++a1770bbf0eed5654
++a17a82dae8015d88
++a17b8c7f229b500f
++a18d02b361265b76
++a193d8cb114b5f14
++a1ae5eade4e65bbe
++a20f8ccc4f2755b0
++a21b0122850c512e
++a2208059d5a75c08
++a230029e5a9c53fd
++a242b781eaf9586d
++a2434e10263f5e19
++a246d338012c5702
++a248dc765acd5442
++a26abdd5868e5be3
++a294e8a9d7d057ea
++a2b45a11342e5b9c
++a32e1fdffba851d3
++a33ff9b0730357f4
++a35644ab438d5464
++a35b06c911f6569e
++a398ab577d4057cc
++a3c02d43585c5d16
++a3ceb7173df45db9
++a3d4d6da173252f8
++a3dc7e73da505c42
++a3ec8d595a6e5aa7
++a4198f36316d5c66
++a42aedfe4cef5260
++a42feb410b7255b1
++a43c96bc13755335
++a453e2ddb8fa5cf6
++a46e061688695398
++a472d4f470385396
++a498020ab9525ad6
++a49a5aa784885574
++a49db3c7f8ef52ba
++a49e52c207965691
++a4a63b6debc85975
++a4b683f9e18551c9
++a4b78c6440055de9
++a4c709183700513b
++a4f1db68858a5328
++a5226932cf4051a2
++a5330d73b69f50e3
++a536155702fe55c9
++a537a4a252e25315
++a5585158147159cd
++a5a7f8dc6221564e
++a5b42398245752d2
++a5c3f424cb845849
++a5c8ad88d3e453c6
++a5cf96b4a7c55482
++a5db785aba885241
++a5e5dcacfb285de3
++a5f27ec54f235103
++a5fc5fda53445d5e
++a63130b459885219
++a65cd4fd17c15bd1
++a65d634931495053
++a65f87a4897d5d22
++a65f95b75aa45305
++a660dbfb86fb50d4
++a66860666de75ed0
++a668a799509d5259
++a6822a536fd85f52
++a68f492126e25e62
++a6966f83df6955c5
++a6a0895bce265db9
++a6aeae254c40571f
++a6c7d31f42435b3a
++a6d63244ba5f5e47
++a6de6eb5269350ad
++a6ea2224fc765c1a
++a70813fed4c45f18
++a717f34065d9578b
++a734e106bd785a64
++a75871b3bb785f3a
++a7589a10f70754b9
++a79386b24dec5ff7
++a7a0050be1b95234
++a7b0ee72508150ae
++a7c3d1c7936158a1
++a7daa170e5d8584b
++a7e3cc1e45d553ed
++a80798d995bd5273
++a80b5c3ecb8f53ae
++a813026848cd5517
++a81b0a807a7e5536
++a83e7e6a71795994
++a8402a848a8552a7
++a8426b6dcd155c2a
++a868c4ddad935aac
++a870f0d633f950ba
++a89402f6607a563a
++a8ba0b53bbb25fe1
++a8c12dd85f655b57
++a8cb3a15f87d590c
++a8daad8a6db35c36
++a8f9f2c3f6ee5daf
++a8ff86cd5e5d54e9
++a90db05d79ff57ff
++a9374f099ae35b79
++a95519ff67965569
++a9820d4a1b7b5dc1
++a99b0e1fdf925305
++a9cee208a7745348
++a9d5676244415a8f
++a9feb110fcad5330
++aa2cd9f9debf5fb0
++aa3a8c288de45acc
++aa442131222657f4
++aa685dc8b920545b
++aa6bebef4f595b49
++aa770575827f5633
++aa83eb3ff1ca509b
++aa84ad63848356b2
++aa9cc8608f8857a3
++aabe4b35f4f15e9b
++aad257deaba05e31
++ab2312da9bc7532f
++ab417aff82565edc
++ab4f2066b37353fb
++ab51c05e36365ea7
++ab5a5fd1cb6b5c92
++ab66949553b85af1
++ab71a446a61c5768
++ab9d408b4b475008
++aba6b0b137125c0a
++abc85f6048a651d7
++abf12af76b0c5db8
++abf3cb25d4795ee4
++ac149699fb155168
++ac526eb8ebc253fc
++ac5dbcda4f2650fa
++ac9fc4b609785e10
++aca063178958558a
++acbb89aca18153a5
++accc03e1c8de529a
++ad4ad545b63154a3
++ad4c3b2b20ed5958
++ad52c4107a1e5fd7
++ad7b6402445c5815
++ad9fccf02e80520d
++adae8fab9eb75aa9
++add9797c91655787
++ade638915cf95cde
++adf22fc463cf5c3f
++ae00dbb1f6425d50
++ae14d3d743585421
++ae1711ffb3bd5cb8
++ae24a4dd59eb50d0
++ae4dbb600d625a68
++ae8bce804cc55d8c
++ae9acec952a85e59
++aeaa5a502bf65cac
++aeab34705bc2551a
++aeb025cdbe365307
++aeb34b8ea4e05244
++aeb96cf2accc5159
++aed73df74c625539
++aee9ed7a74f95412
++aef8a542fba85d80
++af0b89a572d254e2
++af0d7358802e5720
++af9ca1de6cfd529b
++afb77afecca7545f
++afbe71a5fa7e509f
++affbca3ff3cc5fe0
++b04f2edb68405d9f
++b068f6201e785a1a
++b0add1c5e115536b
++b0bc569d5f225f88
++b0bd7877de095880
++b0d60da758d25f2a
++b110cda4f83454a7
++b14826a16a2d5f32
++b153ebff06c15420
++b174d2be850f5c24
++b17ae2865d2d557c
++b1861c8305b553bb
++b19e1e31f8005fb6
++b1b1719ff47a5e48
++b25437c709bd505c
++b276e6060f1e51e6
++b2a0f96d841c5619
++b32c25fdd57e586c
++b32f92e602585828
++b3399689f2ce5212
++b3783dc387795c4d
++b3e237528b375a3a
++b3f3b492781c574e
++b3f9a60d815f5e71
++b3fa8edb6e145e1b
++b428446f22435908
++b4306a97b6fe55eb
++b43d8c792cc4538a
++b45fe9a1acfe52a3
++b46eef92422e5752
++b47afdf4db325c71
++b488accbf91c5d6c
++b48e98c0de3f5a6c
++b4902ccd8cda56f8
++b4b3c65d77de57c6
++b4cd607b82065229
++b4d1dc0020775842
++b4de04110ce4518a
++b5033e4121ac5ce1
++b537a140d01f5f84
++b54de297253a5499
++b59362e9c2da57d1
++b59bfff05bf253be
++b5a4b47816f45c55
++b5abb799426a5288
++b5b7e4d38ab15d31
++b5ba576a9b2f56f0
++b5c427791d9a5902
++b5ee112380e25cad
++b5fee96bc9855ac2
++b6259727fe385427
++b63c960017905611
++b642b6058ba75bc8
++b6527447afa957d1
++b661010dcc36572b
++b6687b3b467e5bce
++b6883ce03cb157b9
++b68f6c9245d4534d
++b6ad94bd3e925ab2
++b757ae920f6e560a
++b76f4002abc15fa0
++b77178be1e2c515d
++b7afccb3f7b559ee
++b7ca292ad1a850bb
++b7cf51de4d515690
++b7e29c617ae25487
++b7ee0fadbcb758fd
++b8482019fb7750bb
++b8886be22ac75bd6
++b8bbdf81831e5200
++b8d090144717597b
++b8d74bcead10591a
++b8db2f8fe82b5bf3
++b8eace30c5fc57b4
++b904c9c73f625043
++b90f3f18633f525c
++b94591a1e03c5f34
++b9532feb14e456e8
++b96c4b03688b5666
++b98ecde932c75f3d
++b9b86420e7eb58c7
++b9bd2b2677ad5677
++b9c532ccf1f65873
++b9dabab7e9265224
++b9dd1326c6765307
++b9e4b84514d4538a
++b9fa66e1b2925fab
++ba0e536662755b9d
++ba2746089b105c25
++ba4eb59cda2f5712
++ba517e315ac958a0
++ba5690b2e7dc526f
++ba7c80ca2e0354b6
++ba83a1256ba05df0
++ba963a53b36b5a37
++bad1ebf244595850
++bad78f831b1b5c3c
++baf231ba9c3b5c82
++bb1f8f97e191545e
++bb20bd2651dc5b88
++bb221c0c550e5d8d
++bb32d4bea04255e9
++bb7806c7c62e56b1
++bb8cd6ea62a75e3b
++bb950d03bb7c5b0b
++bbb00ab2511f540f
++bbc056d024ef5023
++bbe3dc3c003452a4
++bbf49b45a95052ed
++bc192c372f285ae7
++bc4131fc4e255eb4
++bc4cc464922f5550
++bc531d144c8c5f53
++bc5346c4b1a456a6
++bd0b9a20899c5ad8
++bd21858b714255fe
++bd3090f493b3543d
++bd3ac7cad7205f5c
++bd7f3fa2d89a5833
++bd847aeada455d13
++bd9a78739fad5f95
++bde6fe93ae555743
++be1d1c39405e5130
++be236c49a37b5ec0
++be298ca4529655a0
++be2f7ab31ea650b0
++be36745b0ba350b0
++be38d1c8719a5625
++be46a135174d5c78
++be82307dc43c52b8
++bec0906622985970
++bed94bd5c12a517e
++bee0ab68c8835ffa
++bef0c8b6dfaa52f8
++bef18f0c9fb6581b
++bf09156011e35ae1
++bf17db5a20325d82
++bf19666e19cc554f
++bf21f9f1220c558d
++bf432fa34ab352ee
++bf45dc030c475d43
++bf4ec3621fac5a60
++bf6e665d4bd553c8
++bf8076e5c9a35d9e
++bfb29150122f55bc
++bfcf2e711162533a
++bfe05dbb6e9d52c8
++bfe6c5172ff75c65
++bfeb48b2a2865810
++bff0b8e6a01251c0
++bff21f3d2b58587e
++bff33c001f705049
++c0429cdc83ad534c
++c04fea963bd755cb
++c0502fe772825d04
++c0755036d5af50fa
++c086e4613ee75249
++c0ba812cf0375f9a
++c0c5c61abb0253ed
++c0e12d7fb0e257ae
++c111c9dbdb715352
++c11e962b18975e12
++c122e1891ae055e3
++c1236e2f26625506
++c1253d610fb95593
++c13811c80c5d5d44
++c148630e04645ec2
++c14a4cbd047e5258
++c15a480963245e71
++c15d9ec112575089
++c166654b5ce456e1
++c174d4c4b9535526
++c17fbf8589885516
++c183de1ff54b5a04
++c186096059eb5fce
++c1b6a53d66f65690
++c1d22d773e88523d
++c1d39c9f1f185082
++c1e98e86dfc65fbc
++c1fa43eea5175c54
++c213343d084c57e0
++c24ae48ed34e59ad
++c24ff8fc37a05d1e
++c2a4792e9be45b0b
++c2a9f892fd405ab1
++c2e96a6ebe705d8f
++c30ddde6d9cf5e28
++c316ced11ead5151
++c32a127069855ffb
++c33064cb81a85159
++c33e0c1bd36b5c56
++c34a76c9281a52ef
++c38a6e35d7695774
++c3a5299d11d05c08
++c3acbcf832275fbb
++c3c1039d667c5e42
++c3eb60bb918a5646
++c3f1126c3f9558b3
++c3f782a5641958e2
++c3f99a826176577e
++c3fffef0589e5d4f
++c4031263cf105859
++c413c24cd93a5526
++c4154cc2aade5778
++c419a3e2d41052ef
++c426db12bdce59d2
++c43100e90913579c
++c43ffca4006854a9
++c453d1f6a24359fc
++c467430ad4aa5f29
++c48e31ee7b255d2a
++c4a5569fed325c64
++c4a7c27be9145127
++c4bc86e348f45153
++c4e1e83c18f15914
++c4fe8eeb4b8952c4
++c52ef5212e3d5b3e
++c558294d6c7057a9
++c5644868556f573a
++c5745d98b9cb5092
++c596a7cf8917545a
++c5af57fc44f75588
++c5b140454181576a
++c5ceaf402b8e5c7a
++c5eba3aa89fa59d7
++c6117469790c5c95
++c61e8d1ce7905ee9
++c63a3d433d375490
++c64540450fa65ad4
++c645ebd986b550ed
++c65d38d27e0b5ed0
++c68312e1caab551f
++c695903731a05451
++c6a4086edb975f3f
++c6a634bee5de5af9
++c6f94d1ca16f5b33
++c6fbfc84f0755359
++c706a9e6bced5b5e
++c71870a3afc159db
++c747369efb2d5e67
++c74a11028b2a5490
++c76aa65bdf4c598f
++c771b4e8266f56b3
++c794ef39c01b5bbf
++c7a468233bdc5e29
++c7f61770b26f5bc6
++c824806d81c450de
++c86a310ea8b152ce
++c876a748bbb05e2d
++c876ceb0302c5234
++c88b8fab47955ac2
++c8937568e39154b7
++c895e4428f9c5952
++c8b9b623d6195871
++c8f24de9ef205da3
++c9101a5225455d5b
++c93a0ad6e0585fe4
++c95cc188499f5f1a
++c99f23a67160551c
++c9b5c72955e95911
++c9d7a89321b95226
++c9d97b56669c5287
++c9da1a6690d756a8
++c9e03243c8635cb4
++ca1a0f0c14fa56d1
++ca33cf0759e25b65
++ca3762aacffe51f2
++ca7834a69751595c
++ca8bbacba5fa5011
++ca8c1e9366d75e55
++ca92d8a43f705314
++cab4ec7d715d5b93
++caf91e09d46b5aee
++cb120f89105a5489
++cb1f75633e6b59e0
++cb26cd4e71165288
++cb2a0c01f0f0582a
++cb2deffc53d0599a
++cb2f31519e475583
++cb81e4f4a5665c00
++cb8bb8430ccb53fd
++cbd399ba16fc568c
++cbdc0169f2705bd2
++cbdf0a1b73df5a37
++cbf9d5ae4a3d59ab
++cbfbe9e84d855c16
++cc03527cb6e95c0f
++cc160871d2c154fa
++cc189c892b985ee0
++cc4c0feadb1a520c
++cc7bacc4f148557d
++cc8c2b3f1cd65d97
++cc9f5ffe98f55597
++ccccc9f6dede59f2
++cd0034e610d95457
++cd1ba64ec82c5fd8
++cd23c65b215f580a
++cd3cb0a59ccb543b
++cd60b79617655632
++cdcededc61895e67
++cdd9ab6b25e85797
++cdf804ebaee954df
++ce1c023a809f5bde
++ce2ab1851c225883
++ce3a629cee7d56db
++ce427c7b13d55906
++ce5c649769785244
++ce6da5cab6275d9a
++ce821bd1e5ab5431
++ce97d1ee47035a05
++cece729e40745436
++ced3144116fd517a
++cedf4db201f35ead
++cf01b4fd5acb5a39
++cf30c342764d510e
++cf6dd65e81295099
++cfc4b4e09a4c58f8
++cfc5a16e5665541d
++cfc7694fa4815f5b
++cfefe1cf62f95825
++d017c0c655d8595e
++d03828b11ad45c57
++d05d211d0d255dc9
++d06cddbdfe735b69
++d09739f7c59550bd
++d0eb562393f253fc
++d105e1c5bd92514b
++d10d3ebaafa75812
++d141e27cc26853a6
++d14f227b85d1554f
++d19b8ca22edc536c
++d1b3ebe57170576b
++d1b5022d74ab5974
++d1c9189c93e251f9
++d1e0076946655e3e
++d2428ed08d835d5d
++d2435520b47e5c70
++d285cc45fcd15caa
++d293dd7ecbfc5976
++d29a6e3f5ec359a3
++d2d99785ef56528e
++d2f58911e46851c0
++d3217f489bba515b
++d3391cfbcf675db1
++d3843217418853d3
++d388eb2fdde35da1
++d39a3df23d885b37
++d3ce4b7183ce5ec4
++d3e9551242b85d35
++d4349e8983915b78
++d4403d5ad3cf55d3
++d4495ae9ddd15656
++d459e5b8273256f5
++d4782d6b991a5b02
++d47fec7709cd57f4
++d4998339d2685385
++d4a07261ecc9523c
++d4ba9d5d45705709
++d4c8bed14b9b5558
++d4df9bd1a7d45cc5
++d52d98cd25a95545
++d52e5a435b355c96
++d530f29439835eb8
++d532827cdd59595c
++d532a41c74c25871
++d57b1726493e5965
++d59c10ca949a50d5
++d5d860394ffe52ed
++d5f69f39672453f8
++d65a410838e55d51
++d66b9acf07e05f90
++d6a2b25265345a92
++d6d5808da0955eb5
++d7022510a5bd5559
++d72f9e620aa15b28
++d75b92f5c4215ba6
++d7700e5288315052
++d7a14cd415ac52f8
++d7c7f82f15415405
++d7d307d284d259fd
++d7d48b82594457b9
++d7fabd56271055c9
++d812455cc34e5af1
++d81c881b495c5177
++d838236d0c6956ef
++d871103ac2fe5bf9
++d8a6f692f3895d78
++d8cd24549cc453f8
++d90563820c7d5b7e
++d932eba4bfac5228
++d94ac65b396759da
++d94cc71771815ba2
++d958a7c09cf15d1c
++d95daa24d0545d88
++d9e66f2b21275843
++d9e8bfe712e05809
++da2790c16c81597b
++da2cd7497a4a51cc
++da4114f35d865ff9
++da92920229b65a29
++da96cbc04e62583f
++daadedf48ef25dc8
++dac03d716525578f
++dae1b6fb61b85237
++dae596294d0c52cb
++daf09fee97415ddf
++db73a19925465ea1
++dba4e169c8805b72
++dbc33bc96bf05fc9
++dbcc9f811f38584c
++dbdfb60bb1495efa
++dbe800f8725a559d
++dc089bf57ebb514e
++dc12a4e204a65822
++dc1c0ec4cb1e598e
++dc5cfd9c035a5b3c
++dc9c7234cffb544b
++dcad77ea8d725cf5
++dcb5e9e5b62357e9
++dcb6e5bc5a035a65
++dce7538b233657eb
++dcfc4ca514c75d28
++dd1e3090477e5da6
++dd4cb97d1ca25f2e
++dd5de1225df75e5f
++dd8ff15bd1855946
++ddacabbb59035878
++ddb3b26fdbf45924
++ddb5e4002e1a5b20
++ddbe067fd3155213
++dddbd242cb4458c5
++ddde24750f225938
++dde2a77ab1905c6d
++dde4e37c25b052bb
++ddf83bf39dd752f0
++ddfa72e9ceb2589d
++de0dde0b78ce5a56
++de51a4d8c6b6500e
++de5d31f4682154aa
++de5dce68cdd65bce
++de692a3c51495920
++deb6c72f900850f4
++dedebd5c1f5755f7
++deec21e2688f5a90
++def2ab805935511d
++def58f8f2ede593d
++df273f67be9c57bd
++df2eeef40f3c526b
++df42c8ee4a525ebc
++df58af54c3e852e8
++df82dbdf99fc5595
++df85d9413d9253b9
++dfa248d51b2e5338
++dfa586e9c3b352ee
++e01aaef588a3520e
++e0438ae7901a51bf
++e0dd84b4087c593c
++e0f3467abeae59d6
++e10eef5155615fd1
++e168b79574e05120
++e17aac89a6d65c9d
++e1aec8a9f1855797
++e1db64c4e05b5e78
++e1e5902770e652d9
++e1ea7a77920b58fa
++e2201bc71d585db3
++e22d6c81c11d52c5
++e249022bd83d5580
++e2980675184c57b6
++e29c64adf475518b
++e2cdc19a38cf573e
++e2dafe4b691d5224
++e2df2e8589a553cd
++e2fbed21c4405e75
++e301eccd470953a2
++e304fd7fded759ac
++e3551612ed4e5b58
++e3bbc5b5de3d5d82
++e3cea38c4d885ba8
++e3fb742cca875a72
++e4184699935b5d0e
++e41b85c3c26e587c
++e4295bd61d3d5187
++e4412f26f5ac5122
++e445c94c82165e0b
++e4508c63d214583f
++e4546f6bd53354c4
++e484e49c082a5334
++e54c33823cd4536a
++e56b180a29de5e38
++e574db2ae25159cd
++e57f9fb73b2650d3
++e597f7ed2aeb5948
++e5abb33d4cd55099
++e5b156a6955c521e
++e5b23ced943c520e
++e5d67939886754d1
++e5df7eb60fc352a1
++e600dc079f2a58ca
++e60b20e0cffa533c
++e6316539b850542a
++e642d58ef88d51c5
++e6525719515d5c25
++e65a1ea69d1e56c0
++e661360a4ea45b3d
++e66b63c182675ec8
++e699411974025270
++e6c8fa1fc0025aff
++e6cc332f8ae65fbb
++e74b85a8f0a85a39
++e75f1510192a5463
++e7763bfa680e57bc
++e7997a2cfd195a9b
++e7cf4c1f34fa5c0a
++e7e1d8a4b0c5517a
++e7fdd0b67edf5ef5
++e7fea214efa95103
++e8144e3fa4635c82
++e830c86f18d456b4
++e857116236e25b93
++e8772f1643215b19
++e87ba08e942c5433
++e88f447cd8ec560c
++e896ddc97f565af6
++e8a24086363c59e6
++e8a240e381cd5761
++e8b68651d7975974
++e8bafa77316a589f
++e8d7a976a0125c01
++e8d7d313368c5d93
++e905b96cb44e5e64
++e9119cc26b3c5b47
++e95fa46cbbb55ed2
++e988e0e84ba25f57
++e9ce5f60534b5bd0
++e9db8044b2165542
++e9fa852ac88159ef
++ea046d47ae95584a
++ea1d15a0e8ed5749
++ea42d9d27a925bf3
++ea81089881d05f07
++eaaa43780a445862
++ead31350c6225d7e
++ead7ded4ff9d5fbe
++eae5c2b0d7e75db0
++eb1d4fa383a75e00
++eb600cddabfc5ee6
++eb703122c429584b
++eb8e81e2bcf0565d
++eb9a0035198a5e87
++ebe41718c177505f
++ebe79ee75a9951a4
++ec086097cdc454d7
++ec28da10b6155712
++ec3d601516a35e18
++ec861a59077855bd
++ecdd80b34a8f57a1
++ecdf31c3d09859f7
++ece700cbe284539e
++ed40ac88241154aa
++ed5a7d5c79735afe
++ed92afc943645c4b
++eda86bd052255bb2
++edac6c35f3355b16
++eddd3d38b0335f85
++ee37446b0ee55dc7
++ee374f08968056bf
++ee37e21b00ec5674
++ee4cfbe3e6985cb6
++ee5ca598163c5bc3
++eeaa1f8486735a8f
++eeb47f88a3625fc4
++eec35af81c18590a
++eedb42ef49405c05
++eee315142a955e41
++eee38d7652b8558a
++eeed29a19c235c26
++eefec0d6d2bc5c26
++ef258bb212705444
++ef2906f344a95970
++ef2f4f82162358a6
++ef44d8c601ff5cfd
++ef4e62dad9d85fa0
++ef582cba25ff5196
++efafc385b0875cc6
++efb399673500531a
++efe20889a9c65ca0
++efe610ba39895a23
++efee37d890b05092
++f01a2a63b5a05d37
++f03a5ec7635d5a9c
++f07f169fc2e25f7a
++f0945b21439e5ee2
++f09db087395d50f8
++f0b4cdeaf2ec58cf
++f0bdc9644a055e0e
++f0ddb2f9a7e35f85
++f0e8d8d0fbcf582d
++f10e52909bc358ce
++f1108e85198a566e
++f129a33dd59c56e0
++f12a656ac46a5a92
++f14bc0e214a05de1
++f17493fc2a115a80
++f1a04533576956cb
++f1a70ef371695fe4
++f1ac22e17d0b529d
++f1d0eab6211d5414
++f1edf639688e57aa
++f20d4269f7085188
++f216b1453e5352e4
++f225bdaf48a05cd0
++f22e411f579255f7
++f23a2e4ca68a5b23
++f25099f8458d5a62
++f29e4f6144b75c8e
++f2b37b61822e54d9
++f2b93d6cc0415acc
++f2e60e974eaf5d5b
++f2e9373b3cae5d31
++f314bf6a71e652c8
++f38e9def59a1554c
++f393a48aa01f572b
++f39f7bb41c5350cd
++f3e71469b00f537a
++f3f548c7dca65fc6
++f3fb3fd6f4d5593d
++f410c03d76ac5510
++f4175e8841125fd5
++f41c3b03314d50b4
++f42cabc5bd6852b5
++f4393d1c7b9e5e8e
++f47f66b6efd65481
++f4c0ce5bc7465fa1
++f4cfb8e9bcde5afc
++f4d59b0c999550fe
++f523c626fc32565f
++f53aee5a51e158e5
++f55ab18267a65234
++f5610e3cee7c55db
++f58be6489ba75eb1
++f5903da0afb65d63
++f5a09d3327465bcc
++f5bb37535da95039
++f5dcc09b36f95ae3
++f5f3cb7d67c45f2c
++f63921c1108a5904
++f63af40b8dae575e
++f63c32f5d15a5e53
++f6710cd6f4095655
++f672c15ae28b5392
++f67b4a6fc87f520a
++f690edb11dec567a
++f6ad6838854e582c
++f6d27289286856aa
++f6e860402525525a
++f73d5aa821b75f25
++f743c8f07a085a17
++f74d76fbfbd656dc
++f79666fcd6045417
++f7a41318b5ff5af0
++f7cb8004fd8b5ba5
++f7d3128cf583526d
++f818af7d85c35b59
++f856534193a959cc
++f890a3cdf2f458ac
++f8a41a8f514a5a57
++f8c987905cbc5dab
++f8ccc977324659d5
++f903884328c75e97
++f90aa759296b5766
++f9708fac99b15909
++f97f4e754cd75e24
++f980cced88145048
++f9fcaad64c3f553c
++fa0f7121557a5ac8
++fa6e0baa471b5182
++fa92ab96265f5c01
++fabff12a75675388
++facefe670966504d
++fad5fe0477ef56e3
++fae4a5d1b4415a4d
++fb0d5bcffed35e2b
++fb36f0022c295908
++fb7027a430415352
++fb7a727f60ab519f
++fb84f15c14d0544b
++fba12dc3ab7257a6
++fba6f3ad1c485231
++fbe0e0712801510f
++fbf00f632fff50fd
++fbfb9c3b066b56ca
++fc2011c038c95b5b
++fc23734b98375bdb
++fc60b3a110975ae5
++fca21994c9785ca0
++fca67f509c995051
++fcb975bc93b85dcf
++fce06da4c74a50ad
++fd2bdb761f0a59a8
++fd3cdf42e89d521f
++fd513edec3235524
++fd6bc5cfcbab5d9a
++fd78a142480e5535
++fd83f622550d52ea
++fd93972d51c85335
++fdbd48c828b15407
++fdd9b765fb705383
++fdeee4a407895a3c
++fdf84618211752c5
++fe02f8a150f75ecf
++fe0cc9e713745ab4
++fe5126531a9b513b
++fe5488217a2251b9
++fea08184d0b450d1
++feaebbcab03c52e1
++feb1b11ec177537a
++ff13395a724b57b7
++ff19f4f95cab50bd
++ff68f334aea65504
++ff78cca1dfec5fd9
++ffcef78e3b855f83
++fff94be9e38d5305
++d8aeac1ec4465bcd
++429b1e3500ca5e62
++36210579c81f5c10
++df216e244db45c8f
++1fb4a0bb4cef592a
++91b878bbf4115cb6
++9ba6f392b3d55fa2
++337f3b1136ac53a2
++ca01f56b2b1c5618
++7d8e71ed4d185b26
++f4d0d1f87e8b5b81
++02225c78fac5568e
++90f2c41d6f9f53cd
++1492d76544da50b1
++3d46b93bb0985329
++859b26725bb05ce3
++3aaf93bccddc5504
++bf9d240b0fd05756
++86971186d9cf500d
++b6671d60685e576e
++755283606e7d5aa9
++52425612ae7e588d
++d9237b82ddb05140
++fbf34b12952b559d
++12982e2ed0c05dfd
++fec0103d0ecc5e82
++bd06df35208b5c0b
++d551f4918d5c529b
++469208e2a2835cee
++f814133ea0b85ba4
++776fb17d37ed562d
++d04d0586753f5bbc
++25c38f5107fd53ac
++7ef440fa014f52dc
++bf8a22945ce05389
++9d904d5513b250af
++4bde1882809059b5
++073eaf1d43505df5
++aa8c9f18660c5f62
++dad4b9d86f2a578b
++906f467822a25bc0
++2d3bdcd09a9f5056
++e34d81c3b7a958df
++02158b807fec52ad
++6694e112e57c5d1f
++c6ec7ccfe0bb5f5c
++e4910f81535d573c
++933efe24995e55e4
++bb8d56945c395429
++717cc9f3d67b5ace
++38c67e642eef5e73
++8bff9f5e320c5cbc
++3cfb838fd74650f0
++f14d9ed52e545615
++06bf7136f4a05480
++af2863facc0c5fae
++4ebf72fb19b25afc
++8942ac215b795125
++b6345dacaec25ae6
++b275c77ff74e5446
++6faa3c40eb525f3c
++e3ed7af1261b5ab0
++06ff6b237766542b
++eede4135a8155ec9
++28830833e0a35802
++aa139f9d893c5ad6
++196784a1c7fd51a6
++3d5a980d25a85ae4
++e551eb309baa51d4
++82af8dbd251a5fae
++7df6c59ff27b5c81
++16bdee6183cd52b5
++416ab3ea7fa6512f
++42f7cc2568ac5ab5
++1f506da506c55cdd
++9ccf1c5f2df95a1c
++3fea3a40b67f5e01
++97600f1ae6815f23
++9e7dd25657ef5d2b
++28f97730bd6258e3
++2536716470545288
++9744a0a0b24c529e
++aa2ed84299e65908
++580906a8481450af
++1fbe37849bc35870
++74ac1ce7974e5a8d
++983348e1996251f2
++45517fbb1d1556ea
++e33550af8af95289
++ae096d27295d58c4
++886f76333f5d5275
++9b21c7a69ffa5eaa
++745c48badfe657fa
++86de0ae4b5355b64
++491151c434fb5970
++a7df86da4f5d56f8
++711c289ea3105a47
++8da81651b7af58c0
++e3fd23057fa35a8f
++ee1b595bb7795997
++a64dfff7a5315d42
++20a3a11132b35564
++9d8cd66e066957af
++811fab15fa185e8f
++06bd4dbadc0e59b8
++effadcf1264350f5
++c170eec6430355c3
++4b9614fa71205964
++aedc0f560ca65a42
++6e6e64a6f9715e40
++36786b9d4a9e51c0
++9b6f9cd5f37d5445
++b68e81a0c48354df
++f1ed6e305eda52f2
++75ce116ccb105a07
++4f05aeeac5155fce
++b773049a482d5576
++5caea8d4728c563e
++2b5105034af75cf3
++e92b57a90c2f5f98
++b4219be2e2525dad
++c96930e979f95c91
++a601cc5025535684
++d0e4f991013f5c40
++aa1bffb117bb58f8
++872e3da8a74659e9
++47860a80890c5812
++7922f4295bb955b6
++11c296f613755af6
++2de3e97bbfe851e9
++b55656dc7809556d
++736e43c54f365f05
++0070e937a5d05c66
++867b98cb450b5a37
++a49d77260c465194
++7bea33f07d905478
++6a116cdc9ee255ad
++f560e727c667514e
++9942680625ee54d7
++6bb4536ed0775e22
++6a178f7803285ffc
++3041846f7e025079
++6b7a284c9f1557a2
++55ad5465387b5da7
++1af074f8f2fc52c8
++99cb2133555158fe
++d6cbcf6600555190
++6a2e1d15db0558b6
++a5e68d482199506a
++8f4ede8e2fa3595e
++062a19468a765955
++a9c96ffb10bd5f45
++c7b574bad7075511
++5d654ba9d9465b24
++c425a56d740f5200
++b65f71a795375cf3
++478afb44d6585c2c
++41da2eee400e5aa3
++49b5ff07cd4e584e
++956e1c8d7df6501e
++c9555bbcf9c05b41
++ecda9be815f8539c
++f1797cc324755430
++d2fa8ba7df735d24
++73c375ef5a2e51f5
++12addc61b5a95603
++8d1dd8f607e4573a
++8ab4588ed979589a
++bd4bb38e1c1152cc
++bb0f8c98d59d59c3
++4659455ec9f15616
++d4826b473c7c5738
++6643f73471c45ba4
++8bfa160022c25d5e
++103eef45f2e95738
++8863a6af03ab525f
++4ceb244f5af15721
++76779b8f33fc58b8
++c708ba0dd3125d1e
++716d6153e50552d4
++d5bf0cdf39ee579d
++29b93231c26b56cf
++8959ad5b3fe358ea
++7b2dcb8314ee5e88
++2232cc39a36a5fb2
++9b066bd78d60510d
++d91565fe99895605
++c17379eedd7a5161
++f0762af623595b1b
++412c704636b4535c
++b39c12e1a2b9516d
++52c590260f225172
++23625a5b73225cd7
++e71128daa591542a
++8d11a15ab9f0556b
++7176ae9c86a354ac
++4cf8abb5344d556d
++62b4d3c95524575d
++e712e4380c9f5161
++b4b13c6c96de57dd
++aa0c68c0011e5a1e
++c306d9c575af5c0a
++b02d68ffc043519b
++8178dd62c3f5562e
++6d0af76c550d57e5
++446a3d5315df532d
++e191bb436313570c
++a8ae38e0af7b5c42
++27df269bcf8e55b2
++89dfcc960d6f5de7
++3f0210c2c1df5a89
++aba6b60d168c5ab8
++777eff918ee15a99
++a8aab9da62785334
++3ae27200aa535a5d
++30de07c60f875bb0
++294407d658b85408
++be79dae728815501
++fbebfcf92ad25926
++588479ed5a4955bf
++261efbd6806f5f38
++519706a8f9265373
++08d5143123745643
++fb3b4f8674ba5781
++ee479115ae3c5bbf
++6ce77fb3892e56c6
++babfc6efa10152ca
++591578366227524d
++fcd3dc4582185bd8
++a89f126524f05646
++04fbf4c422f15b0d
++c1bbd2efd47d5e91
++08c5f1c908bb5834
++137bb55268c35f17
++493abf03ffae5a20
++ae99b88c87845958
++0a34a996e35054d1
++453cd33f4fea530c
++519e081249cc5f89
++77c55c505b2f5af9
++842d15b7d49d5192
++6dfdbc573b415852
++22d2e87e1888568b
++6d89a9eab9ff5f3d
++4f789273384e5305
++0c85961687825412
++24d3c3b0366b5675
++873d0ea648fa53fe
++99b11ec9ad075e34
++cca1c1e1036f5bb4
++0ab4474217b75b19
++736f42c5ebf95ef1
++39d0e6aa330f5b31
++ff208d81e6055a75
++087bec50aee356e0
++0833c21951a256e2
++34f4b5539f6b5bc1
++c1936f50d6eb5d9b
++052dcf1d2a285f76
++9fa3d7981279524e
++88ffd2fdb79552a1
++d958f72fa80d516c
++15f965fe4a2d5cd4
++cbf850bd43e25796
++2f61c779e6695055
++382c271cbbbe50cb
++7d2a626f4a645e31
++8bdd1fe5d75a5bdb
++be8e5f5dbf675389
++0c388895c9015748
++81c4ba28ca315732
++a3f6e31fe4135595
++7104d5fbd47e519f
++c98f335b1b545ce2
++ff648e9f08dd50aa
++1afca00614095fda
++341360d227465ff6
++d8864d2e5a175408
++3d33e72f685d5086
++88aaf1149199509d
++b87a619490c65bb3
++1e35278c0b7856c7
++9cd71d593cc05084
++a1a990630ed9519f
++15d44f34817e5ddc
++6d8d2c444d235b9b
++008a5e60934c5a07
++8fe6a08ee05d5979
++e1a7102608f05d6e
++f9f62bd3b3f15b0f
++081fca82b3fb5c5e
++032d90eea8965ede
++0ee4dd4316965f7e
++baf73d37d02b5622
++4d2e78cc27f85b2f
++7121481cb09f517b
++b8274baae669537a
++fa54ee9000025b7c
++607db6f001df5fab
++a9aa563a9d675d5a
++f479a16ef69a53c4
++a7b8f4718ed95a48
++6c3d08efcfac5170
++e55c5d47116254f8
++2867fb3a8495523b
++1dcf069abc1a5ad9
++ec4ac4fd83e150cc
++a725e9a5f9d35c3c
++6dd04060914a5fdb
++7f0830874a245385
++cf5adcd800ec5129
++ffa02bad42b35a64
++46eeb5c416c459e2
++5ecee70d78b75912
++03b214a43d4856c7
++d69c723716885327
++22d8e3a4942c547e
++6a703e766ae453f8
++08b4023dcea65465
++365b8ee54560542c
++e1e73ae5273858a1
++40631ddcff935df1
++c34fab7bd640514e
++7a83accfe7c456c7
++cbaeb2a612b65c87
++4c08551f784452fa
++e7934fb037af5c35
++6b249e9b17375ea4
++d7845a74b5585b03
++be86593a04c355cd
++fc287c18d3255806
++dd4add4db419536e
++6f102acc513a5601
++c31c04fa63d25812
++0ac7b043d2d35143
++e909ab82a8bc5b97
++a4dc3476f0775642
++9f2a6e2eb7205065
++69ce9c35017253eb
++e7194200a0505fdf
++658741ef8a5a5f43
++bf6bc4142a855a83
++983035e9e5435730
++62513fab845253a7
++95794dd3aa815a04
++989e7519f63d5649
++4c9ddad073a65cd9
++f79002258bb95775
++1c9492329fb6553e
++4b7e4731dddc57ec
++871c0bd448385241
++e2f960836b5a5b43
++f399b2a42a135529
++e32f5c30292f57f4
++4973ff8f28f55f75
++ed518bf0f4b95abf
++2e8968c8446853ff
++70dd174836605646
++282b4fb36bca563c
++6f693076dc1a5c8f
++6cb160ab5d585c31
++841ae5f8edf45e00
++f3616703a8505326
++b987d8621d8c573c
++ffc43f0e8bce57b2
++8ec637f2cb855e4b
++e13d322b01115aef
++82fe85d26da35827
++065965faf9c358d2
++01b39612d447572e
++7d7070f1b6905ec1
++744545082b40563d
++4e41ffa94ea358c6
++9e80d55a9d175dc3
++b15c13dc026f53ff
++c9a21a65b8f352d4
++84974daf80d35f0e
++0422461933255f44
++47af9e1c37485399
++b744da8a3d48515c
++a363be34baff5e1f
++1eeb2ce4723559d8
++b1ed161192e45270
++e7ef51fbead055b3
++d87bdc6d07a45cc4
++efabd4a7daae5a3f
++d32f96c9ac4951c1
++fd0ecad817445835
++c94db3520bf75da4
++33ae316fe3515797
++8e6b06d8e26158d9
++da5a60e1946c58e9
++0692cf0589ac5df3
++84b7e2fba3195037
++c43a35b8031755ab
++5835c418951f57f0
++178d3ef6bb7951ad
++88328d2a839a5712
++52412774a9a25c6d
++c22fb005b14a552c
++d48f9b9ac72351f0
++b92637af787851c1
++f5c44ed198b35cd9
++4b0a91e5193459ee
++eb9d7a2603bc543f
++0cf592e259545c1e
++fba4434b534f5ce0
++4919b5c667c45885
++4628c8726dd35c63
++0a5d0741046e5f59
++c30f7b06cdf65606
++d03d2711517f5251
++3d263ace9b41536f
++9bc7c9e914dd50ab
++bf2598ed9444501a
++4ed1bb7e81575c75
++b2554affe6ea56a9
++3468426ff4495566
++a180fc982d985103
++7b73710eec0b57ac
++8309af76a42a5397
++d3fd6655caca523b
++cbcd0d75ac5d5cf0
++9e747a4d2016501f
++3c553f6621605895
++03505949174050f8
++9920246634af5a14
++e82d29bcb9a55b6f
++ded3ad60ea615b60
++1f4920c335815d30
++72fd3786adb152a0
++8265a1f502475403
++d1ff5fd9117d5fd2
++552ce475a0da5e75
++f2cae3739b875f02
++e5324a076dc45372
++1b6c2bed7d8654fe
++d5d74319be6e5f89
++af1f27b3004f5cbe
++cd07b62d03575bde
++ad4192eb29f25bdc
++5e4e022cd8e5598c
++0294bacac0955525
++474c53db3c2d553d
++09abd16fa1f05d6a
++f344994268b45997
++671370a5ce055e21
++01f313ba55cb5899
++24c54b909eea5acb
++aea2d38dddc55c8c
++950b2fe17a04549b
++d1199b0f68685531
++145c22e1bf855bf9
++3c5eee78238b5782
++854ba37a808f5bf5
++c3a121fb298a5a16
++8d71b53ddb425aef
++aa998dd9750c5993
++0cc082d7e16d543e
++bb07cc3b1acf5c00
++0dff3a805f7b5a18
++3ce59d6f9a21554d
++b921343cf8735452
++a3034d2c1f3c550f
++4829018d153b5c62
++55c97c324e1f555e
++55bf6fe6a5a65eda
++0d30b27499ac5697
++aa4e51ded245588a
++3023dfb8d6bf5fff
++77706ae548525611
++57660c5f41365873
++5446254f5e675f6e
++e56ca6b3506752db
++1082044af8f15c23
++cc1552ffd8995692
++58afe9463ee85ce5
++e7f35412998f5f1f
++08d9908623ea50ab
++e6d2003036aa50d6
++6af50319c9f05383
++65d6529689455062
++398c731243b55b37
++f5be3e22388e59e8
++5612175253a654cf
++c45cc9c68a4a5899
++fe29451caefe5de2
++54bbebde829753a4
++e2aa8701f8bf5c36
++254d6005a9ea5372
++d2f9c67f55da5cd6
++49452031f2c958c5
++047832b1dd6753e6
++36468fed3ed355d4
++69908bb51aec5b99
++04b58878cb0d5fd0
++864e5ef51fe7540e
++1ddea14a10535927
++587e6678370e59a2
++ffc3930b008a5b67
++2cd47fd95bea5ebe
++658bd6c64ecf59d0
++a6fc3d2a3db4594f
++dd9c449c8d9f5e1a
++223bf44311a555db
++cf4b0720b7db5fd9
++fc0c02ffffa75655
++45898601e8355175
++b877c0bb3d1f5e61
++1fc1bb47f8d1576d
++909fb0c07b605a43
++48a8cf81063f5fd0
++117450e0b207562d
++c9b0fcae36d95d38
++c227b0609d1752db
++db4c372b74c05803
++af4d2a8e5f7053bf
++da198c48a0945a96
++ef83acca152e5b7c
++76e7e102bf6d5f85
++c4d5a6f29b335572
++eced9eaf2ccc5612
++c87b2ec1e3eb5bc1
++26977d16af4859b2
++6dc5ea51c2a85961
++365030bc2edc560c
++1b5e835cdd8150d5
++2c5775e9d01d501b
++efa749f9a34d560c
++3c7a30bc09385fdc
++6fef7a7853425e45
++f4f17ce598845336
++fd13d43d91b35255
++b9e426a9a56459e4
++4dbc75aa498e5508
++684e717d0dbe503c
++8a65601d78bd5922
++6abe81d6c45d5e1c
++5e14823ba9115184
++b63541d1a58c58a2
++cb861dd4ddb5560e
++9195e3b52157505f
++12b79525649a5a46
++9ee7ae5508135519
++77a9b9dfebea55b3
++b0b2b7181d095997
++a559fb4bb39454ec
++9e3f3519e687591f
++32126e34f0095b65
++1f2bbb649b7456e5
++ed8aebb0b4305749
++17c062f8e59e508b
++d5cfb24704a35a73
++cc980c77464653df
++110061f3e0a55468
++009be3d5375e5ce9
++bd96cbc0ec405432
++16d7706093a455f0
++6a09f518388c5732
++5c921c49fe095279
++75d5188b40935855
++eff52cd30ec856a9
++a19f946b0ed552b2
++8b4276cf100553cc
++f534da1f241554d6
++bfab250588c75d46
++60b3f101066857c0
++d6f3d217219b5001
++117a6476a40f5fae
++385ecebcd8365d72
++4dc9ea78826f5385
++75c165c6647e5ae1
++5574b29a27d458e0
++651fe5c33c395b11
++6c0ca06ace2450fc
++df2040ca72f55ff0
++36b5933a9e695391
++d33af576e2e054f4
++746a3766eeaf57da
++cc76f9935ecd519b
++26a7875a44e25516
++939b06fab3e5580d
++dff90181af7752c3
++775e5aff1caf534f
++f7712c52d98354f6
++a8e50061464d51bd
++58f84b0a855753ba
++55722b0237aa55f5
++8efd1e758e26537e
++10f1fb5c7aa959b7
++f4d079ccd2925bb3
++6290daebe4775347
++eb154896305c5cb9
++7b0ee6f8172e5258
++271a2db03ab45709
++9d3bd5cecf335e1c
++164288d330175be8
++4a35da4f95a152ef
++d6d27b7afdad58ec
++6a955e5bbe355dc1
++cb4b596aa1035d2d
++df12b8b0209d59e6
++57265196169c5845
++453ccf7defba5a85
++499266bcc44e5d06
++e6bd3c78dc095358
++9e59d9f239ff5751
++a0bae450af1e553c
++7dac3d3c8a84546e
++b18dc62e81c85442
++369f16db7c645350
++23e27474707254dc
++ca1a95fdc4905dcc
++2b73fd3503325e94
++b023f95a9b7c5ced
++68be8a7182f358cb
++8c9c1574e69b5230
++aa639a3e9ea05f7c
++01ea72fe2dde5827
++846fa6e6ec005ebe
++0fccb0423c53537f
++3d7464b910cf5aff
++c98f2655b4a459cd
++7e19d2771ec259f4
++5c0a65d215515b0b
++8178b7e91bd9576a
++f14ab4ce65b05c6b
++7550ade82afb5fb1
++dd9376a962e65a63
++aaec0110ffd251b1
++9aeded17919c5aae
++ad085631fed254e7
++79dbcb76dcff5b4c
++90ca347fe6be5c50
++8e36cc30b1575436
++501b6cd88d505dd2
++17d58f6e8f6259c2
++e221fddcee695414
++80aeead80cf652a2
++b754fba370bc5dbd
++2bd9418c8a9152e5
++6a6b7d5508f55d1c
++40159132c2e650c3
++3da187f398aa5c50
++b343eba1b9025786
++7461701e87e855db
++72967500df9950db
++982b0181b1be552c
++16855b4340b45e8e
++beae436b1dd6574c
++ad71f287e47c58b6
++9c3f8189aa0c5a2e
++9d303a6651f75a80
++0e82d6b9b44b5be4
++859453114d9254c2
++cb5cecfaafb55731
++c9b8f784861857f4
++8b20265de9855b5c
++5e7b7b8d19c95948
++19427582f6cf5a59
++3b89cf3003035a7a
++09424689d82052a4
++2012d702effa5287
++d25b70b6e1e555f4
++ef7e01d4b0ed5487
++d95fb278c534544d
++ae56e0000e3c55ab
++e37312dc9edf5c85
++dacf71d016185c89
++09e7df6d0c215ba5
++7052b60dd18456c7
++fda8180a67805f48
++0f95bb47aed75726
++8d752d21abba56b7
++eb894ba5acb3528c
++c618e7fbc7395338
++86f5930006925432
++c9d4242c322b59e8
++e697aa96441f55e9
++a5d767111aae566c
++0da6c59a2d175be3
++dee770934fb652cd
++6f1133de8fdf5485
++92aa43382fd4548e
++4959d7c475065e63
++73a74393886b5180
++e27f8cd41521527b
++04f15a9ef1645200
++380e85136f9852b8
++00136467c92d5a91
++92b4fca93c6b59d1
++6983b2fd4032507d
++ba5366eff0b85007
++8f6a4fbe40b75310
++7f5c540bae045075
++de3cc43348285cdd
++f70685b891d55ce8
++ebed6acd5aac5f74
++68f9a3debdc45351
++9f9054a89b4f5843
++bc62c284bd7055a6
++665d839fc53e5b74
++8e6ac3397b2e543f
++5088c5baee505598
++1782e84eac9256c6
++b6355d043dbc595f
++564132b1b6f1564b
++db58eb7104825d8f
++4c6c1de0b22358c2
++c0daea13b2a250a3
++acd9d16d983057c3
++3b8647260d3a5e5c
++6fb93cff7ca659ac
++d3f263ff37b0532c
++3907131e93395d33
++c202c8aa54115f13
++309e7c2a164f5260
++abea6770c2685941
++fddb15afcabf583e
++cddc9c83fb3b536a
++e52f1c24d90d5314
++64f60580646f5339
++5cac61da778c57e2
++6de8eb7fa04b57e8
++9ba9c479d1df55c2
++cf66bcf10d9f5692
++89531c914a5c50e5
++eaf6448c5ab25572
++0578185549dc54d4
++abfc0dc0579456d3
++d8a8f53ffe8356ce
++a0471bb37cda5d29
++f8e03426bdba5fdd
++5bc90939daa757cd
++e58766f514385bd7
++8c0d350531275570
++f079720c09c352f5
++fc63d6e44b7f5ca6
++fa30cc23b6595b37
++94b495f90cbe551c
++33d2ce133ad35912
++87991c12dfab5eb4
++633109e95e2f5c64
++87cb19d3d8815196
++48e308f888cf5b7d
++29456fcf73fd5220
++f48febc5e9855a3f
++2889f4a3c35f5847
++065bc19c763e5546
++10403f40ae9a5203
++e8be8d91e7e55d65
++f276846395845cd4
++084c45dd976657fe
++6544594b29925dd0
++735f6c225e905b34
++8bc5231f3c595e77
++0a3d3f2c80e1507a
++8353a5c80ad25637
++378504b121725d98
++76511f6ac9d35418
++a68a9cb7f54455a0
++fec502ecffe35534
++355bf609688d55d3
++32028e14410857c7
++4a100dff32a952b4
++05e0f9ec3acb51fa
++42ae97b3a2f95a86
++1a2d456385d35ea1
++c8f1cc5a5b3b57a2
++cbb452879b545312
++76f1e74fb2f75c74
++ae57e81a8f0057a0
++d1736e8e7c635387
++3c676a842aa95b15
++44ede010c46e5175
++12dc4ae0a2015bf3
++891f967c5f7758a9
++dc73d5dff42c5e8c
++c9dc921bffe15e70
++1d1f265e50485434
++c7413119403f59a8
++1f9d1a4cd6255360
++b41c179e3bb955f7
++6eb21ff1408c5a7b
++f1f1d88bc1cc5166
++d46a39a2fd0455dc
++89f3f77436a25b07
++e2ca7314a22e54bc
++2d14508ada3a5a8c
++17f5cfab9f285424
++23cc9995ccfb5e8f
++3d4bf86ee4995718
++7e9b3d39e8c35dc1
++62a6eb743d645278
++50180225cde85f84
++3a31ed375caf5fe5
++68be0eef63e95888
++75fa8ede19e75dd2
++1c156a157c215533
++29a2c1820acf5523
++a2ceb1782a6d54aa
++738f7ef9a9f35523
++ee2362a517625cff
++b5194016ea9056b1
++06d3f37f7158536a
++817f1cf4318f5886
++cc21efb7ed2d5372
++80c39211029c5f70
++0423d45f6680508d
++e2828da445cd5858
++bfae672a92a856fb
++c799ae47bf705a80
++8fcbba72bffc5b93
++960d230631fe5763
++61ab0066a9f755e6
++24ebeccbdc095a35
++c09771db1a545b6f
++5a6a5c57cc0c5dae
++9bb53c0348a75038
++caa2c2000a8c5181
++8c180fa3dff854ac
++4daf9cee9a005d75
++3172eb6a34625a71
++73cde6573e065380
++216ed2658b8a56ea
++21e72cb20c2a5c79
++d301e5d2cd13577e
++8d7d5646edb65059
++01097af1a743535c
++c62440c54d8b50db
++69062ee497115748
++48b16e096fc05681
++4af7b92b920d5aea
++67bb1fa1eb405873
++050f1a112a8f500c
++f94c6482854155e1
++c8a9724a3c475444
++efc3bb8f20275449
++ac42edd2fd865589
++625676ea300e50b0
++96275f5407985a31
++d528bfc8141f5ca1
++c1e71a896211562f
++1be0c000975a50b0
++d0ac4df6ed615d5f
++f0057303b30c5e74
++d0da15b8a1c25030
++f1cbe69701a651b8
++e5937d560b1852c1
++6b0618ffee4a52e4
++4597b398aa365093
++32d7eaa6e8ad5bd5
++f1dc27d71ceb5c4f
++054a6d4f2c035e7a
++3e0c8e46c6495ba8
++c1f5d1dec0325d27
++067acf2fcb115adb
++406d18376f5a52f1
++43855a1e9c2853a6
++8a7338e107b15dcd
++be095955508253ff
++4d76cc0ed9f35f83
++e3fe91199cfc5a6d
++950f15c3cf295944
++8ad2c4430f0f510a
++e8f9c42bc08e5882
++6bc8ae529bc15c68
++3ba13af28e9a54c8
++a0466e7df7885f9d
++d1fac72eca2957fc
++addab130863a5533
++5e948fd0b4ce56ef
++01c4e9c85bea5cba
++9d70a1d1032454b1
++2c9d3cf095d259b1
++a0789d34368c535f
++a9f4431b7f58523b
++b149f62a71d35bd3
++9decbceb9de8515a
++35b7c3aa35c65ce6
++e5729bee4e1655e3
++5445ced00f485aeb
++c45659d538285ce7
++a82643c9b0355aa8
++fc0ed30727415a9a
++5c0f2e56dcc255c2
++98b72dc2f09e5fc8
++3f6d1d1691ad541d
++39101a75066553ac
++799d8eb620555b57
++c0274d47a18e5e82
++ce0eb965e08d525c
++fadc8a74a97b533a
++0bdd842731615275
++6f53a20bfd82597e
++624e2d881a5b548a
++b0ef1408cf9a5a7d
++fc39d39e1dd45860
++d423804b551e51ca
++500c4f3b56065a74
++530b7ab99ef6597a
++0fd204e49ea55bfa
++c58d202f05ed5b39
++4ce8573e86d55613
++9ebc695f3a7c5b06
++5a5311378fce589e
++6bee4644d290565e
++bae68ff4b5535290
++e74fce950e3b526c
++5291c822f6405dd0
++4ef9a48e4ffa5eb4
++d84409335ced5b56
++656d1994aa355ac2
++8185782211b0515c
++9be6627ef8755ec7
++c7534c1170ac5327
++aa829a3acbe55371
++09fe3549cc1c51d5
++4c46cbc25f8c5009
++c57644bbc0765358
++12da3d9955695595
++2f8d6751ad955784
++3c365ce74fcd503a
++10bc1346d0c35664
++8890c68d2a865ce5
++3c77f01449d15309
++982ea539e8725948
++51ea95ea396350ee
++ffac303386e457d8
++26ad6908a7dc532a
++a8cfaacddbdc5a3f
++84f7e1cc500a528d
++d3931dec33a85270
++9f5b1d7c2ae75ff5
++3444ee111ffb54b8
++a3eb80c897c1500f
++4cdce51d3e485b70
++52c87f20c0ab538f
++da70802ece445e18
++13c95549df275dde
++72ba1d4356d55018
++08ba9e74b13055e7
++f741d0adaa7a55e3
++fc487364222959ce
++7d7e3d9be01454e7
++190786c8b4415ad4
++481e116809635b08
++649c8be410db5b16
++c99b299a5a285a0a
++9e937847371b526a
++bb06c0a13fb85892
++841b5a61db7d59d2
++c53e9055d84651fc
++806f5d2c554f574a
++a77dc62443c15275
++9cfe9a4e1f0a5e56
++59063a255aca5970
++3baffd37be415801
++764a5f5b3e625906
++d665fba304b65e14
++3372aa813d395b44
++6391eb35c97a55c6
++b5d596e7233e5f20
++cd2fc135985f5bcf
++c471ab6ec8fc5279
++bba45996e8665214
++fe207909e7db5d57
++343490eb560d578b
++f97b100defde532e
++afb7570c39a7584f
++6154a417c4a95ff0
++a68cd3af81cf5483
++94ad824452d55a8a
++d4f302c655075902
++46a86fd23a4b59ae
++7b6901d08bd85f67
++9d69d74273fb5554
++4e49c3578be85c78
++968620c71c5d515a
++cd25634cc3c75fe1
++0d2e91a2710e59a4
++1d7bca86d24b51e7
++933d814047af5a7f
++faf3a0dfd6f85e6a
++53b3493e96075543
++ab56edb50c5e5a40
++04378225b6c05551
++64308f87d9af59fc
++9d62b40dcf765e88
++f97eb45076fe53a8
++348a51377a2755ed
++c2caa4314dd858ba
++16cac7c51a165b21
++0652228e80d852e6
++4d5b42cb036a5700
++f8bb22a2a4c75b42
++1894cf3f0b1a5ae7
++10f10559ac375a36
++362c6e9ca33958cc
++ffbe6bb39c0d564a
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/experiments/evaluate_open_loop.py ./bdse/experiments/evaluate_open_loop.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/experiments/evaluate_open_loop.py	2026-08-18 05:46:07.000000000 +0000
++++ ./bdse/experiments/evaluate_open_loop.py	2026-08-18 13:54:02.493657217 +0000
+@@ -1008,6 +1008,7 @@
+             icer_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_dominance_logit_star", []), dtype=np.float64).reshape(-1)
+             icer_scalar_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_scalar_dominance_logit_star", []), dtype=np.float64).reshape(-1)
+             icer_profile_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_profile_dominance_logit_star", []), dtype=np.float64).reshape(-1)
++            icer_retention_margin = np.asarray(tour_diag.get("_decisive_frontier_icer_incumbent_retention_margin_star", []), dtype=np.float64).reshape(-1)
+             icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
+             icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
+             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
+@@ -1054,6 +1055,7 @@
+                         "icer_dominance_logit": float(icer_dominance_logits[challenger]) if icer_dominance_logits.size == edge_valid.size else float("nan"),
+                         "icer_scalar_dominance_logit": float(icer_scalar_dominance_logits[challenger]) if icer_scalar_dominance_logits.size == edge_valid.size else float("nan"),
+                         "icer_profile_dominance_logit": float(icer_profile_dominance_logits[challenger]) if icer_profile_dominance_logits.size == edge_valid.size else float("nan"),
++                        "icer_incumbent_retention_margin": float(icer_retention_margin[challenger]) if icer_retention_margin.size == edge_valid.size else float("nan"),
+                         "icer_admissible": float(icer_admissible[challenger]) if icer_admissible.size == edge_valid.size else 0.0,
+                     }
+                     if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/planner/tournament.py ./bdse/planner/tournament.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/planner/tournament.py	2026-08-18 08:36:57.000000000 +0000
++++ ./bdse/planner/tournament.py	2026-08-18 14:01:19.774342043 +0000
+@@ -1787,6 +1787,7 @@
+     # but diagnostic serialization still exposes the arrays for schema stability.
+     scalar_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
+     profile_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
++    incumbent_retention_margin = np.zeros((len(valid),), dtype=np.float64)
+     selected = legacy
+     baseline = legacy
+     flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+@@ -1850,26 +1851,74 @@
+         if dominance_policy == "scalar_only":
+             profile_dominance_logits = np.zeros_like(scalar_dominance_logits)
+             dominance_logits = scalar_dominance_logits.copy()
++            dominance_positive = np.isfinite(scalar_dominance_logits) & (scalar_dominance_logits > 0.0)
+         elif dominance_policy == "dual_equal_mean":
+             profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
+             dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
++            dominance_positive = np.isfinite(dominance_logits) & (dominance_logits > 0.0)
++        elif dominance_policy == "dual_positive_consensus_mean":
++            # V64.3.21: a signed-attribution view is corroborating evidence, not
++            # a compensating term.  Both independently trained TRAIN-only views
++            # must cross their semantic zero-log-odds boundary; only then is
++            # their equal mean used for extremal ranking.  This is a structural
++            # consensus rule, not a validation-tuned threshold.
++            profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
++            dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
++            dominance_positive = (
++                np.isfinite(scalar_dominance_logits) & np.isfinite(profile_dominance_logits)
++                & (scalar_dominance_logits > 0.0) & (profile_dominance_logits > 0.0)
++            )
+         else:
+             raise ValueError(f"unknown EAF-ICER dominance_policy={dominance_policy}")
+ 
++        # V64.3.21 selection-conditioned incumbent retention.  The historical
++        # all-edge support head is still the absolute support gate for *new*
++        # alternatives, but it is no longer asked to veto an already admissible
++        # extremal incumbent.  A dedicated TRAIN-only linear margin readout is
++        # fit only on frozen raw-EAF incumbents and predicts the normalized
++        # teacher margin J(anchor)-J(incumbent).  Zero is therefore a semantic
++        # preserve-vs-anchor boundary and requires no validation threshold.
++        retention_policy = str(icer_cfg.get("incumbent_retention_policy", "generic_support")).strip().lower()
++        if retention_policy in {"selected_incumbent_scalar_margin_mse", "selected_incumbent_profile_margin_mse"}:
++            stored_base = list(icer_cfg.get("retention_feature_names", []))
++            expected_base = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[:18] if retention_policy == "selected_incumbent_scalar_margin_mse" else _ICER_DOMINANCE_PROFILE_BASE_NAMES)
++            rmean = np.asarray(icer_cfg.get("retention_feature_mean", []), dtype=np.float64).reshape(-1)
++            rstd = np.asarray(icer_cfg.get("retention_feature_std", []), dtype=np.float64).reshape(-1)
++            rw = np.asarray(icer_cfg.get("retention_weights", []), dtype=np.float64).reshape(-1)
++            if stored_base != expected_base or len(rmean) != len(expected_base) or len(rstd) != len(expected_base) or len(rw) != len(expected_base):
++                raise ValueError("EAF-ICER incumbent retention margin schema/mean/std/weights are inconsistent")
++            fpos = {str(n): i for i, n in enumerate(names)}
++            if any(n not in fpos for n in expected_base):
++                raise ValueError("EAF-ICER incumbent retention profile features missing from runtime schema")
++            rx = feat[:, [fpos[n] for n in expected_base]]
++            rz = (rx - rmean[None, :]) / np.maximum(rstd[None, :], 1.0e-6)
++            incumbent_retention_margin = np.clip(rz @ rw + float(icer_cfg.get("retention_bias", 0.0)), -40.0, 40.0)
++        elif retention_policy == "preserve_admissible_incumbent":
++            incumbent_retention_margin = np.ones((len(valid),), dtype=np.float64)
++        elif retention_policy == "generic_support":
++            incumbent_retention_margin = support_logits.copy()
++        else:
++            raise ValueError(f"unknown EAF-ICER incumbent_retention_policy={retention_policy}")
+ 
+         support_ok = admissible & np.isfinite(support_logits) & (support_logits > 0.0)
+         legacy_admissible = bool(0 <= legacy < len(valid) and admissible[legacy])
+         legacy_supported = bool(legacy_admissible and support_ok[legacy])
++        legacy_retained = bool(
++            legacy_admissible
++            and np.isfinite(incumbent_retention_margin[legacy])
++            and incumbent_retention_margin[legacy] >= 0.0
++        )
+         # When the frozen incumbent itself is deployment-admissible, every
+-        # alternative replacement is incumbent-contrastive even if the support
+-        # head would otherwise abstain on the incumbent.  This prevents an
+-        # anchor-relative branch from silently bypassing the dominance claim.
++        # alternative replacement remains incumbent-contrastive.  V64.3.21
++        # makes the baseline asymmetric: only the selected-incumbent margin head
++        # may demote an admissible incumbent to the anchor; generic edge support
++        # continues to gate alternatives but cannot veto the incumbent itself.
+         if legacy_admissible:
+-            baseline = int(legacy if legacy_supported else a)
++            baseline = int(legacy if legacy_retained else a)
+             alternative = support_ok.copy()
+             if 0 <= legacy < len(alternative):
+                 alternative[legacy] = False
+-            cand = np.flatnonzero(alternative & np.isfinite(dominance_logits) & (dominance_logits > 0.0)).astype(np.int64)
++            cand = np.flatnonzero(alternative & dominance_positive).astype(np.int64)
+             if cand.size:
+                 best = sorted(
+                     cand.tolist(),
+@@ -1913,8 +1962,12 @@
+         "decisive_frontier_icer_selected_support_logit": support_selected,
+         "decisive_frontier_icer_selected_dominance_logit": dominance_selected,
+         "decisive_frontier_icer_legacy_support_logit": float(support_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
++        "decisive_frontier_icer_legacy_retention_margin": float(incumbent_retention_margin[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
+         "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
+         "decisive_frontier_icer_dominance_policy_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_equal_mean"),
++        "decisive_frontier_icer_dominance_policy_dual_positive_consensus": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_positive_consensus_mean"),
++        "decisive_frontier_icer_incumbent_retention_profile_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_profile_margin_mse"),
++        "decisive_frontier_icer_incumbent_retention_scalar_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_scalar_margin_mse"),
+         "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
+         "decisive_frontier_icer_safe_domain_active": float(bool(safe_available)),
+         "decisive_frontier_icer_all_flagged_domain": float(bool(all_flagged_domain)),
+@@ -1931,6 +1984,7 @@
+         "_decisive_frontier_icer_dominance_logit_star": np.asarray(dominance_logits, dtype=np.float32),
+         "_decisive_frontier_icer_scalar_dominance_logit_star": np.asarray(scalar_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
+         "_decisive_frontier_icer_profile_dominance_logit_star": np.asarray(profile_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
++        "_decisive_frontier_icer_incumbent_retention_margin_star": np.asarray(incumbent_retention_margin, dtype=np.float32),
+         "_decisive_frontier_icer_admissible_mask": np.asarray(admissible, dtype=bool),
+     }
+     return int(selected), diag
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tests/test_v64_3_21_eaf_icer_mcr.py ./bdse/tests/test_v64_3_21_eaf_icer_mcr.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tests/test_v64_3_21_eaf_icer_mcr.py	1970-01-01 00:00:00.000000000 +0000
++++ ./bdse/tests/test_v64_3_21_eaf_icer_mcr.py	2026-08-18 14:04:44.691275235 +0000
+@@ -0,0 +1,70 @@
++from __future__ import annotations
++
++import copy, json
++from pathlib import Path
++import numpy as np
++
++from bdse.planner.tournament import _apply_decisive_frontier_icer, _ICER_DOMINANCE_PROFILE_BASE_NAMES
++from bdse.tests.test_v64_3_19_eaf_icer import _cfg, _diag, _matrix
++from bdse.tools.fit_v64_3_21_eaf_icer_mcr import _fit_ridge, _predict
++from bdse.tools.check_v64_3_19_eaf_icer_screen import _icer_edge_diag
++
++
++def _run(cfg: dict, safety: np.ndarray|None=None):
++    return _apply_decisive_frontier_icer(2,0,_matrix(),np.asarray([0.,.10,.05,.08]),np.zeros((3,4),np.float32),np.asarray([0.,.20,.40,.30]),np.ones(4,bool),np.zeros(4,bool) if safety is None else safety,_diag(),1.0,None,cfg)
++
++
++def _mcr_cfg(*, retention_bias: float, consensus: bool=False) -> dict:
++    c=_cfg(support_bias=1.0,dominance_bias=1.0,raw_margin_weight=0.0,policy="dual_equal_mean")
++    ic=c["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    ic["all_flagged_policy"]="preserve_legacy_for_structural_guard"
++    ic["incumbent_retention_policy"]="selected_incumbent_profile_margin_mse"
++    names=list(_ICER_DOMINANCE_PROFILE_BASE_NAMES)
++    ic["retention_feature_names"]=names; ic["retention_feature_mean"]=[0.0]*len(names); ic["retention_feature_std"]=[1.0]*len(names); ic["retention_weights"]=[0.0]*len(names); ic["retention_bias"]=retention_bias
++    if consensus: ic["dominance_policy"]="dual_positive_consensus_mean"
++    return c
++
++
++def test_mcr_retention_margin_not_generic_support_controls_admissible_incumbent_fallback() -> None:
++    keep=_mcr_cfg(retention_bias=1.0); ic=keep["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    # No positive dominance => baseline is the incumbent when retention margin is positive.
++    ic["scalar_dominance_bias"]=-10.0; ic["profile_dominance_bias"]=-10.0
++    s,d=_run(keep); assert s==2; assert float(d["decisive_frontier_icer_legacy_retention_margin"])>0
++    drop=copy.deepcopy(keep); di=drop["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]; di["retention_bias"]=-1.0
++    s2,d2=_run(drop); assert s2==0; assert float(d2["decisive_frontier_icer_legacy_retention_margin"])<0
++
++
++def test_mcr_consensus_requires_both_dominance_views_positive() -> None:
++    c=_mcr_cfg(retention_bias=1.0,consensus=True); ic=c["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    # Scalar is positive, signed-profile is negative: mean could be positive but consensus must reject.
++    ic["scalar_dominance_bias"]=3.0; ic["profile_dominance_bias"]=-1.0
++    s,_=_run(c); assert s==2
++    ic["profile_dominance_bias"]=1.0
++    s2,_=_run(c); assert s2!=2
++
++
++def test_mcr_all_flagged_still_delegates_exact_legacy() -> None:
++    c=_mcr_cfg(retention_bias=-10.0,consensus=True)
++    s,d=_run(c,safety=np.ones(4,bool)); assert s==2; assert float(d["decisive_frontier_icer_structural_domain_delegated"])==1.0
++
++
++def test_retention_ridge_preserves_semantic_zero_sign() -> None:
++    rng=np.random.default_rng(21); X=rng.normal(size=(500,4)); y=2.0*X[:,0]-0.5*X[:,1]
++    mask=np.ones(len(y),bool); w,b,m,s,scale=_fit_ridge(X,y,mask); pred=_predict(X,w,b,m,s)
++    assert scale>0 and np.mean((pred>=0)==(y>=0))>.95
++
++
++def test_edge_diag_can_exclude_delegated_domain(tmp_path: Path) -> None:
++    rows=[
++      {"scenario_token":"safe","anchor_action":0,"raw_top_action":1,"challenger_action":1,"teacher_margin":.2,"icer_admissible":1,"icer_selected_action":1,"icer_support_logit":1,"icer_dominance_logit":0,"icer_scalar_dominance_logit":0,"icer_profile_dominance_logit":0},
++      {"scenario_token":"flagged","anchor_action":0,"raw_top_action":1,"challenger_action":1,"teacher_margin":-.2,"icer_admissible":0,"icer_selected_action":1,"icer_support_logit":0,"icer_dominance_logit":0,"icer_scalar_dominance_logit":0,"icer_profile_dominance_logit":0},
++    ]
++    p=tmp_path/"e.jsonl"; p.write_text("\n".join(json.dumps(r) for r in rows)+"\n")
++    d=_icer_edge_diag(p,{"safe"}); assert d["scene_count"]==1.0 and d["selected_nonanchor_teacher_better_rate"]==1.0
++
++
++def test_v21_design_exclusion_adds_exact_v20_fresh_block() -> None:
++    root=Path(__file__).resolve().parents[1]/"configs"
++    old={x.strip() for x in (root/"v64_3_20_design_exclude_v64_3_19_screen_tokens.txt").read_text().splitlines() if x.strip()}
++    new={x.strip() for x in (root/"v64_3_21_design_exclude_v64_3_20_screen_tokens.txt").read_text().splitlines() if x.strip()}
++    assert len(old)==3200 and len(new)==3700 and old<=new and len(new-old)==500
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_19_eaf_icer_screen.py ./bdse/tools/check_v64_3_19_eaf_icer_screen.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_19_eaf_icer_screen.py	2026-08-18 05:59:13.000000000 +0000
++++ ./bdse/tools/check_v64_3_19_eaf_icer_screen.py	2026-08-18 13:59:47.297159424 +0000
+@@ -35,8 +35,10 @@
+     return float((ranks[yy == 1].sum() - pos * (pos + 1) / 2.0) / (pos * neg))
+ 
+ 
+-def _icer_edge_diag(path: Path) -> dict[str, float]:
++def _icer_edge_diag(path: Path, allowed_tokens: set[str] | None = None) -> dict[str, float]:
+     rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
++    if allowed_tokens is not None:
++        rows = [r for r in rows if str(r.get("scenario_token", "")) in allowed_tokens]
+     groups: dict[str, list[dict[str, Any]]] = {}
+     support_y: list[int] = []; support_s: list[float] = []
+     for r in rows:
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py ./bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py	2026-08-18 08:33:44.000000000 +0000
++++ ./bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py	2026-08-18 13:59:48.695207576 +0000
+@@ -43,7 +43,14 @@
+         raise SystemExit("paired row token identity mismatch")
+ 
+     all_flagged = [t for t in tokens if _f(rr[t], "all_actions_safety_flagged_rate", 0.0) >= 0.5]
+-    safe_domain = [t for t in tokens if t not in set(all_flagged)]
++    all_flagged_set = set(all_flagged)
++    safe_domain = [t for t in tokens if t not in all_flagged_set]
++    safe_set = set(safe_domain)
++    # V64.3.21 audit correction: learned ICER is deliberately disabled in the
++    # all-flagged delegated domain, so recovery/guard-cleanup gates must be
++    # computed only on the safe-available learned-intervention domain.
++    se_safe = _icer_edge_diag(Path(a.v20_scalar_edge_output), safe_set)
++    de_safe = _icer_edge_diag(Path(a.v20_dual_edge_output), safe_set)
+     def frac(xs: list[bool]) -> float:
+         return float(sum(bool(x) for x in xs) / len(xs)) if xs else float("nan")
+ 
+@@ -77,7 +84,7 @@
+     instrumentation = de["scene_count"] >= 480 and de["admissible_edge_count"] >= 2048 and de["direct_counterfactual_dominance_edge_count"] >= 512 and _f(d_m, "decisive_frontier_value_complete_star_coverage") >= .99 and all(frozen.values())
+     candidate_support = de["multi_admissible_proposal_rate"] >= .25 and de["admissible_candidates_per_proposal_mean"] >= 3.0
+     fresh_signal = de["support_auc"] >= .65 and de["direct_counterfactual_dominance_auc"] >= .70
+-    recovery = de["alternative_recovery_rate"] >= .03 and de["alternative_recovery_precision"] >= .80 and de["direct_incumbent_replacement_rate"] >= .02 and de["direct_incumbent_replacement_precision"] >= .60 and de["direct_incumbent_opportunity_capture_rate"] >= .08 and de["selected_nonanchor_teacher_better_rate"] >= .80 and de["alternative_teacher_margin_mean"] > 0.0
++    recovery = de_safe["alternative_recovery_rate"] >= .03 and de_safe["alternative_recovery_precision"] >= .80 and de_safe["direct_incumbent_replacement_rate"] >= .02 and de_safe["direct_incumbent_replacement_precision"] >= .60 and de_safe["direct_incumbent_opportunity_capture_rate"] >= .08 and de_safe["selected_nonanchor_teacher_better_rate"] >= .80 and de_safe["alternative_teacher_margin_mean"] > 0.0
+     # The scalar V20 operator must preserve V19 safe-domain mechanism exactly; the
+     # only allowed semantic difference is all-flagged structural-domain delegation.
+     mechanism_identity = all(
+@@ -93,7 +100,9 @@
+         and D["match"] >= S["match"] - .005
+         and D["harmful"] <= S["harmful"] + .005
+     )
+-    deployment_alignment = D["guard_block"] <= .001
++    safe_guard_block = frac([_f(dr[t], "pair_action_anchor_guard_blocked_flip", 0.0) >= 0.5 for t in safe_domain])
++    delegated_guard_block = frac([_f(dr[t], "pair_action_anchor_guard_blocked_flip", 0.0) >= 0.5 for t in all_flagged])
++    deployment_alignment = safe_guard_block <= .001
+     retention = D["beneficial"] / max(R["beneficial"], 1e-12) if R["beneficial"] > 0 else float("nan")
+     preservation = R["harmful"] - D["harmful"] >= .05 and retention >= .35 and D["beneficial"] > D["harmful"] and D["flip"] >= .03 and D["flip"] < R["flip"]
+     anchor_match = _f(raw_m, "selected_local_anchor_action_match"); anchor_regret = _f(raw_m, "selected_local_anchor_teacher_regret")
+@@ -128,7 +137,8 @@
+         "preservation_gain": preservation,
+         "endpoint_gain": endpoint,
+         "structural_domain_diagnostics": structural,
+-        "edge_diagnostics": {"v19_scalar_control": v19e, "v20_scalar": se, "v20_dual": de},
++        "edge_diagnostics": {"v19_scalar_control": v19e, "v20_scalar": se, "v20_dual": de, "v20_scalar_safe_domain": se_safe, "v20_dual_safe_domain": de_safe},
++        "domain_aware_guard_diagnostics": {"safe_domain_scene_count": float(len(safe_domain)), "all_flagged_scene_count": float(len(all_flagged)), "safe_domain_guard_block_rate": safe_guard_block, "delegated_all_flagged_guard_block_rate": delegated_guard_block},
+         "metrics": {"anchor": {"match": anchor_match, "regret": anchor_regret}, "raw": R, "v19_scalar_control": V19, "v20_scalar": S, "v20_dual": D, "dual_beneficial_retention_vs_raw": retention},
+         "frozen_interface": frozen,
+         "thresholds": {
+@@ -146,7 +156,7 @@
+             "regret_vs_raw_tolerance": .02,
+         },
+         "next_action": next_action,
+-        "interpretation": "V64.3.20 changes no learned head. It tests whether V19's mechanism-level success becomes a full endpoint success once all-flagged scenes preserve the frozen raw proposal and are delegated to the unchanged continuous structural-risk guard. Signed selected-evidence attribution remains incremental only if dual improves direct dominance discrimination without material replacement-precision/capture or endpoint harm.",
++        "interpretation": "V64.3.20 changes no learned head. Recovery and post-selection guard-cleanup are domain-aware: all-flagged scenes are delegated structural-domain controls and are excluded from learned-safe-domain mechanism gates. It tests whether V19's mechanism-level success becomes a full endpoint success once all-flagged scenes preserve the frozen raw proposal and are delegated to the unchanged continuous structural-risk guard.",
+     }
+     p = Path(a.output); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+     print(json.dumps(report, indent=2, sort_keys=True))
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_21_eaf_icer_mcr_contract.py ./bdse/tools/check_v64_3_21_eaf_icer_mcr_contract.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_21_eaf_icer_mcr_contract.py	1970-01-01 00:00:00.000000000 +0000
++++ ./bdse/tools/check_v64_3_21_eaf_icer_mcr_contract.py	2026-08-18 14:01:35.796724785 +0000
+@@ -0,0 +1,63 @@
++from __future__ import annotations
++
++import argparse, json, math
++from pathlib import Path
++from typing import Any
++import yaml
++
++from bdse.planner.tournament import _ICER_DOMINANCE_PROFILE_BASE_NAMES
++
++
++def _icer(cfg: dict[str,Any])->dict[str,Any]:
++    return ((((cfg.get("runtime",{}) or {}).get("decisive_frontier_value",{}) or {}).get("incumbent_contrastive_extremal_recovery",{}) or {}))
++
++
++def _head(ic: dict[str,Any], prefix: str)->dict[str,Any]:
++    return {k:v for k,v in ic.items() if k.startswith(prefix)}
++
++
++def _finite(xs)->bool:
++    try: return all(math.isfinite(float(x)) for x in xs)
++    except Exception: return False
++
++
++def main()->None:
++    ap=argparse.ArgumentParser(description="Audit V64.3.21 EAF-ICER-MCR frozen-head + retention contract.")
++    ap.add_argument("--config",required=True); ap.add_argument("--expect",choices=["mcr-scalar-retention","mcr-mean","mcr-consensus"],required=True)
++    ap.add_argument("--frozen-v20-dual-config",required=True); ap.add_argument("--output")
++    a=ap.parse_args()
++    cfg=yaml.safe_load(Path(a.config).read_text(encoding="utf-8")); old=yaml.safe_load(Path(a.frozen_v20_dual_config).read_text(encoding="utf-8"))
++    ic, oi=_icer(cfg),_icer(old)
++    expected_policy="dual_positive_consensus_mean" if a.expect=="mcr-consensus" else "dual_equal_mean"
++    expected_retention="selected_incumbent_scalar_margin_mse" if a.expect=="mcr-scalar-retention" else "selected_incumbent_profile_margin_mse"
++    expected_features=list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[:18] if a.expect=="mcr-scalar-retention" else _ICER_DOMINANCE_PROFILE_BASE_NAMES)
++    meta=cfg.get("metadata",{}) or {}; prov=cfg.get("provenance",{}) or {}
++    rnames=list(ic.get("retention_feature_names",[]) or [])
++    checks={
++        "version":meta.get("algorithm_version")=="V64.3.21-EAF-ICER-MCR-DARM-DBR" and prov.get("algorithm_version")==meta.get("algorithm_version"),
++        "enabled":bool(ic.get("enabled",False)),
++        "dominance_policy":str(ic.get("dominance_policy",""))==expected_policy,
++        "all_flagged_deployment_complete":str(ic.get("all_flagged_policy",""))=="preserve_legacy_for_structural_guard",
++        "safe_domain_learning_only":bool(ic.get("require_safe_available_for_learned_intervention",False)),
++        "support_head_frozen":_head(ic,"support_")==_head(oi,"support_"),
++        "scalar_dominance_head_frozen":_head(ic,"scalar_dominance_")==_head(oi,"scalar_dominance_"),
++        "profile_dominance_head_frozen":_head(ic,"profile_dominance_")==_head(oi,"profile_dominance_"),
++        "zero_reference_logits":abs(float(ic.get("anchor_logit",99)))<1e-12 and abs(float(ic.get("incumbent_logit",99)))<1e-12,
++        "retention_policy":str(ic.get("incumbent_retention_policy",""))==expected_retention,
++        "retention_schema":rnames==expected_features,
++        "retention_vectors":len(ic.get("retention_feature_mean",[]))==len(rnames)==len(ic.get("retention_feature_std",[]))==len(ic.get("retention_weights",[])),
++        "retention_numeric_finite":_finite(ic.get("retention_feature_mean",[])) and _finite(ic.get("retention_feature_std",[])) and _finite(ic.get("retention_weights",[])) and math.isfinite(float(ic.get("retention_bias",float("nan")))) ,
++        "retention_objective_fixed":str(ic.get("retention_training_objective",""))=="fixed_linear_mse_plus_l2_1e-3_zero_is_semantic_teacher_tie",
++        "retention_zero_boundary":str(ic.get("retention_threshold_policy",""))=="fixed_zero_predicted_teacher_margin_no_validation_threshold_sweep",
++        "target_is_selected_incumbent_margin":str(ic.get("retention_training_target",""))=="normalized_teacher_margin_JT_anchor_minus_JT_selected_incumbent",
++        "no_validation_threshold_sweep":"no_validation_threshold_sweep" in str(ic.get("threshold_policy","")),
++        "training_reuse":str(ic.get("training_reuse",""))=="exact_v64_3_20_support_and_v64_3_19_dominance_heads_frozen_retention_fit_train_only",
++        "evaluation_only":bool((cfg.get("training",{}) or {}).get("evaluation_only",False)),
++    }
++    report={"audit":"v64_3_21_eaf_icer_mcr_contract","expect":a.expect,"passed":all(checks.values()),"checks":checks}
++    if a.output:
++        p=Path(a.output); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
++    print(json.dumps(report,indent=2,sort_keys=True))
++    if not report["passed"]: raise SystemExit(2)
++
++if __name__=="__main__": main()
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_21_eaf_icer_mcr_screen.py ./bdse/tools/check_v64_3_21_eaf_icer_mcr_screen.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_21_eaf_icer_mcr_screen.py	1970-01-01 00:00:00.000000000 +0000
++++ ./bdse/tools/check_v64_3_21_eaf_icer_mcr_screen.py	2026-08-18 14:02:58.054813612 +0000
+@@ -0,0 +1,23 @@
++from __future__ import annotations
++import argparse,json
++from pathlib import Path
++
++
++def main():
++    ap=argparse.ArgumentParser(description="Aggregate two independent V64.3.21 MCR fresh replication blocks.")
++    ap.add_argument("--split-a-report",required=True); ap.add_argument("--split-b-report",required=True); ap.add_argument("--output",required=True); a=ap.parse_args()
++    A=json.load(open(a.split_a_report)); B=json.load(open(a.split_b_report))
++    both=bool(A.get("full_split_pass",False) and B.get("full_split_pass",False))
++    # Profile-retention attribution is a diagnostic rather than a promotion shortcut:
++    # if it fails, the main mechanism can still be real, but paper claims about signed
++    # attribution in the retention head must be demoted until an independent ablation supports it.
++    profile_both=bool(A.get("profile_retention_incremental_diagnostic",False) and B.get("profile_retention_incremental_diagnostic",False))
++    if both:
++        next_action="independent_frozen_full_val_reproduction_of_V64_3_21_MCR_consensus_only_no_test_or_closed_loop_until_reproduced"
++    else:
++        fails=[r.get("next_action") for r in [A,B] if not r.get("full_split_pass",False)]
++        next_action="STOP_DOUBLE_FRESH_REPLICATION:"+"|".join(str(x) for x in fails)
++    r={"audit":"v64_3_21_eaf_icer_mcr_double_fresh_screen","full_promotion_to_independent_full_val_reproduction":both,"both_independent_500_scene_blocks_pass":both,"signed_profile_retention_incremental_on_both_blocks":profile_both,"split_a":A,"split_b":B,"next_action":next_action,"interpretation":"V64.3.21 is allowed to leave screen only if the complete mechanism and endpoint pass independently on two disjoint label-free 500-scene validation blocks. Pooled success cannot rescue a failed block. Passing this screen permits only one frozen independent full-val reproduction; test/closed-loop remain forbidden."}
++    p=Path(a.output);p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(r,indent=2,sort_keys=True),encoding="utf-8");print(json.dumps(r,indent=2,sort_keys=True))
++
++if __name__=="__main__":main()
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_21_eaf_icer_mcr_split.py ./bdse/tools/check_v64_3_21_eaf_icer_mcr_split.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/check_v64_3_21_eaf_icer_mcr_split.py	1970-01-01 00:00:00.000000000 +0000
++++ ./bdse/tools/check_v64_3_21_eaf_icer_mcr_split.py	2026-08-18 14:02:58.053630750 +0000
+@@ -0,0 +1,135 @@
++from __future__ import annotations
++
++import argparse, json, math
++from pathlib import Path
++from typing import Any
++import numpy as np
++
++from bdse.tools.check_v64_3_19_eaf_icer_screen import _icer_edge_diag, _metric_pack, _f, _auc
++
++
++def _load_rows(path: str)->dict[str,dict[str,Any]]:
++    rows=[json.loads(x) for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
++    out={str(r.get("scenario_token","")):r for r in rows}
++    if len(out)!=len(rows): raise SystemExit(f"duplicate scenario tokens in {path}")
++    return out
++
++
++def _edge_groups(path: str, allowed: set[str]|None=None)->dict[str,list[dict[str,Any]]]:
++    g:dict[str,list[dict[str,Any]]]={}
++    for line in Path(path).read_text(encoding="utf-8").splitlines():
++        if not line.strip(): continue
++        r=json.loads(line); t=str(r.get("scenario_token",""))
++        if allowed is not None and t not in allowed: continue
++        g.setdefault(t,[]).append(r)
++    return g
++
++
++def _retention_diag(edge_path: str, safe: set[str])->dict[str,float]:
++    ys=[]; ps=[]; fallback_sum=0.0; fallback_n=0; n=0
++    for rs in _edge_groups(edge_path,safe).values():
++        if not rs: continue
++        a=int(rs[0].get("anchor_action",-1)); lg=int(rs[0].get("raw_top_action",-1))
++        if lg==a: continue
++        lr=next((r for r in rs if int(r.get("challenger_action",-999))==lg),None)
++        if lr is None or _f(lr,"icer_admissible",0)<.5: continue
++        tm=_f(lr,"teacher_margin"); pred=_f(lr,"icer_incumbent_retention_margin")
++        if not (math.isfinite(tm) and math.isfinite(pred)): continue
++        n+=1; ys.append(int(tm>0)); ps.append(pred)
++        if pred<0: fallback_n+=1; fallback_sum+=tm
++    sign=float(np.mean([(p>=0)==(y>0) for p,y in zip(ps,ys)])) if ys else float("nan")
++    return {"admissible_selected_incumbent_count":float(n),"retention_auc":_auc(ys,ps) if ys else float("nan"),"retention_sign_accuracy":sign,
++            "predicted_anchor_fallback_rate":float(fallback_n/n) if n else float("nan"),"predicted_anchor_fallback_teacher_margin_sum":float(fallback_sum)}
++
++
++def _path_diag(raw_rows:dict[str,dict[str,Any]], alg_rows:dict[str,dict[str,Any]], edge_path:str, safe:set[str], allflag:set[str])->dict[str,Any]:
++    groups=_edge_groups(edge_path)
++    buckets={k:{"count":0,"regret_delta_sum":0.0,"regret_delta_mean":float("nan")} for k in ["direct_incumbent_to_alternative","admissible_incumbent_to_anchor","inadmissible_incumbent_anchor_relative","keep_legacy","all_flagged_delegated","other"]}
++    for t,r in alg_rows.items():
++        delta=_f(r,"teacher_regret",0)-_f(raw_rows[t],"teacher_regret",0)
++        if t in allflag: k="all_flagged_delegated"
++        else:
++            rs=groups.get(t,[])
++            if not rs: k="other"
++            else:
++                a=int(rs[0].get("anchor_action",-1)); lg=int(rs[0].get("raw_top_action",-1)); sel=int(rs[0].get("icer_selected_action",lg))
++                lr=next((x for x in rs if int(x.get("challenger_action",-999))==lg),None)
++                legacy_adm=bool(lr is not None and _f(lr,"icer_admissible",0)>=.5)
++                if legacy_adm and sel not in {a,lg}: k="direct_incumbent_to_alternative"
++                elif legacy_adm and sel==a: k="admissible_incumbent_to_anchor"
++                elif not legacy_adm and sel!=lg: k="inadmissible_incumbent_anchor_relative"
++                elif sel==lg: k="keep_legacy"
++                else: k="other"
++        buckets[k]["count"]+=1; buckets[k]["regret_delta_sum"]+=delta
++    for d in buckets.values():
++        if d["count"]: d["regret_delta_mean"]=d["regret_delta_sum"]/d["count"]
++    return buckets
++
++
++def _guard_block_rate(rows:dict[str,dict[str,Any]], tokens:set[str])->float:
++    if not tokens: return float("nan")
++    return float(np.mean([_f(rows[t],"pair_action_anchor_guard_blocked_flip",0)>=.5 for t in tokens]))
++
++
++def _identity_rate(a,b,tokens,key="bdse_action"):
++    if not tokens:return float("nan")
++    return float(np.mean([int(a[t].get(key,-99999))==int(b[t].get(key,-99998)) for t in tokens]))
++
++
++def main()->None:
++    ap=argparse.ArgumentParser(description="One 500-scene V64.3.21 MCR replication block checker.")
++    ap.add_argument("--split-name",required=True)
++    for name in ["raw","v20","scalar-retention","profile-mean","consensus"]:
++        ap.add_argument(f"--{name}-metrics",required=True); ap.add_argument(f"--{name}-rows",required=True)
++        if name!="raw": ap.add_argument(f"--{name}-edges",required=True)
++    ap.add_argument("--output",required=True); a=ap.parse_args()
++    tags=["raw","v20","scalar_retention","profile_mean","consensus"]
++    metrics={t:json.load(open(getattr(a,t+"_metrics"))) for t in tags}
++    rows={t:_load_rows(getattr(a,t+"_rows")) for t in tags}
++    tokens=set(rows["raw"])
++    if len(tokens)<480 or any(set(rows[t])!=tokens for t in tags[1:]): raise SystemExit("paired fresh token identity mismatch")
++    allflag={t for t in tokens if _f(rows["raw"][t],"all_actions_safety_flagged_rate",0)>=.5}; safe=tokens-allflag
++    edge_paths={t:getattr(a,t+"_edges") for t in tags[1:]}
++    ed={t:_icer_edge_diag(Path(edge_paths[t]),safe) for t in tags[1:]}
++    retention={t:_retention_diag(edge_paths[t],safe) for t in ["scalar_retention","profile_mean","consensus"]}
++    path={t:_path_diag(rows["raw"],rows[t],edge_paths[t],safe,allflag) for t in tags[1:]}
++    M={t:_metric_pack(metrics[t]) for t in tags}
++    anchor={"match":_f(metrics["raw"],"selected_local_anchor_action_match"),"regret":_f(metrics["raw"],"selected_local_anchor_teacher_regret")}
++    structural={
++        "all_flagged_scene_count":float(len(allflag)),
++        "consensus_all_flagged_final_identity_vs_raw":_identity_rate(rows["consensus"],rows["raw"],allflag),
++        "profile_mean_all_flagged_final_identity_vs_raw":_identity_rate(rows["profile_mean"],rows["raw"],allflag),
++        "consensus_all_flagged_delegation_rate":float(np.mean([_f(rows["consensus"][t],"decisive_frontier_icer_structural_domain_delegated",0)>=.5 for t in allflag])) if allflag else float("nan"),
++        "consensus_safe_guard_block_rate":_guard_block_rate(rows["consensus"],safe),
++        "v20_safe_guard_block_rate":_guard_block_rate(rows["v20"],safe),
++    }
++    frozen_keys=["selected_local_anchor_action_match","pair_full_interface_action_match","local_pair_full_interface_action_match","evidence_certificate_fraction","decision_budget_atom_count","proposal_candidate_atom_count","proposal_decisive_atom_recall","selected_decisive_atom_recall","effective_selected_decisive_atom_recall"]
++    frozen={k:bool(math.isfinite(_f(metrics["raw"],k)) and math.isfinite(_f(metrics["consensus"],k)) and abs(_f(metrics["raw"],k)-_f(metrics["consensus"],k))<=1e-6) for k in frozen_keys}
++    c=ed["consensus"]; p=ed["profile_mean"]; s=ed["scalar_retention"]
++    instrumentation=c["scene_count"]>=450 and c["admissible_edge_count"]>=1800 and c["direct_counterfactual_dominance_edge_count"]>=400 and _f(metrics["consensus"],"decisive_frontier_value_complete_star_coverage")>=.99 and all(frozen.values())
++    structural_ok=(len(allflag)>=3 and structural["consensus_all_flagged_final_identity_vs_raw"]==1.0 and structural["profile_mean_all_flagged_final_identity_vs_raw"]==1.0 and structural["consensus_all_flagged_delegation_rate"]==1.0 and structural["consensus_safe_guard_block_rate"]<=.001)
++    candidate=c["multi_admissible_proposal_rate"]>=.25 and c["admissible_candidates_per_proposal_mean"]>=3.0
++    signal=c["support_auc"]>=.65 and c["direct_counterfactual_dominance_auc"]>=.70
++    magnitude=(retention["profile_mean"]["retention_auc"]>=.65 and retention["profile_mean"]["retention_sign_accuracy"]>=.65 and path["profile_mean"]["admissible_incumbent_to_anchor"]["regret_delta_sum"]<=0.0)
++    recovery=(c["alternative_recovery_rate"]>=.03 and c["alternative_recovery_precision"]>=.80 and c["direct_incumbent_replacement_rate"]>=.02 and c["direct_incumbent_replacement_precision"]>=.60 and c["direct_incumbent_opportunity_capture_rate"]>=.08 and c["selected_nonanchor_teacher_better_rate"]>=.80 and c["alternative_teacher_margin_mean"]>0)
++    consensus_gain=(c["direct_incumbent_replacement_precision"]>=p["direct_incumbent_replacement_precision"]+.01 and c["direct_incumbent_opportunity_capture_rate"]>=p["direct_incumbent_opportunity_capture_rate"]-.06 and M["consensus"]["regret"]<=M["profile_mean"]["regret"]*1.02 and M["consensus"]["match"]>=M["profile_mean"]["match"]-.005)
++    profile_retention_incremental=(retention["profile_mean"]["retention_auc"]>=retention["scalar_retention"]["retention_auc"]+.005 or M["profile_mean"]["regret"]<=M["scalar_retention"]["regret"]*.99 or path["profile_mean"]["admissible_incumbent_to_anchor"]["regret_delta_sum"]<path["scalar_retention"]["admissible_incumbent_to_anchor"]["regret_delta_sum"])
++    ret=M["consensus"]["beneficial"]/max(M["raw"]["beneficial"],1e-12) if M["raw"]["beneficial"]>0 else float("nan")
++    preservation=M["raw"]["harmful"]-M["consensus"]["harmful"]>=.05 and ret>=.35 and M["consensus"]["beneficial"]>M["consensus"]["harmful"] and M["consensus"]["flip"]>=.03 and M["consensus"]["flip"]<M["raw"]["flip"]
++    endpoint=M["consensus"]["match"]>=anchor["match"]+.005 and M["consensus"]["regret"]<=M["raw"]["regret"]*1.02
++    full=bool(instrumentation and structural_ok and candidate and signal and magnitude and recovery and consensus_gain and preservation and endpoint)
++    if full: next_action="split_pass_freeze_do_not_tune_wait_for_second_independent_fresh_block"
++    elif not instrumentation: next_action="engineering_or_frozen_interface_failure"
++    elif not structural_ok: next_action="deployment_domain_accounting_or_structural_delegation_failure"
++    elif not candidate or not signal: next_action="frontier_or_reliability_signal_regression_do_not_tune_thresholds"
++    elif not magnitude: next_action="selected_incumbent_magnitude_retention_failed_do_not_change_dominance_or_budget_audit_incumbent_conditioning"
++    elif not recovery: next_action="incumbent_replacement_failed_despite_retention_do_not_tune_thresholds_audit_contrastive_false_positive_extremes"
++    elif not consensus_gain: next_action="corroboration_not_helpful_keep_profile_mean_as_candidate_do_not_tune_view_weights"
++    elif not preservation: next_action="recovery_harms_preservation_keep_guards_frozen_audit_selected_extremes"
++    else: next_action="mechanism_passes_but_endpoint_still_fails_enter_regret_magnitude_ordering_only_after_replication_audit"
++    report={"audit":"v64_3_21_eaf_icer_mcr_split","split_name":a.split_name,"full_split_pass":full,"instrumentation_valid":instrumentation,"deployment_complete_domain_alignment":structural_ok,"candidate_support_valid":candidate,"fresh_support_and_dominance_signal":signal,"selected_incumbent_magnitude_retention":magnitude,"counterfactual_recovery_mechanism":recovery,"corroboration_gain":consensus_gain,"profile_retention_incremental_diagnostic":profile_retention_incremental,"preservation_gain":preservation,"endpoint_gain":endpoint,"next_action":next_action,"structural":structural,"retention":retention,"edge_diagnostics":ed,"path_diagnostics":path,"metrics":{"anchor":anchor,**M,"consensus_beneficial_retention_vs_raw":ret},"frozen_interface":frozen,
++    "thresholds":{"support_auc_min":.65,"direct_dominance_auc_min":.70,"retention_auc_min":.65,"retention_sign_accuracy_min":.65,"incumbent_to_anchor_regret_delta_sum_max":0.0,"direct_replacement_precision_min":.60,"direct_capture_min":.08,"safe_selected_nonanchor_teacher_better_min":.80,"consensus_precision_gain_min":.01,"consensus_capture_max_drop":.06,"harmful_abs_reduction_min":.05,"beneficial_retention_min":.35,"match_over_anchor_min":.005,"regret_vs_raw_tolerance":.02}}
++    out=Path(a.output); out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
++    print(json.dumps(report,indent=2,sort_keys=True))
++
++if __name__=="__main__":main()
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=V64_3_21_EAF_ICER_MCR.patch' '--exclude=V64_3_21_EAF_ICER_MCR_CHANGED_FILES.txt' /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/fit_v64_3_21_eaf_icer_mcr.py ./bdse/tools/fit_v64_3_21_eaf_icer_mcr.py
+--- /mnt/data/v20_code/bdse_v64_3_20_eaf_icer_dc/bdse/tools/fit_v64_3_21_eaf_icer_mcr.py	1970-01-01 00:00:00.000000000 +0000
++++ ./bdse/tools/fit_v64_3_21_eaf_icer_mcr.py	2026-08-18 14:12:08.150247871 +0000
+@@ -0,0 +1,193 @@
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.planner.tournament import _ICER_DOMINANCE_PROFILE_BASE_NAMES
++
++PROFILE_RETENTION_FEATURE_NAMES = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES)
++SCALAR_RETENTION_FEATURE_NAMES = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[:18])
++_FIXED_L2 = 1.0e-3
++_FIXED_HOLDOUT_FRACTION = 0.20
++_FIXED_SPLIT_SEED = "v64.3.21-eaf-icer-mcr-retention-v1"
++
++
++def _hash_holdout(token: str) -> bool:
++    h = hashlib.sha256((_FIXED_SPLIT_SEED + "::" + token).encode()).digest()
++    return int.from_bytes(h[:8], "big") / float(2**64) < _FIXED_HOLDOUT_FRACTION
++
++
++def _auc(y: np.ndarray, score: np.ndarray) -> float:
++    y = np.asarray(y, dtype=np.int64); score = np.asarray(score, dtype=np.float64)
++    good = np.isfinite(score); y, score = y[good], score[good]
++    pos, neg = int((y == 1).sum()), int((y == 0).sum())
++    if not pos or not neg: return float("nan")
++    order = np.argsort(score, kind="mergesort")
++    ranks = np.empty_like(order, dtype=np.float64); ranks[order] = np.arange(1, len(score)+1, dtype=np.float64)
++    _, inv, cnt = np.unique(score, return_inverse=True, return_counts=True)
++    for i, c in enumerate(cnt):
++        if c > 1:
++            ii = np.flatnonzero(inv == i); ranks[ii] = ranks[ii].mean()
++    return float((ranks[y == 1].sum() - pos*(pos+1)/2.0)/(pos*neg))
++
++
++def _load_selected_incumbents(path: Path) -> dict[str, Any]:
++    by_token: dict[str, list[dict[str, Any]]] = {}
++    for line in path.read_text(encoding="utf-8").splitlines():
++        if not line.strip(): continue
++        r = json.loads(line); by_token.setdefault(str(r.get("scenario_token", "")), []).append(r)
++    X: list[list[float]]=[]; y: list[float]=[]; tokens: list[str]=[]
++    all_scenes=len(by_token); raw_proposal=0; admissible_inc=0
++    for tok, rows in by_token.items():
++        if not rows: continue
++        try:
++            legacy=int(rows[0].get("raw_top_action", -1)); anchor=int(rows[0].get("anchor_action", -1))
++        except Exception: continue
++        if legacy == anchor or legacy < 0: continue
++        raw_proposal += 1
++        inc = next((r for r in rows if int(r.get("challenger_action", -999)) == legacy), None)
++        if inc is None or float(inc.get("dacer_admissible", 0.0)) < 0.5: continue
++        vals=[]; ok=True
++        for name in PROFILE_RETENTION_FEATURE_NAMES:
++            try: v=float(inc.get(f"dacer_feature_{name}", np.nan))
++            except Exception: ok=False; break
++            if not np.isfinite(v): ok=False; break
++            vals.append(v)
++        try: tm=float(inc.get("teacher_margin", np.nan))
++        except Exception: ok=False; tm=float("nan")
++        if not ok or not np.isfinite(tm): continue
++        X.append(vals); y.append(tm); tokens.append(tok); admissible_inc += 1
++    if not X: raise SystemExit(f"no final-guard-admissible raw incumbents in {path}")
++    return {"X":np.asarray(X,dtype=np.float64), "y":np.asarray(y,dtype=np.float64), "tokens":tokens,
++            "all_scene_count":all_scenes, "raw_proposal_scene_count":raw_proposal, "admissible_incumbent_scene_count":admissible_inc}
++
++
++def _fit_ridge(X: np.ndarray, y: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray,float,np.ndarray,np.ndarray,float]:
++    idx=np.flatnonzero(mask)
++    if idx.size < 64: raise SystemExit(f"retention fit too small: {idx.size}")
++    mean=X[idx].mean(axis=0); std=np.maximum(X[idx].std(axis=0),1e-6)
++    Z=(X[idx]-mean[None,:])/std[None,:]
++    # Positive scale only: zero in normalized target remains exactly the semantic teacher tie.
++    y_scale=max(float(np.sqrt(np.mean(np.square(y[idx])))),1e-6)
++    yn=y[idx]/y_scale
++    # Intercept is unregularized; standardized features use fixed L2.
++    A=np.concatenate([Z,np.ones((len(Z),1),dtype=np.float64)],axis=1)
++    gram=(A.T@A)/len(A); rhs=(A.T@yn)/len(A)
++    reg=np.eye(A.shape[1],dtype=np.float64)*_FIXED_L2; reg[-1,-1]=0.0
++    coef=np.linalg.solve(gram+reg,rhs)
++    return coef[:-1],float(coef[-1]),mean,std,y_scale
++
++
++def _predict(X,w,b,mean,std):
++    return ((X-mean[None,:])/np.maximum(std[None,:],1e-6))@w+b
++
++
++def _metrics(y: np.ndarray, pred: np.ndarray, y_scale: float) -> dict[str, float]:
++    yy=np.asarray(y,dtype=np.float64); pp=np.asarray(pred,dtype=np.float64)
++    return {
++        "auc_teacher_better_than_anchor": _auc((yy>0).astype(int),pp),
++        "sign_accuracy": float(np.mean((pp>=0)==(yy>=0))),
++        "mse_normalized_by_train_rms": float(np.mean(np.square(pp - yy/max(float(y_scale),1e-6)))),
++        "mae_teacher_margin_units": float(np.mean(np.abs(pp*float(y_scale)-yy))),
++        "predicted_negative_rate": float(np.mean(pp<0)),
++        "teacher_positive_rate": float(np.mean(yy>0)),
++        "fallback_regret_delta_teacher_margin_sum": float(np.sum(yy[pp<0])),
++        "scene_count": float(len(yy)),
++    }
++
++
++def _icer(cfg: dict[str,Any]) -> dict[str,Any]:
++    return cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++
++
++def _make_cfg(base: dict[str,Any], *, w,b,mean,std,y_scale, policy: str, retention_features: list[str]) -> dict[str,Any]:
++    # YAML round-trip makes a deep, serialization-faithful copy and preserves the frozen V20 heads.
++    cfg=yaml.safe_load(yaml.safe_dump(base,sort_keys=False))
++    ic=_icer(cfg)
++    ic.update({
++        "model_type":"decomposed_anchor_support_plus_dual_view_incumbent_contrastive_reliability_plus_selected_incumbent_profile_margin",
++        "dominance_policy":policy,
++        "incumbent_retention_policy":"selected_incumbent_profile_margin_mse" if len(retention_features)==len(PROFILE_RETENTION_FEATURE_NAMES) else "selected_incumbent_scalar_margin_mse",
++        "retention_feature_names":list(retention_features),
++        "retention_feature_mean":[float(x) for x in mean],
++        "retention_feature_std":[float(x) for x in std],
++        "retention_weights":[float(x) for x in w],
++        "retention_bias":float(b),
++        "retention_target_scale_teacher_margin_rms":float(y_scale),
++        "retention_training_population":"train_only_raw_eaf_final_guard_admissible_selected_incumbents",
++        "retention_training_target":"normalized_teacher_margin_JT_anchor_minus_JT_selected_incumbent",
++        "retention_training_objective":"fixed_linear_mse_plus_l2_1e-3_zero_is_semantic_teacher_tie",
++        "retention_threshold_policy":"fixed_zero_predicted_teacher_margin_no_validation_threshold_sweep",
++        "dominance_corroboration_policy":"both_scalar_and_signed_profile_positive" if policy=="dual_positive_consensus_mean" else "none_equal_mean_control",
++        "training_reuse":"exact_v64_3_20_support_and_v64_3_19_dominance_heads_frozen_retention_fit_train_only",
++        "selection_operator":"deployment-complete asymmetric evidence burden: selected-incumbent retention margin decides incumbent-vs-anchor; alternatives require anchor support; consensus main additionally requires scalar and signed-profile dominance views both >0 before equal-mean ranking",
++    })
++    version="V64.3.21-EAF-ICER-MCR-DARM-DBR"
++    cfg.setdefault("metadata",{})["algorithm_version"]=version
++    cfg.setdefault("provenance",{})["algorithm_version"]=version
++    exp=cfg.setdefault("experiment",{})
++    ret_tag = "profile" if len(retention_features)==len(PROFILE_RETENTION_FEATURE_NAMES) else "scalar"
++    exp["name"]=("v64_3_21_eaf_icer_mcr_"+ret_tag+"_consensus") if policy=="dual_positive_consensus_mean" else ("v64_3_21_eaf_icer_mcr_"+ret_tag+"_mean")
++    exp["algorithm"]="V64.3.21 EAF-ICER-MCR: Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Magnitude-aware Corroborated Reliability"
++    exp["mechanism_chain"]="fixed B<=16 -> frozen EAF complete frontier + exact selected-evidence attribution -> deployment-complete admissible frontier -> selected-incumbent teacher-margin retention + corroborated incumbent dominance -> asymmetric preserve/replace/anchor -> unchanged final/structural guards"
++    return cfg
++
++
++def main()->None:
++    ap=argparse.ArgumentParser(description="Fit V64.3.21 TRAIN-only selected-incumbent retention margin and emit mean/consensus configs.")
++    ap.add_argument("--train-frontier-edges",required=True)
++    ap.add_argument("--base-v20-dual-config",required=True)
++    ap.add_argument("--output-scalar-retention-config",required=True)
++    ap.add_argument("--output-mean-config",required=True)
++    ap.add_argument("--output-consensus-config",required=True)
++    ap.add_argument("--output-report",required=True)
++    a=ap.parse_args()
++    data=_load_selected_incumbents(Path(a.train_frontier_edges)); X,y=data["X"],data["y"]
++    hold=np.asarray([_hash_holdout(t) for t in data["tokens"]],dtype=bool)
++    if int(hold.sum())<128 or int((~hold).sum())<512: raise SystemExit(f"deterministic TRAIN holdout too small: train={(~hold).sum()} holdout={hold.sum()}")
++    # Profile-retention fit uses all 30 registered incumbent-relative features.
++    w0,b0,m0,s0,ys0=_fit_ridge(X,y,~hold); pred0=_predict(X[hold],w0,b0,m0,s0)
++    hold_metrics=_metrics(y[hold],pred0,ys0)
++    # Scalar-retention ablation is the exact first 18 non-atom features from the same registry.
++    Xs=X[:, :len(SCALAR_RETENTION_FEATURE_NAMES)]
++    sw0,sb0,sm0,ss0,sys0=_fit_ridge(Xs,y,~hold); spred0=_predict(Xs[hold],sw0,sb0,sm0,ss0)
++    scalar_hold_metrics=_metrics(y[hold],spred0,sys0)
++    # Promotion configs are refit on all TRAIN-only incumbents after the fixed internal diagnostic split.
++    full=np.ones(len(y),dtype=bool); w,b,mean,std,y_scale=_fit_ridge(X,y,full)
++    sw,sb,smean,sstd,sy_scale=_fit_ridge(Xs,y,full)
++    base=yaml.safe_load(Path(a.base_v20_dual_config).read_text(encoding="utf-8"))
++    base_ic=_icer(base)
++    if not bool(base_ic.get("enabled",False)) or str(base_ic.get("dominance_policy",""))!="dual_equal_mean":
++        raise SystemExit("base V20 dual config must contain frozen enabled ICER dual_equal_mean heads")
++    if str(base_ic.get("all_flagged_policy",""))!="preserve_legacy_for_structural_guard":
++        raise SystemExit("base V20 config is not deployment-complete in all-flagged domain")
++    scalar_cfg=_make_cfg(base,w=sw,b=sb,mean=smean,std=sstd,y_scale=sy_scale,policy="dual_equal_mean",retention_features=SCALAR_RETENTION_FEATURE_NAMES)
++    mean_cfg=_make_cfg(base,w=w,b=b,mean=mean,std=std,y_scale=y_scale,policy="dual_equal_mean",retention_features=PROFILE_RETENTION_FEATURE_NAMES)
++    con_cfg=_make_cfg(base,w=w,b=b,mean=mean,std=std,y_scale=y_scale,policy="dual_positive_consensus_mean",retention_features=PROFILE_RETENTION_FEATURE_NAMES)
++    for path,cfg in [(a.output_scalar_retention_config,scalar_cfg),(a.output_mean_config,mean_cfg),(a.output_consensus_config,con_cfg)]:
++        p=Path(path); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(yaml.safe_dump(cfg,sort_keys=False),encoding="utf-8")
++    report={
++        "audit":"v64_3_21_eaf_icer_mcr_train_only_retention_fit",
++        **{k:v for k,v in data.items() if k.endswith("count")},
++        "profile_feature_count":len(PROFILE_RETENTION_FEATURE_NAMES), "profile_retention_feature_names":PROFILE_RETENTION_FEATURE_NAMES,
++        "scalar_feature_count":len(SCALAR_RETENTION_FEATURE_NAMES), "scalar_retention_feature_names":SCALAR_RETENTION_FEATURE_NAMES,
++        "internal_holdout_scene_count":int(hold.sum()), "internal_fit_scene_count":int((~hold).sum()),
++        "internal_holdout_profile_retention_metrics":hold_metrics,
++        "internal_holdout_scalar_retention_metrics":scalar_hold_metrics,
++        "full_train_teacher_margin_rms_scale":float(y_scale),
++        "fixed_l2":_FIXED_L2, "holdout_fraction":_FIXED_HOLDOUT_FRACTION, "holdout_seed":_FIXED_SPLIT_SEED,
++        "fit_uses_nuplan_validation":False, "fit_uses_test":False,
++        "frozen_support_and_dominance_heads_reused":True,
++        "zero_retention_boundary_is_semantic_teacher_tie":True,
++        "interpretation":"TRAIN-only selected-incumbent magnitude readout. It is conditioned on the frozen raw-EAF incumbent actually being final-guard-admissible; it predicts anchor-minus-incumbent teacher margin with a zero-preserving target scale. No validation threshold/loss-weight/feature selection is performed.",
++    }
++    rp=Path(a.output_report); rp.parent.mkdir(parents=True,exist_ok=True); rp.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
++    print(json.dumps(report,indent=2,sort_keys=True))
++
++if __name__=="__main__": main()

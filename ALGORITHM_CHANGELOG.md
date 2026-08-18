@@ -7298,3 +7298,257 @@ Engineering verification after the final all-flagged diagnostic initialization f
 - 5000 randomized safe-domain ICER cases: **0 action / admissible-mask / support-logit / dominance-logit differences** between V19 and V20 policy;
 - launcher `bash -n`: PASS;
 - raw/scalar/dual V20 contract checks: PASS.
+
+# V64.3.21 — EAF-ICER-MCR: selection-conditioned magnitude retention + corroborated incumbent dominance after V64.3.20 double-domain audit
+
+## V64.3.20 uploaded screen: the official NEXT_ACTION is a checker domain-accounting false diagnosis
+
+The uploaded V64.3.20 screen printed:
+
+`NEXT_ACTION=V19_mechanism_failed_to_reproduce_in_safe_domain_do_not_tune_thresholds_audit_operator_or_data_identity`
+
+and correctly stopped before full/test/closed-loop.  Re-auditing the exact rows/edges shows that the STOP itself is appropriate, but the **reason string is not**.
+
+The V20 checker used all ICER edge rows in the learned-recovery gate and used the global final-guard-block rate.  V20 deliberately disables learned ICER in all-actions-safety-flagged scenes and delegates those scenes to the frozen structural-risk guard.  Therefore those delegated scenes must not be counted as failures of the learned safe-domain recovery mechanism.
+
+After domain-aware accounting:
+
+- all-flagged scenes: **28**;
+- V20 structural delegation: **100%**;
+- V20 final action identity with raw in all-flagged domain: **100%**;
+- V20-scalar selected/final identity with frozen V19-scalar in safe domain: **100%**;
+- safe-domain post-selection guard-block rate: **0%**;
+- the reported global 1% guard-block rate consists of **5/28 delegated all-flagged scenes**, not learned safe-domain cleanup;
+- safe-domain V20-dual support AUC: **0.7351**;
+- safe-domain direct dominance AUC: **0.7584**;
+- safe-domain direct incumbent replacement precision: **60.98%**;
+- safe-domain direct opportunity capture: **32.26%**;
+- safe-domain selected-nonanchor teacher-better rate: **80.90%**;
+- alternative precision: **87.80%**.
+
+Thus the corrected pre-registered logic is:
+
+- instrumentation: PASS;
+- candidate support: PASS;
+- deployment-complete structural semantics: PASS;
+- safe-domain V19 mechanism identity: PASS;
+- fresh support/dominance signal: PASS;
+- direct incumbent recovery: PASS;
+- signed-profile incremental composite support: PASS;
+- safe-domain deployment alignment: PASS;
+- preservation: PASS;
+- endpoint: **FAIL**;
+- full promotion: **FALSE**.
+
+This is exactly the previously defined **Case E**: mechanism/semantics/preservation pass, regret endpoint still fails.  The corrected next action is teacher-improvement magnitude / robust extremal ordering on the same frozen deployment-complete frontier.  V20 still remains a STOP screen; no full/test/closed-loop is authorized.
+
+The V21 code fixes the historical V20 checker so learned-recovery and post-selection guard-cleanup gates are computed on the safe-available domain only.  All-flagged structural behavior remains separately reported.
+
+## V64.3.20 endpoint attribution: direct replacement is not the remaining bottleneck
+
+Fresh 500-scene endpoint summary:
+
+| arm | teacher match | teacher regret | beneficial | harmful | flip |
+|---|---:|---:|---:|---:|---:|
+| DARM anchor | 14.2% | 25247.70 | - | - | - |
+| raw EAF | 15.6% | **15496.66** | 8.6% | 7.2% | 55.0% |
+| frozen V19 scalar | 19.4% | 16482.96 | 6.8% | **1.6%** | 35.6% |
+| V20 ICER-DC scalar | 19.0% | 16420.18 | 6.8% | 2.0% | 37.4% |
+| V20 ICER-DC dual | **19.6%** | 16387.74 | **7.4%** | 2.0% | 37.4% |
+
+V20 fixes the V19 all-flagged semantic bug: all 28 all-flagged scenes are raw-final-action identical, so their V20-vs-raw regret contribution is exactly zero.
+
+The remaining dual-vs-raw regret gap is concentrated in one safe-domain branch:
+
+| V20-dual path | scenes | total V20-dual - raw teacher regret |
+|---|---:|---:|
+| direct admissible incumbent -> alternative | **82** | **-41211.95** |
+| admissible incumbent -> anchor | **88** | **+486752.07** |
+| raw incumbent inadmissible / anchor-relative branch | 169 | 0 |
+| keep legacy | 133 | 0 |
+| all-flagged delegated | 28 | 0 |
+
+Therefore the direct incumbent-replacement mechanism remains net beneficial.  The unstable branch is the **generic anchor-support head used as a hard veto over an already final-guard-admissible raw incumbent**.
+
+This branch is not stable across inspected fresh splits:
+
+- V19 fresh: admissible incumbent -> anchor contributes approximately **-96001.71** regret versus raw;
+- V20 fresh: the same operator role contributes **+486752.07**.
+
+The selected-incumbent teacher-better prevalence itself does not collapse; the failure is in using an all-edge support classifier as an extremal incumbent-retention decision.  This is the Case-E magnitude problem that V21 targets.
+
+## V64.3.21 main algorithm: EAF-ICER-MCR
+
+Name:
+
+**Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Magnitude-aware Corroborated Reliability**.
+
+The headline novelty remains:
+
+> **evidence-attributed incumbent-contrastive reliability for deployment-admissible extremal recovery under a fixed planner-interface evidence budget**.
+
+V21 does not replace this novelty.  It makes the evidence burden asymmetric and selection-conditioned so that an already admissible extremal incumbent is not treated like a generic frontier edge.
+
+Frozen mainline:
+
+**fixed planner-interface evidence cap B<=16
+-> auditable evidence atoms
+-> terminally frozen M=24 acquisition
+-> selected B<=16 evidence
+-> frozen EAF complete DARM-anchor frontier value
+-> exact selected-evidence attribution
+-> complete deployment-admissible frontier
+-> selected-incumbent retention magnitude + incumbent-contrastive reliability
+-> corroborated alternative extremal recovery / anchor abstention
+-> unchanged one-sided/evidence certificate
+-> unchanged structural-risk guard
+-> final decision preservation**.
+
+### 1. Selection-conditioned incumbent retention magnitude
+
+If the frozen raw-EAF incumbent is final-guard-admissible, V21 no longer lets the generic all-edge support classifier veto it.
+
+A dedicated TRAIN-only linear readout is fit **only on raw-EAF selected incumbents that are final-guard-admissible**.  Its target is:
+
+`J_T(anchor) - J_T(incumbent)`
+
+normalized by a positive TRAIN-only RMS scale.  The normalization never translates zero, so:
+
+- predicted margin >= 0: retain the admissible incumbent as the baseline;
+- predicted margin < 0: anchor becomes the baseline.
+
+The objective is fixed linear MSE + L2=1e-3.  The zero boundary is semantic and is not validation tuned.
+
+This is deliberately a magnitude objective, not another generic classifier: V20 shows that a small number of wrong incumbent vetoes can dominate endpoint regret.
+
+Two retention representations are emitted from one deterministic TRAIN-only fit:
+
+- `scalar-retention`: first 18 registered non-atom incumbent-relative evidence features;
+- `profile-retention`: the same 18 plus 12 exact signed selected-atom contribution statistics.
+
+The scalar/profile retention comparison is a mandatory ablation.  TRAIN internal holdout currently shows profile retention has slightly lower normalized MSE but scalar retention has higher sign AUC, so no signed-profile retention claim is pre-declared.
+
+### 2. Corroborated incumbent-relative dominance
+
+V19/V20 `dual_equal_mean` allows a strongly positive scalar view to compensate for a negative signed-profile view, or vice versa.  Because extremal action selection is sensitive to a small number of high-score false positives, V21 main uses a fixed corroboration rule:
+
+- alternative must satisfy the frozen generic anchor-support logit > 0;
+- scalar incumbent-dominance logit > 0;
+- signed-profile incumbent-dominance logit > 0;
+- only corroborated alternatives are ranked by the equal mean of the two dominance logits.
+
+No view weight or threshold is tuned.  Both zero boundaries are the TRAIN-only semantic log-odds boundaries already frozen in V19.
+
+Design-only analysis on the already-inspected V19/V20 fresh splits showed that this `both-positive -> equal-mean` rule raises direct replacement precision by roughly 3--4pp on both inspected splits at a moderate opportunity-capture cost.  Those inspected results are diagnosis only and are excluded from V21 promotion.
+
+### 3. Deployment-complete all-flagged behavior remains frozen
+
+All-actions-safety-flagged scenes still bypass learned ICER/MCR, preserve the exact raw proposal, and delegate to the unchanged structural-risk guard.  V21 does not learn a magnitude head or dominance decision in that domain.
+
+## V64.3.21 causal experiment: double-fresh replication, not pooled rescue
+
+The central V19/V20 lesson is cross-split stability.  V21 therefore selects **1000 completely new validation tokens** by identity + fixed SHA256 only, then deterministically partitions them into two disjoint 500-scene blocks A and B.
+
+Each block independently runs five arms:
+
+1. raw EAF;
+2. frozen V20 ICER-DC dual control;
+3. V21 scalar-retention + old dual-equal-mean dominance;
+4. V21 profile-retention + old dual-equal-mean dominance;
+5. V21 profile-retention + both-positive corroborated dominance (main).
+
+Causal comparisons:
+
+- `V20 -> scalar-retention mean`: selection-conditioned magnitude objective;
+- `scalar-retention mean -> profile-retention mean`: exact signed selected-evidence contribution to incumbent retention;
+- `profile-retention mean -> profile-retention consensus`: corroborated two-view extremal operator;
+- `raw -> consensus`: complete preservation + endpoint.
+
+A pooled 1000-scene success cannot rescue a failed 500-scene block.  **Both A and B must independently pass**.
+
+Per-block hard evidence includes:
+
+- complete frozen-interface instrumentation;
+- all-flagged delegation and raw-final identity;
+- safe-domain post-selection guard block <=0.1%;
+- healthy multi-admissible frontier;
+- support AUC >=0.65 and direct dominance AUC >=0.70;
+- profile selected-incumbent retention AUC/sign accuracy >=0.65;
+- admissible-incumbent -> anchor total regret delta versus raw <=0;
+- direct incumbent replacement precision >=60%;
+- direct opportunity capture >=8%;
+- safe-domain selected non-anchor teacher-better >=80%;
+- corroborated direct precision >= profile-mean precision +1pp with capture drop <=6pp;
+- harmful absolute reduction versus raw >=5pp and beneficial retention >=35%;
+- teacher match >= DARM anchor +0.5pp;
+- regret <=1.02x raw.
+
+Passing both blocks authorizes **only one frozen independent full-validation reproduction**.  Test/closed-loop remain forbidden until full-val reproduces.
+
+## V64.3.21 data discipline
+
+The inspected V20 fresh set is now permanent design data.
+
+- prior exclusion: 3200 validation tokens;
+- V20 fresh: 500 unique, zero overlap with prior exclusion;
+- V21 exclusion: **3700 unique validation tokens**;
+- V21 fresh: 1000 new label-free hash-selected tokens, split 500/500;
+- no teacher/match/regret/reliability label participates in token selection;
+- TRAIN retention fit uses only frozen V18 TRAIN frontier edges;
+- no validation or test labels enter the fitted config.
+
+## V64.3.21 no-repeat constraints
+
+All previous terminal constraints remain.  In addition:
+
+- do not interpret the original V20 `mechanism_failed` next_action literally; the domain-aware correction classifies V20 as Case E;
+- do not tune the 60% direct precision gate or any support/dominance/retention zero threshold;
+- do not refit V19 support or dominance heads;
+- do not change B/M, selector, acquisition, EAF value checkpoint, certificate, safety mask, or structural guard;
+- do not restore generic support as the hard veto for an already admissible incumbent if V21 retention is being evaluated;
+- do not tune scalar/profile consensus weights; the main rule is both positive then equal mean;
+- do not claim signed-profile retention gain unless it reproduces against scalar retention on untouched data;
+- do not pool A/B to hide a failed replication block;
+- do not use any of the 3700 design-excluded tokens for promotion;
+- do not run full/test/closed-loop from the screen launcher.
+
+If selected-incumbent magnitude fails on fresh data, audit selection conditioning/representation on TRAIN-only data; do not return to selector/acquisition/threshold tuning.  If magnitude and recovery both pass but corroboration does not, keep the profile-mean operator rather than tuning view weights.  If both fresh blocks pass mechanism/preservation but endpoint still fails, only then continue the Case-E branch with a more explicit regret-tail / improvement-magnitude ordering objective on the same frozen frontier.
+
+## V64.3.21 engineering changes
+
+- `bdse/planner/tournament.py`
+  - adds selection-conditioned scalar/profile incumbent-retention margin policies;
+  - generic support remains mandatory for alternatives but no longer unconditionally vetoes an admissible incumbent under MCR;
+  - adds `dual_positive_consensus_mean` dominance policy;
+  - preserves V20 all-flagged deployment-complete delegation;
+  - exposes retention-margin and policy diagnostics.
+- `bdse/experiments/evaluate_open_loop.py`
+  - exports per-edge incumbent-retention margin for auditable TRAIN/fresh diagnostics.
+- `bdse/tools/fit_v64_3_21_eaf_icer_mcr.py`
+  - deterministic TRAIN-only selected-incumbent linear MSE fit;
+  - emits scalar-retention, profile-retention mean, and profile-retention consensus configs from one fit;
+  - fixed L2 and zero semantic boundary; no validation tuning.
+- `bdse/tools/check_v64_3_21_eaf_icer_mcr_contract.py`
+  - verifies frozen V20/V19 support/dominance heads, retention schema, fixed objectives/zero boundaries, and deployment-complete policy.
+- `bdse/tools/check_v64_3_21_eaf_icer_mcr_split.py`
+  - domain-aware per-block mechanism/path/preservation/endpoint audit.
+- `bdse/tools/check_v64_3_21_eaf_icer_mcr_screen.py`
+  - requires both independent 500-scene blocks to pass; no pooled rescue.
+- `bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py`
+  - fixes historical all-flagged/safe-domain accounting bug.
+- `bdse/configs/v64_3_21_design_exclude_v64_3_20_screen_tokens.txt`
+  - 3700-token permanent design exclusion.
+- `RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh`
+  - one TRAIN-only fit, 1000 label-free fresh tokens, two disjoint 500-scene replications, five causal arms per block, pre-deserialization token filtering, hard STOP before full/test/closed-loop.
+- `bdse/tests/test_v64_3_21_eaf_icer_mcr.py`
+  - retention-baseline semantics, two-view corroboration, all-flagged delegation, zero-preserving ridge, domain-filtered edge diagnostics, and exclusion-set tests.
+
+Engineering verification after final implementation:
+
+- V64.3.6--V64.3.21 targeted regression: **101/101 PASS**;
+- full repository: **389/389 PASS**;
+- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first` warnings;
+- real frozen V18 TRAIN frontier fit: **1674** admissible selected incumbents; scalar/profile configs and contracts PASS;
+- V20 historical screen re-audit with corrected domain accounting: Case E, endpoint-only fail;
+- 5000 randomized frozen V20 dual cases through old V20 versus V21 code: **0 differences**, identical output SHA256;
+- launcher `bash -n`: PASS.

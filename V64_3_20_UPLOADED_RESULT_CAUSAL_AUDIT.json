@@ -1,0 +1,99 @@
+{
+  "audit": "v64_3_20_uploaded_result_causal_audit_corrected_domain_accounting",
+  "corrected_case": "E",
+  "corrected_checker_full_promotion": false,
+  "corrected_gates": {
+    "candidate_support_valid": true,
+    "deployment_alignment_invariant": true,
+    "deployment_complete_structural_domain_support": true,
+    "endpoint_gain": false,
+    "fresh_counterfactual_signal": true,
+    "instrumentation_valid": true,
+    "preservation_gain": true,
+    "signed_profile_incremental_support": true,
+    "v19_safe_domain_mechanism_identity": true
+  },
+  "corrected_next_action": "V20_deployment_semantics_and_recovery_pass_but_endpoint_still_fails_now_audit_teacher_improvement_magnitude_ordering_without_selector_budget_or_threshold_changes",
+  "data_use": "design_only_after_inspection; all V20 500 fresh tokens permanently excluded from V21 promotion",
+  "domain_guard": {
+    "all_flagged_scene_count": 28.0,
+    "delegated_all_flagged_guard_block_rate": 0.17857142857142858,
+    "safe_domain_guard_block_rate": 0.0,
+    "safe_domain_scene_count": 472.0
+  },
+  "key_conclusion": "Direct incumbent-to-alternative replacements remain net beneficial; endpoint regret failure is dominated by the unstable admissible-incumbent-to-anchor veto path. V20 structural delegation itself is correct.",
+  "metrics": {
+    "anchor": {
+      "teacher_action_match": 0.142,
+      "teacher_regret": 25247.70155393243
+    },
+    "raw": {
+      "beneficial_pair_potential_intervention_rate": 0.086,
+      "harmful_pair_potential_intervention_rate": 0.072,
+      "pair_action_anchor_guard_blocked_flip": 0.348,
+      "pair_potential_deployed_flip_rate": 0.55,
+      "teacher_action_match": 0.156,
+      "teacher_regret": 15496.657364608343
+    },
+    "v19_scalar_control": {
+      "beneficial_pair_potential_intervention_rate": 0.068,
+      "harmful_pair_potential_intervention_rate": 0.016,
+      "pair_action_anchor_guard_blocked_flip": 0.0,
+      "pair_potential_deployed_flip_rate": 0.356,
+      "teacher_action_match": 0.194,
+      "teacher_regret": 16482.964223029023
+    },
+    "v20_dual": {
+      "beneficial_pair_potential_intervention_rate": 0.074,
+      "harmful_pair_potential_intervention_rate": 0.02,
+      "pair_action_anchor_guard_blocked_flip": 0.01,
+      "pair_potential_deployed_flip_rate": 0.374,
+      "teacher_action_match": 0.196,
+      "teacher_regret": 16387.73759441003
+    },
+    "v20_scalar": {
+      "beneficial_pair_potential_intervention_rate": 0.068,
+      "harmful_pair_potential_intervention_rate": 0.02,
+      "pair_action_anchor_guard_blocked_flip": 0.01,
+      "pair_potential_deployed_flip_rate": 0.374,
+      "teacher_action_match": 0.19,
+      "teacher_regret": 16420.183048714614
+    }
+  },
+  "official_uploaded_next_action": "V19_mechanism_failed_to_reproduce_in_safe_domain_do_not_tune_thresholds_audit_operator_or_data_identity",
+  "original_checker_full_promotion": false,
+  "safe_domain_dual_mechanism": {
+    "alternative_recovery_precision": 0.8780487804878049,
+    "alternative_recovery_rate": 0.18850574712643678,
+    "alternative_teacher_margin_mean": 1.547461071800929,
+    "direct_counterfactual_dominance_auc": 0.758401742583647,
+    "direct_incumbent_opportunity_capture_rate": 0.3225806451612903,
+    "direct_incumbent_replacement_precision": 0.6097560975609756,
+    "direct_incumbent_replacement_rate": 0.3082706766917293,
+    "selected_nonanchor_teacher_better_rate": 0.8089887640449438,
+    "support_auc": 0.7350567939371907
+  },
+  "v20_dual_vs_raw_path_decomposition": {
+    "admissible_incumbent_to_anchor": {
+      "scene_count": 88,
+      "total_dual_minus_raw_teacher_regret": 486752.06566708535
+    },
+    "all_flagged_delegated": {
+      "scene_count": 28,
+      "total_dual_minus_raw_teacher_regret": 0.0
+    },
+    "direct_incumbent_to_alternative": {
+      "scene_count": 82,
+      "total_dual_minus_raw_teacher_regret": -41211.95076624657
+    },
+    "inadmissible_incumbent_anchor_relative": {
+      "scene_count": 169,
+      "total_dual_minus_raw_teacher_regret": 0.0
+    },
+    "keep_legacy": {
+      "scene_count": 133,
+      "total_dual_minus_raw_teacher_regret": 0.0
+    }
+  },
+  "why_official_next_action_is_wrong": "V20 checker mixed all-flagged delegated structural-domain scenes into learned-safe-domain selected-nonanchor and global guard-block gates."
+}
