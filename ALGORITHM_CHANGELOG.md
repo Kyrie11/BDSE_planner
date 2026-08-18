@@ -7058,3 +7058,243 @@ All prior terminal constraints remain. In particular:
 - `bdse/tests/test_v64_3_19_eaf_icer.py`
   - incumbent preservation/replacement, support bypass prevention, guard fail-close, fixed interaction schema, pre-deserialization token filtering, and direct-incumbent-vs-anchor-recovery metric separation.
 
+
+# V64.3.20 — EAF-ICER-DC: deployment-complete structural-domain semantics after V64.3.19 fresh screen
+
+## V64.3.19 fresh-screen result attribution
+
+V64.3.19 is the first fresh screen in this line where the **incumbent-contrastive mechanism itself passes**.
+
+Fresh 500-scene endpoint summary:
+
+| arm | teacher match | teacher regret | beneficial | harmful | flip | final-guard block |
+|---|---:|---:|---:|---:|---:|---:|
+| DARM anchor | 16.8% | 24073.97 | - | - | - | - |
+| raw EAF | 14.2% | **12960.05** | 7.8% | 10.4% | 61.0% | 31.8% |
+| frozen V18 DACER-profile | 22.8% | 14030.53 | 6.2% | 0.2% | 37.8% | 0% |
+| V19 ICER-scalar | **24.2%** | 14007.24 | **7.6%** | 0.2% | 37.8% | 0% |
+| V19 ICER-dual | 23.8% | **13620.09** | 7.2% | 0.2% | 38.0% | 0% |
+
+The pre-registered V19 screen reports:
+
+- instrumentation valid: PASS;
+- candidate support: PASS;
+- fresh counterfactual signal: PASS;
+- direct incumbent-recovery mechanism: PASS;
+- gain versus V18: PASS;
+- signed-profile dual-view causal support: PASS under the pre-registered composite criterion;
+- deployment alignment: PASS;
+- preservation: PASS;
+- endpoint: **FAIL**;
+- full promotion: **FALSE**.
+
+Therefore V19 is a **mechanism-level true positive, not a full promotion**.
+
+### Direct incumbent replacement is genuinely repaired
+
+V18 profile -> V19 ICER-scalar / ICER-dual on the same fresh 500 scenes:
+
+| diagnostic | V18 profile | V19 scalar | V19 dual |
+|---|---:|---:|---:|
+| direct incumbent replacement precision | 35.29% | **63.04%** | 60.22% |
+| direct incumbent opportunity capture | 10.40% | **33.53%** | 32.37% |
+| direct incumbent replacement rate | 17.29% | 31.19% | 31.53% |
+| alternative recovery precision | 86.27% | 91.30% | **93.55%** |
+| support AUC | - | 0.7983 | 0.7983 |
+| direct dominance AUC | - | 0.7703 | **0.7841** |
+| anchor recovery rate | - | **0%** | **0%** |
+
+The direct-replacement improvement cannot be explained by anchor recovery because the V19 fresh screen performs no anchor->alternative recovery. The support/dominance/operator decomposition therefore resolves the principal V18 incumbent-replacement mechanism bottleneck on fresh data.
+
+### Signed selected-evidence attribution: retain as a secondary structured view, do not overclaim
+
+V19 dual versus scalar:
+
+- combined direct dominance AUC improves 0.7703 -> 0.7841;
+- alternative precision improves 91.30% -> 93.55%;
+- alternative teacher-margin mean improves 1.459 -> 1.512;
+- teacher regret improves 14007.24 -> 13620.09;
+- but direct incumbent replacement precision decreases 63.04% -> 60.22%;
+- direct opportunity capture decreases 33.53% -> 32.37%;
+- match decreases 24.2% -> 23.8%.
+
+Among the 39 scenes where scalar and dual deploy different final actions, dual reduces total teacher regret by 193576.31 even though it wins on only 18 scenes and loses on 21. This is consistent with signed attribution helping **extremal/tail ordering or improvement magnitude**, not yet proving that it improves the binary direct-replacement gate.
+
+Consequently:
+
+- keep signed exact selected-evidence attribution in the main candidate because it contains fresh incremental information;
+- keep scalar ICER as a mandatory causal ablation;
+- do **not** make signed-profile replacement-precision improvement a paper claim unless a later fresh/full-val experiment demonstrates it directly.
+
+## New V19 endpoint diagnosis: the remaining regret fail is dominated by incomplete all-flagged deployment semantics
+
+V19 dual regret is 13620.09 versus raw 12960.05, a +5.09% gap, so it misses the pre-registered <=1.02x raw endpoint constraint.
+
+Per-scene paired decomposition shows that the learned direct-replacement mechanism is **not** the source of this regret failure:
+
+| dual-vs-raw path | scenes | total dual - raw teacher regret |
+|---|---:|---:|
+| same final action | 292 | 0 |
+| direct incumbent -> alternative | 93 | **-191056.43** |
+| admissible incumbent -> anchor | 105 | **-96001.71** |
+| all-flagged structural-domain divergence | **10** | **+617078.33** |
+
+Across all 18 all-actions-safety-flagged scenes, the total V19-dual minus raw regret is +617078.33. Across the other 482 scenes, V19 dual is **better** than raw by -287058.14 total teacher regret.
+
+The cause is a deployment-semantic bug in V19's definition of `deployment incumbent`:
+
+1. ICER's pre-structural guard-admissible mask intentionally becomes empty when every valid action is safety-flagged.
+2. V19 interprets `raw incumbent not guard-admissible` as `deployment incumbent = DARM anchor` and abstains to the anchor.
+3. But the real frozen deployment stack subsequently executes the continuous `all_flagged_risk_guard`.
+4. The DARM anchor is **not a neutral abstention before this structural guard**: changing the pre-structural proposal changes the score/tie-break context entering the downstream structural path and can change the final action.
+5. Thus V19's learned operator is aligned to the one-sided/evidence guard but not to the **complete deployment operator** in the all-flagged domain.
+
+This is not evidence for reopening acquisition, selector, B/M, the EAF value representation, threshold tuning, or a teacher-magnitude head yet.
+
+A design-only replay on the already-inspected V19 fresh 500, using raw behavior on all-flagged scenes and V19 dual elsewhere, gives match 23.4% and regret 12385.93. This is **diagnosis only**, not promotion/publication evidence; all 500 V19 fresh scenes are permanently excluded from V20 promotion.
+
+## V64.3.20 algorithm: EAF-ICER-DC (Deployment-Complete ICER)
+
+V64.3.20 changes **no learned weight, feature, evidence query, threshold, selector, budget, certificate, or structural-risk guard**.
+
+The V19 TRAIN-only scalar/profile support/dominance heads are copied exactly and contract-checked. The only algorithmic correction is a domain-partitioned deployment operator:
+
+### Safe-available domain
+
+If at least one valid action is unflagged:
+
+- execute the exact frozen V19 ICER operator;
+- same guard-admissible frontier;
+- same support and dominance logits;
+- same zero thresholds;
+- same scalar/dual selection;
+- same final one-sided/evidence/structural guards.
+
+V20 must be action/logit/mask identical to V19 in this domain.
+
+### All-actions-safety-flagged structural domain
+
+If every valid action is safety-flagged:
+
+- do **not** run learned ICER replacement;
+- do **not** substitute the DARM anchor as a pseudo deployment incumbent;
+- preserve the exact frozen raw-EAF legacy proposal;
+- delegate the scene to the unchanged one-sided/evidence certificate and continuous structural-risk guard.
+
+This makes `deployment-admissible` refer to the **complete deployment stack**, rather than only the pre-structural learned-intervention mask.
+
+The ICER novelty remains:
+
+> **evidence-attributed incumbent-contrastive reliability for deployment-admissible extremal recovery under a fixed planner-interface evidence budget**
+
+V20 strengthens the meaning of `deployment-admissible`; it does not introduce a new headline novelty.
+
+## Why V64.3.20 does not add teacher-improvement magnitude ordering yet
+
+The V19 no-repeat policy permits a teacher-improvement-magnitude / robust extremal-ordering objective once direct recovery and preservation succeed but regret fails. Those conditions are nominally satisfied.
+
+However, paired V19 attribution now shows that nearly the entire endpoint regret gap is explained by a deterministic deployment-domain semantic mismatch, while the direct alternative-replacement path itself reduces total regret relative to raw. Adding a magnitude head in the same revision would confound:
+
+1. deployment-completeness correction, and
+2. genuine tail/magnitude ordering capacity.
+
+Therefore V20 fixes the semantic error **alone**. Only if an untouched V20 fresh screen still passes deployment-completeness/recovery/preservation but fails the regret endpoint may V21 introduce a TRAIN-only teacher-improvement magnitude objective on the same frozen frontier.
+
+## V64.3.20 causal screen
+
+Use one new untouched 500-scene hash-selected validation set with four independent full replays:
+
+1. V20 raw EAF;
+2. frozen V19 ICER-scalar control with the old all-flagged semantics;
+3. V20 ICER-DC-scalar;
+4. V20 ICER-DC-dual.
+
+No fitting is performed in V20.
+
+Primary causal comparisons:
+
+- `V19 scalar -> V20 scalar`: structural-domain semantic correction only;
+- `V20 scalar -> V20 dual`: signed selected-evidence attribution increment;
+- `raw -> V20 dual`: preservation + endpoint.
+
+Required structural-domain evidence:
+
+- at least 5 all-flagged scenes in the fresh screen;
+- V20 scalar/dual structural-domain delegation rate = 100%;
+- V20 selected pre-structural proposal equals frozen raw legacy proposal = 100% in all-flagged scenes;
+- V20 final action equals raw final action = 100% in all-flagged scenes;
+- V20 scalar selected/final action equals V19 scalar = 100% on the safe-available domain.
+
+The existing direct-replacement mechanism gates remain in force. Signed-profile incremental support requires fresh direct-dominance AUC gain >=0.5pp over scalar, no material alternative/direct-replacement/capture degradation, and endpoint non-harm.
+
+Passing the screen authorizes **only one independent frozen full-validation reproduction**. Test/closed-loop remain forbidden until reproduction passes.
+
+## V64.3.20 speed policy
+
+V19 speed optimization succeeded on the uploaded server run:
+
+- prerequisites: 15 s;
+- frozen train reuse: 10 s;
+- fresh token selection: 4 s;
+- train-only fit: 23 s;
+- raw/V18 wave: 319 s;
+- ICER wave: 332 s;
+- screen: 5 s;
+- total: **708 s = 11.8 min**.
+
+Therefore V20 keeps the pre-deserialization scenario-token filter and independent replay semantics. It removes the V19 fit stage entirely because the learned heads are frozen/copied. No invasive one-replay/multi-arm evaluator is added.
+
+## V64.3.20 data discipline
+
+The entire inspected V19 fresh set is now design data.
+
+- previous design exclusion: 2700 unique validation tokens;
+- V19 fresh: 500 unique, zero overlap with previous design exclusion;
+- V20 design exclusion: **3200 unique validation tokens**;
+- V20 fresh selection: scenario identity + fixed SHA256 only;
+- no teacher/match/regret/reliability label is read for fresh token selection.
+
+## V64.3.20 no-repeat constraints
+
+All earlier constraints remain, plus:
+
+- do not change/refit V19 support or dominance heads in V20;
+- do not use the inspected V19 500 scenes for promotion;
+- do not call DARM-anchor substitution a neutral abstention in an all-flagged structural domain;
+- do not modify or relax the continuous structural-risk guard;
+- do not add teacher-improvement magnitude ordering in V20; first test the deployment-completeness correction causally;
+- do not claim signed-profile improvement of **direct replacement precision** from V19; its fresh evidence currently supports discrimination/tail-ordering value, not direct precision gain;
+- do not update the paper to claim full ICER endpoint success until V20 fresh + independent full-val reproduce the complete chain.
+
+If V20 deployment-completeness, direct recovery and preservation pass but regret still fails, the next allowed algorithm branch is TRAIN-only teacher-improvement magnitude / robust extremal ordering on the **same** frozen deployment-complete frontier. Do not return to selector/acquisition/B/M/threshold/certificate changes.
+
+## V64.3.20 engineering implementation
+
+- `bdse/planner/tournament.py`
+  - adds `all_flagged_policy=preserve_legacy_for_structural_guard` for V20 fitted arms;
+  - preserves the legacy raw-EAF proposal and skips learned ICER heads in all-flagged scenes;
+  - adds explicit safe-domain/all-flagged/delegation diagnostics;
+  - initializes skipped-head diagnostic arrays to zero for schema-safe all-flagged serialization.
+- `bdse/configs/v64_3_19_icer_{scalar,dual}_frozen_uploaded.yaml`
+  - exact copied V19 TRAIN-only heads used as immutable controls.
+- `bdse/configs/v64_3_20_icer_dc_{scalar,dual}.yaml`
+  - exact frozen V19 heads; only algorithm metadata + all-flagged deployment policy change.
+- `bdse/tools/check_v64_3_20_eaf_icer_dc_contract.py`
+  - verifies frozen-head semantic identity, zero thresholds, no refit, safe-domain-only learning and structural-domain policy.
+- `bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py`
+  - separately audits all-flagged raw identity, safe-domain V19 identity, direct recovery, signed-profile increment, preservation and endpoint.
+- `bdse/configs/v64_3_20_design_exclude_v64_3_19_screen_tokens.txt`
+  - 3200-token permanent design exclusion.
+- `RUN_V64_3_20_EAF_ICER_DC_SCREEN_2GPU.sh`
+  - four-arm fresh paired screen; no refit; pre-load token filtering; stage timing; hard STOP before full/test/closed-loop.
+- `bdse/tests/test_v64_3_20_eaf_icer_dc.py`
+  - all-flagged delegation, safe-domain operator identity, frozen-head identity and exclusion-set tests.
+
+Engineering verification after the final all-flagged diagnostic initialization fix:
+
+- V64.3.6–V64.3.20 targeted regression: **95/95 PASS**;
+- full repository: **383/383 PASS**;
+- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first` warnings;
+- 5000 randomized safe-domain ICER cases: **0 action / admissible-mask / support-logit / dominance-logit differences** between V19 and V20 policy;
+- launcher `bash -n`: PASS;
+- raw/scalar/dual V20 contract checks: PASS.

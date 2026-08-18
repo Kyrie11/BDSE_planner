@@ -1782,10 +1782,34 @@ def _apply_decisive_frontier_icer(
     )
     support_logits = np.zeros((len(valid),), dtype=np.float64)
     dominance_logits = np.zeros((len(valid),), dtype=np.float64)
+    # Always initialize the component-head diagnostics.  V64.3.20 deliberately
+    # skips both learned dominance heads in the all-flagged structural domain,
+    # but diagnostic serialization still exposes the arrays for schema stability.
+    scalar_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
+    profile_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
     selected = legacy
     baseline = legacy
+    flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    if flags.shape[0] < len(valid):
+        flags = np.pad(flags, (0, len(valid) - flags.shape[0]), constant_values=False)
+    flags = flags[: len(valid)]
+    safe_available = bool(np.any(valid & ~flags))
+    all_flagged_domain = bool(valid.any() and not safe_available)
+    all_flagged_policy = str(icer_cfg.get("all_flagged_policy", "anchor_abstention")).strip().lower()
+    structural_domain_delegated = bool(all_flagged_domain and all_flagged_policy == "preserve_legacy_for_structural_guard")
     applies = bool(enabled and frontier_active and 0 <= a < len(valid))
-    if applies:
+    if applies and structural_domain_delegated:
+        # V64.3.20 deployment-complete delegation.  In an all-flagged bank the
+        # learned ICER frontier is intentionally empty, but choosing the DARM
+        # anchor is *not* a neutral abstention: it changes the proposal entering
+        # the frozen continuous structural-risk guard and can therefore change
+        # the final deployed action.  Preserve the frozen raw-EAF proposal
+        # exactly and delegate the whole scene to the unchanged one-sided /
+        # evidence / structural-risk stack.  No learned support/dominance score
+        # is consumed in this domain.
+        selected = int(legacy)
+        baseline = int(legacy)
+    elif applies:
         support_names = list(icer_cfg.get("support_feature_names", []))
         support_mean = np.asarray(icer_cfg.get("support_feature_mean", []), dtype=np.float64).reshape(-1)
         support_std = np.asarray(icer_cfg.get("support_feature_std", []), dtype=np.float64).reshape(-1)
@@ -1892,6 +1916,10 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
         "decisive_frontier_icer_dominance_policy_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_equal_mean"),
         "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
+        "decisive_frontier_icer_safe_domain_active": float(bool(safe_available)),
+        "decisive_frontier_icer_all_flagged_domain": float(bool(all_flagged_domain)),
+        "decisive_frontier_icer_structural_domain_delegated": float(bool(structural_domain_delegated)),
+        "decisive_frontier_icer_all_flagged_preserved_legacy": float(bool(structural_domain_delegated and int(selected) == int(legacy))),
         "_decisive_frontier_icer_anchor_action": int(a),
         "_decisive_frontier_icer_legacy_selected_action": int(legacy),
         "_decisive_frontier_icer_raw_margin_star": np.asarray(margin_star, dtype=np.float32),

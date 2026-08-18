@@ -1,0 +1,16 @@
+ALGORITHM_CHANGELOG.md
+NEXT_COMMANDS_V64_3_20_EAF_ICER_DC.txt
+RUN_V64_3_20_EAF_ICER_DC_SCREEN_2GPU.sh
+V64_3_19_EAF_ICER_POSTMORTEM_AND_V64_3_20_EAF_ICER_DC.md
+V64_3_19_UPLOADED_RESULT_CAUSAL_AUDIT.json
+V64_3_20_ENGINEERING_VALIDATION.txt
+bdse/configs/v64_3_19_icer_dual_frozen_uploaded.yaml
+bdse/configs/v64_3_19_icer_scalar_frozen_uploaded.yaml
+bdse/configs/v64_3_20_design_exclude_v64_3_19_screen_tokens.txt
+bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml
+bdse/configs/v64_3_20_icer_dc_dual.yaml
+bdse/configs/v64_3_20_icer_dc_scalar.yaml
+bdse/planner/tournament.py
+bdse/tests/test_v64_3_20_eaf_icer_dc.py
+bdse/tools/check_v64_3_20_eaf_icer_dc_contract.py
+bdse/tools/check_v64_3_20_eaf_icer_dc_screen.py

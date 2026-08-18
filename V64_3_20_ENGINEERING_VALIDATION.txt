@@ -1,0 +1,67 @@
+V64.3.20 EAF-ICER-DC engineering validation
+============================================
+
+Scope
+-----
+Semantic-only deployment-completeness correction on top of V64.3.19 ICER.
+No learned head is refit. V19 train-only support/scalar/profile dominance heads
+are copied exactly. Only all-actions-safety-flagged behavior changes:
+preserve raw legacy proposal and delegate to unchanged structural-risk guard.
+
+Detected and fixed during audit
+-------------------------------
+The first V20 all-flagged unit test found an UnboundLocalError because the new
+delegated branch intentionally skips scalar/profile dominance inference while
+private diagnostic serialization still referenced branch-local arrays.
+Fix: initialize scalar_dominance_logits and profile_dominance_logits to zero
+before branching. This preserves diagnostic schema and avoids computing learned
+heads in the delegated structural domain.
+
+Static / contract checks
+------------------------
+- python -m compileall -q bdse: PASS
+- RUN_V64_3_20_EAF_ICER_DC_SCREEN_2GPU.sh bash -n: PASS
+- V20 raw contract: PASS
+- V20 ICER-DC scalar contract vs frozen V19 scalar: PASS
+- V20 ICER-DC dual contract vs frozen V19 dual: PASS
+- copied learned heads semantic identity: PASS
+- fixed zero support/dominance thresholds: PASS
+- no-refit marker: PASS
+- safe-domain-only learned intervention: PASS
+- all-flagged policy preserve_legacy_for_structural_guard: PASS
+
+Regression
+----------
+Targeted V64.3.6--V64.3.20: 95/95 PASS
+Full repository: 383/383 PASS
+Warnings: 36, all existing PyTorch Transformer nested_tensor/norm_first warnings;
+no new warning class.
+
+Randomized V19/V20 safe-domain equivalence
+------------------------------------------
+5000 deterministic random tournament cases with at least one unflagged valid
+action:
+- action differences: 0
+- admissible-mask differences: 0
+- support-logit differences: 0
+- dominance-logit differences: 0
+
+Data discipline
+---------------
+- V19 prior design exclusion: 2700 unique validation tokens
+- inspected V19 fresh: 500 unique, zero overlap with prior exclusion
+- V20 permanent design exclusion: 3200 unique validation tokens
+- V20 fresh selection: token identity + fixed SHA256 only
+- no validation label is used for V20 fitting (there is no V20 fit stage)
+
+Runtime leakage audit
+---------------------
+V20 adds no teacher/J_T/future runtime input. Teacher quantities remain confined
+to existing TRAIN-only fit/evaluation diagnostic code. The V20 runtime change
+uses only runtime validity/safety flags and the frozen raw proposal identity.
+
+Speed policy
+------------
+Uploaded V19 screen stage timing: total 708 s (~11.8 min). The pre-load token
+filter and frozen-artifact reuse are retained. V20 removes the V19 fit stage and
+does not add an invasive coupled multi-arm evaluator.
