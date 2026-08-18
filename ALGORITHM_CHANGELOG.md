@@ -6495,3 +6495,279 @@ Final validation after implementation:
 - V64.3.16 vs refactored V64.3.17 utility-refinement randomized equivalence replay: **5000/5000 identical actions and 5000/5000 identical public diagnostics**;
 - exclusion audit: **1700/1700 unique**, includes all prior 1200 design tokens and all current 500 inspected fresh tokens;
 - no runtime teacher/future leakage found in the DALER path.
+
+# V64.3.17 postmortem + V64.3.18 EAF-DACER (2026-08-18)
+
+## V64.3.17 result: DALER improves preservation but does not test, let alone validate, all-challenger extremal recovery
+
+The uploaded V64.3.17 screen correctly stopped before full/test/closed-loop. On the untouched 500-scene screen:
+
+- DARM anchor: teacher match `17.60%`, teacher regret `25196.11`;
+- raw frozen EAF: match `17.80%`, regret `12349.05`, flip `58.80%`, beneficial `9.60%`, harmful `9.40%`;
+- scalar EAIR: match `22.00%`, regret `13805.09`;
+- frozen RAER: match `22.60%`, regret `12840.36`, harmful `1.60%`, beneficial `6.60%`, flip `39.20%`;
+- V64.3.17 DALER: match `22.20%`, regret `12573.01`, harmful `2.40%`, beneficial `7.00%`, flip `40.20%`.
+
+Therefore DALER retains the useful preservation behavior discovered in RAER: relative to raw EAF it removes `7.0pp` harmful intervention while retaining `72.92%` of raw beneficial intervention, and relative to RAER it lowers regret by about `2.08%` at a `0.4pp` match cost. The final frozen one-sided/evidence guard blocks `0%` of DALER post-selections, so the learned action is aligned with the *implemented* final guard.
+
+The reliability signal is also real on the subset DALER calls executable: train internal-holdout executable-edge AUC is `0.7812`; fresh exact-executable-edge AUC is `0.8316`. The failure is not "EAF attribution has no reliability information".
+
+However the intended recovery mechanism fails completely:
+
+- DALER alternative recovery is only `1/476 = 0.21%` raw-proposal scenes;
+- that single recovered alternative is teacher-worse (`alternative precision = 0`, teacher margin `-0.4247`);
+- frozen RAER, despite its weaker operator, has `1.68%` alternative recovery and `50%` precision on the same scenes.
+
+The V64.3.17 paper claim **all-challenger evidence-attributed extremal recovery** is therefore unsupported. DALER is a useful preservation/abstention mechanism, not a validated recovery mechanism.
+
+## Root cause: V64.3.17 conflated an upstream incumbent-construction heuristic with deployment admissibility
+
+The screen's `instrumentation_valid=false` is not missing feature instrumentation. It is caused by the checker requiring at least 512 exact-executable fresh edges while only 285 exist. Detailed mask audit identifies why.
+
+Fresh 500 scenes / 13,400 challenger edges:
+
+- frozen final-guard prerequisites (`daler_guard_executable`): **5,205 edges**, mean `10.41` per scene, `274` scenes with at least two candidates;
+- legacy utility-refinement eligibility (`daler_utility_equivalent`): **481 edges**, of which **476 are exactly the legacy raw-top action** and only 5 are alternatives;
+- V64.3.17 hard intersection (`daler_executable`): **285 edges**;
+- exact-executable candidate-count distribution: `219` scenes with zero, `279` with one, only `2` scenes with two or more.
+
+The same pathology exists on TRAIN and is therefore structural, not a fresh-validation accident:
+
+- final-guard-admissible: `30,352` edges, `1,635` multi-candidate scenes;
+- utility-equivalent: `2,788` edges, `2,773` of them raw-top, only 10 multi-candidate scenes;
+- hard intersection: `1,676` edges; `1,673` scenes have exactly one candidate and only **one** scene has more than one.
+
+This explains the V64.3.17 fit report's internal-holdout `alternative_recovery_rate=0`: the "listwise" fitter almost never saw a list with competing executable challengers.
+
+The semantic error is now explicit: `_certificate_utility_refinement_context` is an **upstream legacy incumbent construction/refinement heuristic** (score slack, top-k, pair certificate and deployment utility). It is not the final execution guard. V64.3.17 incorrectly elevated that pool into a hard learned-intervention admissibility condition. The actual unchanged final intervention contract is safety availability + unflagged candidate + frozen EAF DARM-anchor margin `>=0.015` + EAF score gain `>=0` + unchanged evidence certificate, followed by the existing all-flagged structural-risk guard.
+
+This is an algorithm/interface semantic error, not teacher/future leakage.
+
+## Guard-admissible frontier has real recovery headroom (design-only diagnosis)
+
+After removing only the incorrect hard utility-equivalence condition, the already-inspected V64.3.17 fresh scenes have:
+
+- `274/476 = 57.56%` proposal scenes with at least two guard-admissible challengers;
+- `275/476 = 57.77%` proposal scenes with at least one non-incumbent guard-admissible alternative;
+- `159/476 = 33.40%` proposal scenes with an alternative whose teacher margin is better than `max(anchor, legacy incumbent)`;
+- mean teacher improvement on those counterfactual opportunities is about `0.190` normalized margin.
+
+TRAIN shows analogous support (`58.96%` multi-admissible proposal scenes and `38.33%` counterfactual opportunity rate). These values are **design-only** because the V64.3.17 screen has now been inspected; they are not promotion or publication results.
+
+A temporary scalar guard-frontier replay also indicates that correcting the candidate set alone is insufficient for strong recovery: anchor-relative reliability can remain good while alternative capture stays small. Therefore V64.3.18 must supervise **incumbent-relative dominance**, not merely widen the list and rerun the same anchor-relative classifier.
+
+## Revised scientific bottleneck
+
+The previous diagnosis remains correct but is now more precise:
+
+1. frozen EAF contains useful and generalizable evidence-attributed reliability information;
+2. RAER/DALER already provide useful preservation/abstention;
+3. V64.3.17 did not actually expose a complete recoverable frontier because of the hard utility-equivalence semantic error;
+4. once the true final-guard-admissible frontier is restored, the unresolved problem is **which admissible alternative should dominate the frozen legacy incumbent**, not whether a challenger is merely better than the anchor.
+
+Do **not** interpret V64.3.17 as evidence for broad EAF representation unfreezing. The pre-registered "structured per-atom representation" branch is conditioned on a correctly formed multi-challenger deployment frontier; that condition was violated.
+
+# V64.3.18 algorithm: EAF-DACER
+
+**Evidence-Attributed Deployment-Admissible Counterfactual Extremal Recovery (EAF-DACER)**
+
+The refined paper-level mainline is:
+
+`fixed planner-interface evidence cap B<=16`
+`-> auditable evidence atoms`
+`-> terminally frozen budgeted acquisition (M=24)`
+`-> frozen selected evidence`
+`-> frozen EAF complete DARM-anchor frontier value`
+`-> exact signed selected-evidence attribution`
+`-> complete final-guard-admissible challenger frontier`
+`-> anchor-augmented support + incumbent-relative evidence-attributed dominance`
+`-> counterfactual extremal recovery / explicit anchor abstention`
+`-> unchanged one-sided + evidence certificate`
+`-> unchanged all-flagged structural-risk guard`
+`-> final decision preservation`.
+
+The novelty statement is refined to:
+
+**evidence-attributed counterfactual dominance for deployment-admissible extremal recovery under a fixed planner-interface evidence budget.**
+
+"Counterfactual" here is operational: among runtime alternatives generated for the same scene and the same frozen evidence interface, estimate whether an admissible challenger should replace the frozen legacy incumbent. It is not a causal-inference identification claim.
+
+The old phrase "deployment-aligned listwise reliability" is retained as historical V64.3.17 terminology but is no longer the preferred novelty wording. It is too generic and, more importantly, V64.3.17's candidate-set semantics were wrong. The new novelty directly names the unresolved mechanism that must be demonstrated.
+
+## V64.3.18 learned choice set: final-guard-admissible complete frontier
+
+DACER may score a challenger only if it satisfies the unchanged final learned-intervention prerequisites:
+
+1. valid candidate;
+2. if any unflagged valid action exists, challenger is unflagged;
+3. all-flagged scenes abstain from learned DACER and remain owned by the frozen continuous structural-risk guard;
+4. frozen EAF DARM-anchor margin `>= pair_action_anchor_guard.flip_margin` (`0.015` in this frozen contract);
+5. frozen EAF score gain over the DARM anchor `>= score_margin` (`0`);
+6. unchanged evidence certificate passes.
+
+The V64.3.17 utility-equivalence set is **not** a hard gate. It remains available only as an auditable diagnostic / deterministic exact-tie-break prior describing whether a challenger belonged to the legacy incumbent-construction pool; it is deliberately **not a learned feature**. This makes the G-DALER -> DACER-scalar -> DACER-profile ablations clean and prevents the old heuristic from re-entering the learned score through a back door.
+
+The original legacy utility-refinement procedure itself remains unchanged; DACER is a downstream learned extremal-recovery operator over candidates that the final frozen intervention contract can actually execute.
+
+## Exact signed selected-atom attribution profile
+
+V64.3.13 EAF already has an exact additive selected-evidence decomposition. V64.3.18 exposes the existing per-selected-atom contribution matrix internally without changing the EAF residual arithmetic. For each challenger, the selected-atom contribution column sums back to the frozen EAF anchor residual (tested numerically).
+
+DACER augments the audited 25 scalar DALER features with a small permutation-invariant signed attribution profile:
+
+- normalized selected-atom count;
+- candidate contribution L1 mass, positive-mass fraction, top-1 concentration, normalized effective support;
+- top-4 signed atom contributions normalized by L1 mass;
+- the same statistics for **candidate minus legacy-incumbent** selected-atom contributions.
+
+This adds no evidence query and no teacher/future runtime input. It explicitly represents whether the selected B evidence supports the challenger differently from the incumbent, rather than reducing evidence attribution to one RSS magnitude.
+
+## V64.3.18 train-only objective
+
+One shared standardized linear score is intentionally retained so the paper novelty remains the evidence/decision operator rather than network depth.
+
+For every scene, the DARM anchor is a fixed logit-0 abstention pseudo-item. Training uses three fixed terms in the main DACER arm:
+
+1. **anchor-augmented listwise CE**: target the teacher-best positive-margin final-guard-admissible challenger, otherwise the anchor;
+2. **class-balanced support BCE** with fixed weight 1: preserve absolute "challenger better than anchor" semantics;
+3. **incumbent-dominance pair loss** with fixed weight 1: for every admissible alternative, supervise the sign of `teacher_margin(candidate) - teacher_margin(legacy incumbent)` through the score difference `s(candidate)-s(legacy)`.
+
+No validation threshold, anchor-logit, support-weight, dominance-weight, B/M, guard, or certificate sweep is permitted.
+
+Runtime selection is argmax over fixed anchor logit 0 and the final-guard-admissible challengers. The learned score determines the extremal order; frozen EAF margin, legacy status, utility prior/cost and action id are deterministic tie-breakers only. The unchanged final guard remains after selection and should therefore perform essentially zero hidden cleanup.
+
+## V64.3.18 causal screen: six arms on one untouched 500-scene set
+
+All fitted components use TRAIN only. The same new 500 hash-selected validation tokens are replayed in six frozen paired arms:
+
+1. raw frozen EAF;
+2. frozen V64.3.16 RAER control;
+3. frozen V64.3.17 DALER hard-utility-mask control;
+4. **G-DALER**: candidate-set semantic correction only — final-guard-admissible frontier, V64.3.17-style scalar/listwise+support objective, no incumbent-dominance loss;
+5. **DACER-scalar**: same corrected frontier + incumbent-dominance objective, scalar attribution representation;
+6. **DACER-profile**: same corrected frontier/objective + exact signed selected-atom incumbent-relative attribution profile (main V64.3.18 arm).
+
+This decomposition is mandatory. It identifies separately:
+
+- V64.3.17 DALER -> G-DALER: effect of correcting the candidate-set semantics;
+- G-DALER -> DACER-scalar: effect of incumbent-relative dominance supervision;
+- DACER-scalar -> DACER-profile: effect of structured exact selected-atom attribution.
+
+## V64.3.18 promotion gates
+
+Before model quality is interpreted, the candidate semantic correction itself must be validated:
+
+- fresh final-guard-admissible edges >= `2048`;
+- fresh multi-admissible raw-proposal scene rate >= `25%`;
+- admissible support at least `5x` the old V64.3.17 exact-executable edge count (with absolute minimum 2048);
+- train admissible edges >= `8192`, train multi-admissible scenes >= `512`.
+
+Capacity/generalization:
+
+- main profile train internal-holdout admissible support AUC >= `0.65`;
+- main profile train internal-holdout incumbent-dominance AUC >= `0.60`, >=512 dominance pairs;
+- fresh admissible support AUC >= `0.65`;
+- fresh incumbent-dominance AUC >= `0.60`.
+
+Mechanism:
+
+- proposal changed >= `5%`;
+- alternative recovery >= `3%`;
+- alternative recovery precision >= `70%`;
+- alternative teacher-margin mean > `0`;
+- counterfactual recovery precision (`selected alternative > max(anchor, incumbent)`) >= `60%`;
+- counterfactual opportunity capture >= `5%`;
+- selected non-anchor teacher-better rate >= `75%`.
+
+Causal ablations:
+
+- DACER-scalar must improve a recovery-specific metric over G-DALER (dominance AUC +2pp, counterfactual capture +2pp, or alternative recovery +1pp);
+- DACER-profile must improve a structured mechanism metric over DACER-scalar (dominance AUC +1pp, counterfactual precision +5pp, capture +1pp, or alternative recovery +1pp) while remaining endpoint-non-harmful.
+
+Preservation/endpoint:
+
+- harmful absolute reduction vs raw >= `5pp`;
+- beneficial retention >= `35%`, beneficial > harmful;
+- deployed flip >= `3%` and below raw;
+- post-selection final-guard block <= `0.1%`;
+- teacher match >= DARM anchor `+0.5pp`;
+- regret <= `1.02 * raw EAF regret`;
+- paired improvement/non-harm vs frozen RAER under the same V64.3.17 rule.
+
+Passing the screen **only** authorizes one independently frozen full-validation reproduction. Test/closed-loop are still forbidden until that reproduction succeeds.
+
+## V64.3.18 data discipline
+
+The entire V64.3.17 500-scene fresh screen has now been inspected and is design data. V64.3.18 therefore uses `bdse/configs/v64_3_18_design_exclude_v64_3_17_screen_tokens.txt` with **2200 unique validation tokens**: all previous 1700 exclusions plus all 500 V64.3.17 fresh-screen tokens. The next 500 scenes are selected from validation discovery only by scenario-token identity and a fixed SHA256 seed `v64.3.18-eaf-dacer-fresh-v1`; no label, match, regret, reliability score or oracle statistic participates.
+
+The V64.3.17 fresh budget audit also reconfirms the paper wording: `456/500 = 91.2%` scenes use B=16; every scene with at least 16 eligible proposal atoms uses B=16. Continue to claim a **planner-interface evidence cap B<=16**, not unconditional exact B=16.
+
+## V64.3.18 pre-registered failure branches
+
+1. If the final-guard-admissible frontier is still collapsed, stop for candidate/guard semantic engineering audit. Do not tune reliability.
+2. If corrected frontier support is healthy but support/dominance AUC is low, only then upgrade the structured incumbent-relative attribution representation; keep acquisition, B/M, guard and certificate frozen.
+3. If G-DALER -> DACER-scalar has no recovery-specific gain, the incumbent-dominance training target/objective is falsified; redesign relative ordering, not thresholds.
+4. If DACER-scalar works but DACER-profile has no causal gain, the current signed summary profile is falsified; either retain the simpler scalar mechanism or design a richer selected-atom set encoder in a new pre-registered version. Do not claim per-atom novelty without the ablation.
+5. If dominance/recovery succeeds but regret endpoint fails, add a train-only teacher-improvement-magnitude / robust listwise ordering term on the **same** frozen guard-admissible frontier.
+6. If final-guard block exceeds 0.1%, engineering stop: learned admissibility and actual final guard are inconsistent.
+7. If all gates pass, freeze exact config and perform an independent full-val reproduction before any test/closed-loop evaluation.
+
+## V64.3.18 no-repeat constraints
+
+All earlier terminal no-repeat constraints remain. In particular:
+
+- do not reopen BTP/RET/CET/AF/HAP or acquisition/family allocation;
+- do not increase B or M;
+- do not relax one-sided/evidence/safety/structural certificates;
+- do not sweep OCFI radius/alpha, EAIR/RAER probability thresholds, DALER/DACER anchor logit, or objective weights;
+- do not broad-unfreeze EAF before the corrected guard-admissible counterfactual screen resolves representation capacity;
+- do not use the old utility-equivalence pool as a hard "deployment" mask again; it is an upstream legacy incumbent prior, not the final guard;
+- do not use any of the 2200 excluded validation tokens for promotion;
+- do not interpret any design-only oracle/replay on the V64.3.17 500 scenes as publication evidence;
+- do not claim literal "all valid challengers" if a candidate fails frozen deployment guards; the supported story is **all final-guard-admissible challengers on the complete frozen EAF anchor frontier**;
+- do not modify the paper to claim DACER until fresh screen + independent full-val reproduction support the complete mechanism chain.
+
+## V64.3.18 engineering changes
+
+- `bdse/planner/tournament.py`
+  - exposes the exact signed selected-atom EAF contribution matrix as private runtime diagnostics without changing residual arithmetic;
+  - adds final-guard-admissible challenger construction independent of utility-equivalence;
+  - keeps all-flagged learned abstention;
+  - adds 42-feature DACER representation: the audited 25 scalar DALER features plus 17 selected-atom / candidate-minus-incumbent signed attribution-profile features;
+  - adds anchor-augmented DACER extremal operator and RAER/DALER/DACER mutual exclusion.
+- `bdse/experiments/evaluate_open_loop.py`
+  - DACER prefix propagation and per-frontier-edge admissibility/logit/utility-prior/feature export.
+- `bdse/experiments/train.py`, `bdse/metrics/bdse_metrics.py`
+  - DACER diagnostic propagation.
+- `bdse/tools/fit_v64_3_18_eaf_dacer.py`
+  - train-only guard-admissible listwise/support fitter;
+  - fixed incumbent-dominance pair objective;
+  - scalar/profile representation modes and candidate-set-only G-DALER objective ablation;
+  - deterministic scene-group holdout; no validation fitting.
+- `bdse/tools/check_v64_3_18_eaf_dacer_contract.py`
+  - strict B/M/guard/certificate/utility-prior/model/objective contract.
+- `bdse/tools/check_v64_3_18_eaf_dacer_screen.py`
+  - separates instrumentation from candidate-support collapse;
+  - reports admissible support, incumbent-dominance AUC, counterfactual opportunity/capture, structured-profile causal ablation, preservation and endpoint gates.
+- `bdse/configs/v64_3_18_eaf_dacer_raw.yaml`
+  - frozen raw instrumentation contract.
+- `bdse/configs/v64_3_18_design_exclude_v64_3_17_screen_tokens.txt`
+  - 2200 unique validation design exclusions.
+- `RUN_V64_3_18_EAF_DACER_SCREEN_2GPU.sh`
+  - six-arm paired causal screen; hard STOP before full/test/closed-loop.
+- `bdse/tests/test_v64_3_18_eaf_dacer.py`
+  - utility-prior-not-hard-gate, frozen guard/evidence fail-close, all-flagged abstention, exact atom-attribution sum, incumbent-relative signed profile, alternative recovery outside legacy utility pool, and synthetic counterfactual fitter tests.
+
+### V64.3.18 final engineering validation addendum
+
+Final pre-delivery validation after the DACER candidate-semantics, counterfactual-objective, signed selected-atom profile, launcher and checker changes:
+
+- V64.3.6–V64.3.18 targeted regression: **84/84 PASS** (6 pre-existing Transformer `nested_tensor/norm_first` warnings);
+- full repository: **372/372 PASS** (36 warnings, same pre-existing warning classes only);
+- 5000 deterministic randomized V64.3.17-raw vs V64.3.18-raw tournament replays: **0 action differences, 0 score differences, 0 frozen-public-diagnostic case differences**;
+- V64.3.18 design exclusion: **2200 unique validation tokens**, exact `1700 prior + 500 V64.3.17 fresh` union with zero overlap between those sets and **0 overlap with the audited 3000 train tokens**;
+- raw config contract, Python compile, and launcher shell syntax all PASS.
+
+One additional fail-closed contract check was added after final static review: the phrase **final-guard-admissible** is only exact under the frozen V64.3.17/V64.3.18 robust-margin contract where `residual_beta_uncertainty=0` and `residual_epsilon(_cal)=0`. If a future config changes either value without updating the pre-selection admissibility operator, the V64.3.18 contract now fails instead of silently treating an approximate candidate set as deployment-equivalent.
+
+No runtime teacher/future leakage was found. Teacher cost/margin appears only in TRAIN-only DACER objectives and evaluation diagnostics. Legacy utility-pool membership remains diagnostic / deterministic exact-tie-break context only; it is neither a DACER learned feature nor a hard admissibility gate.

@@ -1,0 +1,56 @@
+V64.3.18 EAF-DACER ENGINEERING VALIDATION
+==========================================
+
+Algorithm version: V64.3.18-EAF-DACER-DARM-DBR
+Repository: bdse_v64_3_18_eaf_dacer
+
+1) Static / contract
+- python -m compileall -q bdse: PASS
+- bash -n RUN_V64_3_18_EAF_DACER_SCREEN_2GPU.sh: PASS
+- raw V64.3.18 contract: PASS
+- exact guard-admissibility contract now additionally requires residual_beta_uncertainty=0 and residual_epsilon(_cal)=0
+- RAER/DALER/DACER learned arms are mutually exclusive
+- utility-equivalence membership is not a learned feature and not a hard DACER gate
+- all-flagged scenes abstain from DACER and remain owned by the frozen structural-risk guard
+
+2) Leakage audit
+- DACER runtime path has no teacher/J_T/future/ground-truth input.
+- teacher_margin/teacher_better are used only by TRAIN-only fitter labels/objectives and evaluation diagnostics.
+- fitted runtime config contains feature normalization, linear weights/bias, fixed anchor logit, and frozen admissibility/objective metadata.
+- fresh-scene selection uses scenario-token identity + fixed SHA256 hash only.
+
+3) Data-split audit
+- previous design exclusion unique: 1700
+- inspected V64.3.17 fresh unique: 500
+- overlap: 0
+- V64.3.18 union exclusion unique: 2200
+- train unique tokens audited: 3000
+- train / V64.3.18 design-exclusion overlap: 0
+
+4) Legacy frozen-planner equivalence
+- randomized tournament cases: 5000
+- action differences, V64.3.17 raw vs V64.3.18 raw: 0
+- score differences: 0
+- frozen public diagnostic case differences: 0
+- conclusion: new DACER instrumentation is raw-path behavior preserving.
+
+5) Tests
+- V64.3.6–V64.3.18 targeted regression: 84 passed, 6 warnings
+- full repository: 372 passed, 36 warnings
+- warning classes unchanged: existing PyTorch Transformer nested_tensor / norm_first warnings in scene encoder/external baseline models.
+
+6) V64.3.18 specific mechanisms tested
+- utility prior is not a hard gate
+- guard/evidence fail-close
+- all-flagged learned abstention
+- exact atom-attribution sum
+- incumbent-relative signed profile
+- recovery outside legacy utility pool
+- synthetic counterfactual/listwise fitter
+- fitted config contract for G-DALER / DACER-scalar / DACER-profile
+- screen-checker dry-run fail-safe behavior
+
+7) Execution safety
+- RUN_V64_3_18_EAF_DACER_SCREEN_2GPU.sh is screen-only.
+- failure prints STOP SCREEN and does not run full/test/closed-loop.
+- success only authorizes independent frozen full-validation reproduction; test/closed-loop remain forbidden.

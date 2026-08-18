@@ -899,9 +899,12 @@ def _decisive_frontier_value_star_residual_numpy(
         "decisive_frontier_value_attribution_scale_mean": float(np.mean(attr_vals)) if attr_vals.size else 0.0,
         "decisive_frontier_value_attribution_scale_rms": float(np.sqrt(np.mean(attr_vals * attr_vals))) if attr_vals.size else 0.0,
         "decisive_frontier_value_scale": float(scale),
-        # Private runtime-only vector consumed by the one-sided intervention
-        # guard.  It is stripped from scalar diagnostics automatically.
+        # Private runtime-only vectors consumed by reliability/recovery heads.
+        # They are stripped from scalar diagnostics automatically.  The atom
+        # matrix is the exact signed selected-evidence decomposition whose
+        # column sum equals the frozen EAF residual for each challenger.
         "_decisive_frontier_value_attribution_scale_star": attribution_scale,
+        "_decisive_frontier_value_atom_contrib_star": np.asarray(atom_contrib, dtype=np.float32),
     }
 
 
@@ -1392,6 +1395,291 @@ def _apply_decisive_frontier_daler(
     }
     return selected, diag
 
+
+
+# V64.3.18 EAF-DACER -------------------------------------------------------
+# The V64.3.17 DALER screen showed that treating the upstream utility-refinement
+# pool as a hard deployment admissibility set collapses almost every scene to a
+# singleton.  DACER therefore learns over the *actual frozen guard-admissible*
+# frontier.  The legacy utility pool is retained only as an auditable diagnostic / exact-tie-break
+# prior; its membership bit is not a learned feature and it is not a safety or execution constraint.
+_DACER_PROFILE_FEATURE_NAMES = [
+    "selected_atom_count_norm",
+    "atom_contrib_l1",
+    "atom_contrib_positive_mass_fraction",
+    "atom_contrib_top1_abs_fraction",
+    "atom_contrib_effective_support_norm",
+    "delta_atom_contrib_l1",
+    "delta_atom_contrib_positive_mass_fraction",
+    "delta_atom_contrib_top1_abs_fraction",
+    "delta_atom_contrib_effective_support_norm",
+    "atom_top1_signed_norm",
+    "atom_top2_signed_norm",
+    "atom_top3_signed_norm",
+    "atom_top4_signed_norm",
+    "delta_atom_top1_signed_norm",
+    "delta_atom_top2_signed_norm",
+    "delta_atom_top3_signed_norm",
+    "delta_atom_top4_signed_norm",
+]
+_DACER_FEATURE_NAMES = list(_DALER_FEATURE_NAMES) + list(_DACER_PROFILE_FEATURE_NAMES)
+
+
+def _decisive_frontier_guard_admissible_mask(
+    margin_star: np.ndarray,
+    scores: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    anchor_action: int,
+    evidence_certificate_fraction: float | None,
+    cfg: dict[str, Any],
+    *,
+    require_safe_available_for_learned_intervention: bool = True,
+) -> np.ndarray:
+    """Frozen one-sided deployment prerequisites, before any learned score.
+
+    This is deliberately narrower than "all valid" but broader than the legacy
+    utility-refinement candidate pool.  Every action in this mask can pass the
+    unchanged V64.3.13 one-sided/evidence guard under the V64.3.18 raw contract;
+    utility refinement is an upstream choice heuristic, not an execution guard.
+    """
+    margins = np.asarray(margin_star, dtype=np.float64).reshape(-1)
+    scores_arr = np.asarray(scores, dtype=np.float64).reshape(-1)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)[: margins.shape[0]]
+    flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
+    if flags.shape[0] < len(valid):
+        flags = np.pad(flags, (0, len(valid) - flags.shape[0]), constant_values=False)
+    flags = flags[: len(valid)]
+    a = int(anchor_action)
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    guard_cfg = runtime_cfg.get("pair_action_anchor_guard", {}) or {}
+    dual_cfg = runtime_cfg.get("dual_certificate", {}) or {}
+
+    mask = valid.copy()
+    if 0 <= a < len(mask):
+        mask[a] = False
+    safe_exists = bool(np.any(valid & ~flags))
+    if safe_exists:
+        mask &= ~flags
+    elif bool(require_safe_available_for_learned_intervention):
+        mask &= False
+
+    flip_margin = float(guard_cfg.get("flip_margin", runtime_cfg.get("pair_residual_trust", {}).get("flip_margin", 0.05)))
+    score_margin = float(guard_cfg.get("score_margin", 0.0))
+    mask &= np.isfinite(margins) & (margins >= flip_margin)
+    if scores_arr.size >= len(valid) and 0 <= a < scores_arr.size and np.isfinite(scores_arr[a]):
+        score_gain = scores_arr[: len(valid)] - float(scores_arr[a])
+        mask &= np.isfinite(score_gain) & (score_gain >= score_margin)
+    else:
+        # Fail closed on malformed score vectors rather than accidentally making
+        # a partially indexed challenger deployable.
+        mask &= False
+
+    require_evidence = bool(
+        dual_cfg.get("enabled", False)
+        and dual_cfg.get("require_evidence_certificate_before_residual_flip", False)
+    )
+    min_evidence = float(dual_cfg.get("min_evidence_certificate_fraction_for_residual_flip", 1.0))
+    cert = float(evidence_certificate_fraction) if evidence_certificate_fraction is not None else float("nan")
+    evidence_pass = bool(
+        (not require_evidence)
+        or (np.isfinite(cert) and cert + 1.0e-9 >= min_evidence)
+    )
+    if not evidence_pass:
+        mask &= False
+    return np.asarray(mask, dtype=bool)
+
+
+def _signed_atom_profile(vec: np.ndarray, *, top_k: int = 4) -> list[float]:
+    """Permutation-invariant signed attribution profile for one challenger."""
+    x = np.asarray(vec, dtype=np.float64).reshape(-1)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return [0.0, 0.0, 0.0, 0.0] + [0.0] * int(top_k)
+    ax = np.abs(x)
+    l1 = float(ax.sum())
+    sq = float(np.dot(x, x))
+    denom = max(l1, 1.0e-9)
+    pos_fraction = float(np.maximum(x, 0.0).sum() / denom)
+    top1_fraction = float(ax.max() / denom) if ax.size else 0.0
+    effective_support = float((l1 * l1) / max(sq, 1.0e-12) / max(float(x.size), 1.0)) if l1 > 0.0 else 0.0
+    order = np.argsort(-ax, kind="mergesort")[: int(top_k)]
+    top = [float(x[i] / denom) for i in order.tolist()]
+    top.extend([0.0] * (int(top_k) - len(top)))
+    return [l1, pos_fraction, top1_fraction, effective_support, *top]
+
+
+def _decisive_frontier_dacer_features(
+    margin_star: np.ndarray,
+    attribution_star: np.ndarray | None,
+    atom_contrib_star: np.ndarray | None,
+    scores: np.ndarray,
+    valid_mask: np.ndarray,
+    anchor_action: int,
+    legacy_action: int,
+    potential_diag: dict[str, Any],
+    evidence_certificate_fraction: float | None,
+    utility_refinement_diag: dict[str, Any] | None,
+    admissible_mask: np.ndarray,
+    cfg: dict[str, Any],
+) -> tuple[np.ndarray, list[str], np.ndarray]:
+    """Guard-admissible scalar features + exact signed selected-atom profile."""
+    # Reuse the audited V64.3.17 scalar representation, but compute its candidate
+    # fraction on the guard-admissible frontier rather than the collapsed utility
+    # intersection.  This preserves all previous diagnostics as a strict ablation.
+    scalar, scalar_names = _decisive_frontier_daler_features(
+        margin_star, attribution_star, scores, valid_mask, anchor_action, legacy_action,
+        potential_diag, evidence_certificate_fraction, utility_refinement_diag,
+        admissible_mask, cfg,
+    )
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    K = len(valid); a = int(anchor_action); legacy = int(legacy_action)
+    challengers = valid.copy()
+    if 0 <= a < K:
+        challengers[a] = False
+
+    utility_prior = np.zeros((K,), dtype=bool)
+    if utility_refinement_diag is not None:
+        raw = utility_refinement_diag.get("_utility_refinement_eligible_mask", None)
+        if raw is not None:
+            tmp = np.asarray(raw, dtype=bool).reshape(-1)
+            utility_prior[: min(K, len(tmp))] = tmp[: min(K, len(tmp))]
+    if 0 <= a < K:
+        utility_prior[a] = False
+
+    contrib = np.zeros((0, K), dtype=np.float64)
+    if atom_contrib_star is not None:
+        tmp = np.asarray(atom_contrib_star, dtype=np.float64)
+        if tmp.ndim == 2 and tmp.shape[1] >= K:
+            contrib = tmp[:, :K]
+    S = int(contrib.shape[0])
+    legacy_vec = contrib[:, legacy] if S and 0 <= legacy < K and legacy != a else np.zeros((S,), dtype=np.float64)
+    extra = np.zeros((K, len(_DACER_PROFILE_FEATURE_NAMES)), dtype=np.float64)
+    for b in np.flatnonzero(challengers).tolist():
+        cand = contrib[:, b] if S else np.zeros((0,), dtype=np.float64)
+        delta = cand - legacy_vec if S else np.zeros((0,), dtype=np.float64)
+        cp = _signed_atom_profile(cand, top_k=4)
+        dp = _signed_atom_profile(delta, top_k=4)
+        # cp/dp each: l1, positive-mass fraction, top1-abs fraction,
+        # normalized effective support, then top-4 signed normalized atoms.
+        budget_norm = max(float((cfg.get("evidence", {}) or {}).get("budget", 16)), 1.0)
+        vals = [
+            float(S) / budget_norm,
+            cp[0], cp[1], cp[2], cp[3],
+            dp[0], dp[1], dp[2], dp[3],
+            cp[4], cp[5], cp[6], cp[7],
+            dp[4], dp[5], dp[6], dp[7],
+        ]
+        extra[b] = np.asarray(vals, dtype=np.float64)
+    return np.concatenate([scalar, extra], axis=1), list(_DACER_FEATURE_NAMES), utility_prior
+
+
+def _apply_decisive_frontier_dacer(
+    legacy_action: int,
+    anchor_action: int,
+    margin_matrix: np.ndarray,
+    attribution_star: np.ndarray | None,
+    atom_contrib_star: np.ndarray | None,
+    scores: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    potential_diag: dict[str, Any],
+    evidence_certificate_fraction: float | None,
+    utility_refinement_diag: dict[str, Any] | None,
+    cfg: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """V64.3.18 guard-admissible counterfactual extremal recovery."""
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    frontier_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+    dacer_cfg = frontier_cfg.get("deployment_admissible_counterfactual_extremal_recovery", {}) or {}
+    enabled = bool(dacer_cfg.get("enabled", False))
+    instrument = bool(dacer_cfg.get("instrument_features", True))
+    frontier_active = bool(float(potential_diag.get("decisive_frontier_value_active", 0.0)) >= 0.5)
+    M = np.asarray(margin_matrix, dtype=np.float64)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    a = int(anchor_action); legacy = int(legacy_action)
+    margin_star = M[:, a].copy() if 0 <= a < M.shape[1] else np.zeros((len(valid),), dtype=np.float64)
+    admissible = _decisive_frontier_guard_admissible_mask(
+        margin_star, scores, valid, runtime_safety_flags, a,
+        evidence_certificate_fraction, cfg,
+        require_safe_available_for_learned_intervention=bool(
+            dacer_cfg.get("require_safe_available_for_learned_intervention", True)
+        ),
+    )
+    feat, names, utility_prior = _decisive_frontier_dacer_features(
+        margin_star, attribution_star, atom_contrib_star, scores, valid, a, legacy,
+        potential_diag, evidence_certificate_fraction, utility_refinement_diag,
+        admissible, cfg,
+    )
+    logits = np.zeros((len(valid),), dtype=np.float64)
+    selected = legacy
+    applies = bool(enabled and frontier_active and 0 <= a < len(valid))
+    anchor_logit = float(dacer_cfg.get("anchor_logit", 0.0))
+    feature_mode = str(dacer_cfg.get("feature_mode", "profile")).strip().lower()
+    if applies:
+        cfg_names = list(dacer_cfg.get("feature_names", []))
+        mean = np.asarray(dacer_cfg.get("feature_mean", []), dtype=np.float64).reshape(-1)
+        std = np.asarray(dacer_cfg.get("feature_std", []), dtype=np.float64).reshape(-1)
+        weights = np.asarray(dacer_cfg.get("weights", []), dtype=np.float64).reshape(-1)
+        if cfg_names != names or len(names) != len(mean) or len(names) != len(std) or len(names) != len(weights):
+            raise ValueError(
+                "EAF-DACER enabled but feature schema/mean/std/weights are inconsistent; "
+                "fit the V64.3.18 train-only counterfactual readout before enabling selection"
+            )
+        z = (feat - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
+        logits = np.clip(z @ weights + float(dacer_cfg.get("bias", 0.0)), -40.0, 40.0)
+        cand = np.flatnonzero(admissible & np.isfinite(logits)).astype(np.int64)
+        if cand.size:
+            util_cost = np.full((len(valid),), np.inf, dtype=np.float64)
+            if utility_refinement_diag is not None and utility_refinement_diag.get("_utility_refinement_cost", None) is not None:
+                tmp = np.asarray(utility_refinement_diag["_utility_refinement_cost"], dtype=np.float64).reshape(-1)
+                util_cost[: min(len(valid), len(tmp))] = tmp[: min(len(valid), len(tmp))]
+            # The learned score is the only new extremal operator.  Frozen EAF
+            # margin/utility are deterministic tie-breakers, never hard gates
+            # beyond the already-computed guard-admissible mask.
+            best = sorted(
+                cand.tolist(),
+                key=lambda b: (
+                    -float(logits[b]),
+                    -int(b == legacy),
+                    -float(margin_star[b]),
+                    -int(utility_prior[b]),
+                    float(util_cost[b]) if np.isfinite(util_cost[b]) else float("inf"),
+                    int(b),
+                ),
+            )[0]
+            selected = int(best) if float(logits[best]) > anchor_logit + 1.0e-12 else a
+        else:
+            selected = a
+    selected_logit = float(logits[selected]) if 0 <= selected < len(logits) and selected != a else anchor_logit
+    legacy_logit = float(logits[legacy]) if 0 <= legacy < len(logits) and legacy != a else anchor_logit
+    diag: dict[str, Any] = {
+        "decisive_frontier_dacer_enabled": float(enabled),
+        "decisive_frontier_dacer_instrument_features": float(instrument),
+        "decisive_frontier_dacer_active": float(applies),
+        "decisive_frontier_dacer_feature_mode_profile": float(feature_mode == "profile"),
+        "decisive_frontier_dacer_legacy_selected_action": float(legacy),
+        "decisive_frontier_dacer_selected_action": float(selected),
+        "decisive_frontier_dacer_proposal_changed": float(int(selected) != int(legacy)),
+        "decisive_frontier_dacer_anchor_fallback": float(int(selected) == int(a)),
+        "decisive_frontier_dacer_selected_logit": selected_logit,
+        "decisive_frontier_dacer_legacy_logit": legacy_logit,
+        "decisive_frontier_dacer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
+        "decisive_frontier_dacer_utility_prior_candidate_count": float(np.asarray(utility_prior, dtype=bool).sum()),
+        "_decisive_frontier_dacer_anchor_action": int(a),
+        "_decisive_frontier_dacer_legacy_selected_action": int(legacy),
+        "_decisive_frontier_dacer_raw_margin_star": np.asarray(margin_star, dtype=np.float32),
+        "_decisive_frontier_dacer_attribution_scale_star": np.zeros_like(margin_star, dtype=np.float32)
+            if attribution_star is None else np.asarray(attribution_star, dtype=np.float32).reshape(-1)[: len(margin_star)],
+        "_decisive_frontier_dacer_feature_matrix": np.asarray(feat, dtype=np.float32),
+        "_decisive_frontier_dacer_feature_names": names,
+        "_decisive_frontier_dacer_logit_star": np.asarray(logits, dtype=np.float32),
+        "_decisive_frontier_dacer_admissible_mask": np.asarray(admissible, dtype=bool),
+        "_decisive_frontier_dacer_utility_prior_mask": np.asarray(utility_prior, dtype=bool),
+    }
+    return selected, diag
+
+
 def run_pair_conditioned_tournament(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -1464,6 +1752,7 @@ def run_pair_conditioned_tournament(
     # exact same selected-B atom contributions as the frontier residual and is
     # consumed only by the V64.3.14 one-sided intervention certificate.
     frontier_attribution_scale_star: np.ndarray | None = None
+    frontier_atom_contrib_star: np.ndarray | None = None
     if use_evidence_action_potential:
         J_anchor, J_corrected, residual_sigma, potential_diag = _evidence_action_potential_cost(
             predicted_base_cost,
@@ -1545,6 +1834,9 @@ def run_pair_conditioned_tournament(
                 M_B[int(challenger), darm_anchor] = -float(M_B[darm_anchor, int(challenger)])
             frontier_attribution_scale_star = frontier_diag.pop(
                 "_decisive_frontier_value_attribution_scale_star", None
+            )
+            frontier_atom_contrib_star = frontier_diag.pop(
+                "_decisive_frontier_value_atom_contrib_star", None
             )
             potential_diag.update(frontier_diag)
         else:
@@ -1652,12 +1944,27 @@ def run_pair_conditioned_tournament(
             utility_refinement_diag,
             cfg,
         )
+        dacer_action, dacer_diag = _apply_decisive_frontier_dacer(
+            raw_eaf_action,
+            anchor_action,
+            M_B,
+            frontier_attribution_scale_star,
+            frontier_atom_contrib_star,
+            scores,
+            valid_mask,
+            runtime_safety_flags,
+            potential_diag,
+            evidence_certificate_fraction,
+            utility_refinement_diag,
+            cfg,
+        )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))
         daler_enabled_runtime = bool((frontier_runtime_cfg.get("deployment_aligned_listwise_extremal_reliability", {}) or {}).get("enabled", False))
-        if raer_enabled_runtime and daler_enabled_runtime:
-            raise ValueError("RAER and DALER are mutually exclusive causal arms; enable at most one")
-        action = int(daler_action if daler_enabled_runtime else raer_action)
+        dacer_enabled_runtime = bool((frontier_runtime_cfg.get("deployment_admissible_counterfactual_extremal_recovery", {}) or {}).get("enabled", False))
+        if int(raer_enabled_runtime) + int(daler_enabled_runtime) + int(dacer_enabled_runtime) > 1:
+            raise ValueError("RAER, DALER and DACER are mutually exclusive causal arms; enable at most one")
+        action = int(dacer_action if dacer_enabled_runtime else (daler_action if daler_enabled_runtime else raer_action))
         proposed_action = int(action)
         raw_margin = float(M_B[proposed_action, anchor_action]) if proposed_action != anchor_action else float("inf")
         residual_sigma = (
@@ -1820,6 +2127,7 @@ def run_pair_conditioned_tournament(
             "pair_action_anchor_proposed_action": int(proposed_action),
             **raer_diag,
             **daler_diag,
+            **dacer_diag,
             "pair_action_anchor_raw_margin": float(raw_margin),
             "pair_action_anchor_residual_sigma": float(residual_sigma),
             "pair_action_anchor_residual_beta_uncertainty": float(residual_beta_uncertainty),

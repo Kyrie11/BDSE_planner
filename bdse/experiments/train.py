@@ -1212,6 +1212,7 @@ def _run_validation_open_loop(
                     or key.startswith("decisive_frontier_eair_")
                     or key.startswith("decisive_frontier_raer_")
                     or key.startswith("decisive_frontier_daler_")
+                or key.startswith("decisive_frontier_dacer_")
                     or key.startswith("base_prior_")
                     or key.startswith("learned_base_")
                     or key.startswith("structural_residual_")
