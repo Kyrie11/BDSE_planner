@@ -6771,3 +6771,290 @@ Final pre-delivery validation after the DACER candidate-semantics, counterfactua
 One additional fail-closed contract check was added after final static review: the phrase **final-guard-admissible** is only exact under the frozen V64.3.17/V64.3.18 robust-margin contract where `residual_beta_uncertainty=0` and `residual_epsilon(_cal)=0`. If a future config changes either value without updating the pre-selection admissibility operator, the V64.3.18 contract now fails instead of silently treating an approximate candidate set as deployment-equivalent.
 
 No runtime teacher/future leakage was found. Teacher cost/margin appears only in TRAIN-only DACER objectives and evaluation diagnostics. Legacy utility-pool membership remains diagnostic / deterministic exact-tie-break context only; it is neither a DACER learned feature nor a hard admissibility gate.
+
+---
+
+# V64.3.19 — EAF-ICER: incumbent-contrastive extremal recovery after V64.3.18 DACER screen
+
+## V64.3.18 uploaded fresh-screen attribution
+
+V64.3.18 correctly **STOPPED at screen**. Do not run full/test/closed-loop from that result.
+
+The pre-registered mechanism chain now has a much narrower failure than V64.3.17:
+
+`candidate semantic recovery -> genuine multi-challenger support -> incumbent-dominance generalization -> signed-evidence attribution gain -> alternative/counterfactual recovery -> preservation -> endpoint`.
+
+Fresh 500-scene endpoint table:
+
+| arm | teacher match | regret | beneficial | harmful | final guard block |
+|---|---:|---:|---:|---:|---:|
+| DARM anchor | 16.2% | 23785.04 | - | - | - |
+| raw EAF | 15.8% | **14453.06** | 9.0% | 9.4% | 35.2% |
+| frozen RAER | 21.6% | 15013.09 | 7.0% | 1.6% | 1.8% |
+| frozen V17 DALER | 22.0% | **14400.88** | 7.6% | 1.8% | 0 |
+| G-DALER | **23.2%** | 14722.83 | 7.2% | **0.2%** | 0 |
+| DACER-scalar | 22.2% | 15252.56 | 6.2% | **0.2%** | 0 |
+| DACER-profile | **23.2%** | 14680.41 | 7.2% | **0.2%** | 0 |
+
+### Chain status
+
+1. **Candidate semantics: supported.** V17 singleton collapse is repaired. DACER-profile has 4933 fresh final-guard-admissible edges, mean 9.866 candidates/scene; 267/470 raw-proposal scenes (56.81%) have >=2 admissible challengers.
+2. **Genuine multi-challenger support: supported.** The learned operator now sees a real list rather than the V17 hard utility-equivalence singleton.
+3. **Incumbent-dominance generalization: partially supported.** Fresh dominance AUC is 0.6567 G-DALER, 0.6774 scalar DACER, 0.6883 profile DACER; profile TRAIN internal holdout is 0.7006. Signal exists but is not sufficient for extremal replacement precision.
+4. **Signed evidence attribution: causally supported but modest.** Profile vs scalar: dominance AUC +1.09pp, alternative recovery 5.96% -> 11.28%, counterfactual opportunity capture 7.55% -> 13.21%, endpoint 22.2%/15252.56 -> 23.2%/14680.41, with harmful unchanged at 0.2%.
+5. **Alternative recovery over anchor: supported.** Profile recovers alternatives in 11.28% of proposal scenes; 84.91% are teacher-better-than-anchor, mean teacher margin 1.131.
+6. **Incumbent-relative counterfactual recovery: FAILED and is now the primary bottleneck.** Only 39.62% of selected alternatives actually beat the frozen incumbent/anchor deployment comparator, below the pre-registered 60% requirement.
+7. **Preservation: supported.** harmful 9.4% -> 0.2%, beneficial retention 80%, final guard block 0.
+8. **Endpoint: screen-supported.** profile match 23.2% > anchor 16.2% / RAER 21.6%; regret 14680.41 is within 1.02x raw and 1.02x RAER.
+
+Therefore V64.3.18 falsifies neither frozen EAF nor evidence-attributed reliability. The remaining failure is specifically **how incumbent-relative reliability is converted into extremal replacement**.
+
+## V64.3.18 model diagnosis: shared pointwise score conflates two reliability semantics
+
+V64.3.18 uses one score for:
+
+- candidate better than DARM anchor (absolute support), and
+- candidate better than frozen incumbent (relative dominance),
+
+then runs extremal argmax on that same score.
+
+The 0.688 fresh dominance AUC shows meaningful ordering information, but selected alternative counterfactual precision is only 39.62%. This is a second-order winner's-curse: earlier versions suffered value-extremum over-selection; V64.3.18 now suffers **reliability-extremum over-selection**. High-score dominance false positives are disproportionately selected.
+
+Do not respond with probability/score threshold sweeps, anchor-logit tuning, loss-weight tuning, selector changes, B/M changes, acquisition changes, certificate relaxation, or broad EAF unfreezing.
+
+## V64.3.19 paper mainline / novelty
+
+The fixed-budget evidence story remains the correct mainline. The historical phrase
+
+**evidence-attributed, deployment-aligned listwise reliability for extremal decision selection under a fixed planner-interface evidence budget**
+
+remains a valid umbrella description, but `listwise` is no longer the core novelty because V64.3.18 demonstrates that listwise/shared-score training is insufficient.
+
+V64.3.19 preferred mechanism wording:
+
+**evidence-attributed incumbent-contrastive reliability for deployment-admissible extremal recovery under a fixed planner-interface evidence budget.**
+
+Mainline:
+
+`fixed planner-interface evidence cap B<=16`
+`-> auditable evidence atoms`
+`-> terminally frozen M=24 acquisition`
+`-> B<=16 selected evidence`
+`-> frozen EAF complete DARM-anchor frontier value`
+`-> exact selected-evidence attribution`
+`-> complete final-guard-admissible challenger frontier`
+`-> frozen anchor-support reliability + direct incumbent-contrastive evidence reliability`
+`-> admissible incumbent preservation / evidence-supported replacement / anchor abstention`
+`-> unchanged one-sided + evidence certificate`
+`-> unchanged structural-risk guard`
+`-> final decision preservation`.
+
+`counterfactual` remains an operational same-scene candidate-vs-incumbent comparison, not a causal-identification claim.
+
+# V64.3.19 algorithm: EAF-ICER
+
+**Evidence-Attributed Incumbent-Contrastive Extremal Recovery.**
+
+## Decompose support from dominance
+
+The V64.3.18 TRAIN-only scalar G-DALER support head is frozen and reused exactly. It remains responsible only for:
+
+`teacher challenger better than DARM anchor`.
+
+V64.3.19 learns a separate direct incumbent-dominance head only on TRAIN scenes where the raw-EAF incumbent itself is final-guard-admissible.
+
+Dominance target for admissible alternative `b`:
+
+`teacher_margin(b) > max(0, teacher_margin(raw incumbent))`.
+
+Thus a positive direct-dominance label means the alternative is teacher-better than both anchor and the actual admissible incumbent.
+
+Dominance uses unweighted direct BCE so logit zero is the fixed conditional 0.5 boundary. There is no validation threshold sweep.
+
+## Deployment incumbent semantics
+
+Runtime comparator is now exactly aligned with deployment:
+
+- if raw EAF incumbent is final-guard-admissible: deployment incumbent = raw incumbent;
+- otherwise: deployment incumbent = DARM anchor, because the unchanged final guard would reject raw top anyway.
+
+When raw incumbent is admissible, no alternative may replace it unless:
+
+1. alternative is final-guard-admissible;
+2. frozen anchor-support logit > 0;
+3. direct incumbent-dominance logit > 0.
+
+If no alternative passes, keep the supported incumbent; if the incumbent is not support-positive, abstain to anchor. When raw incumbent is inadmissible, the problem is anchor recovery and only the frozen support head is used.
+
+This prevents anchor-relative support from bypassing the direct incumbent-dominance claim.
+
+## Direct incumbent-replacement metrics separated from anchor recovery
+
+A final V64.3.19 audit found that a combined `counterfactual_recovery_precision` could hide a semantic failure: an alternative selected when raw top is itself guard-inadmissible is anchor recovery, not direct incumbent replacement.
+
+V64.3.19 therefore reports and gates separately:
+
+- `direct_incumbent_replacement_rate`;
+- `direct_incumbent_replacement_precision`;
+- `direct_incumbent_opportunity_rate`;
+- `direct_incumbent_opportunity_capture_rate`;
+- `anchor_recovery_rate_on_proposals`;
+- `anchor_recovery_precision`.
+
+Overall deployment recovery metrics remain diagnostic, but paper/promotion support for the incumbent-contrastive novelty must come from the **direct incumbent** metrics. Anchor recovery cannot inflate that claim.
+
+## Fixed quadratic evidence-interaction map
+
+V64.3.18 already shows useful linear signal; broad representation unfreezing is not justified. V64.3.19 uses a fixed auditable degree-2 map followed by a linear logistic readout:
+
+`psi(phi) = [phi_i, phi_i*phi_j for i<=j]`.
+
+Two pre-registered views:
+
+- scalar interaction: 25 audited DALER scalar features -> 350 fixed features;
+- profile interaction: 30 evidence/incumbent-relative features -> 495 fixed features, including signed top-4 candidate-minus-incumbent selected-atom contributions.
+
+No new evidence query, no EAF value change, no hidden learned representation, no validation feature selection.
+
+The main arm uses fixed equal mean of scalar and profile direct log-odds. The scalar-only arm is the structured-attribution causal ablation. The 0.5 mixing weight is fixed and not tuned.
+
+## TRAIN-only design diagnostics (not promotion/publication evidence)
+
+Using the uploaded V64.3.18 TRAIN frontier only, with the frozen V18 G-DALER support head:
+
+| arm | direct dominance AUC | direct replacement rate | direct replacement precision | direct opportunity capture | alternative precision |
+|---|---:|---:|---:|---:|---:|
+| ICER-scalar | 0.7544 | 38.68% | 64.44% | 39.19% | 96.30% |
+| ICER-dual | **0.7647** | 41.55% | **64.83%** | **42.34%** | 95.86% |
+
+These numbers are design-only and only justify running the fresh V64.3.19 screen. They must not appear as validation/test/publication results.
+
+The frozen support head was originally fit on all V18 TRAIN. Therefore V64.3.19 fit reports explicitly mark `support_holdout_independent=false`; support replay AUC on the dominance partition is not called an independent holdout. Fresh support AUC is the actual generalization gate.
+
+# V64.3.19 causal screen
+
+Use one new untouched 500-scene hash-selected validation set with four full replays:
+
+1. V19 raw EAF;
+2. frozen V18 DACER-profile control;
+3. ICER-scalar;
+4. ICER-dual main.
+
+The earlier V17/RAER/G-DALER arms are not rerun because V64.3.18 already answered candidate-semantics and preservation causality. V19's unresolved causal comparison is V18 profile -> ICER scalar -> ICER dual.
+
+Primary gates:
+
+- frozen interface identity and complete EAF frontier instrumentation;
+- multi-admissible proposal rate >=25%, mean >=3 admissible candidates/proposal;
+- fresh support AUC >=0.65;
+- fresh direct incumbent-dominance AUC >=0.70;
+- overall alternative recovery >=3%, alternative precision >=80%;
+- **direct incumbent replacement rate >=2%**;
+- **direct incumbent replacement precision >=60%**;
+- **direct incumbent opportunity capture >=8%**;
+- direct incumbent precision >= frozen V18 profile +10pp and direct capture not materially worse;
+- dual signed-profile causal gain over scalar in direct dominance AUC (+0.5pp), direct replacement precision (+3pp), or direct capture (+1pp), with endpoint non-harm;
+- post-selection final guard block <=0.1%;
+- harmful absolute reduction vs raw >=5pp, beneficial retention >=35%, beneficial>harmful, flip non-trivial and below raw;
+- match >= anchor +0.5pp;
+- regret <=1.02*raw and <=1.02*frozen V18 profile; match not below V18 profile by >0.5pp.
+
+Passing this screen only authorizes an independent frozen full-validation reproduction. Test/closed-loop remain forbidden until reproduction succeeds.
+
+# V64.3.19 speed audit and optimization
+
+V64.3.18 is slow partly because it intentionally runs more experiments, but the logs reveal a major engineering inefficiency.
+
+V18 progress:
+
+- train raw 3000: 34m23s;
+- validation discovery raw 4000: 47m41s;
+- fresh raw/RAER: progress `58418/58418`, ~1h46m43s;
+- fresh V17/G-DALER: `58418/58418`, ~38m42s;
+- fresh scalar/profile: `58418/58418`, ~27m06–27m07s.
+
+Yet each fresh arm evaluates exactly 500 scenes and planner latency is only ~0.48–0.55 s/scene. The old evaluator loads/iterates cache samples before checking the requested scenario-token set. Thus most fresh wall time is cache scan/NPZ deserialization and cold-cache I/O, not DACER inference.
+
+V64.3.19 engineering optimizations:
+
+1. `PreprocessedBDSEDataset` accepts explicit `scenario_tokens`.
+2. Requested tokens are resolved from manifest/cache filename identity before NPZ deserialization.
+3. If manifests resolve every requested token, evaluation skips recursive full-split scanning; incomplete legacy/resumed manifests fail over to conservative disk-union search.
+4. Original post-load token verification remains as a correctness guard; `--require-all-scenario-tokens` remains hard fail.
+5. Fresh token selection uses cache identity + fixed SHA256 directly; the 4000-scene GPU validation-discovery replay is removed.
+6. V18 TRAIN frontier edges are reused; the 3000-scene GPU train raw replay is removed.
+7. Fresh full replay count falls from six to four while preserving the current causal question.
+8. Scalar and dual ICER configs are emitted by **one** dominance fit; the identical scalar/profile heads are not refit twice.
+9. Launcher records stage wall time in provenance.
+
+Planner-evaluated scene workload drops from at least `3000+4000+6*500=10000` in V18 to `4*500=2000` in V19 (~80% reduction). Fresh cache materialization should fall from scanning 58,418 cache entries per arm to the requested 500 when manifest/index metadata is complete. Exact server wall-time improvement is intentionally not claimed before measurement.
+
+A more invasive one-replay/multi-arm shadow evaluator was not introduced because it would increase metric/instrumentation coupling and complicate causal auditing. Current speed changes remove duplicated frozen computation while preserving independent arm replay semantics.
+
+# V64.3.19 data discipline
+
+The entire inspected V64.3.18 fresh set is now design data.
+
+- V64.3.18 fresh unique: 500;
+- V64.3.19 validation design exclusion: **2700 unique**;
+- all V18 fresh tokens are included: 500/500;
+- audited TRAIN unique from frozen frontier: 3000;
+- TRAIN / V19 design-exclusion overlap: **0**.
+
+V19 fresh token selection uses only scenario-token identity + fixed SHA256. No NPZ teacher label, match, regret, reliability, or oracle statistic is read during selection.
+
+# V64.3.19 no-repeat constraints
+
+All prior terminal constraints remain. In particular:
+
+- do not reopen BTP/RET/CET/AF/HAP/acquisition/family allocation;
+- do not increase B or M;
+- do not relax one-sided/evidence/safety/structural guards;
+- do not sweep OCFI radius/alpha, EAIR/RAER threshold, DACER/ICER threshold, anchor logit, dominance mixing weight, or objective weight;
+- never restore V17 utility-equivalence hard mask;
+- do not broad-unfreeze EAF before the direct incumbent-contrastive screen resolves the remaining reliability bottleneck;
+- do not use any of the 2700 validation design tokens for promotion;
+- do not let anchor-recovery metrics substitute for direct incumbent-replacement evidence;
+- do not claim signed-profile novelty if ICER-dual lacks a causal gain over ICER-scalar on fresh data;
+- do not add teacher-improvement magnitude objective unless direct recovery/preservation succeeds but regret endpoint subsequently fails;
+- do not update the paper to claim ICER until fresh screen + independent full-val reproduction support the chain.
+
+# V64.3.19 engineering implementation
+
+- `bdse/planner/tournament.py`
+  - adds fixed scalar/profile quadratic evidence-interaction maps;
+  - adds ICER decomposed support + direct incumbent-contrastive operator;
+  - deployment incumbent is raw incumbent iff final-guard-admissible, otherwise anchor;
+  - direct replacement requires support>0 AND dominance>0;
+  - RAER/DALER/DACER/ICER are mutually exclusive;
+  - unchanged final one-sided/evidence/structural guards remain authoritative.
+- `bdse/data/nuplan_dataset.py`
+  - token-filtered cache index before sample deserialization;
+  - manifest fast path with conservative fallback.
+- `bdse/experiments/evaluate_open_loop.py`
+  - passes scenario-token filter into preprocessed dataset before iteration;
+  - preserves post-load token verification;
+  - propagates ICER support/scalar/profile/aggregate diagnostics and cache-prefilter audit fields.
+- `bdse/experiments/train.py`, `bdse/metrics/bdse_metrics.py`
+  - ICER diagnostic prefix propagation.
+- `bdse/tools/fit_v64_3_19_eaf_icer.py`
+  - reuses frozen V18 G-DALER support head;
+  - direct unweighted incumbent-contrastive BCE over fixed interaction maps;
+  - deterministic TRAIN scene-group holdout;
+  - one fit emits both dual main and scalar ablation configs/reports;
+  - support holdout independence is explicitly audited.
+- `bdse/tools/select_fresh_preprocessed_tokens.py`
+  - identity/hash-only fresh selection, no NPZ loading.
+- `bdse/tools/check_v64_3_19_eaf_icer_contract.py`
+  - strict B/M/frozen-guard/no-threshold/feature-schema/direct-objective contract.
+- `bdse/tools/check_v64_3_19_eaf_icer_screen.py`
+  - separates overall recovery, anchor recovery, and direct incumbent replacement;
+  - direct incumbent precision/capture are the novelty/promotion gates.
+- `RUN_V64_3_19_EAF_ICER_SCREEN_2GPU.sh`
+  - four-arm paired fresh screen;
+  - no train raw replay, no val discovery replay;
+  - stage timing provenance;
+  - hard STOP before full/test/closed-loop.
+- `bdse/tests/test_v64_3_19_eaf_icer.py`
+  - incumbent preservation/replacement, support bypass prevention, guard fail-close, fixed interaction schema, pre-deserialization token filtering, and direct-incumbent-vs-anchor-recovery metric separation.
+

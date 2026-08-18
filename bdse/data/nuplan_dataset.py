@@ -1157,6 +1157,7 @@ class PreprocessedBDSEDataset:
         max_scenarios_per_split: int | None = None,
         max_scenarios_strategy: str = "first",
         max_scenarios_block_size: int = 32,
+        scenario_tokens: set[str] | list[str] | tuple[str, ...] | None = None,
     ):
         self.preprocessed_dir = Path(preprocessed_dir)
         if split is None:
@@ -1177,7 +1178,11 @@ class PreprocessedBDSEDataset:
                 "expected 'first', 'uniform', or 'uniform_blocks'."
             )
         self.max_scenarios_block_size = max(1, int(max_scenarios_block_size))
+        self.scenario_tokens = None if scenario_tokens is None else {str(x).strip() for x in scenario_tokens if str(x).strip()}
+        if scenario_tokens is not None and not self.scenario_tokens:
+            raise ValueError("scenario_tokens was provided but contains no non-empty tokens")
         self._paths: list[Path] | None = None
+        self._scenario_token_matches: set[str] = set()
 
     @staticmethod
     def _is_canonical_split_name(split: str) -> bool:
@@ -1380,6 +1385,62 @@ class PreprocessedBDSEDataset:
                     paths.append(child / self.manifest_name)
         return sorted(dict.fromkeys(paths), key=lambda p: str(p))
 
+    @staticmethod
+    def scenario_token_from_cache_path(path: str | Path) -> str | None:
+        """Extract the canonical scenario token without opening the NPZ.
+
+        BDSE preprocessing writes ``<scenario_token>_itXXXXXX.npz``.  Token-filtered
+        evaluation should use this O(1) filename metadata before deserializing a
+        sample; falling back to post-load filtering made every 500-scene replay scan
+        a large validation cache and dominated V64.3.18 wall time.
+        """
+        name = Path(path).name
+        if not name.endswith(".npz"):
+            return None
+        stem = name[:-4]
+        marker = stem.rfind("_it")
+        if marker <= 0:
+            return None
+        suffix = stem[marker + 3 :]
+        if len(suffix) != 6 or not suffix.isdigit():
+            return None
+        token = stem[:marker].strip()
+        return token or None
+
+    def _manifest_token_paths(self) -> dict[str, list[Path]]:
+        """Return requested token -> existing cache paths using manifest metadata only.
+
+        This is a correctness fallback for legacy cache layouts whose filenames are
+        not canonical.  No NPZ is opened.
+        """
+        if self.scenario_tokens is None:
+            return {}
+        out: dict[str, list[Path]] = {}
+        wanted = self.scenario_tokens
+        for manifest_path in self._manifest_paths():
+            if not manifest_path.exists():
+                continue
+            with manifest_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not self._record_matches_split(rec.get("split", "")):
+                        continue
+                    token = str(rec.get("scenario_token", "")).strip()
+                    if token not in wanted:
+                        continue
+                    path = Path(str(rec.get("path", "")))
+                    if not path.is_absolute():
+                        path = self.preprocessed_dir / path
+                    if path.exists():
+                        out.setdefault(token, []).append(path)
+        return out
+
     def _paths_from_manifest(self, manifest_path: Path) -> list[Path]:
         paths: list[Path] = []
         if not manifest_path.exists():
@@ -1407,6 +1468,25 @@ class PreprocessedBDSEDataset:
             return self._paths
         if not self.preprocessed_dir.exists():
             raise FileNotFoundError(f"preprocessed cache root does not exist: {self.preprocessed_dir}")
+        # Fast path for an explicit replay token set: if manifests resolve every
+        # requested token, do not recursively scan the whole split at all.  The
+        # post-load token guard and --require-all-scenario-tokens still verify
+        # correctness.  If any requested token is absent from manifest metadata,
+        # fall back to the conservative manifest+disk union below so resumed or
+        # legacy caches remain supported.
+        if self.scenario_tokens is not None:
+            manifest_matches = self._manifest_token_paths()
+            if self.scenario_tokens.issubset(set(manifest_matches)):
+                selected = sorted(
+                    dict.fromkeys(p for t in self.scenario_tokens for p in manifest_matches.get(t, [])),
+                    key=lambda p: str(p),
+                )
+                if selected:
+                    self._scenario_token_matches = set(self.scenario_tokens)
+                    selected = self._apply_training_caps(selected)
+                    self._paths = selected
+                    return self._paths
+
         paths: list[Path] = []
         for mp in self._manifest_paths():
             paths.extend(self._paths_from_manifest(mp))
@@ -1424,6 +1504,24 @@ class PreprocessedBDSEDataset:
         # Manifests may contain duplicates after resumed preprocessing. Keep one
         # copy of each path and sort deterministically.
         paths = sorted(dict.fromkeys(paths), key=lambda p: str(p))
+        if self.scenario_tokens is not None:
+            wanted = self.scenario_tokens
+            manifest_matches = self._manifest_token_paths()
+            selected: list[Path] = []
+            matched: set[str] = set()
+            for path in paths:
+                token = self.scenario_token_from_cache_path(path)
+                if token is not None and token in wanted:
+                    selected.append(path); matched.add(token)
+            # Legacy/non-canonical filenames are recovered from manifest metadata.
+            selected_set = set(selected)
+            for token, token_paths in manifest_matches.items():
+                for path in token_paths:
+                    if path not in selected_set:
+                        selected.append(path); selected_set.add(path)
+                    matched.add(token)
+            paths = sorted(selected_set, key=lambda p: str(p))
+            self._scenario_token_matches = matched
         paths = self._apply_training_caps(paths)
         if not paths:
             hint = ""

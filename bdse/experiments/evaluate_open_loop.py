@@ -708,6 +708,11 @@ def main() -> None:
             args.preprocessed_dir, split=args.split, max_scenarios=dataset_cap,
             max_scenarios_strategy=args.max_scenarios_strategy,
             max_scenarios_block_size=args.max_scenarios_block_size,
+            # V64.3.19 speed/correctness fix: resolve requested tokens at the cache
+            # path/manifest layer before load_sample_npz().  The old loop-level
+            # filter deserialized unrelated validation samples and made repeated
+            # causal-arm replays I/O-bound even though planner latency was small.
+            scenario_tokens=scenario_token_filter,
         )
     else:
         if len(args.split) != 1:
@@ -778,6 +783,7 @@ def main() -> None:
                 or key.startswith("decisive_frontier_raer_")
                 or key.startswith("decisive_frontier_daler_")
                 or key.startswith("decisive_frontier_dacer_")
+                or key.startswith("decisive_frontier_icer_")
                 or key.startswith("decisive_anchor_margin_")
                 or key.startswith("base_prior_")
                 or key.startswith("learned_base_")
@@ -972,9 +978,9 @@ def main() -> None:
             diag.details["pair_full_action"] = int(pair_full_action)
             diag.details["local_pair_full_action"] = int(local_pair_full_action)
         if frontier_edge_file is not None:
-            edge_anchor = int(tour_diag.get("_decisive_frontier_dacer_anchor_action", tour_diag.get("_decisive_frontier_daler_anchor_action", tour_diag.get("_decisive_frontier_raer_anchor_action", -1))))
-            edge_margins = np.asarray(tour_diag.get("_decisive_frontier_dacer_raw_margin_star", tour_diag.get("_decisive_frontier_daler_raw_margin_star", tour_diag.get("_decisive_frontier_raer_raw_margin_star", []))), dtype=np.float64).reshape(-1)
-            edge_attr = np.asarray(tour_diag.get("_decisive_frontier_dacer_attribution_scale_star", tour_diag.get("_decisive_frontier_daler_attribution_scale_star", tour_diag.get("_decisive_frontier_raer_attribution_scale_star", []))), dtype=np.float64).reshape(-1)
+            edge_anchor = int(tour_diag.get("_decisive_frontier_icer_anchor_action", tour_diag.get("_decisive_frontier_dacer_anchor_action", tour_diag.get("_decisive_frontier_daler_anchor_action", tour_diag.get("_decisive_frontier_raer_anchor_action", -1)))))
+            edge_margins = np.asarray(tour_diag.get("_decisive_frontier_icer_raw_margin_star", tour_diag.get("_decisive_frontier_dacer_raw_margin_star", tour_diag.get("_decisive_frontier_daler_raw_margin_star", tour_diag.get("_decisive_frontier_raer_raw_margin_star", [])))), dtype=np.float64).reshape(-1)
+            edge_attr = np.asarray(tour_diag.get("_decisive_frontier_icer_attribution_scale_star", tour_diag.get("_decisive_frontier_dacer_attribution_scale_star", tour_diag.get("_decisive_frontier_daler_attribution_scale_star", tour_diag.get("_decisive_frontier_raer_attribution_scale_star", [])))), dtype=np.float64).reshape(-1)
             edge_valid = np.asarray(sample.candidates.valid_mask, dtype=bool).reshape(-1)
             raw_top = int(tour_diag.get("_decisive_frontier_raer_raw_top_action", -1))
             raer_selected = int(tour_diag.get("decisive_frontier_raer_selected_action", raw_top))
@@ -996,6 +1002,14 @@ def main() -> None:
             dacer_admissible = np.asarray(tour_diag.get("_decisive_frontier_dacer_admissible_mask", []), dtype=bool).reshape(-1)
             dacer_utility_prior = np.asarray(tour_diag.get("_decisive_frontier_dacer_utility_prior_mask", []), dtype=bool).reshape(-1)
             dacer_feature_names = list(tour_diag.get("_decisive_frontier_dacer_feature_names", []))
+            icer_selected = int(tour_diag.get("decisive_frontier_icer_selected_action", raw_top))
+            icer_features = tour_diag.get("_decisive_frontier_icer_feature_matrix", None)
+            icer_support_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_support_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_dominance_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_scalar_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_scalar_dominance_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_profile_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_profile_dominance_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
+            icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
                 normalized = bool(tour_diag.get("normalized_margins", cfg.get("model", {}).get("pair_margin_normalized", False)))
                 mscale = max(float(tour_diag.get("margin_scale", pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 1.0)))) if normalized else 1.0, 1.0e-6)
@@ -1034,6 +1048,13 @@ def main() -> None:
                         "dacer_logit": float(dacer_logits[challenger]) if dacer_logits.size == edge_valid.size else float("nan"),
                         "dacer_admissible": float(dacer_admissible[challenger]) if dacer_admissible.size == edge_valid.size else 0.0,
                         "dacer_utility_prior": float(dacer_utility_prior[challenger]) if dacer_utility_prior.size == edge_valid.size else 0.0,
+                        "icer_selected_action": icer_selected,
+                        "is_icer_selected": float(challenger == icer_selected),
+                        "icer_support_logit": float(icer_support_logits[challenger]) if icer_support_logits.size == edge_valid.size else float("nan"),
+                        "icer_dominance_logit": float(icer_dominance_logits[challenger]) if icer_dominance_logits.size == edge_valid.size else float("nan"),
+                        "icer_scalar_dominance_logit": float(icer_scalar_dominance_logits[challenger]) if icer_scalar_dominance_logits.size == edge_valid.size else float("nan"),
+                        "icer_profile_dominance_logit": float(icer_profile_dominance_logits[challenger]) if icer_profile_dominance_logits.size == edge_valid.size else float("nan"),
+                        "icer_admissible": float(icer_admissible[challenger]) if icer_admissible.size == edge_valid.size else 0.0,
                     }
                     if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):
                         for j, name in enumerate(feature_names):
@@ -1046,6 +1067,10 @@ def main() -> None:
                     if cmat is not None and cmat.ndim == 2 and cmat.shape[0] == edge_valid.size and cmat.shape[1] == len(dacer_feature_names):
                         for j, name in enumerate(dacer_feature_names):
                             row[f"dacer_feature_{name}"] = float(cmat[challenger, j])
+                    imat = None if icer_features is None else np.asarray(icer_features, dtype=np.float64)
+                    if imat is not None and imat.ndim == 2 and imat.shape[0] == edge_valid.size and imat.shape[1] == len(icer_feature_names):
+                        for j, name in enumerate(icer_feature_names):
+                            row[f"icer_feature_{name}"] = float(imat[challenger, j])
                     frontier_edge_file.write(json.dumps(row, sort_keys=True) + "\n")
         metric_means.update(diag)
         if args.per_sample_output:
@@ -1086,6 +1111,12 @@ def main() -> None:
     summary["device"] = str(device)
     summary["evaluated_scenario_count"] = int(evaluated_scenario_count)
     summary["scenario_token_filter_count"] = int(len(scenario_token_filter)) if scenario_token_filter is not None else 0
+    summary["scenario_token_prefilter_active"] = bool(
+        scenario_token_filter is not None and isinstance(dataset, PreprocessedBDSEDataset)
+    )
+    summary["scenario_token_prefilter_path_count"] = int(len(dataset)) if summary["scenario_token_prefilter_active"] else 0
+    if scenario_token_filter is not None and isinstance(dataset, PreprocessedBDSEDataset):
+        summary["scenario_token_prefilter_match_count"] = int(len(getattr(dataset, "_scenario_token_matches", set())))
     if planner_latencies_ms:
         latency = np.asarray(planner_latencies_ms, dtype=np.float64)
         summary.update(

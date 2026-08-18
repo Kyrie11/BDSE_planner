@@ -1680,6 +1680,233 @@ def _apply_decisive_frontier_dacer(
     return selected, diag
 
 
+
+
+_ICER_DOMINANCE_PROFILE_BASE_NAMES = [
+    "raw_margin", "attribution_scale", "margin_over_attribution", "attribution_over_frontier_rms",
+    "raw_margin_z", "attribution_z", "raw_margin_rank", "attribution_rank", "margin_below_frontier_max",
+    "margin_minus_legacy_selected", "attribution_minus_legacy_selected", "eaf_score_gain_vs_anchor",
+    "eaf_score_minus_legacy_selected", "utility_cost_minus_legacy_selected", "guard_margin_excess",
+    "eaf_score_rank", "utility_cost_rank", "executable_candidate_fraction",
+    "atom_contrib_l1", "atom_contrib_positive_mass_fraction", "atom_contrib_top1_abs_fraction",
+    "atom_contrib_effective_support_norm", "delta_atom_contrib_l1",
+    "delta_atom_contrib_positive_mass_fraction", "delta_atom_contrib_top1_abs_fraction",
+    "delta_atom_contrib_effective_support_norm", "delta_atom_top1_signed_norm",
+    "delta_atom_top2_signed_norm", "delta_atom_top3_signed_norm", "delta_atom_top4_signed_norm",
+]
+
+
+def _icer_quadratic_interaction_features(
+    feat: np.ndarray, feature_names: list[str], mode: str
+) -> tuple[np.ndarray, list[str], list[str]]:
+    """Fixed, auditable second-order map for incumbent-contrastive reliability.
+
+    V64.3.18 established signal in the exact signed selected-evidence profile but
+    a linear shared score could not protect the extremal operator from high-score
+    false-positive alternatives.  ICER keeps a linear *readout* while exposing
+    fixed pairwise interactions among the pre-registered runtime-only evidence
+    statistics.  This adds no evidence query and no learned hidden representation.
+    """
+    all_names = list(feature_names)
+    if mode == "scalar_interaction":
+        base_names = list(_DALER_FEATURE_NAMES)
+    elif mode == "profile_interaction":
+        base_names = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES)
+    else:
+        raise ValueError(f"unknown EAF-ICER dominance_feature_mode={mode}")
+    pos = {str(n): i for i, n in enumerate(all_names)}
+    missing = [n for n in base_names if n not in pos]
+    if missing:
+        raise ValueError(f"EAF-ICER dominance base features missing from DACER schema: {missing}")
+    X = np.asarray(feat, dtype=np.float64)[:, [pos[n] for n in base_names]]
+    parts = [X]
+    out_names = [f"lin::{n}" for n in base_names]
+    for i, ni in enumerate(base_names):
+        block = X[:, i : i + 1] * X[:, i:]
+        parts.append(block)
+        out_names.extend([f"quad::{ni}*{nj}" for nj in base_names[i:]])
+    return np.concatenate(parts, axis=1), out_names, base_names
+
+
+def _apply_decisive_frontier_icer(
+    legacy_action: int,
+    anchor_action: int,
+    margin_matrix: np.ndarray,
+    attribution_star: np.ndarray | None,
+    atom_contrib_star: np.ndarray | None,
+    scores: np.ndarray,
+    valid_mask: np.ndarray,
+    runtime_safety_flags: np.ndarray,
+    potential_diag: dict[str, Any],
+    evidence_certificate_fraction: float | None,
+    utility_refinement_diag: dict[str, Any] | None,
+    cfg: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """V64.3.19 incumbent-contrastive extremal recovery.
+
+    V64.3.18 showed that one shared pointwise score can be a strong anchor-support
+    reliability signal yet still replace a good incumbent with an inferior
+    alternative.  ICER therefore decomposes the decision into two train-only
+    readouts over the *same* frozen guard-admissible frontier and selected evidence:
+
+    1) scalar anchor-support score: is a challenger supported over the DARM anchor?
+    2) incumbent-contrastive score: should an alternative replace the frozen
+       legacy incumbent under the same evidence interface?
+
+    No alternative can replace a supported admissible incumbent unless both scores
+    are positive.  Zero is the fixed pseudo-item logit for anchor/incumbent; there
+    is no validation threshold sweep.  The unchanged final one-sided/evidence and
+    structural-risk guards still execute after this operator.
+    """
+    runtime_cfg = cfg.get("runtime", {}) or {}
+    frontier_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
+    icer_cfg = frontier_cfg.get("incumbent_contrastive_extremal_recovery", {}) or {}
+    enabled = bool(icer_cfg.get("enabled", False))
+    instrument = bool(icer_cfg.get("instrument_features", True))
+    frontier_active = bool(float(potential_diag.get("decisive_frontier_value_active", 0.0)) >= 0.5)
+    M = np.asarray(margin_matrix, dtype=np.float64)
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    a = int(anchor_action); legacy = int(legacy_action)
+    margin_star = M[:, a].copy() if 0 <= a < M.shape[1] else np.zeros((len(valid),), dtype=np.float64)
+    admissible = _decisive_frontier_guard_admissible_mask(
+        margin_star, scores, valid, runtime_safety_flags, a,
+        evidence_certificate_fraction, cfg,
+        require_safe_available_for_learned_intervention=bool(
+            icer_cfg.get("require_safe_available_for_learned_intervention", True)
+        ),
+    )
+    feat, names, utility_prior = _decisive_frontier_dacer_features(
+        margin_star, attribution_star, atom_contrib_star, scores, valid, a, legacy,
+        potential_diag, evidence_certificate_fraction, utility_refinement_diag,
+        admissible, cfg,
+    )
+    support_logits = np.zeros((len(valid),), dtype=np.float64)
+    dominance_logits = np.zeros((len(valid),), dtype=np.float64)
+    selected = legacy
+    baseline = legacy
+    applies = bool(enabled and frontier_active and 0 <= a < len(valid))
+    if applies:
+        support_names = list(icer_cfg.get("support_feature_names", []))
+        support_mean = np.asarray(icer_cfg.get("support_feature_mean", []), dtype=np.float64).reshape(-1)
+        support_std = np.asarray(icer_cfg.get("support_feature_std", []), dtype=np.float64).reshape(-1)
+        support_weights = np.asarray(icer_cfg.get("support_weights", []), dtype=np.float64).reshape(-1)
+        expected_support_names = list(_DALER_FEATURE_NAMES)
+        if (
+            support_names != expected_support_names
+            or len(support_names) != len(support_mean)
+            or len(support_names) != len(support_std)
+            or len(support_names) != len(support_weights)
+        ):
+            raise ValueError("EAF-ICER support head schema/mean/std/weights are inconsistent")
+        sx = feat[:, : len(expected_support_names)]
+        sz = (sx - support_mean[None, :]) / np.maximum(support_std[None, :], 1.0e-6)
+        support_logits = np.clip(sz @ support_weights + float(icer_cfg.get("support_bias", 0.0)), -40.0, 40.0)
+
+        dominance_policy = str(icer_cfg.get("dominance_policy", "dual_equal_mean"))
+
+        def _read_dom_head(prefix: str, mode: str) -> np.ndarray:
+            dom_x, runtime_names, runtime_base_names = _icer_quadratic_interaction_features(feat, names, mode)
+            stored_names = list(icer_cfg.get(f"{prefix}_feature_names", []))
+            stored_base_names = list(icer_cfg.get(f"{prefix}_base_feature_names", []))
+            mean = np.asarray(icer_cfg.get(f"{prefix}_feature_mean", []), dtype=np.float64).reshape(-1)
+            std = np.asarray(icer_cfg.get(f"{prefix}_feature_std", []), dtype=np.float64).reshape(-1)
+            weights = np.asarray(icer_cfg.get(f"{prefix}_weights", []), dtype=np.float64).reshape(-1)
+            if (
+                stored_names != runtime_names
+                or stored_base_names != runtime_base_names
+                or len(runtime_names) != len(mean)
+                or len(runtime_names) != len(std)
+                or len(runtime_names) != len(weights)
+            ):
+                raise ValueError(f"EAF-ICER {prefix} interaction schema/mean/std/weights are inconsistent")
+            z = (dom_x - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
+            return np.clip(z @ weights + float(icer_cfg.get(f"{prefix}_bias", 0.0)), -40.0, 40.0)
+
+        scalar_dominance_logits = _read_dom_head("scalar_dominance", "scalar_interaction")
+        if dominance_policy == "scalar_only":
+            profile_dominance_logits = np.zeros_like(scalar_dominance_logits)
+            dominance_logits = scalar_dominance_logits.copy()
+        elif dominance_policy == "dual_equal_mean":
+            profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
+            dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
+        else:
+            raise ValueError(f"unknown EAF-ICER dominance_policy={dominance_policy}")
+
+
+        support_ok = admissible & np.isfinite(support_logits) & (support_logits > 0.0)
+        legacy_admissible = bool(0 <= legacy < len(valid) and admissible[legacy])
+        legacy_supported = bool(legacy_admissible and support_ok[legacy])
+        # When the frozen incumbent itself is deployment-admissible, every
+        # alternative replacement is incumbent-contrastive even if the support
+        # head would otherwise abstain on the incumbent.  This prevents an
+        # anchor-relative branch from silently bypassing the dominance claim.
+        if legacy_admissible:
+            baseline = int(legacy if legacy_supported else a)
+            alternative = support_ok.copy()
+            if 0 <= legacy < len(alternative):
+                alternative[legacy] = False
+            cand = np.flatnonzero(alternative & np.isfinite(dominance_logits) & (dominance_logits > 0.0)).astype(np.int64)
+            if cand.size:
+                best = sorted(
+                    cand.tolist(),
+                    key=lambda b: (
+                        -float(dominance_logits[b]),
+                        -float(support_logits[b]),
+                        -float(margin_star[b]),
+                        -int(utility_prior[b]),
+                        int(b),
+                    ),
+                )[0]
+                selected = int(best)
+            else:
+                selected = int(baseline)
+        else:
+            # If raw top is not deployment-admissible, the actual deployment
+            # incumbent is the anchor.  The learned recovery is therefore
+            # anchor-relative and must not be forced to beat an action that the
+            # frozen final guard would reject anyway.
+            baseline = int(a)
+            cand = np.flatnonzero(support_ok).astype(np.int64)
+            if cand.size:
+                best = sorted(
+                    cand.tolist(),
+                    key=lambda b: (-float(support_logits[b]), -float(margin_star[b]), -int(utility_prior[b]), int(b)),
+                )[0]
+                selected = int(best)
+            else:
+                selected = int(a)
+    support_selected = float(support_logits[selected]) if 0 <= selected < len(valid) and selected != a else 0.0
+    dominance_selected = float(dominance_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0
+    diag: dict[str, Any] = {
+        "decisive_frontier_icer_enabled": float(enabled),
+        "decisive_frontier_icer_instrument_features": float(instrument),
+        "decisive_frontier_icer_active": float(applies),
+        "decisive_frontier_icer_legacy_selected_action": float(legacy),
+        "decisive_frontier_icer_baseline_action": float(baseline),
+        "decisive_frontier_icer_selected_action": float(selected),
+        "decisive_frontier_icer_proposal_changed": float(int(selected) != int(legacy)),
+        "decisive_frontier_icer_anchor_fallback": float(int(selected) == int(a)),
+        "decisive_frontier_icer_selected_support_logit": support_selected,
+        "decisive_frontier_icer_selected_dominance_logit": dominance_selected,
+        "decisive_frontier_icer_legacy_support_logit": float(support_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
+        "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
+        "decisive_frontier_icer_dominance_policy_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_equal_mean"),
+        "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
+        "_decisive_frontier_icer_anchor_action": int(a),
+        "_decisive_frontier_icer_legacy_selected_action": int(legacy),
+        "_decisive_frontier_icer_raw_margin_star": np.asarray(margin_star, dtype=np.float32),
+        "_decisive_frontier_icer_attribution_scale_star": np.zeros_like(margin_star, dtype=np.float32)
+        if attribution_star is None else np.asarray(attribution_star, dtype=np.float32),
+        "_decisive_frontier_icer_feature_matrix": np.asarray(feat, dtype=np.float32),
+        "_decisive_frontier_icer_feature_names": names,
+        "_decisive_frontier_icer_support_logit_star": np.asarray(support_logits, dtype=np.float32),
+        "_decisive_frontier_icer_dominance_logit_star": np.asarray(dominance_logits, dtype=np.float32),
+        "_decisive_frontier_icer_scalar_dominance_logit_star": np.asarray(scalar_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
+        "_decisive_frontier_icer_profile_dominance_logit_star": np.asarray(profile_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
+        "_decisive_frontier_icer_admissible_mask": np.asarray(admissible, dtype=bool),
+    }
+    return int(selected), diag
+
 def run_pair_conditioned_tournament(
     predicted_base_cost: np.ndarray,
     pair_atom_delta: np.ndarray,
@@ -1958,13 +2185,28 @@ def run_pair_conditioned_tournament(
             utility_refinement_diag,
             cfg,
         )
+        icer_action, icer_diag = _apply_decisive_frontier_icer(
+            raw_eaf_action,
+            anchor_action,
+            M_B,
+            frontier_attribution_scale_star,
+            frontier_atom_contrib_star,
+            scores,
+            valid_mask,
+            runtime_safety_flags,
+            potential_diag,
+            evidence_certificate_fraction,
+            utility_refinement_diag,
+            cfg,
+        )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))
         daler_enabled_runtime = bool((frontier_runtime_cfg.get("deployment_aligned_listwise_extremal_reliability", {}) or {}).get("enabled", False))
         dacer_enabled_runtime = bool((frontier_runtime_cfg.get("deployment_admissible_counterfactual_extremal_recovery", {}) or {}).get("enabled", False))
-        if int(raer_enabled_runtime) + int(daler_enabled_runtime) + int(dacer_enabled_runtime) > 1:
-            raise ValueError("RAER, DALER and DACER are mutually exclusive causal arms; enable at most one")
-        action = int(dacer_action if dacer_enabled_runtime else (daler_action if daler_enabled_runtime else raer_action))
+        icer_enabled_runtime = bool((frontier_runtime_cfg.get("incumbent_contrastive_extremal_recovery", {}) or {}).get("enabled", False))
+        if int(raer_enabled_runtime) + int(daler_enabled_runtime) + int(dacer_enabled_runtime) + int(icer_enabled_runtime) > 1:
+            raise ValueError("RAER, DALER, DACER and ICER are mutually exclusive causal arms; enable at most one")
+        action = int(icer_action if icer_enabled_runtime else (dacer_action if dacer_enabled_runtime else (daler_action if daler_enabled_runtime else raer_action)))
         proposed_action = int(action)
         raw_margin = float(M_B[proposed_action, anchor_action]) if proposed_action != anchor_action else float("inf")
         residual_sigma = (
@@ -2128,6 +2370,7 @@ def run_pair_conditioned_tournament(
             **raer_diag,
             **daler_diag,
             **dacer_diag,
+            **icer_diag,
             "pair_action_anchor_raw_margin": float(raw_margin),
             "pair_action_anchor_residual_sigma": float(residual_sigma),
             "pair_action_anchor_residual_beta_uncertainty": float(residual_beta_uncertainty),
