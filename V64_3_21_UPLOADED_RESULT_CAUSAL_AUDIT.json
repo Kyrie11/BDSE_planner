@@ -1,0 +1,610 @@
+{
+  "causal_conclusions": [
+    "Candidate semantics, multi-challenger frontier, frozen support/dominance signal and deployment-complete structural delegation remain valid.",
+    "V21 selected-incumbent retention magnitude is split-unstable: helpful in A, harmful in B; it cannot be a trusted hard veto as designed.",
+    "V21 positive-consensus improves binary direct precision but can worsen regret tail; binary precision is not a sufficient extremal reliability objective.",
+    "The remaining failures are path-specific regret tails: selected-incumbent->anchor instability and systematic incumbent->alternative transition failures.",
+    "The next causal intervention should be magnitude-weighted, selection-conditioned regret reliability with explicit runtime planner-transition semantics on the same frozen evidence/frontier."
+  ],
+  "double_fresh_pass": false,
+  "full_promotion": false,
+  "reported_next_action": "STOP_DOUBLE_FRESH_REPLICATION:incumbent_replacement_failed_despite_retention_do_not_tune_thresholds_audit_contrastive_false_positive_extremes|selected_incumbent_magnitude_retention_failed_do_not_change_dominance_or_budget_audit_incumbent_conditioning",
+  "split_A": {
+    "booleans": {
+      "candidate_support_valid": true,
+      "corroboration_gain": true,
+      "counterfactual_recovery_mechanism": false,
+      "deployment_complete_domain_alignment": true,
+      "endpoint_gain": false,
+      "fresh_support_and_dominance_signal": true,
+      "instrumentation_valid": true,
+      "preservation_gain": false,
+      "selected_incumbent_magnitude_retention": true
+    },
+    "consensus_edge": {
+      "admissible_candidates_per_proposal_mean": 12.25,
+      "admissible_edge_count": 5537.0,
+      "alternative_recovery_precision": 0.8674698795180723,
+      "alternative_recovery_rate": 0.1836283185840708,
+      "alternative_teacher_margin_mean": 0.9314699281089933,
+      "anchor_fallback_rate": 0.38716814159292035,
+      "anchor_recovery_precision": NaN,
+      "anchor_recovery_rate_on_proposals": 0.0,
+      "counterfactual_opportunity_capture_rate": 0.3128491620111732,
+      "counterfactual_opportunity_rate": 0.39601769911504425,
+      "counterfactual_recovery_precision": 0.6746987951807228,
+      "direct_counterfactual_dominance_auc": 0.7896845482606024,
+      "direct_counterfactual_dominance_edge_count": 5229.0,
+      "direct_incumbent_opportunity_capture_rate": 0.3146067415730337,
+      "direct_incumbent_opportunity_rate": 0.5798045602605864,
+      "direct_incumbent_proposal_count": 307.0,
+      "direct_incumbent_replacement_precision": 0.6746987951807228,
+      "direct_incumbent_replacement_rate": 0.2703583061889251,
+      "multi_admissible_proposal_rate": 0.6703539823008849,
+      "profile_counterfactual_dominance_auc": 0.780431596273841,
+      "proposal_changed_rate": 0.5707964601769911,
+      "proposal_scene_count": 452.0,
+      "scalar_counterfactual_dominance_auc": 0.7757132108196345,
+      "scene_count": 475.0,
+      "selected_nonanchor_teacher_better_rate": 0.7003610108303249,
+      "selected_teacher_margin_mean_including_anchor": 0.544522055698303,
+      "strict_raw_top_counterfactual_recovery_precision": 0.6746987951807228,
+      "support_auc": 0.7736703506747217
+    },
+    "consensus_paths": {
+      "admissible_incumbent_to_anchor": {
+        "count": 30,
+        "regret_delta_mean": -661.5514116726921,
+        "regret_delta_sum": -19846.542350180764
+      },
+      "all_flagged_delegated": {
+        "count": 25,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "direct_incumbent_to_alternative": {
+        "count": 83,
+        "regret_delta_mean": 1732.6809282360107,
+        "regret_delta_sum": 143812.5170435889
+      },
+      "inadmissible_incumbent_anchor_relative": {
+        "count": 145,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "keep_legacy": {
+        "count": 217,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "other": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      }
+    },
+    "metrics": {
+      "anchor": {
+        "match": 0.174,
+        "regret": 22202.533979470147
+      },
+      "consensus": {
+        "beneficial": 0.116,
+        "flip": 0.576,
+        "guard_block": 0.002,
+        "harmful": 0.074,
+        "match": 0.216,
+        "regret": 12225.29313106324
+      },
+      "consensus_beneficial_retention_vs_raw": 1.2608695652173914,
+      "profile_mean": {
+        "beneficial": 0.112,
+        "flip": 0.576,
+        "guard_block": 0.002,
+        "harmful": 0.074,
+        "match": 0.212,
+        "regret": 12225.115969942539
+      },
+      "raw": {
+        "beneficial": 0.092,
+        "flip": 0.636,
+        "guard_block": 0.292,
+        "harmful": 0.11,
+        "match": 0.156,
+        "regret": 11977.361181676424
+      },
+      "scalar_retention": {
+        "beneficial": 0.112,
+        "flip": 0.566,
+        "guard_block": 0.002,
+        "harmful": 0.07,
+        "match": 0.216,
+        "regret": 12261.792313327112
+      },
+      "v20": {
+        "beneficial": 0.088,
+        "flip": 0.408,
+        "guard_block": 0.002,
+        "harmful": 0.012,
+        "match": 0.25,
+        "regret": 12227.585483761253
+      }
+    },
+    "profile_mean_edge": {
+      "admissible_candidates_per_proposal_mean": 12.25,
+      "admissible_edge_count": 5537.0,
+      "alternative_recovery_precision": 0.8681318681318682,
+      "alternative_recovery_rate": 0.2013274336283186,
+      "alternative_teacher_margin_mean": 0.9945252752567756,
+      "anchor_fallback_rate": 0.38716814159292035,
+      "anchor_recovery_precision": NaN,
+      "anchor_recovery_rate_on_proposals": 0.0,
+      "counterfactual_opportunity_capture_rate": 0.329608938547486,
+      "counterfactual_opportunity_rate": 0.39601769911504425,
+      "counterfactual_recovery_precision": 0.6483516483516484,
+      "direct_counterfactual_dominance_auc": 0.7896845482606024,
+      "direct_counterfactual_dominance_edge_count": 5229.0,
+      "direct_incumbent_opportunity_capture_rate": 0.33146067415730335,
+      "direct_incumbent_opportunity_rate": 0.5798045602605864,
+      "direct_incumbent_proposal_count": 307.0,
+      "direct_incumbent_replacement_precision": 0.6483516483516484,
+      "direct_incumbent_replacement_rate": 0.2964169381107492,
+      "multi_admissible_proposal_rate": 0.6703539823008849,
+      "profile_counterfactual_dominance_auc": 0.780431596273841,
+      "proposal_changed_rate": 0.588495575221239,
+      "proposal_scene_count": 452.0,
+      "scalar_counterfactual_dominance_auc": 0.7757132108196345,
+      "scene_count": 475.0,
+      "selected_nonanchor_teacher_better_rate": 0.703971119133574,
+      "selected_teacher_margin_mean_including_anchor": 0.544531854432855,
+      "strict_raw_top_counterfactual_recovery_precision": 0.6483516483516484,
+      "support_auc": 0.7736703506747217
+    },
+    "profile_mean_paths": {
+      "admissible_incumbent_to_anchor": {
+        "count": 30,
+        "regret_delta_mean": -661.5514116726921,
+        "regret_delta_sum": -19846.542350180764
+      },
+      "all_flagged_delegated": {
+        "count": 25,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "direct_incumbent_to_alternative": {
+        "count": 91,
+        "regret_delta_mean": 1579.3839173982196,
+        "regret_delta_sum": 143723.93648323798
+      },
+      "inadmissible_incumbent_anchor_relative": {
+        "count": 145,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "keep_legacy": {
+        "count": 209,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "other": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      }
+    },
+    "retention_profile": {
+      "admissible_selected_incumbent_count": 307.0,
+      "predicted_anchor_fallback_rate": 0.10097719869706841,
+      "predicted_anchor_fallback_teacher_margin_sum": -0.9908016661659971,
+      "retention_auc": 0.8066106825505321,
+      "retention_sign_accuracy": 0.7166123778501629
+    },
+    "top_consensus_direct_replacement_losses": [
+      {
+        "candidate_action": 4,
+        "candidate_support_logit": 0.2097795307636261,
+        "incumbent_action": 1,
+        "mean_dominance_logit": 0.4124159514904022,
+        "profile_dominance_logit": 0.583865761756897,
+        "regret_delta_vs_raw": 75677.932144341,
+        "scalar_dominance_logit": 0.24096615612506866,
+        "scenario_token": "9a682fdc040a5be4",
+        "teacher_improvement_candidate_minus_incumbent": -3.78389660721705
+      },
+      {
+        "candidate_action": 21,
+        "candidate_support_logit": 0.4813838005065918,
+        "incumbent_action": 25,
+        "mean_dominance_logit": 0.18294110894203186,
+        "profile_dominance_logit": 0.18066327273845673,
+        "regret_delta_vs_raw": 31927.62373108091,
+        "scalar_dominance_logit": 0.185218945145607,
+        "scenario_token": "b485dcabdd3a5a86",
+        "teacher_improvement_candidate_minus_incumbent": -1.5963811865540454
+      },
+      {
+        "candidate_action": 4,
+        "candidate_support_logit": 0.10197429358959198,
+        "incumbent_action": 1,
+        "mean_dominance_logit": 0.8632815480232239,
+        "profile_dominance_logit": 0.32839858531951904,
+        "regret_delta_vs_raw": 24603.618081913446,
+        "scalar_dominance_logit": 1.3981645107269287,
+        "scenario_token": "e8595a50f1e45df0",
+        "teacher_improvement_candidate_minus_incumbent": -1.2301809040956724
+      },
+      {
+        "candidate_action": 0,
+        "candidate_support_logit": 1.1984881162643433,
+        "incumbent_action": 2,
+        "mean_dominance_logit": 1.2573447227478027,
+        "profile_dominance_logit": 1.2582433223724365,
+        "regret_delta_vs_raw": 19805.439423441887,
+        "scalar_dominance_logit": 1.256446123123169,
+        "scenario_token": "6f3d733d71ee5279",
+        "teacher_improvement_candidate_minus_incumbent": -0.9902719711720943
+      },
+      {
+        "candidate_action": 2,
+        "candidate_support_logit": 1.4549164772033691,
+        "incumbent_action": 3,
+        "mean_dominance_logit": 0.3543946146965027,
+        "profile_dominance_logit": 0.1582852602005005,
+        "regret_delta_vs_raw": 19795.99427807331,
+        "scalar_dominance_logit": 0.5505039691925049,
+        "scenario_token": "1e866434c26c5e19",
+        "teacher_improvement_candidate_minus_incumbent": -0.9897997139036656
+      },
+      {
+        "candidate_action": 22,
+        "candidate_support_logit": 1.3353081941604614,
+        "incumbent_action": 25,
+        "mean_dominance_logit": 0.8528711199760437,
+        "profile_dominance_logit": 0.8486945033073425,
+        "regret_delta_vs_raw": 19791.194432766177,
+        "scalar_dominance_logit": 0.8570476770401001,
+        "scenario_token": "f16cbeaf6e1558ef",
+        "teacher_improvement_candidate_minus_incumbent": -0.9895597216383089
+      },
+      {
+        "candidate_action": 16,
+        "candidate_support_logit": 1.2262473106384277,
+        "incumbent_action": 6,
+        "mean_dominance_logit": 0.9317131042480469,
+        "profile_dominance_logit": 1.1232651472091675,
+        "regret_delta_vs_raw": 18577.64804669563,
+        "scalar_dominance_logit": 0.7401610016822815,
+        "scenario_token": "7b23694734cd5d54",
+        "teacher_improvement_candidate_minus_incumbent": -0.9288824023347815
+      },
+      {
+        "candidate_action": 17,
+        "candidate_support_logit": 0.6560896635055542,
+        "incumbent_action": 20,
+        "mean_dominance_logit": 1.3452370166778564,
+        "profile_dominance_logit": 1.4569077491760254,
+        "regret_delta_vs_raw": 6104.772855643416,
+        "scalar_dominance_logit": 1.2335662841796875,
+        "scenario_token": "08640542e7135392",
+        "teacher_improvement_candidate_minus_incumbent": -0.3052386427821708
+      }
+    ]
+  },
+  "split_B": {
+    "booleans": {
+      "candidate_support_valid": true,
+      "corroboration_gain": true,
+      "counterfactual_recovery_mechanism": false,
+      "deployment_complete_domain_alignment": true,
+      "endpoint_gain": false,
+      "fresh_support_and_dominance_signal": true,
+      "instrumentation_valid": true,
+      "preservation_gain": false,
+      "selected_incumbent_magnitude_retention": false
+    },
+    "consensus_edge": {
+      "admissible_candidates_per_proposal_mean": 11.651685393258427,
+      "admissible_edge_count": 5185.0,
+      "alternative_recovery_precision": 0.9333333333333333,
+      "alternative_recovery_rate": 0.16853932584269662,
+      "alternative_teacher_margin_mean": 1.8375055630724846,
+      "anchor_fallback_rate": 0.3865168539325843,
+      "anchor_recovery_precision": NaN,
+      "anchor_recovery_rate_on_proposals": 0.0,
+      "counterfactual_opportunity_capture_rate": 0.24456521739130435,
+      "counterfactual_opportunity_rate": 0.4134831460674157,
+      "counterfactual_recovery_precision": 0.6,
+      "direct_counterfactual_dominance_auc": 0.7742326903136946,
+      "direct_counterfactual_dominance_edge_count": 4889.0,
+      "direct_incumbent_opportunity_capture_rate": 0.24456521739130435,
+      "direct_incumbent_opportunity_rate": 0.6216216216216216,
+      "direct_incumbent_proposal_count": 296.0,
+      "direct_incumbent_replacement_precision": 0.6,
+      "direct_incumbent_replacement_rate": 0.2533783783783784,
+      "multi_admissible_proposal_rate": 0.6404494382022472,
+      "profile_counterfactual_dominance_auc": 0.7610643532274788,
+      "proposal_changed_rate": 0.5550561797752809,
+      "proposal_scene_count": 445.0,
+      "scalar_counterfactual_dominance_auc": 0.7660653349737685,
+      "scene_count": 474.0,
+      "selected_nonanchor_teacher_better_rate": 0.6886446886446886,
+      "selected_teacher_margin_mean_including_anchor": 0.6326637447745385,
+      "strict_raw_top_counterfactual_recovery_precision": 0.6,
+      "support_auc": 0.7502081760610094
+    },
+    "consensus_paths": {
+      "admissible_incumbent_to_anchor": {
+        "count": 23,
+        "regret_delta_mean": 4319.13997332751,
+        "regret_delta_sum": 99340.21938653274
+      },
+      "all_flagged_delegated": {
+        "count": 26,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "direct_incumbent_to_alternative": {
+        "count": 75,
+        "regret_delta_mean": 1440.9887871822475,
+        "regret_delta_sum": 108074.15903866856
+      },
+      "inadmissible_incumbent_anchor_relative": {
+        "count": 149,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "keep_legacy": {
+        "count": 227,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "other": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      }
+    },
+    "metrics": {
+      "anchor": {
+        "match": 0.156,
+        "regret": 25923.90575390862
+      },
+      "consensus": {
+        "beneficial": 0.104,
+        "flip": 0.578,
+        "guard_block": 0.0,
+        "harmful": 0.068,
+        "match": 0.192,
+        "regret": 14474.533878734082
+      },
+      "consensus_beneficial_retention_vs_raw": 1.0399999999999998,
+      "profile_mean": {
+        "beneficial": 0.102,
+        "flip": 0.578,
+        "guard_block": 0.0,
+        "harmful": 0.068,
+        "match": 0.19,
+        "regret": 14267.681355802019
+      },
+      "raw": {
+        "beneficial": 0.1,
+        "flip": 0.624,
+        "guard_block": 0.298,
+        "harmful": 0.082,
+        "match": 0.174,
+        "regret": 14059.70512188368
+      },
+      "scalar_retention": {
+        "beneficial": 0.094,
+        "flip": 0.554,
+        "guard_block": 0.0,
+        "harmful": 0.06,
+        "match": 0.19,
+        "regret": 14309.212509553716
+      },
+      "v20": {
+        "beneficial": 0.058,
+        "flip": 0.39,
+        "guard_block": 0.0,
+        "harmful": 0.016,
+        "match": 0.198,
+        "regret": 15267.616248513941
+      }
+    },
+    "profile_mean_edge": {
+      "admissible_candidates_per_proposal_mean": 11.651685393258427,
+      "admissible_edge_count": 5185.0,
+      "alternative_recovery_precision": 0.9204545454545454,
+      "alternative_recovery_rate": 0.19775280898876405,
+      "alternative_teacher_margin_mean": 1.8243977764321955,
+      "anchor_fallback_rate": 0.3865168539325843,
+      "anchor_recovery_precision": NaN,
+      "anchor_recovery_rate_on_proposals": 0.0,
+      "counterfactual_opportunity_capture_rate": 0.2717391304347826,
+      "counterfactual_opportunity_rate": 0.4134831460674157,
+      "counterfactual_recovery_precision": 0.5681818181818182,
+      "direct_counterfactual_dominance_auc": 0.7742326903136946,
+      "direct_counterfactual_dominance_edge_count": 4889.0,
+      "direct_incumbent_opportunity_capture_rate": 0.2717391304347826,
+      "direct_incumbent_opportunity_rate": 0.6216216216216216,
+      "direct_incumbent_proposal_count": 296.0,
+      "direct_incumbent_replacement_precision": 0.5681818181818182,
+      "direct_incumbent_replacement_rate": 0.2972972972972973,
+      "multi_admissible_proposal_rate": 0.6404494382022472,
+      "profile_counterfactual_dominance_auc": 0.7610643532274788,
+      "proposal_changed_rate": 0.5842696629213483,
+      "proposal_scene_count": 445.0,
+      "scalar_counterfactual_dominance_auc": 0.7660653349737685,
+      "scene_count": 474.0,
+      "selected_nonanchor_teacher_better_rate": 0.6959706959706959,
+      "selected_teacher_margin_mean_including_anchor": 0.6442846730291489,
+      "strict_raw_top_counterfactual_recovery_precision": 0.5681818181818182,
+      "support_auc": 0.7502081760610094
+    },
+    "profile_mean_paths": {
+      "admissible_incumbent_to_anchor": {
+        "count": 23,
+        "regret_delta_mean": 4319.13997332751,
+        "regret_delta_sum": 99340.21938653274
+      },
+      "all_flagged_delegated": {
+        "count": 26,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "direct_incumbent_to_alternative": {
+        "count": 88,
+        "regret_delta_mean": 52.81701787086645,
+        "regret_delta_sum": 4647.897572636248
+      },
+      "inadmissible_incumbent_anchor_relative": {
+        "count": 149,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "keep_legacy": {
+        "count": 214,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "other": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      }
+    },
+    "retention_profile": {
+      "admissible_selected_incumbent_count": 296.0,
+      "predicted_anchor_fallback_rate": 0.0777027027027027,
+      "predicted_anchor_fallback_teacher_margin_sum": 4.967010969326637,
+      "retention_auc": 0.6921213397935538,
+      "retention_sign_accuracy": 0.6722972972972973
+    },
+    "top_consensus_direct_replacement_losses": [
+      {
+        "candidate_action": 4,
+        "candidate_support_logit": 2.545807361602783,
+        "incumbent_action": 1,
+        "mean_dominance_logit": 1.1386839151382446,
+        "profile_dominance_logit": 0.9485303163528442,
+        "regret_delta_vs_raw": 36798.09763042698,
+        "scalar_dominance_logit": 1.328837513923645,
+        "scenario_token": "8825204d3b7a55f6",
+        "teacher_improvement_candidate_minus_incumbent": -1.839904881521349
+      },
+      {
+        "candidate_action": 3,
+        "candidate_support_logit": 2.928626537322998,
+        "incumbent_action": 8,
+        "mean_dominance_logit": 0.4943288266658783,
+        "profile_dominance_logit": 0.6711879372596741,
+        "regret_delta_vs_raw": 25087.960094545968,
+        "scalar_dominance_logit": 0.3174697160720825,
+        "scenario_token": "7ca2d888cada516d",
+        "teacher_improvement_candidate_minus_incumbent": -1.2543980047272985
+      },
+      {
+        "candidate_action": 4,
+        "candidate_support_logit": 2.1950297355651855,
+        "incumbent_action": 1,
+        "mean_dominance_logit": 2.1312174797058105,
+        "profile_dominance_logit": 1.180305004119873,
+        "regret_delta_vs_raw": 22200.364105599474,
+        "scalar_dominance_logit": 3.082129955291748,
+        "scenario_token": "2306f566ba6a52bf",
+        "teacher_improvement_candidate_minus_incumbent": -1.1100182052799736
+      },
+      {
+        "candidate_action": 18,
+        "candidate_support_logit": 1.465874433517456,
+        "incumbent_action": 1,
+        "mean_dominance_logit": 0.21643498539924622,
+        "profile_dominance_logit": 0.0581284798681736,
+        "regret_delta_vs_raw": 19797.573179300292,
+        "scalar_dominance_logit": 0.37474149465560913,
+        "scenario_token": "69ad2d1368e55f6d",
+        "teacher_improvement_candidate_minus_incumbent": -0.9898786589650146
+      },
+      {
+        "candidate_action": 19,
+        "candidate_support_logit": 2.3168394565582275,
+        "incumbent_action": 21,
+        "mean_dominance_logit": 0.5873985886573792,
+        "profile_dominance_logit": 0.5463294982910156,
+        "regret_delta_vs_raw": 19794.580702764913,
+        "scalar_dominance_logit": 0.6284677386283875,
+        "scenario_token": "19a0d0329c725979",
+        "teacher_improvement_candidate_minus_incumbent": -0.9897290351382457
+      },
+      {
+        "candidate_action": 16,
+        "candidate_support_logit": 1.7752151489257812,
+        "incumbent_action": 18,
+        "mean_dominance_logit": 1.7488117218017578,
+        "profile_dominance_logit": 1.8201067447662354,
+        "regret_delta_vs_raw": 19784.409365143623,
+        "scalar_dominance_logit": 1.6775166988372803,
+        "scenario_token": "4b4d92a83e695aa6",
+        "teacher_improvement_candidate_minus_incumbent": -0.9892204682571812
+      },
+      {
+        "candidate_action": 7,
+        "candidate_support_logit": 0.5036228895187378,
+        "incumbent_action": 2,
+        "mean_dominance_logit": 1.4059823751449585,
+        "profile_dominance_logit": 1.116873860359192,
+        "regret_delta_vs_raw": 18575.099971486256,
+        "scalar_dominance_logit": 1.6950910091400146,
+        "scenario_token": "cbc7ec49622b5237",
+        "teacher_improvement_candidate_minus_incumbent": -0.9287549985743128
+      },
+      {
+        "candidate_action": 0,
+        "candidate_support_logit": 1.0304516553878784,
+        "incumbent_action": 10,
+        "mean_dominance_logit": 3.015021800994873,
+        "profile_dominance_logit": 2.8329386711120605,
+        "regret_delta_vs_raw": 8396.970488132913,
+        "scalar_dominance_logit": 3.1971051692962646,
+        "scenario_token": "2d61fbfb13a0564e",
+        "teacher_improvement_candidate_minus_incumbent": -0.41984852440664566
+      }
+    ]
+  },
+  "systematic_transition_diagnostic": {
+    "fresh_A_large_loss_occurrences": 2,
+    "fresh_A_regret_delta_sum_approx": 100281.55,
+    "fresh_B_large_loss_occurrences": 2,
+    "fresh_B_regret_delta_sum_approx": 58998.46,
+    "interpretation": "Repeated across TRAIN and both fresh blocks; motivates semantic planner-transition conditioning rather than an action-slot blacklist.",
+    "raw_action_transition": "1->4",
+    "train_final_guard_admissible_occurrences": 78,
+    "train_teacher_improvement_sum_candidate_minus_incumbent": -66.81748501265994,
+    "train_teacher_positive_fraction": 0.28205128205128205
+  },
+  "train_retention_warning": {
+    "interpretation": "AUC/sign passed, but predicted fallback teacher-margin sum was positive for both heads; TRAIN already warned that learned incumbent->anchor veto could be net harmful.",
+    "profile": {
+      "auc_teacher_better_than_anchor": 0.7676244570664885,
+      "fallback_regret_delta_teacher_margin_sum": 6.315327075607868,
+      "mae_teacher_margin_units": 1.2464043890948113,
+      "mse_normalized_by_train_rms": 0.5621071938952965,
+      "predicted_negative_rate": 0.12292358803986711,
+      "scene_count": 301.0,
+      "sign_accuracy": 0.7674418604651163,
+      "teacher_positive_rate": 0.7275747508305648
+    },
+    "scalar": {
+      "auc_teacher_better_than_anchor": 0.7930170397594387,
+      "fallback_regret_delta_teacher_margin_sum": 4.174332440921296,
+      "mae_teacher_margin_units": 1.2650369543163862,
+      "mse_normalized_by_train_rms": 0.5733357687179947,
+      "predicted_negative_rate": 0.12624584717607973,
+      "scene_count": 301.0,
+      "sign_accuracy": 0.7840531561461794,
+      "teacher_positive_rate": 0.7275747508305648
+    }
+  },
+  "uploaded_screen_stop": true,
+  "version": "V64.3.21"
+}

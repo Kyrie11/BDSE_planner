@@ -7552,3 +7552,111 @@ Engineering verification after final implementation:
 - V20 historical screen re-audit with corrected domain accounting: Case E, endpoint-only fail;
 - 5000 randomized frozen V20 dual cases through old V20 versus V21 code: **0 differences**, identical output SHA256;
 - launcher `bash -n`: PASS.
+
+---
+
+# V64.3.22 EAF-ICER-TCR — Transition-Conditioned Regret Reliability
+
+## Why V64.3.21 stopped
+
+V64.3.21 double-fresh replication did **not** expose a single shared failure. The two untouched 500-scene blocks failed for different path-level reasons:
+
+- Split A: profile retention itself was directionally safe (`incumbent -> anchor` total regret delta **-19.85k**), but direct incumbent→alternative replacements contributed **+143.72k** regret.
+- Split B: profile-mean direct replacements were nearly regret-neutral (**+4.65k**), but `incumbent -> anchor` contributed **+99.34k** regret.
+- V21 both-positive consensus is terminally demoted to an ablation: on Split B it improved binary direct precision from **56.8% to 60.0%** but worsened direct-path regret from **+4.65k to +108.07k**. Binary precision is therefore not a sufficient extremal-regret objective.
+- The V21 TRAIN retention fitter already contained a warning that its promotion contract ignored: predicted-fallback teacher-margin sums were positive on deterministic TRAIN holdout (profile **+6.3153**, scalar **+4.1743**). A selected-incumbent veto must fail closed on path-regret sign, not only AUC/sign accuracy.
+- A repeated planner transition `raw action 1 -> candidate action 4` appears as a large false-positive tail in both fresh blocks and already exists in frozen TRAIN: **78** final-guard-admissible examples, only **28.2%** teacher-positive, aggregate candidate-minus-incumbent teacher improvement **-66.82**. This is evidence that the remaining tail is planner-transition structured rather than merely fresh-split noise.
+
+The headline novelty remains unchanged:
+
+> **evidence-attributed incumbent-contrastive reliability for deployment-admissible extremal recovery under a fixed planner-interface evidence budget**.
+
+V22 adds a subordinate mechanism, **planner-transition-conditioned regret reliability**, without changing B/M, acquisition, selected evidence, EAF value, support/dominance heads, certificates, safety masks, or structural-risk guard.
+
+## V64.3.22 algorithm
+
+Mainline:
+
+**fixed planner-interface evidence cap B<=16 -> auditable evidence atoms -> frozen M=24 acquisition -> selected B<=16 evidence -> frozen EAF complete DARM-anchor frontier -> exact selected-evidence attribution -> complete final-guard-admissible frontier -> frozen support/incumbent-dominance reliability -> transition-conditioned magnitude-weighted regret-risk veto -> conservative incumbent retention / alternative replacement -> unchanged evidence and one-sided certificate -> unchanged structural-risk guard -> final decision preservation**.
+
+### Transition-conditioned regret representation
+
+For candidate `b` relative to a frozen reference action, runtime computes an auditable transition vector from the already-generated candidate trajectory bank and maneuver IDs: maneuver-family relations, terminal progress/lateral/speed deltas, path-length/lateral-excursion deltas, path separation, and terminal yaw difference. It contains no teacher/future signal and no raw candidate-slot identity, and consumes no additional planner-interface evidence query.
+
+### Regret-sensitive TRAIN objective
+
+Two TRAIN-only heads use fixed magnitude-weighted logistic expected-improvement objectives (`weight=abs(teacher improvement)`, fixed L2=1e-3, semantic zero boundary, no validation threshold sweep):
+
+- retention risk: raw admissible incumbent vs anchor teacher improvement;
+- replacement risk: candidate vs raw admissible incumbent teacher improvement.
+
+Replacement-risk fitting is **selection-conditioned on frozen support-positive + scalar-dominance-positive alternatives**. This is deliberate: scalar and signed-profile V22 arms share the same TRAIN population and the same regret-risk head, so signed attribution cannot contaminate the ablation through sample selection.
+
+### V22 extremal operator
+
+For a final-guard-admissible incumbent:
+
+1. retention risk may demote it to anchor only if its TRAIN-fitted expected-improvement logit is negative;
+2. an alternative must have frozen anchor support >0;
+3. alternative eligibility is fixed by frozen **scalar incumbent-dominance >0**;
+4. replacement regret-risk must be >0;
+5. scalar arm ranks survivors by scalar dominance;
+6. signed-profile arm has exactly the same eligibility and risk head, but ranks survivors by equal-mean scalar/profile dominance.
+
+Thus signed selected-evidence attribution is a **ranking-only evidence view**, not a hard consensus gate. The V21 `dual_positive_consensus_mean` policy remains available only as a historical ablation and must not be promoted or weight-tuned.
+
+All-flagged structural-domain delegation remains unchanged.
+
+## TRAIN fail-close contract
+
+Before any fresh validation replay, transition-conditioned TCR must pass deterministic TRAIN-holdout path checks:
+
+- predicted incumbent→anchor fallback teacher-improvement sum <=0;
+- >=8 selected direct replacements;
+- selected direct-replacement candidate-minus-incumbent teacher-improvement sum >=0;
+- transition feature nonzero coverage >=95%.
+
+Failure stops before fresh GPU evaluation. This closes the V21 fitter loophole where average AUC/sign accuracy could hide a harmful path direction.
+
+## V64.3.22 causal screen
+
+Permanent validation exclusion expands from 3700 to **4700** unique tokens by adding both inspected V21 fresh blocks. V22 selects 1000 untouched tokens label-free by fixed SHA256 and splits them into independent A/B 500-scene blocks. No pooled rescue is allowed.
+
+Each block runs:
+
+1. raw EAF;
+2. frozen V21 profile-retention + dual-mean control;
+3. evidence-only magnitude risk with scalar eligibility + signed-profile ranking;
+4. transition-conditioned risk + scalar eligibility/ranking;
+5. transition-conditioned risk + the same scalar eligibility/risk head + signed-profile equal-mean ranking (main).
+
+Per-block promotion requires transition instrumentation, structural identity, healthy frontier support, support/dominance/risk signal, **both path regret sums non-positive** (`incumbent->anchor` and direct `incumbent->alternative`), direct precision/capture, preservation, match and regret endpoint. Both A and B must pass independently. If signed-profile main fails but scalar TCR passes both blocks, scalar TCR becomes the full-val candidate; no view-weight tuning is allowed.
+
+Passing screen authorizes only one frozen independent full-validation reproduction. Test/closed-loop remain forbidden until reproduction succeeds.
+
+## V64.3.22 no-repeat constraints
+
+In addition to all prior terminal constraints:
+
+- do not retry V21 both-positive consensus as the main operator;
+- do not tune scalar/profile weights or zero thresholds;
+- do not use a raw action-slot blacklist for the repeated `1->4` failure; transition features must be planner-semantic;
+- do not train replacement risk on all easy frontier negatives; keep it selection-conditioned;
+- do not allow signed-profile information to enter scalar-arm TRAIN sample selection;
+- do not promote a retention/replacement head whose deterministic TRAIN-holdout path teacher-improvement sum has the harmful sign;
+- do not broad-unfreeze EAF or reopen acquisition/selector/B/M/certificates before TCR is causally tested;
+- do not pool A/B or use any of the 4700 design tokens for promotion.
+
+## Engineering status
+
+Final V22 implementation includes transition feature instrumentation, magnitude-weighted regret-risk fitting, TRAIN fail-close contracts, clean scalar-vs-signed-profile ranking ablation, double-fresh checker, launcher, and 4700-token exclusion.
+
+Final regression after implementation:
+
+- V64.3.6--V64.3.22 targeted: **108/108 PASS**;
+- full repository: **396/396 PASS**;
+- warnings: **36**, all existing PyTorch Transformer `nested_tensor/norm_first` warnings;
+- V22-specific tests: **7/7 PASS**;
+- modified Python modules: `py_compile` PASS;
+- launcher: `bash -n` PASS;
+- frozen V21 behavior with V22 risk disabled: 5000 randomized cases, **0 action/score/diagnostic differences** (identical SHA256).

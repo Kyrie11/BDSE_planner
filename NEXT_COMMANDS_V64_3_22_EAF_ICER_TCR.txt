@@ -1,0 +1,8 @@
+# V64.3.22 EAF-ICER-TCR
+# Run exactly this command from the code-package root. Do NOT tune thresholds,
+# B/M, certificate/guard parameters, risk weights, or dominance view weights.
+# The launcher will STOP before fresh validation if the TRAIN-only regret-risk
+# path-sign contract fails. Even if both fresh blocks pass, do NOT run test or
+# closed-loop; only an independent frozen full-val reproduction is allowed next.
+
+bash RUN_V64_3_22_EAF_ICER_TCR_SCREEN_2GPU.sh

@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from bdse.planner.pair_screen import build_rival_sets_from_base
+from bdse.planner.pair_screen import build_rival_sets_from_base, SAFE_LIKE_MANEUVER_IDS, PROGRESSIVE_MANEUVER_IDS
 from bdse.model.potential_projection import project_pair_residual_to_action_potential_numpy
 from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, full_interface_margin, margin_normalization_scale
 from bdse.utils import softmin_np
@@ -1682,6 +1682,133 @@ def _apply_decisive_frontier_dacer(
 
 
 
+_ICER_TRANSITION_MANEUVER_NAMES = [
+    "keep_follow", "decelerate_stop", "yield_creep", "lane_change_left",
+    "lane_change_right", "route_turn_connector", "safe_fallback",
+]
+_ICER_TRANSITION_FEATURE_NAMES = (
+    [f"candidate_maneuver_{n}" for n in _ICER_TRANSITION_MANEUVER_NAMES]
+    + [f"reference_maneuver_{n}" for n in _ICER_TRANSITION_MANEUVER_NAMES]
+    + [
+        "same_maneuver", "candidate_safe_like", "reference_safe_like",
+        "candidate_progressive", "reference_progressive", "safe_to_progressive",
+        "progressive_to_safe", "candidate_terminal_x_norm", "reference_terminal_x_norm",
+        "delta_terminal_x_norm", "candidate_terminal_y_norm", "reference_terminal_y_norm",
+        "delta_terminal_y_norm", "candidate_terminal_speed_norm", "reference_terminal_speed_norm",
+        "delta_terminal_speed_norm", "candidate_path_length_norm", "reference_path_length_norm",
+        "delta_path_length_norm", "candidate_max_abs_y_norm", "reference_max_abs_y_norm",
+        "delta_max_abs_y_norm", "endpoint_separation_norm", "mean_path_separation_norm",
+        "max_path_separation_norm", "sin_terminal_yaw_delta", "cos_terminal_yaw_delta",
+    ]
+)
+
+
+def _icer_transition_feature_matrix(
+    candidate_trajectories: np.ndarray | None,
+    maneuver_ids: np.ndarray | None,
+    valid_mask: np.ndarray,
+    reference_action: int,
+) -> tuple[np.ndarray, list[str]]:
+    """Runtime-only planner-transition semantics for regret-tail reliability.
+
+    These features deliberately describe *how the proposed planner action changes*
+    relative to a frozen reference action.  They use only the already-generated
+    candidate bank (trajectory and maneuver family), add no evidence query, and
+    contain no teacher/future information.  V64.3.21 exposed repeated high-regret
+    incumbent->candidate failures that were visible in TRAIN but indistinguishable
+    to the evidence-only reliability heads.  The transition view makes those
+    planner semantics explicit without memorizing candidate-slot indices.
+    """
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    K = int(len(valid))
+    out = np.zeros((K, len(_ICER_TRANSITION_FEATURE_NAMES)), dtype=np.float64)
+    if K == 0:
+        return out, list(_ICER_TRANSITION_FEATURE_NAMES)
+
+    man = np.full((K,), -999, dtype=np.int64)
+    if maneuver_ids is not None:
+        src = np.asarray(maneuver_ids, dtype=np.int64).reshape(-1)
+        man[: min(K, src.size)] = src[:K]
+    ref = int(reference_action)
+    if not (0 <= ref < K):
+        ref = 0
+    ref_man = int(man[ref])
+    col = 0
+    for mid in range(len(_ICER_TRANSITION_MANEUVER_NAMES)):
+        out[:, col] = (man == mid).astype(np.float64); col += 1
+    for mid in range(len(_ICER_TRANSITION_MANEUVER_NAMES)):
+        out[:, col] = float(ref_man == mid); col += 1
+    cand_safe = np.asarray([int(m) in SAFE_LIKE_MANEUVER_IDS for m in man], dtype=np.float64)
+    cand_prog = np.asarray([int(m) in PROGRESSIVE_MANEUVER_IDS for m in man], dtype=np.float64)
+    ref_safe = float(ref_man in SAFE_LIKE_MANEUVER_IDS)
+    ref_prog = float(ref_man in PROGRESSIVE_MANEUVER_IDS)
+    out[:, col] = (man == ref_man).astype(np.float64); col += 1
+    out[:, col] = cand_safe; col += 1
+    out[:, col] = ref_safe; col += 1
+    out[:, col] = cand_prog; col += 1
+    out[:, col] = ref_prog; col += 1
+    out[:, col] = cand_safe * ref_prog; col += 1
+    out[:, col] = cand_prog * ref_safe; col += 1
+
+    tr = None
+    if candidate_trajectories is not None:
+        raw = np.asarray(candidate_trajectories, dtype=np.float64)
+        if raw.ndim == 3 and raw.shape[0] >= K and raw.shape[1] >= 1 and raw.shape[2] >= 2:
+            tr = np.nan_to_num(raw[:K], nan=0.0, posinf=0.0, neginf=0.0)
+    if tr is None:
+        # Keep semantic maneuver features available even if a legacy caller has
+        # no trajectory bank.  The config contract prevents a transition-trained
+        # head from silently consuming all-zero geometry at deployment.
+        return out, list(_ICER_TRANSITION_FEATURE_NAMES)
+
+    x = tr[:, :, 0]
+    y = tr[:, :, 1]
+    yaw = tr[:, :, 2] if tr.shape[2] > 2 else np.zeros_like(x)
+    speed = tr[:, :, 3] if tr.shape[2] > 3 else np.zeros_like(x)
+    end_x, end_y, end_yaw, end_speed = x[:, -1], y[:, -1], yaw[:, -1], speed[:, -1]
+    dxy = np.diff(tr[:, :, :2], axis=1)
+    path_len = np.linalg.norm(dxy, axis=2).sum(axis=1) if dxy.shape[1] else np.zeros((K,), dtype=np.float64)
+    max_abs_y = np.max(np.abs(y), axis=1)
+    scale_idx = np.flatnonzero(valid)
+    if scale_idx.size == 0:
+        scale_idx = np.arange(K)
+    pos_scale = max(float(np.max(np.sqrt(end_x[scale_idx] ** 2 + end_y[scale_idx] ** 2))), 1.0)
+    speed_scale = max(float(np.max(np.abs(end_speed[scale_idx]))), 1.0)
+    length_scale = max(float(np.max(np.abs(path_len[scale_idx]))), 1.0)
+    lateral_scale = max(float(np.max(np.abs(max_abs_y[scale_idx]))), 1.0)
+
+    rx, ry, ryaw, rv = float(end_x[ref]), float(end_y[ref]), float(end_yaw[ref]), float(end_speed[ref])
+    rlen, rlat = float(path_len[ref]), float(max_abs_y[ref])
+    out[:, col] = end_x / pos_scale; col += 1
+    out[:, col] = rx / pos_scale; col += 1
+    out[:, col] = (end_x - rx) / pos_scale; col += 1
+    out[:, col] = end_y / pos_scale; col += 1
+    out[:, col] = ry / pos_scale; col += 1
+    out[:, col] = (end_y - ry) / pos_scale; col += 1
+    out[:, col] = end_speed / speed_scale; col += 1
+    out[:, col] = rv / speed_scale; col += 1
+    out[:, col] = (end_speed - rv) / speed_scale; col += 1
+    out[:, col] = path_len / length_scale; col += 1
+    out[:, col] = rlen / length_scale; col += 1
+    out[:, col] = (path_len - rlen) / length_scale; col += 1
+    out[:, col] = max_abs_y / lateral_scale; col += 1
+    out[:, col] = rlat / lateral_scale; col += 1
+    out[:, col] = (max_abs_y - rlat) / lateral_scale; col += 1
+
+    ref_xy = tr[ref, :, :2]
+    sep = np.linalg.norm(tr[:, :, :2] - ref_xy[None, :, :], axis=2)
+    out[:, col] = np.linalg.norm(np.stack([end_x-rx, end_y-ry], axis=1), axis=1) / pos_scale; col += 1
+    out[:, col] = np.mean(sep, axis=1) / pos_scale; col += 1
+    out[:, col] = np.max(sep, axis=1) / pos_scale; col += 1
+    dyaw = np.arctan2(np.sin(end_yaw - ryaw), np.cos(end_yaw - ryaw))
+    out[:, col] = np.sin(dyaw); col += 1
+    out[:, col] = np.cos(dyaw); col += 1
+    if col != out.shape[1]:
+        raise RuntimeError(f"ICER transition feature count mismatch: wrote {col}, expected {out.shape[1]}")
+    return out, list(_ICER_TRANSITION_FEATURE_NAMES)
+
+
+
 _ICER_DOMINANCE_PROFILE_BASE_NAMES = [
     "raw_margin", "attribution_scale", "margin_over_attribution", "attribution_over_frontier_rms",
     "raw_margin_z", "attribution_z", "raw_margin_rank", "attribution_rank", "margin_below_frontier_max",
@@ -1694,6 +1821,38 @@ _ICER_DOMINANCE_PROFILE_BASE_NAMES = [
     "delta_atom_contrib_effective_support_norm", "delta_atom_top1_signed_norm",
     "delta_atom_top2_signed_norm", "delta_atom_top3_signed_norm", "delta_atom_top4_signed_norm",
 ]
+
+_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[:18])
+
+
+def _icer_regret_risk_feature_matrix(
+    feat: np.ndarray,
+    feature_names: list[str],
+    transition_feat: np.ndarray,
+    transition_names: list[str],
+    mode: str,
+) -> tuple[np.ndarray, list[str]]:
+    """Auditable feature view for V64.3.22 regret-risk heads.
+
+    The evidence-only ablation uses exactly the 18 scalar runtime EAF statistics
+    already present in ICER.  The main arm appends planner-transition semantics
+    from the candidate bank.  There is no learned hidden representation and no
+    validation-selected feature subset.
+    """
+    pos = {str(n): i for i, n in enumerate(feature_names)}
+    if any(n not in pos for n in _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES):
+        raise ValueError("EAF-ICER regret-risk evidence features missing from runtime schema")
+    base = np.asarray(feat[:, [pos[n] for n in _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES]], dtype=np.float64)
+    names = [f"evidence::{n}" for n in _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES]
+    mode = str(mode).strip().lower()
+    if mode == "evidence_only":
+        return base, names
+    if mode != "transition_conditioned":
+        raise ValueError(f"unknown EAF-ICER regret_risk_feature_mode={mode}")
+    tr = np.asarray(transition_feat, dtype=np.float64)
+    if tr.ndim != 2 or tr.shape[0] != base.shape[0] or tr.shape[1] != len(transition_names):
+        raise ValueError("EAF-ICER transition feature matrix/schema mismatch")
+    return np.concatenate([base, tr], axis=1), names + [f"transition::{n}" for n in transition_names]
 
 
 def _icer_quadratic_interaction_features(
@@ -1741,8 +1900,10 @@ def _apply_decisive_frontier_icer(
     evidence_certificate_fraction: float | None,
     utility_refinement_diag: dict[str, Any] | None,
     cfg: dict[str, Any],
+    candidate_trajectories: np.ndarray | None = None,
+    maneuver_ids: np.ndarray | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """V64.3.19 incumbent-contrastive extremal recovery.
+    """V64.3.19+ incumbent-contrastive extremal recovery.
 
     V64.3.18 showed that one shared pointwise score can be a strong anchor-support
     reliability signal yet still replace a good incumbent with an inferior
@@ -1780,6 +1941,14 @@ def _apply_decisive_frontier_icer(
         potential_diag, evidence_certificate_fraction, utility_refinement_diag,
         admissible, cfg,
     )
+    transition_vs_incumbent, transition_names = _icer_transition_feature_matrix(
+        candidate_trajectories, maneuver_ids, valid, legacy
+    )
+    transition_vs_anchor, transition_anchor_names = _icer_transition_feature_matrix(
+        candidate_trajectories, maneuver_ids, valid, a
+    )
+    if transition_names != transition_anchor_names:
+        raise RuntimeError("ICER transition schemas differ between incumbent/anchor reference views")
     support_logits = np.zeros((len(valid),), dtype=np.float64)
     dominance_logits = np.zeros((len(valid),), dtype=np.float64)
     # Always initialize the component-head diagnostics.  V64.3.20 deliberately
@@ -1788,6 +1957,8 @@ def _apply_decisive_frontier_icer(
     scalar_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
     profile_dominance_logits = np.zeros((len(valid),), dtype=np.float64)
     incumbent_retention_margin = np.zeros((len(valid),), dtype=np.float64)
+    replacement_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
+    retention_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     selected = legacy
     baseline = legacy
     flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
@@ -1856,6 +2027,16 @@ def _apply_decisive_frontier_icer(
             profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
             dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
             dominance_positive = np.isfinite(dominance_logits) & (dominance_logits > 0.0)
+        elif dominance_policy == "scalar_positive_dual_equal_mean":
+            # V64.3.22 clean signed-attribution ablation: scalar dominance keeps
+            # the incumbent-replacement eligibility boundary fixed, while the
+            # exact signed selected-evidence profile is allowed to change only
+            # the extremal ordering score.  This avoids the V64.3.21 consensus
+            # failure mode and prevents the scalar arm from being contaminated
+            # by profile-dependent TRAIN sample selection.
+            profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
+            dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
+            dominance_positive = np.isfinite(scalar_dominance_logits) & (scalar_dominance_logits > 0.0)
         elif dominance_policy == "dual_positive_consensus_mean":
             # V64.3.21: a signed-attribution view is corroborating evidence, not
             # a compensating term.  Both independently trained TRAIN-only views
@@ -1900,14 +2081,56 @@ def _apply_decisive_frontier_icer(
         else:
             raise ValueError(f"unknown EAF-ICER incumbent_retention_policy={retention_policy}")
 
+        # V64.3.22 transition-conditioned regret-risk.  Binary support and
+        # dominance remain the frozen reliability views; this additional TRAIN-only
+        # head is cost-sensitive to teacher-improvement magnitude and therefore
+        # acts as a zero-boundary *risk veto*, not a tuned probability threshold.
+        regret_risk_enabled = bool(icer_cfg.get("regret_risk_enabled", False))
+        regret_risk_mode = str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower()
+        if regret_risk_enabled:
+            geometry_available = False
+            if candidate_trajectories is not None:
+                _tr_chk = np.asarray(candidate_trajectories)
+                geometry_available = bool(_tr_chk.ndim == 3 and _tr_chk.shape[0] >= len(valid) and _tr_chk.shape[1] >= 1 and _tr_chk.shape[2] >= 2)
+            if regret_risk_mode == "transition_conditioned" and not geometry_available:
+                raise ValueError("EAF-ICER transition-conditioned regret risk requires the runtime candidate trajectory bank")
+            rep_x, rep_names = _icer_regret_risk_feature_matrix(
+                feat, names, transition_vs_incumbent, transition_names, regret_risk_mode
+            )
+            ret_x, ret_names = _icer_regret_risk_feature_matrix(
+                feat, names, transition_vs_anchor, transition_names, regret_risk_mode
+            )
+            if rep_names != ret_names:
+                raise RuntimeError("EAF-ICER replacement/retention regret-risk schemas diverged")
+
+            def _read_regret_risk_head(prefix: str, x: np.ndarray, runtime_names: list[str]) -> np.ndarray:
+                stored_names = list(icer_cfg.get(f"{prefix}_feature_names", []))
+                mean = np.asarray(icer_cfg.get(f"{prefix}_feature_mean", []), dtype=np.float64).reshape(-1)
+                std = np.asarray(icer_cfg.get(f"{prefix}_feature_std", []), dtype=np.float64).reshape(-1)
+                weights = np.asarray(icer_cfg.get(f"{prefix}_weights", []), dtype=np.float64).reshape(-1)
+                if stored_names != runtime_names or len(runtime_names) != len(mean) or len(runtime_names) != len(std) or len(runtime_names) != len(weights):
+                    raise ValueError(f"EAF-ICER {prefix} regret-risk schema/mean/std/weights are inconsistent")
+                z = (x - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
+                return np.clip(z @ weights + float(icer_cfg.get(f"{prefix}_bias", 0.0)), -40.0, 40.0)
+
+            replacement_regret_risk_logits = _read_regret_risk_head("replacement_regret_risk", rep_x, rep_names)
+            retention_regret_risk_logits = _read_regret_risk_head("retention_regret_risk", ret_x, ret_names)
+
         support_ok = admissible & np.isfinite(support_logits) & (support_logits > 0.0)
         legacy_admissible = bool(0 <= legacy < len(valid) and admissible[legacy])
         legacy_supported = bool(legacy_admissible and support_ok[legacy])
-        legacy_retained = bool(
-            legacy_admissible
-            and np.isfinite(incumbent_retention_margin[legacy])
-            and incumbent_retention_margin[legacy] >= 0.0
-        )
+        if regret_risk_enabled:
+            legacy_retained = bool(
+                legacy_admissible
+                and np.isfinite(retention_regret_risk_logits[legacy])
+                and retention_regret_risk_logits[legacy] >= 0.0
+            )
+        else:
+            legacy_retained = bool(
+                legacy_admissible
+                and np.isfinite(incumbent_retention_margin[legacy])
+                and incumbent_retention_margin[legacy] >= 0.0
+            )
         # When the frozen incumbent itself is deployment-admissible, every
         # alternative replacement remains incumbent-contrastive.  V64.3.21
         # makes the baseline asymmetric: only the selected-incumbent margin head
@@ -1918,12 +2141,16 @@ def _apply_decisive_frontier_icer(
             alternative = support_ok.copy()
             if 0 <= legacy < len(alternative):
                 alternative[legacy] = False
-            cand = np.flatnonzero(alternative & dominance_positive).astype(np.int64)
+            replacement_positive = np.ones((len(valid),), dtype=bool)
+            if regret_risk_enabled:
+                replacement_positive = np.isfinite(replacement_regret_risk_logits) & (replacement_regret_risk_logits > 0.0)
+            cand = np.flatnonzero(alternative & dominance_positive & replacement_positive).astype(np.int64)
             if cand.size:
                 best = sorted(
                     cand.tolist(),
                     key=lambda b: (
                         -float(dominance_logits[b]),
+                        -float(replacement_regret_risk_logits[b]) if regret_risk_enabled else 0.0,
                         -float(support_logits[b]),
                         -float(margin_star[b]),
                         -int(utility_prior[b]),
@@ -1965,9 +2192,14 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_legacy_retention_margin": float(incumbent_retention_margin[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
         "decisive_frontier_icer_dominance_policy_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_equal_mean"),
+        "decisive_frontier_icer_dominance_policy_scalar_positive_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "scalar_positive_dual_equal_mean"),
         "decisive_frontier_icer_dominance_policy_dual_positive_consensus": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_positive_consensus_mean"),
         "decisive_frontier_icer_incumbent_retention_profile_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_profile_margin_mse"),
         "decisive_frontier_icer_incumbent_retention_scalar_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_scalar_margin_mse"),
+        "decisive_frontier_icer_regret_risk_enabled": float(bool(icer_cfg.get("regret_risk_enabled", False))),
+        "decisive_frontier_icer_regret_risk_transition_conditioned": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "transition_conditioned"),
+        "decisive_frontier_icer_selected_replacement_regret_risk_logit": float(replacement_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,
+        "decisive_frontier_icer_legacy_retention_regret_risk_logit": float(retention_regret_risk_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
         "decisive_frontier_icer_safe_domain_active": float(bool(safe_available)),
         "decisive_frontier_icer_all_flagged_domain": float(bool(all_flagged_domain)),
@@ -1985,6 +2217,11 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_scalar_dominance_logit_star": np.asarray(scalar_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
         "_decisive_frontier_icer_profile_dominance_logit_star": np.asarray(profile_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
         "_decisive_frontier_icer_incumbent_retention_margin_star": np.asarray(incumbent_retention_margin, dtype=np.float32),
+        "_decisive_frontier_icer_replacement_regret_risk_logit_star": np.asarray(replacement_regret_risk_logits, dtype=np.float32),
+        "_decisive_frontier_icer_retention_regret_risk_logit_star": np.asarray(retention_regret_risk_logits, dtype=np.float32),
+        "_decisive_frontier_icer_transition_vs_incumbent_feature_matrix": np.asarray(transition_vs_incumbent, dtype=np.float32),
+        "_decisive_frontier_icer_transition_vs_anchor_feature_matrix": np.asarray(transition_vs_anchor, dtype=np.float32),
+        "_decisive_frontier_icer_transition_feature_names": list(transition_names),
         "_decisive_frontier_icer_admissible_mask": np.asarray(admissible, dtype=bool),
     }
     return int(selected), diag
@@ -2280,6 +2517,8 @@ def run_pair_conditioned_tournament(
             evidence_certificate_fraction,
             utility_refinement_diag,
             cfg,
+            candidate_trajectories=candidate_trajectories,
+            maneuver_ids=maneuver_ids,
         )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))

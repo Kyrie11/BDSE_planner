@@ -1009,6 +1009,11 @@ def main() -> None:
             icer_scalar_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_scalar_dominance_logit_star", []), dtype=np.float64).reshape(-1)
             icer_profile_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_profile_dominance_logit_star", []), dtype=np.float64).reshape(-1)
             icer_retention_margin = np.asarray(tour_diag.get("_decisive_frontier_icer_incumbent_retention_margin_star", []), dtype=np.float64).reshape(-1)
+            icer_replacement_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_replacement_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_retention_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_retention_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_transition_inc = tour_diag.get("_decisive_frontier_icer_transition_vs_incumbent_feature_matrix", None)
+            icer_transition_anchor = tour_diag.get("_decisive_frontier_icer_transition_vs_anchor_feature_matrix", None)
+            icer_transition_names = list(tour_diag.get("_decisive_frontier_icer_transition_feature_names", []))
             icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
             icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
@@ -1056,6 +1061,8 @@ def main() -> None:
                         "icer_scalar_dominance_logit": float(icer_scalar_dominance_logits[challenger]) if icer_scalar_dominance_logits.size == edge_valid.size else float("nan"),
                         "icer_profile_dominance_logit": float(icer_profile_dominance_logits[challenger]) if icer_profile_dominance_logits.size == edge_valid.size else float("nan"),
                         "icer_incumbent_retention_margin": float(icer_retention_margin[challenger]) if icer_retention_margin.size == edge_valid.size else float("nan"),
+                        "icer_replacement_regret_risk_logit": float(icer_replacement_risk[challenger]) if icer_replacement_risk.size == edge_valid.size else float("nan"),
+                        "icer_retention_regret_risk_logit": float(icer_retention_risk[challenger]) if icer_retention_risk.size == edge_valid.size else float("nan"),
                         "icer_admissible": float(icer_admissible[challenger]) if icer_admissible.size == edge_valid.size else 0.0,
                     }
                     if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):
@@ -1073,6 +1080,20 @@ def main() -> None:
                     if imat is not None and imat.ndim == 2 and imat.shape[0] == edge_valid.size and imat.shape[1] == len(icer_feature_names):
                         for j, name in enumerate(icer_feature_names):
                             row[f"icer_feature_{name}"] = float(imat[challenger, j])
+                    timat = None if icer_transition_inc is None else np.asarray(icer_transition_inc, dtype=np.float64)
+                    tamat = None if icer_transition_anchor is None else np.asarray(icer_transition_anchor, dtype=np.float64)
+                    # V64.3.22 keeps frontier logs auditable without multiplying
+                    # TRAIN I/O unnecessarily: incumbent-relative transition
+                    # geometry is only needed for admissible runtime candidates;
+                    # anchor-relative geometry is only needed on the raw selected
+                    # incumbent used by the retention head.
+                    write_inc_transition = bool(icer_admissible.size == edge_valid.size and icer_admissible[challenger])
+                    if timat is not None and write_inc_transition and timat.ndim == 2 and timat.shape[0] == edge_valid.size and timat.shape[1] == len(icer_transition_names):
+                        for j, name in enumerate(icer_transition_names):
+                            row[f"icer_transition_incumbent_{name}"] = float(timat[challenger, j])
+                    if tamat is not None and challenger == raw_top and tamat.ndim == 2 and tamat.shape[0] == edge_valid.size and tamat.shape[1] == len(icer_transition_names):
+                        for j, name in enumerate(icer_transition_names):
+                            row[f"icer_transition_anchor_{name}"] = float(tamat[challenger, j])
                     frontier_edge_file.write(json.dumps(row, sort_keys=True) + "\n")
         metric_means.update(diag)
         if args.per_sample_output:
