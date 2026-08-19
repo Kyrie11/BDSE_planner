@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+import hashlib
 
 import numpy as np
 
@@ -1825,6 +1828,103 @@ _ICER_DOMINANCE_PROFILE_BASE_NAMES = [
 _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[:18])
 
 
+@lru_cache(maxsize=16)
+def _load_icer_local_regret_memory(
+    path_str: str,
+    expected_sha256: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[str, ...], np.ndarray, tuple[int, ...], float]:
+    """Load one immutable TRAIN-only V64.3.23 regret-coherence memory.
+
+    The memory is deliberately small and auditable.  It stores only frozen
+    TRAIN runtime features and candidate-vs-incumbent teacher-improvement
+    targets.  Runtime lookup uses a pre-registered group-balanced metric and a
+    two-scale one-standard-error lower bound; validation/test labels are never
+    stored or consulted.
+    """
+    path = Path(path_str)
+    if not path.is_file():
+        raise ValueError(f"missing EAF-ICER local regret memory: {path}")
+    if expected_sha256:
+        h = hashlib.sha256(path.read_bytes()).hexdigest()
+        if h != expected_sha256:
+            raise ValueError(f"EAF-ICER local regret memory SHA256 mismatch: {path}")
+    with np.load(path, allow_pickle=False) as z:
+        memory = np.asarray(z["memory_metric_z"], dtype=np.float64)
+        delta = np.asarray(z["teacher_improvement"], dtype=np.float64).reshape(-1)
+        mean = np.asarray(z["feature_mean"], dtype=np.float64).reshape(-1)
+        std = np.asarray(z["feature_std"], dtype=np.float64).reshape(-1)
+        names = tuple(str(x) for x in np.asarray(z["feature_names"]).reshape(-1).tolist())
+        metric_weight = np.asarray(z["feature_metric_weight"], dtype=np.float64).reshape(-1)
+        ks = tuple(int(x) for x in np.asarray(z["neighbor_k_values"]).reshape(-1).tolist())
+        se_multiplier = float(np.asarray(z["se_multiplier"]).reshape(-1)[0])
+    if (
+        memory.ndim != 2
+        or memory.shape[0] != len(delta)
+        or memory.shape[1] != len(mean)
+        or len(mean) != len(std)
+        or len(names) != len(mean)
+        or len(metric_weight) != len(mean)
+    ):
+        raise ValueError("EAF-ICER local regret memory schema is inconsistent")
+    if not ks or any(k <= 1 for k in ks) or memory.shape[0] < max(ks):
+        raise ValueError("EAF-ICER local regret memory has insufficient TRAIN support")
+    if np.any(metric_weight <= 0.0) or not np.isfinite(se_multiplier) or se_multiplier < 0.0:
+        raise ValueError("EAF-ICER local regret metric/lower-bound parameters invalid")
+    if not (
+        np.all(np.isfinite(memory))
+        and np.all(np.isfinite(delta))
+        and np.all(np.isfinite(mean))
+        and np.all(np.isfinite(std))
+        and np.all(np.isfinite(metric_weight))
+    ):
+        raise ValueError("EAF-ICER local regret memory contains non-finite values")
+    return memory, delta, mean, np.maximum(std, 1.0e-6), names, metric_weight, ks, se_multiplier
+
+
+def _icer_local_regret_lower_bound(
+    x: np.ndarray,
+    runtime_names: list[str],
+    memory_path: str,
+    memory_sha256: str,
+) -> np.ndarray:
+    """Two-scale local lower-bound estimate of candidate-vs-incumbent gain.
+
+    V64.3.23 intentionally does not learn a larger network or a validation
+    threshold.  For each runtime candidate it forms inverse-distance-weighted
+    TRAIN neighborhoods at two fixed scales.  At each scale the risk score is
+    ``local mean teacher improvement - 1 standard error``; the runtime score is
+    the minimum across scales.  Positive therefore means both a local and a
+    coarser neighborhood support non-negative replacement improvement under the
+    same fixed evidence/transition metric.
+    """
+    memory, delta, mean, std, names, metric_weight, ks, se_multiplier = _load_icer_local_regret_memory(
+        memory_path, memory_sha256
+    )
+    if list(names) != list(runtime_names):
+        raise ValueError("EAF-ICER local regret memory feature schema mismatch")
+    xx = np.asarray(x, dtype=np.float64)
+    if xx.ndim != 2 or xx.shape[1] != len(mean):
+        raise ValueError("EAF-ICER local regret runtime feature shape mismatch")
+    z = ((xx - mean[None, :]) / std[None, :]) * np.sqrt(metric_weight[None, :])
+    z2 = np.sum(z * z, axis=1, keepdims=True)
+    m2 = np.sum(memory * memory, axis=1, keepdims=False)[None, :]
+    d2 = np.maximum(z2 + m2 - 2.0 * (z @ memory.T), 0.0)
+    rows = np.arange(len(z))[:, None]
+    bounds: list[np.ndarray] = []
+    for k in ks:
+        kk = min(int(k), memory.shape[0])
+        nbr = np.argpartition(d2, kth=kk - 1, axis=1)[:, :kk]
+        dist = np.sqrt(d2[rows, nbr])
+        w = 1.0 / np.maximum(dist, 1.0e-6)
+        w = w / np.maximum(np.sum(w, axis=1, keepdims=True), 1.0e-12)
+        y = delta[nbr]
+        local_mean = np.sum(w * y, axis=1)
+        local_var = np.sum(w * (y - local_mean[:, None]) ** 2, axis=1)
+        effective_n = 1.0 / np.maximum(np.sum(w * w, axis=1), 1.0e-12)
+        local_se = np.sqrt(local_var / np.maximum(effective_n, 1.0))
+        bounds.append(local_mean - se_multiplier * local_se)
+    return np.min(np.stack(bounds, axis=1), axis=1)
+
 def _icer_regret_risk_feature_matrix(
     feat: np.ndarray,
     feature_names: list[str],
@@ -1834,10 +1934,10 @@ def _icer_regret_risk_feature_matrix(
 ) -> tuple[np.ndarray, list[str]]:
     """Auditable feature view for V64.3.22 regret-risk heads.
 
-    The evidence-only ablation uses exactly the 18 scalar runtime EAF statistics
-    already present in ICER.  The main arm appends planner-transition semantics
-    from the candidate bank.  There is no learned hidden representation and no
-    validation-selected feature subset.
+    The evidence-local main uses exactly the 18 scalar runtime EAF statistics
+    already present in ICER.  The transition-conditioned controlled ablation
+    appends planner-transition semantics from the candidate bank.  There is no
+    learned hidden representation and no validation-selected feature subset.
     """
     pos = {str(n): i for i, n in enumerate(feature_names)}
     if any(n not in pos for n in _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES):
@@ -2037,6 +2137,23 @@ def _apply_decisive_frontier_icer(
             profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
             dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
             dominance_positive = np.isfinite(scalar_dominance_logits) & (scalar_dominance_logits > 0.0)
+        elif dominance_policy == "scalar_positive_dual_mean_positive":
+            # V64.3.23 RCR: the signed-profile view remains a *combined* view,
+            # not the V64.3.21 hard per-view consensus.  However, if the exact
+            # evidence-attributed score that will be used to rank alternatives
+            # is itself non-positive, it is semantically inconsistent to let it
+            # trigger an incumbent replacement merely because the scalar view
+            # and regret-risk head are positive.  Eligibility therefore requires
+            # scalar dominance > 0 AND equal-mean scalar/profile dominance > 0.
+            # No validation threshold or view-weight tuning is introduced.
+            profile_dominance_logits = _read_dom_head("profile_dominance", "profile_interaction")
+            dominance_logits = 0.5 * (scalar_dominance_logits + profile_dominance_logits)
+            dominance_positive = (
+                np.isfinite(scalar_dominance_logits)
+                & np.isfinite(dominance_logits)
+                & (scalar_dominance_logits > 0.0)
+                & (dominance_logits > 0.0)
+            )
         elif dominance_policy == "dual_positive_consensus_mean":
             # V64.3.21: a signed-attribution view is corroborating evidence, not
             # a compensating term.  Both independently trained TRAIN-only views
@@ -2087,6 +2204,12 @@ def _apply_decisive_frontier_icer(
         # acts as a zero-boundary *risk veto*, not a tuned probability threshold.
         regret_risk_enabled = bool(icer_cfg.get("regret_risk_enabled", False))
         regret_risk_mode = str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower()
+        # V64.3.23 separates the two asymmetric action-change risks.  Historical
+        # V22 configs omit these flags and therefore keep the old both-heads
+        # behavior.  RCR disables learned incumbent->anchor veto while retaining
+        # the TRAIN-only replacement regret-risk head.
+        retention_regret_risk_enabled = bool(icer_cfg.get("retention_regret_risk_enabled", regret_risk_enabled))
+        replacement_regret_risk_enabled = bool(icer_cfg.get("replacement_regret_risk_enabled", regret_risk_enabled))
         if regret_risk_enabled:
             geometry_available = False
             if candidate_trajectories is not None:
@@ -2113,13 +2236,28 @@ def _apply_decisive_frontier_icer(
                 z = (x - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
                 return np.clip(z @ weights + float(icer_cfg.get(f"{prefix}_bias", 0.0)), -40.0, 40.0)
 
-            replacement_regret_risk_logits = _read_regret_risk_head("replacement_regret_risk", rep_x, rep_names)
-            retention_regret_risk_logits = _read_regret_risk_head("retention_regret_risk", ret_x, ret_names)
+            risk_model_type = str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower()
+            if replacement_regret_risk_enabled:
+                if risk_model_type == "local_multiscale_regret_lower_bound":
+                    replacement_regret_risk_logits = _icer_local_regret_lower_bound(
+                        rep_x,
+                        rep_names,
+                        str(icer_cfg.get("replacement_local_regret_memory_path", "")),
+                        str(icer_cfg.get("replacement_local_regret_memory_sha256", "")),
+                    )
+                elif risk_model_type == "linear_weighted_logistic":
+                    replacement_regret_risk_logits = _read_regret_risk_head("replacement_regret_risk", rep_x, rep_names)
+                else:
+                    raise ValueError(f"unknown EAF-ICER regret_risk_model_type={risk_model_type}")
+            if retention_regret_risk_enabled:
+                if risk_model_type != "linear_weighted_logistic":
+                    raise ValueError("local regret memory is replacement-only; learned retention veto must remain disabled")
+                retention_regret_risk_logits = _read_regret_risk_head("retention_regret_risk", ret_x, ret_names)
 
         support_ok = admissible & np.isfinite(support_logits) & (support_logits > 0.0)
         legacy_admissible = bool(0 <= legacy < len(valid) and admissible[legacy])
         legacy_supported = bool(legacy_admissible and support_ok[legacy])
-        if regret_risk_enabled:
+        if regret_risk_enabled and retention_regret_risk_enabled:
             legacy_retained = bool(
                 legacy_admissible
                 and np.isfinite(retention_regret_risk_logits[legacy])
@@ -2142,7 +2280,7 @@ def _apply_decisive_frontier_icer(
             if 0 <= legacy < len(alternative):
                 alternative[legacy] = False
             replacement_positive = np.ones((len(valid),), dtype=bool)
-            if regret_risk_enabled:
+            if regret_risk_enabled and replacement_regret_risk_enabled:
                 replacement_positive = np.isfinite(replacement_regret_risk_logits) & (replacement_regret_risk_logits > 0.0)
             cand = np.flatnonzero(alternative & dominance_positive & replacement_positive).astype(np.int64)
             if cand.size:
@@ -2150,7 +2288,7 @@ def _apply_decisive_frontier_icer(
                     cand.tolist(),
                     key=lambda b: (
                         -float(dominance_logits[b]),
-                        -float(replacement_regret_risk_logits[b]) if regret_risk_enabled else 0.0,
+                        -float(replacement_regret_risk_logits[b]) if (regret_risk_enabled and replacement_regret_risk_enabled) else 0.0,
                         -float(support_logits[b]),
                         -float(margin_star[b]),
                         -int(utility_prior[b]),
@@ -2193,11 +2331,15 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
         "decisive_frontier_icer_dominance_policy_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_equal_mean"),
         "decisive_frontier_icer_dominance_policy_scalar_positive_dual_equal_mean": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "scalar_positive_dual_equal_mean"),
+        "decisive_frontier_icer_dominance_policy_scalar_positive_dual_mean_positive": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "scalar_positive_dual_mean_positive"),
         "decisive_frontier_icer_dominance_policy_dual_positive_consensus": float(str(icer_cfg.get("dominance_policy", "dual_equal_mean")) == "dual_positive_consensus_mean"),
         "decisive_frontier_icer_incumbent_retention_profile_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_profile_margin_mse"),
         "decisive_frontier_icer_incumbent_retention_scalar_margin": float(str(icer_cfg.get("incumbent_retention_policy", "generic_support")) == "selected_incumbent_scalar_margin_mse"),
         "decisive_frontier_icer_regret_risk_enabled": float(bool(icer_cfg.get("regret_risk_enabled", False))),
+        "decisive_frontier_icer_retention_regret_risk_enabled": float(bool(icer_cfg.get("retention_regret_risk_enabled", icer_cfg.get("regret_risk_enabled", False)))),
+        "decisive_frontier_icer_replacement_regret_risk_enabled": float(bool(icer_cfg.get("replacement_regret_risk_enabled", icer_cfg.get("regret_risk_enabled", False)))),
         "decisive_frontier_icer_regret_risk_transition_conditioned": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "transition_conditioned"),
+        "decisive_frontier_icer_regret_risk_local_memory": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() == "local_multiscale_regret_lower_bound"),
         "decisive_frontier_icer_selected_replacement_regret_risk_logit": float(replacement_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,
         "decisive_frontier_icer_legacy_retention_regret_risk_logit": float(retention_regret_risk_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),

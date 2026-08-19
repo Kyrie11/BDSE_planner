@@ -1,0 +1,657 @@
+{
+  "audit": "v64_3_22_uploaded_result_causal_audit",
+  "data_discipline": {
+    "v23_fresh_plan": "1000 untouched label-free SHA256-selected validation scenes split A500/B500; no pooled rescue",
+    "v23_validation_design_exclusion_count": 4700,
+    "why_not_5700": "V22 stopped before selecting any fresh validation token; no new validation identities were inspected in V22"
+  },
+  "official_run_status": {
+    "completed_train_transition_frontier_scenes": 3000,
+    "fresh_A_ran": false,
+    "fresh_B_ran": false,
+    "fresh_validation_selected": false,
+    "full_test_closed_loop_allowed": false,
+    "interpretation": "engineering_experiment_protocol_abort_not_a_fresh_algorithm_result",
+    "stop_reason": "TRAIN internal holdout too small for evidence_only: retention=281 replacement=228",
+    "stop_stage": "train_only_regret_risk_fit",
+    "train_transition_frontier_seconds": 1786
+  },
+  "per_scene_tail_finding": {
+    "operator_inconsistency": "V22 profile arm could execute an alternative whose actual dual equal-mean ranking score was negative because eligibility required only scalar dominance>0 and risk>0",
+    "second_worst_intended_v22_selected_replacement": {
+      "candidate_action": 19,
+      "incumbent_action": 7,
+      "scenario_token": "bb77e9686029538d",
+      "teacher_improvement_candidate_vs_incumbent": -0.9893599856022746
+    },
+    "tail_interpretation": "two worst selected replacements have larger negative magnitude than the entire net selected-path loss; V22 is tail-dominated and positives partially offset these failures",
+    "two_worst_selected_loss_sum": -4.795846453299188,
+    "worst_intended_v22_selected_replacement": {
+      "candidate_action": 2,
+      "dual_equal_mean_dominance_logit": -0.20923957973718643,
+      "incumbent_action": 1,
+      "scalar_dominance_logit": 0.1632883995771408,
+      "scenario_token": "2b32a9f406845f75",
+      "teacher_improvement_candidate_vs_incumbent": -3.806486467696913,
+      "v22_transition_risk_logit": 5.023652379277723
+    }
+  },
+  "v22_corrected_train_only_design_diagnostic": {
+    "conclusion": "transition-conditioned V22 partially reduces selected replacement tail loss, but remains negative and should not proceed to fresh validation merely by lowering the row-count gate",
+    "evidence_only": {
+      "replacement_edge_auc": 0.602873786407767,
+      "replacement_holdout_edges": 228,
+      "replacement_holdout_unique_scenes": 51,
+      "retention_holdout_count": 281,
+      "retention_predicted_fallback_teacher_improvement_sum": -11.594750756950015,
+      "selected_dual_count": 38,
+      "selected_dual_precision": 0.5,
+      "selected_dual_teacher_improvement_sum": -7.857945002404732
+    },
+    "transition_conditioned": {
+      "replacement_edge_auc": 0.5923106796116505,
+      "replacement_holdout_edges": 228,
+      "replacement_holdout_unique_scenes": 51,
+      "retention_holdout_count": 281,
+      "retention_predicted_fallback_teacher_improvement_sum": -7.53690416030064,
+      "selected_dual_count": 30,
+      "selected_dual_precision": 0.5666666666666667,
+      "selected_dual_teacher_improvement_sum": -3.0571427063135337,
+      "selected_scalar_precision": 0.6333333333333333,
+      "selected_scalar_teacher_improvement_sum": -3.0558064574432837,
+      "transition_nonzero_fraction": 1.0
+    }
+  },
+  "v23_train_only_design_diagnostic": {
+    "design_conclusion": "evidence-local multiscale regret coherence is 5/5 fixed scene-fold path-safe and is the V23 main; transition-local has higher aggregate TRAIN sum but only 3/5 path-safe folds, so transition conditioning is a controlled ablation and cannot rescue a failed evidence-local main",
+    "evidence_local_crossfit": {
+      "all_folds_self_consistent_path_safe": true,
+      "dual_rank_only_teacher_improvement_sum": 8.099697068515322,
+      "feature_names": [
+        "evidence::raw_margin",
+        "evidence::attribution_scale",
+        "evidence::margin_over_attribution",
+        "evidence::attribution_over_frontier_rms",
+        "evidence::raw_margin_z",
+        "evidence::attribution_z",
+        "evidence::raw_margin_rank",
+        "evidence::attribution_rank",
+        "evidence::margin_below_frontier_max",
+        "evidence::margin_minus_legacy_selected",
+        "evidence::attribution_minus_legacy_selected",
+        "evidence::eaf_score_gain_vs_anchor",
+        "evidence::eaf_score_minus_legacy_selected",
+        "evidence::utility_cost_minus_legacy_selected",
+        "evidence::guard_margin_excess",
+        "evidence::eaf_score_rank",
+        "evidence::utility_cost_rank",
+        "evidence::executable_candidate_fraction"
+      ],
+      "fold_seed": "v64.3.23-eaf-icer-rcr-scene-crossfit-v1",
+      "folds": [
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 74.0,
+            "opportunity_capture_rate": 0.2962962962962963,
+            "opportunity_count": 54.0,
+            "selected_replacement_count": 24.0,
+            "selected_replacement_precision": 0.6666666666666666,
+            "selected_replacement_teacher_improvement_mean": 0.04138636184385143,
+            "selected_replacement_teacher_improvement_sum": 0.9932726842524343,
+            "selected_replacement_worst_teacher_improvement": -0.002361465603113011
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.5393345981840357,
+            "positive_rate": 0.20579710144927535,
+            "predicted_positive_precision": 0.5915492957746479,
+            "scene_or_edge_count": 345.0,
+            "sign_accuracy": 0.48695652173913045,
+            "teacher_improvement_sum_on_predicted_negative": -41.731035558759885,
+            "teacher_improvement_sum_on_predicted_positive": 4.946708619163957,
+            "true_positive_rate": 0.5449275362318841
+          },
+          "fold": 0,
+          "holdout_edge_count": 345,
+          "holdout_unique_scene_count": 74,
+          "scalar": {
+            "holdout_scene_count": 74.0,
+            "opportunity_capture_rate": 0.3148148148148148,
+            "opportunity_count": 54.0,
+            "selected_replacement_count": 24.0,
+            "selected_replacement_precision": 0.7083333333333334,
+            "selected_replacement_teacher_improvement_mean": 0.08278284310743761,
+            "selected_replacement_teacher_improvement_sum": 1.9867882345785026,
+            "selected_replacement_worst_teacher_improvement": -0.002361465603113011
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 74.0,
+            "opportunity_capture_rate": 0.24074074074074073,
+            "opportunity_count": 54.0,
+            "selected_replacement_count": 19.0,
+            "selected_replacement_precision": 0.6842105263157895,
+            "selected_replacement_teacher_improvement_mean": 0.05223964715825418,
+            "selected_replacement_teacher_improvement_sum": 0.9925532960068294,
+            "selected_replacement_worst_teacher_improvement": -0.002361465603113011
+          },
+          "self_consistent_path_safe": true
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 69.0,
+            "opportunity_capture_rate": 0.35714285714285715,
+            "opportunity_count": 56.0,
+            "selected_replacement_count": 24.0,
+            "selected_replacement_precision": 0.8333333333333334,
+            "selected_replacement_teacher_improvement_mean": 0.17738446088286572,
+            "selected_replacement_teacher_improvement_sum": 4.257227061188777,
+            "selected_replacement_worst_teacher_improvement": -0.0008613491043445443
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.5966170925848345,
+            "positive_rate": 0.1540983606557377,
+            "predicted_positive_precision": 0.7872340425531915,
+            "scene_or_edge_count": 305.0,
+            "sign_accuracy": 0.3704918032786885,
+            "teacher_improvement_sum_on_predicted_negative": -9.485178961494816,
+            "teacher_improvement_sum_on_predicted_positive": 9.729207715193803,
+            "true_positive_rate": 0.7114754098360656
+          },
+          "fold": 1,
+          "holdout_edge_count": 305,
+          "holdout_unique_scene_count": 69,
+          "scalar": {
+            "holdout_scene_count": 69.0,
+            "opportunity_capture_rate": 0.3392857142857143,
+            "opportunity_count": 56.0,
+            "selected_replacement_count": 24.0,
+            "selected_replacement_precision": 0.7916666666666666,
+            "selected_replacement_teacher_improvement_mean": 0.1774442994639082,
+            "selected_replacement_teacher_improvement_sum": 4.258663187133797,
+            "selected_replacement_worst_teacher_improvement": -0.0008613491043445443
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 69.0,
+            "opportunity_capture_rate": 0.3392857142857143,
+            "opportunity_count": 56.0,
+            "selected_replacement_count": 22.0,
+            "selected_replacement_precision": 0.8636363636363636,
+            "selected_replacement_teacher_improvement_mean": 0.19353162854769626,
+            "selected_replacement_teacher_improvement_sum": 4.257695828049318,
+            "selected_replacement_worst_teacher_improvement": -0.00025827139809564414
+          },
+          "self_consistent_path_safe": true
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 55.0,
+            "opportunity_capture_rate": 0.325,
+            "opportunity_count": 40.0,
+            "selected_replacement_count": 18.0,
+            "selected_replacement_precision": 0.7222222222222222,
+            "selected_replacement_teacher_improvement_mean": -0.038639111943421026,
+            "selected_replacement_teacher_improvement_sum": -0.6955040149815784,
+            "selected_replacement_worst_teacher_improvement": -1.7026166456802834
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.6225214019170264,
+            "positive_rate": 0.19444444444444445,
+            "predicted_positive_precision": 0.7142857142857143,
+            "scene_or_edge_count": 252.0,
+            "sign_accuracy": 0.4007936507936508,
+            "teacher_improvement_sum_on_predicted_negative": -8.225685943703514,
+            "teacher_improvement_sum_on_predicted_positive": 3.267705821710284,
+            "true_positive_rate": 0.6865079365079365
+          },
+          "fold": 2,
+          "holdout_edge_count": 252,
+          "holdout_unique_scene_count": 55,
+          "scalar": {
+            "holdout_scene_count": 55.0,
+            "opportunity_capture_rate": 0.35,
+            "opportunity_count": 40.0,
+            "selected_replacement_count": 18.0,
+            "selected_replacement_precision": 0.7777777777777778,
+            "selected_replacement_teacher_improvement_mean": -0.038627204301830094,
+            "selected_replacement_teacher_improvement_sum": -0.6952896774329417,
+            "selected_replacement_worst_teacher_improvement": -1.7026166456802834
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 55.0,
+            "opportunity_capture_rate": 0.3,
+            "opportunity_count": 40.0,
+            "selected_replacement_count": 16.0,
+            "selected_replacement_precision": 0.75,
+            "selected_replacement_teacher_improvement_mean": 0.06217406024517269,
+            "selected_replacement_teacher_improvement_sum": 0.994784963922763,
+            "selected_replacement_worst_teacher_improvement": -0.0008482173569501761
+          },
+          "self_consistent_path_safe": true
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 51.0,
+            "opportunity_capture_rate": 0.35135135135135137,
+            "opportunity_count": 37.0,
+            "selected_replacement_count": 22.0,
+            "selected_replacement_precision": 0.5909090909090909,
+            "selected_replacement_teacher_improvement_mean": 0.12728181702898878,
+            "selected_replacement_teacher_improvement_sum": 2.8001999746377533,
+            "selected_replacement_worst_teacher_improvement": -0.9865714945818296
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.513337872129727,
+            "positive_rate": 0.2131782945736434,
+            "predicted_positive_precision": 0.6363636363636364,
+            "scene_or_edge_count": 258.0,
+            "sign_accuracy": 0.46511627906976744,
+            "teacher_improvement_sum_on_predicted_negative": -4.549123199184463,
+            "teacher_improvement_sum_on_predicted_positive": 4.67587688506051,
+            "true_positive_rate": 0.5852713178294574
+          },
+          "fold": 3,
+          "holdout_edge_count": 258,
+          "holdout_unique_scene_count": 51,
+          "scalar": {
+            "holdout_scene_count": 51.0,
+            "opportunity_capture_rate": 0.35135135135135137,
+            "opportunity_count": 37.0,
+            "selected_replacement_count": 22.0,
+            "selected_replacement_precision": 0.5909090909090909,
+            "selected_replacement_teacher_improvement_mean": 0.12729676600614204,
+            "selected_replacement_teacher_improvement_sum": 2.800528852135125,
+            "selected_replacement_worst_teacher_improvement": -0.9865714945818296
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 51.0,
+            "opportunity_capture_rate": 0.2972972972972973,
+            "opportunity_count": 37.0,
+            "selected_replacement_count": 19.0,
+            "selected_replacement_precision": 0.5789473684210527,
+            "selected_replacement_teacher_improvement_mean": 0.15036669756013316,
+            "selected_replacement_teacher_improvement_sum": 2.85696725364253,
+            "selected_replacement_worst_teacher_improvement": -0.0011022090441545895
+          },
+          "self_consistent_path_safe": true
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 61.0,
+            "opportunity_capture_rate": 0.28,
+            "opportunity_count": 50.0,
+            "selected_replacement_count": 23.0,
+            "selected_replacement_precision": 0.6086956521739131,
+            "selected_replacement_teacher_improvement_mean": 0.032369624496432034,
+            "selected_replacement_teacher_improvement_sum": 0.7445013634179367,
+            "selected_replacement_worst_teacher_improvement": -0.25515214426409427
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.42442857142857143,
+            "positive_rate": 0.2440677966101695,
+            "predicted_positive_precision": 0.4166666666666667,
+            "scene_or_edge_count": 295.0,
+            "sign_accuracy": 0.3559322033898305,
+            "teacher_improvement_sum_on_predicted_negative": -8.346340619337745,
+            "teacher_improvement_sum_on_predicted_positive": -2.870991801438194,
+            "true_positive_rate": 0.5932203389830508
+          },
+          "fold": 4,
+          "holdout_edge_count": 295,
+          "holdout_unique_scene_count": 61,
+          "scalar": {
+            "holdout_scene_count": 61.0,
+            "opportunity_capture_rate": 0.32,
+            "opportunity_count": 50.0,
+            "selected_replacement_count": 23.0,
+            "selected_replacement_precision": 0.6956521739130435,
+            "selected_replacement_teacher_improvement_mean": 0.032432133245042453,
+            "selected_replacement_teacher_improvement_sum": 0.7459390646359765,
+            "selected_replacement_worst_teacher_improvement": -0.25515214426409427
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 61.0,
+            "opportunity_capture_rate": 0.24,
+            "opportunity_count": 50.0,
+            "selected_replacement_count": 20.0,
+            "selected_replacement_precision": 0.6,
+            "selected_replacement_teacher_improvement_mean": 0.03721457401104561,
+            "selected_replacement_teacher_improvement_sum": 0.7442914802209122,
+            "selected_replacement_worst_teacher_improvement": -0.25515214426409427
+          },
+          "self_consistent_path_safe": true
+        }
+      ],
+      "mean_edge_auc": 0.539247907248839,
+      "mean_self_consistent_capture": 0.28346475046475045,
+      "mean_self_consistent_precision": 0.6953588516746412,
+      "metric_group_policy": "equal_group_average_squared_distance",
+      "mode": "evidence_only",
+      "neighbor_k_values": [
+        32,
+        64
+      ],
+      "scalar_teacher_improvement_sum": 9.096629661050459,
+      "se_multiplier": 1.0,
+      "self_consistent_fold_pass_count": 5,
+      "self_consistent_selected_replacement_count": 96,
+      "self_consistent_teacher_improvement_sum": 9.846292821842354
+    },
+    "main_algorithm_arm": "evidence_local_self_consistent_rcr",
+    "not_promotion_evidence": true,
+    "replacement_population_edges": 1455,
+    "replacement_population_unique_scenes": 310,
+    "train_gate_pass": true,
+    "transition_conditioning_role": "controlled_ablation_only",
+    "transition_local_crossfit": {
+      "all_folds_self_consistent_path_safe": false,
+      "dual_rank_only_teacher_improvement_sum": 15.358652079893647,
+      "feature_names": [
+        "evidence::raw_margin",
+        "evidence::attribution_scale",
+        "evidence::margin_over_attribution",
+        "evidence::attribution_over_frontier_rms",
+        "evidence::raw_margin_z",
+        "evidence::attribution_z",
+        "evidence::raw_margin_rank",
+        "evidence::attribution_rank",
+        "evidence::margin_below_frontier_max",
+        "evidence::margin_minus_legacy_selected",
+        "evidence::attribution_minus_legacy_selected",
+        "evidence::eaf_score_gain_vs_anchor",
+        "evidence::eaf_score_minus_legacy_selected",
+        "evidence::utility_cost_minus_legacy_selected",
+        "evidence::guard_margin_excess",
+        "evidence::eaf_score_rank",
+        "evidence::utility_cost_rank",
+        "evidence::executable_candidate_fraction",
+        "transition::candidate_maneuver_keep_follow",
+        "transition::candidate_maneuver_decelerate_stop",
+        "transition::candidate_maneuver_yield_creep",
+        "transition::candidate_maneuver_lane_change_left",
+        "transition::candidate_maneuver_lane_change_right",
+        "transition::candidate_maneuver_route_turn_connector",
+        "transition::candidate_maneuver_safe_fallback",
+        "transition::reference_maneuver_keep_follow",
+        "transition::reference_maneuver_decelerate_stop",
+        "transition::reference_maneuver_yield_creep",
+        "transition::reference_maneuver_lane_change_left",
+        "transition::reference_maneuver_lane_change_right",
+        "transition::reference_maneuver_route_turn_connector",
+        "transition::reference_maneuver_safe_fallback",
+        "transition::same_maneuver",
+        "transition::candidate_safe_like",
+        "transition::reference_safe_like",
+        "transition::candidate_progressive",
+        "transition::reference_progressive",
+        "transition::safe_to_progressive",
+        "transition::progressive_to_safe",
+        "transition::candidate_terminal_x_norm",
+        "transition::reference_terminal_x_norm",
+        "transition::delta_terminal_x_norm",
+        "transition::candidate_terminal_y_norm",
+        "transition::reference_terminal_y_norm",
+        "transition::delta_terminal_y_norm",
+        "transition::candidate_terminal_speed_norm",
+        "transition::reference_terminal_speed_norm",
+        "transition::delta_terminal_speed_norm",
+        "transition::candidate_path_length_norm",
+        "transition::reference_path_length_norm",
+        "transition::delta_path_length_norm",
+        "transition::candidate_max_abs_y_norm",
+        "transition::reference_max_abs_y_norm",
+        "transition::delta_max_abs_y_norm",
+        "transition::endpoint_separation_norm",
+        "transition::mean_path_separation_norm",
+        "transition::max_path_separation_norm",
+        "transition::sin_terminal_yaw_delta",
+        "transition::cos_terminal_yaw_delta"
+      ],
+      "fold_seed": "v64.3.23-eaf-icer-rcr-scene-crossfit-v1",
+      "folds": [
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 74.0,
+            "opportunity_capture_rate": 0.2962962962962963,
+            "opportunity_count": 54.0,
+            "selected_replacement_count": 36.0,
+            "selected_replacement_precision": 0.4444444444444444,
+            "selected_replacement_teacher_improvement_mean": -0.00627267019929565,
+            "selected_replacement_teacher_improvement_sum": -0.2258161271746434,
+            "selected_replacement_worst_teacher_improvement": -1.2194838024313555
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.512433934137417,
+            "positive_rate": 0.3159420289855073,
+            "predicted_positive_precision": 0.5412844036697247,
+            "scene_or_edge_count": 345.0,
+            "sign_accuracy": 0.48695652173913045,
+            "teacher_improvement_sum_on_predicted_negative": -39.5087853278378,
+            "teacher_improvement_sum_on_predicted_positive": 2.7244583882418656,
+            "true_positive_rate": 0.5449275362318841
+          },
+          "fold": 0,
+          "holdout_edge_count": 345,
+          "holdout_unique_scene_count": 74,
+          "scalar": {
+            "holdout_scene_count": 74.0,
+            "opportunity_capture_rate": 0.35185185185185186,
+            "opportunity_count": 54.0,
+            "selected_replacement_count": 36.0,
+            "selected_replacement_precision": 0.5277777777777778,
+            "selected_replacement_teacher_improvement_mean": 0.021280066230165998,
+            "selected_replacement_teacher_improvement_sum": 0.7660823842859759,
+            "selected_replacement_worst_teacher_improvement": -1.2194838024313555
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 74.0,
+            "opportunity_capture_rate": 0.25925925925925924,
+            "opportunity_count": 54.0,
+            "selected_replacement_count": 31.0,
+            "selected_replacement_precision": 0.45161290322580644,
+            "selected_replacement_teacher_improvement_mean": -0.0073060176770347075,
+            "selected_replacement_teacher_improvement_sum": -0.22648654798807594,
+            "selected_replacement_worst_teacher_improvement": -1.2194838024313555
+          },
+          "self_consistent_path_safe": false
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 69.0,
+            "opportunity_capture_rate": 0.5178571428571429,
+            "opportunity_count": 56.0,
+            "selected_replacement_count": 39.0,
+            "selected_replacement_precision": 0.7435897435897436,
+            "selected_replacement_teacher_improvement_mean": 0.2841427907736063,
+            "selected_replacement_teacher_improvement_sum": 11.081568840170647,
+            "selected_replacement_worst_teacher_improvement": -0.9288139028848613
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.617197318810222,
+            "positive_rate": 0.36065573770491804,
+            "predicted_positive_precision": 0.8,
+            "scene_or_edge_count": 305.0,
+            "sign_accuracy": 0.49836065573770494,
+            "teacher_improvement_sum_on_predicted_negative": -29.83204429915664,
+            "teacher_improvement_sum_on_predicted_positive": 30.076073052855627,
+            "true_positive_rate": 0.7114754098360656
+          },
+          "fold": 1,
+          "holdout_edge_count": 305,
+          "holdout_unique_scene_count": 69,
+          "scalar": {
+            "holdout_scene_count": 69.0,
+            "opportunity_capture_rate": 0.5178571428571429,
+            "opportunity_count": 56.0,
+            "selected_replacement_count": 39.0,
+            "selected_replacement_precision": 0.7435897435897436,
+            "selected_replacement_teacher_improvement_mean": 0.28415180470589124,
+            "selected_replacement_teacher_improvement_sum": 11.081920383529758,
+            "selected_replacement_worst_teacher_improvement": -0.9288139028848613
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 69.0,
+            "opportunity_capture_rate": 0.5178571428571429,
+            "opportunity_count": 56.0,
+            "selected_replacement_count": 36.0,
+            "selected_replacement_precision": 0.8055555555555556,
+            "selected_replacement_teacher_improvement_mean": 0.3145841857749408,
+            "selected_replacement_teacher_improvement_sum": 11.325030687897868,
+            "selected_replacement_worst_teacher_improvement": -0.9288139028848613
+          },
+          "self_consistent_path_safe": true
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 55.0,
+            "opportunity_capture_rate": 0.375,
+            "opportunity_count": 40.0,
+            "selected_replacement_count": 19.0,
+            "selected_replacement_precision": 0.7894736842105263,
+            "selected_replacement_teacher_improvement_mean": 0.016503144755173574,
+            "selected_replacement_teacher_improvement_sum": 0.3135597503482979,
+            "selected_replacement_worst_teacher_improvement": -1.6827764830876695
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.6051071925074998,
+            "positive_rate": 0.21825396825396826,
+            "predicted_positive_precision": 0.8363636363636363,
+            "scene_or_edge_count": 252.0,
+            "sign_accuracy": 0.45634920634920634,
+            "teacher_improvement_sum_on_predicted_negative": -11.546551467575636,
+            "teacher_improvement_sum_on_predicted_positive": 6.588571345582407,
+            "true_positive_rate": 0.6865079365079365
+          },
+          "fold": 2,
+          "holdout_edge_count": 252,
+          "holdout_unique_scene_count": 55,
+          "scalar": {
+            "holdout_scene_count": 55.0,
+            "opportunity_capture_rate": 0.375,
+            "opportunity_count": 40.0,
+            "selected_replacement_count": 19.0,
+            "selected_replacement_precision": 0.7894736842105263,
+            "selected_replacement_teacher_improvement_mean": 0.016535632476164824,
+            "selected_replacement_teacher_improvement_sum": 0.3141770170471317,
+            "selected_replacement_worst_teacher_improvement": -1.6827764830876695
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 55.0,
+            "opportunity_capture_rate": 0.35,
+            "opportunity_count": 40.0,
+            "selected_replacement_count": 17.0,
+            "selected_replacement_precision": 0.8235294117647058,
+            "selected_replacement_teacher_improvement_mean": 0.017724331433693164,
+            "selected_replacement_teacher_improvement_sum": 0.3013136343727838,
+            "selected_replacement_worst_teacher_improvement": -1.6827764830876695
+          },
+          "self_consistent_path_safe": true
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 51.0,
+            "opportunity_capture_rate": 0.35135135135135137,
+            "opportunity_count": 37.0,
+            "selected_replacement_count": 23.0,
+            "selected_replacement_precision": 0.5652173913043478,
+            "selected_replacement_teacher_improvement_mean": 0.17161357979573652,
+            "selected_replacement_teacher_improvement_sum": 3.94711233530194,
+            "selected_replacement_worst_teacher_improvement": -0.12288450449937793
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.5275731880918487,
+            "positive_rate": 0.28294573643410853,
+            "predicted_positive_precision": 0.5616438356164384,
+            "scene_or_edge_count": 258.0,
+            "sign_accuracy": 0.4496124031007752,
+            "teacher_improvement_sum_on_predicted_negative": -4.1754000827453055,
+            "teacher_improvement_sum_on_predicted_positive": 4.302153768621354,
+            "true_positive_rate": 0.5852713178294574
+          },
+          "fold": 3,
+          "holdout_edge_count": 258,
+          "holdout_unique_scene_count": 51,
+          "scalar": {
+            "holdout_scene_count": 51.0,
+            "opportunity_capture_rate": 0.35135135135135137,
+            "opportunity_count": 37.0,
+            "selected_replacement_count": 23.0,
+            "selected_replacement_precision": 0.5652173913043478,
+            "selected_replacement_teacher_improvement_mean": 0.17164568924976878,
+            "selected_replacement_teacher_improvement_sum": 3.947850852744682,
+            "selected_replacement_worst_teacher_improvement": -0.12288450449937793
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 51.0,
+            "opportunity_capture_rate": 0.2972972972972973,
+            "opportunity_count": 37.0,
+            "selected_replacement_count": 20.0,
+            "selected_replacement_precision": 0.55,
+            "selected_replacement_teacher_improvement_mean": 0.1507145531238631,
+            "selected_replacement_teacher_improvement_sum": 3.0142910624772616,
+            "selected_replacement_worst_teacher_improvement": -0.12288450449937793
+          },
+          "self_consistent_path_safe": true
+        },
+        {
+          "dual_rank_only": {
+            "holdout_scene_count": 61.0,
+            "opportunity_capture_rate": 0.26,
+            "opportunity_count": 50.0,
+            "selected_replacement_count": 22.0,
+            "selected_replacement_precision": 0.5909090909090909,
+            "selected_replacement_teacher_improvement_mean": 0.011010330965791106,
+            "selected_replacement_teacher_improvement_sum": 0.24222728124740434,
+            "selected_replacement_worst_teacher_improvement": -0.005140257303826168
+          },
+          "edge_local_regret_lower_bound": {
+            "auc_positive_teacher_improvement": 0.39161904761904764,
+            "positive_rate": 0.2576271186440678,
+            "predicted_positive_precision": 0.35526315789473684,
+            "scene_or_edge_count": 295.0,
+            "sign_accuracy": 0.3220338983050847,
+            "teacher_improvement_sum_on_predicted_negative": -5.361540599097138,
+            "teacher_improvement_sum_on_predicted_positive": -5.855791821678801,
+            "true_positive_rate": 0.5932203389830508
+          },
+          "fold": 4,
+          "holdout_edge_count": 295,
+          "holdout_unique_scene_count": 61,
+          "scalar": {
+            "holdout_scene_count": 61.0,
+            "opportunity_capture_rate": 0.32,
+            "opportunity_count": 50.0,
+            "selected_replacement_count": 22.0,
+            "selected_replacement_precision": 0.7272727272727273,
+            "selected_replacement_teacher_improvement_mean": 0.01108710352111106,
+            "selected_replacement_teacher_improvement_sum": 0.24391627746444333,
+            "selected_replacement_worst_teacher_improvement": -0.005140257303826168
+          },
+          "self_consistent_dual": {
+            "holdout_scene_count": 61.0,
+            "opportunity_capture_rate": 0.22,
+            "opportunity_count": 50.0,
+            "selected_replacement_count": 19.0,
+            "selected_replacement_precision": 0.5789473684210527,
+            "selected_replacement_teacher_improvement_mean": -5.167606393680527e-05,
+            "selected_replacement_teacher_improvement_sum": -0.0009818452147993002,
+            "selected_replacement_worst_teacher_improvement": -0.005140257303826168
+          },
+          "self_consistent_path_safe": false
+        }
+      ],
+      "mean_edge_auc": 0.5307861362332071,
+      "mean_self_consistent_capture": 0.32888273988273986,
+      "mean_self_consistent_precision": 0.6419290477934241,
+      "metric_group_policy": "equal_group_average_squared_distance",
+      "mode": "transition_conditioned",
+      "neighbor_k_values": [
+        32,
+        64
+      ],
+      "scalar_teacher_improvement_sum": 16.35394691507199,
+      "se_multiplier": 1.0,
+      "self_consistent_fold_pass_count": 3,
+      "self_consistent_selected_replacement_count": 123,
+      "self_consistent_teacher_improvement_sum": 14.41316699154504
+    }
+  }
+}
