@@ -1,8 +1,0 @@
-# V64.3.21 EAF-ICER-MCR — next allowed execution only.
-# Do NOT tune thresholds, B/M, acquisition, certificate, support/dominance heads, or view weights.
-# Do NOT run test or closed-loop even if the double-fresh screen passes.
-
-bash RUN_V64_3_21_EAF_ICER_MCR_SCREEN_2GPU.sh
-
-# If STOP SCREEN appears, archive the entire outputs_v64_3_21_eaf_icer_mcr_screen_2gpu_v1 directory and return it for causal attribution.
-# If BOTH fresh 500-scene blocks pass, the only next allowed stage is ONE independent frozen full-val reproduction.

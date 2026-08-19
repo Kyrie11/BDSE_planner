@@ -1,0 +1,44 @@
+V64.3.24 EAF-ICER-TTCR engineering validation
+
+1. Python syntax/import validation
+   - python -m compileall -q bdse: PASS
+   - py_compile on all modified/new Python modules: PASS
+
+2. Launcher validation
+   - bash -n RUN_V64_3_24_EAF_ICER_TYPED_TAIL_SCREEN_2GPU.sh: PASS
+   - permanent design exclusion: 5700 lines / 5700 unique tokens
+   - prior V23 design exclusion: 4700; exactly 1000 V23 A/B tokens added
+
+3. Production call-site audit
+   - nuplan_planner.py: 3/3 pair-conditioned tournament calls pass predicted_atom_costs + atom_types
+   - evaluate_open_loop.py: 2/2 pass predicted_atom_costs + atom_types
+   - train.py: 2/2 pass predicted_atom_costs + atom_types
+
+4. Targeted historical regression
+   - V64.3.6 through V64.3.24 selected test suite: 118/118 PASS
+   - warnings: 6 existing PyTorch Transformer nested-tensor/norm_first warnings
+
+5. V24-specific behavior
+   - typed selected-evidence contrast sign/schema unit test: PASS
+   - rare material-downside tail penalty unit test: PASS
+   - risk-first vs dominance-first integrated operator test: PASS
+   - 5700-token exclusion invariant: PASS
+
+6. Synthetic end-to-end TRAIN fitter/contract dry run
+   - eligible replacement edges: 1280
+   - unique scenes: 320
+   - evidence features: 18
+   - typed features: 67
+   - typed row coverage: 1.0
+   - fixed 5-fold TRAIN main gate: PASS on synthetic data
+   - generated configs: evidence-LCB, evidence-tail, typed-LCB, typed-tail/dominance-first, typed-tail/risk-first
+   - V24 contract checker: 5/5 PASS
+
+7. Diagnostic correctness change
+   - V24 split checker restricts regret-risk AUC/precision/gate diagnostics to the actual deployment-eligible alternatives: final-guard admissible AND support>0 AND scalar-dominance>0.
+   - This corrects a V23 diagnostic-population mismatch; it does not alter historical V23 actions.
+
+8. Not executed here
+   - actual 3000-scene nuPlan TRAIN typed-frontier replay
+   - fresh C/D GPU screen
+   These require the user's external dataset/cache/GPU environment and are intentionally the next experiment.

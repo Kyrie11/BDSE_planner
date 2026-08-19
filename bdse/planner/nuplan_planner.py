@@ -545,6 +545,7 @@ class BDSEPlannerCore:
                     candidate_trajectories=candidates.trajectories,
                     maneuver_ids=candidates.maneuver_ids,
                     predicted_atom_costs=np.asarray(pred.get("g", zero_g), dtype=np.float32),
+                    atom_types=[str(getattr(a, "type", "other")) for a in evidence_bank.atoms],
                 )
                 result.diagnostics["baseline_pair_tournament"] = True
                 return result
@@ -777,6 +778,7 @@ class BDSEPlannerCore:
                         candidate_trajectories=candidates.trajectories,
                         maneuver_ids=candidates.maneuver_ids,
                         predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
+                        atom_types=[str(getattr(a, "type", "other")) for a in evidence_bank.atoms],
                         residual_action_potential=None,
                         residual_action_variance=None,
                     )
@@ -1024,6 +1026,7 @@ class BDSEPlannerCore:
                 candidate_trajectories=candidates.trajectories,
                 maneuver_ids=candidates.maneuver_ids,
                 predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
+                atom_types=[str(getattr(a, "type", "other")) for a in evidence_bank.atoms],
                 residual_action_potential=pred.get("residual_action_potential", None),
                 residual_action_variance=pred.get("residual_action_var", None),
                 residual_set_atom_factors=pred.get("residual_set_atom_factors", None),

@@ -1,0 +1,11 @@
+# Next experiment from repository root
+bash RUN_V64_3_24_EAF_ICER_TYPED_TAIL_SCREEN_2GPU.sh
+
+# Default output root
+outputs_v64_3_24_eaf_icer_typed_tail_screen_2gpu_v1
+
+# First gate artifact
+outputs_v64_3_24_eaf_icer_typed_tail_screen_2gpu_v1/provenance/v64_3_24_train_only_typed_tail_fit.json
+
+# If TRAIN passes, final double-fresh screen artifact
+outputs_v64_3_24_eaf_icer_typed_tail_screen_2gpu_v1/provenance/v64_3_24_eaf_icer_typed_tail_double_fresh_screen.json

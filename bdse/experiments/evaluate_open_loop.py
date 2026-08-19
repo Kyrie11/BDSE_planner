@@ -834,6 +834,7 @@ def main() -> None:
                 candidate_trajectories=sample.candidates.trajectories,
                 maneuver_ids=sample.candidates.maneuver_ids,
                 predicted_atom_costs=pred["g"],
+                atom_types=[str(getattr(a, "type", "other")) for a in sample.evidence_bank.atoms],
                 residual_action_potential=pred.get("residual_action_potential", None),
                 residual_action_variance=pred.get("residual_action_var", None),
                 residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
@@ -865,6 +866,7 @@ def main() -> None:
                     candidate_trajectories=sample.candidates.trajectories,
                     maneuver_ids=sample.candidates.maneuver_ids,
                     predicted_atom_costs=pred["g"],
+                    atom_types=[str(getattr(a, "type", "other")) for a in sample.evidence_bank.atoms],
                     residual_action_potential=None,
                     residual_action_variance=None,
                 )
@@ -1014,6 +1016,8 @@ def main() -> None:
             icer_transition_inc = tour_diag.get("_decisive_frontier_icer_transition_vs_incumbent_feature_matrix", None)
             icer_transition_anchor = tour_diag.get("_decisive_frontier_icer_transition_vs_anchor_feature_matrix", None)
             icer_transition_names = list(tour_diag.get("_decisive_frontier_icer_transition_feature_names", []))
+            icer_typed_inc = tour_diag.get("_decisive_frontier_icer_typed_vs_incumbent_feature_matrix", None)
+            icer_typed_names = list(tour_diag.get("_decisive_frontier_icer_typed_feature_names", []))
             icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
             icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
@@ -1082,6 +1086,7 @@ def main() -> None:
                             row[f"icer_feature_{name}"] = float(imat[challenger, j])
                     timat = None if icer_transition_inc is None else np.asarray(icer_transition_inc, dtype=np.float64)
                     tamat = None if icer_transition_anchor is None else np.asarray(icer_transition_anchor, dtype=np.float64)
+                    tyimat = None if icer_typed_inc is None else np.asarray(icer_typed_inc, dtype=np.float64)
                     # V64.3.22 keeps frontier logs auditable without multiplying
                     # TRAIN I/O unnecessarily: incumbent-relative transition
                     # geometry is only needed for admissible runtime candidates;
@@ -1091,6 +1096,13 @@ def main() -> None:
                     if timat is not None and write_inc_transition and timat.ndim == 2 and timat.shape[0] == edge_valid.size and timat.shape[1] == len(icer_transition_names):
                         for j, name in enumerate(icer_transition_names):
                             row[f"icer_transition_incumbent_{name}"] = float(timat[challenger, j])
+                    # V64.3.24 keeps type-aware selected-evidence contrasts only for
+                    # deployment-admissible alternatives.  These values are pure
+                    # functions of already-selected atoms and predicted g; no new
+                    # evidence query or teacher information enters runtime.
+                    if tyimat is not None and write_inc_transition and tyimat.ndim == 2 and tyimat.shape[0] == edge_valid.size and tyimat.shape[1] == len(icer_typed_names):
+                        for j, name in enumerate(icer_typed_names):
+                            row[f"icer_typed_incumbent_{name}"] = float(tyimat[challenger, j])
                     if tamat is not None and challenger == raw_top and tamat.ndim == 2 and tamat.shape[0] == edge_valid.size and tamat.shape[1] == len(icer_transition_names):
                         for j, name in enumerate(icer_transition_names):
                             row[f"icer_transition_anchor_{name}"] = float(tamat[challenger, j])

@@ -1,0 +1,18 @@
+V64.3.24 EAF-ICER-TTCR changed/new files relative to uploaded bdse.zip
+
+MODIFIED
+ALGORITHM_CHANGELOG.md
+bdse/planner/tournament.py
+bdse/planner/nuplan_planner.py
+bdse/experiments/evaluate_open_loop.py
+bdse/experiments/train.py
+
+NEW
+RUN_V64_3_24_EAF_ICER_TYPED_TAIL_SCREEN_2GPU.sh
+V64_3_23_STOP_POSTMORTEM_AND_V64_3_24_TTCR.md
+bdse/configs/v64_3_24_design_exclude_v64_3_23_screen_tokens.txt
+bdse/tools/fit_v64_3_24_eaf_icer_typed_tail.py
+bdse/tools/check_v64_3_24_eaf_icer_typed_tail_contract.py
+bdse/tools/check_v64_3_24_eaf_icer_typed_tail_split.py
+bdse/tools/check_v64_3_24_eaf_icer_typed_tail_screen.py
+bdse/tests/test_v64_3_24_eaf_icer_typed_tail.py

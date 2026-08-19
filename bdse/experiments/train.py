@@ -1268,6 +1268,7 @@ def _run_validation_open_loop(
                     candidate_trajectories=sample.candidates.trajectories,
                     maneuver_ids=sample.candidates.maneuver_ids,
                     predicted_atom_costs=pred["g"],
+                    atom_types=[str(getattr(a, "type", "other")) for a in sample.evidence_bank.atoms],
                     residual_action_potential=pred.get("residual_action_potential", None),
                     residual_action_variance=pred.get("residual_action_var", None),
                     residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
@@ -1298,6 +1299,7 @@ def _run_validation_open_loop(
                         candidate_trajectories=sample.candidates.trajectories,
                         maneuver_ids=sample.candidates.maneuver_ids,
                         predicted_atom_costs=pred["g"],
+                        atom_types=[str(getattr(a, "type", "other")) for a in sample.evidence_bank.atoms],
                     )
                     local_pair_full_tour = core._apply_all_flagged_structural_guard(
                         local_pair_full_tour, sample.runtime, sample.candidates, runtime_flags, cfg
