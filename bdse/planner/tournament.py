@@ -1512,6 +1512,71 @@ def _signed_atom_profile(vec: np.ndarray, *, top_k: int = 4) -> list[float]:
     return [l1, pos_fraction, top1_fraction, effective_support, *top]
 
 
+_ICER_ATTRIBUTION_SPECTRUM_BUDGET = 16
+_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES = (
+    [f"candidate_atom_signed_spectrum_{i:02d}" for i in range(_ICER_ATTRIBUTION_SPECTRUM_BUDGET)]
+    + [f"delta_atom_signed_spectrum_{i:02d}" for i in range(_ICER_ATTRIBUTION_SPECTRUM_BUDGET)]
+)
+
+
+def _signed_attribution_spectrum(vec: np.ndarray, *, budget: int = _ICER_ATTRIBUTION_SPECTRUM_BUDGET) -> np.ndarray:
+    """Full fixed-budget signed attribution spectrum, normalized by L1 mass.
+
+    Unlike the historical top-4 summary, this retains every selected-evidence
+    contribution up to the planner-interface budget.  Sorting by absolute
+    contribution makes the representation permutation-invariant while preserving
+    the sign of each contribution.  Magnitude remains available through the
+    existing audited ICER aggregate attribution features.
+    """
+    x = np.asarray(vec, dtype=np.float64).reshape(-1)
+    x = x[np.isfinite(x)]
+    out = np.zeros((int(budget),), dtype=np.float64)
+    if x.size == 0:
+        return out
+    denom = float(np.abs(x).sum())
+    if denom <= 1.0e-12:
+        return out
+    order = np.argsort(-np.abs(x), kind="mergesort")[: int(budget)]
+    vals = x[order] / denom
+    out[: len(vals)] = vals
+    return out
+
+
+def _icer_attribution_resolved_feature_matrix(
+    atom_contrib_star: np.ndarray | None,
+    valid_mask: np.ndarray,
+    anchor_action: int,
+    legacy_action: int,
+) -> tuple[np.ndarray, list[str]]:
+    """Candidate and candidate-minus-incumbent full signed evidence spectra."""
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    K = len(valid); a = int(anchor_action); legacy = int(legacy_action)
+    out = np.zeros((K, len(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES)), dtype=np.float64)
+    contrib = np.zeros((0, K), dtype=np.float64)
+    if atom_contrib_star is not None:
+        raw = np.asarray(atom_contrib_star, dtype=np.float64)
+        if raw.ndim == 2 and raw.shape[1] >= K:
+            contrib = raw[:, :K]
+    if contrib.shape[0] > _ICER_ATTRIBUTION_SPECTRUM_BUDGET:
+        raise ValueError(
+            f"selected evidence count {contrib.shape[0]} exceeds attribution spectrum budget "
+            f"{_ICER_ATTRIBUTION_SPECTRUM_BUDGET}"
+        )
+    legacy_vec = (
+        contrib[:, legacy]
+        if contrib.size and 0 <= legacy < K and legacy != a
+        else np.zeros((contrib.shape[0],), dtype=np.float64)
+    )
+    for b in np.flatnonzero(valid).tolist():
+        if b == a:
+            continue
+        cand = contrib[:, b] if contrib.size else np.zeros((0,), dtype=np.float64)
+        delta = cand - legacy_vec if contrib.size else np.zeros((0,), dtype=np.float64)
+        out[b, :_ICER_ATTRIBUTION_SPECTRUM_BUDGET] = _signed_attribution_spectrum(cand)
+        out[b, _ICER_ATTRIBUTION_SPECTRUM_BUDGET:] = _signed_attribution_spectrum(delta)
+    return out, list(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES)
+
+
 def _decisive_frontier_dacer_features(
     margin_star: np.ndarray,
     attribution_star: np.ndarray | None,
@@ -1828,120 +1893,11 @@ _ICER_DOMINANCE_PROFILE_BASE_NAMES = [
 _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[:18])
 
 
-
-_ICER_TYPED_EVIDENCE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("occupancy", ("occupancy", "collision")),
-    ("ttc", ("ttc",)),
-    ("precedence", ("gap", "yield")),
-    ("hard_rule", ("drivable_area", "wrong_way", "red_light")),
-    ("soft_rule_map", ("speed_limit", "route_connector")),
-    ("kinematic", ("local_comfort_accel", "local_comfort_jerk", "local_comfort_curvature", "local_comfort_brake")),
-    ("other", ()),
-)
-_ICER_TYPED_EVIDENCE_STAT_NAMES = (
-    "selected_fraction",
-    "candidate_cost_sum_norm",
-    "reference_cost_sum_norm",
-    "improvement_sum_norm",
-    "upside_mass_norm",
-    "downside_mass_norm",
-    "max_downside_norm",
-)
-_ICER_TYPED_EVIDENCE_FEATURE_NAMES = [
-    f"{group}_{stat}"
-    for group, _ in _ICER_TYPED_EVIDENCE_GROUPS
-    for stat in _ICER_TYPED_EVIDENCE_STAT_NAMES
-]
-
-
-def _icer_typed_selected_evidence_feature_matrix(
-    predicted_atom_costs: np.ndarray | None,
-    selected_atoms: list[int] | np.ndarray,
-    atom_types: list[str] | tuple[str, ...] | np.ndarray | None,
-    valid_mask: np.ndarray,
-    reference_action: int,
-) -> tuple[np.ndarray, list[str]]:
-    """Runtime-only typed selected-evidence contrasts for V64.3.24.
-
-    V64.3.23 compressed the selected evidence into type-agnostic signed-profile
-    statistics.  That representation is intentionally insufficient for the
-    observed hard-tier failure: two candidates can be close in those summaries
-    while the occupancy/TTC evidence that determines interaction risk is very
-    different.  This view keeps the evidence budget, selector and EAF value
-    frozen and only exposes *which already-selected evidence type* supports or
-    contradicts an incumbent replacement.  No new evidence query is issued.
-
-    Positive ``improvement`` means the candidate has lower predicted selected-
-    evidence cost than the reference incumbent.  Per-scene RMS normalization is
-    deterministic and uses runtime predictions only.
-    """
-    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
-    K = int(valid.size)
-    out = np.zeros((K, len(_ICER_TYPED_EVIDENCE_FEATURE_NAMES)), dtype=np.float64)
-    if K == 0 or predicted_atom_costs is None or atom_types is None:
-        return out, list(_ICER_TYPED_EVIDENCE_FEATURE_NAMES)
-    g = np.asarray(predicted_atom_costs, dtype=np.float64)
-    if g.ndim != 2 or g.shape[1] < K:
-        raise ValueError("EAF-ICER typed evidence requires predicted_atom_costs [E,K]")
-    types = [str(x) for x in list(atom_types)]
-    if len(types) < g.shape[0]:
-        raise ValueError("EAF-ICER typed evidence atom type schema shorter than predicted atom bank")
-    selected = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
-    selected = selected[(selected >= 0) & (selected < g.shape[0])]
-    if selected.size == 0:
-        return out, list(_ICER_TYPED_EVIDENCE_FEATURE_NAMES)
-    ref = int(reference_action)
-    if not (0 <= ref < K):
-        ref = 0
-    selected_types = np.asarray([types[int(i)] for i in selected], dtype=object)
-    known = set(t for _, vals in _ICER_TYPED_EVIDENCE_GROUPS[:-1] for t in vals)
-    valid_idx = np.flatnonzero(valid)
-    scale_vals = g[np.ix_(selected, valid_idx)] if valid_idx.size else g[selected, :K]
-    scale = max(float(np.sqrt(np.mean(np.square(np.nan_to_num(scale_vals, nan=0.0, posinf=0.0, neginf=0.0))))), 1.0e-6)
-    col = 0
-    total = max(float(selected.size), 1.0)
-    for group, vals in _ICER_TYPED_EVIDENCE_GROUPS:
-        if group == "other":
-            mask = np.asarray([str(t) not in known for t in selected_types], dtype=bool)
-        else:
-            value_set = set(vals)
-            mask = np.asarray([str(t) in value_set for t in selected_types], dtype=bool)
-        idx = selected[mask]
-        frac = float(idx.size) / total
-        if idx.size:
-            gg = np.nan_to_num(g[idx, :K], nan=0.0, posinf=0.0, neginf=0.0)
-            ref_cost = gg[:, ref]
-            improvement = ref_cost[:, None] - gg
-            cand_sum = gg.sum(axis=0) / scale
-            ref_sum = float(ref_cost.sum() / scale)
-            improve_sum = improvement.sum(axis=0) / scale
-            upside = np.maximum(improvement, 0.0).sum(axis=0) / scale
-            downside = np.maximum(-improvement, 0.0).sum(axis=0) / scale
-            max_down = np.maximum(-improvement, 0.0).max(axis=0) / scale
-        else:
-            cand_sum = np.zeros((K,), dtype=np.float64)
-            ref_sum = 0.0
-            improve_sum = np.zeros((K,), dtype=np.float64)
-            upside = np.zeros((K,), dtype=np.float64)
-            downside = np.zeros((K,), dtype=np.float64)
-            max_down = np.zeros((K,), dtype=np.float64)
-        out[:, col] = frac; col += 1
-        out[:, col] = cand_sum; col += 1
-        out[:, col] = ref_sum; col += 1
-        out[:, col] = improve_sum; col += 1
-        out[:, col] = upside; col += 1
-        out[:, col] = downside; col += 1
-        out[:, col] = max_down; col += 1
-    if col != out.shape[1]:
-        raise RuntimeError("EAF-ICER typed evidence feature schema construction mismatch")
-    return out, list(_ICER_TYPED_EVIDENCE_FEATURE_NAMES)
-
-
 @lru_cache(maxsize=16)
 def _load_icer_local_regret_memory(
     path_str: str,
     expected_sha256: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[str, ...], np.ndarray, tuple[int, ...], float, float, float]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[str, ...], np.ndarray, tuple[int, ...], float, str, float]:
     """Load one immutable TRAIN-only V64.3.23 regret-coherence memory.
 
     The memory is deliberately small and auditable.  It stores only frozen
@@ -1966,8 +1922,8 @@ def _load_icer_local_regret_memory(
         metric_weight = np.asarray(z["feature_metric_weight"], dtype=np.float64).reshape(-1)
         ks = tuple(int(x) for x in np.asarray(z["neighbor_k_values"]).reshape(-1).tolist())
         se_multiplier = float(np.asarray(z["se_multiplier"]).reshape(-1)[0])
-        material_delta_threshold = float(np.asarray(z["material_delta_threshold"]).reshape(-1)[0]) if "material_delta_threshold" in z.files else float("nan")
-        tail_se_multiplier = float(np.asarray(z["tail_se_multiplier"]).reshape(-1)[0]) if "tail_se_multiplier" in z.files else float("nan")
+        certificate_kind = str(np.asarray(z["certificate_kind"]).reshape(-1)[0]) if "certificate_kind" in z.files else "mean_minus_standard_error"
+        downside_multiplier = float(np.asarray(z["downside_multiplier"]).reshape(-1)[0]) if "downside_multiplier" in z.files else 1.0
     if (
         memory.ndim != 2
         or memory.shape[0] != len(delta)
@@ -1981,6 +1937,10 @@ def _load_icer_local_regret_memory(
         raise ValueError("EAF-ICER local regret memory has insufficient TRAIN support")
     if np.any(metric_weight <= 0.0) or not np.isfinite(se_multiplier) or se_multiplier < 0.0:
         raise ValueError("EAF-ICER local regret metric/lower-bound parameters invalid")
+    if certificate_kind not in {"mean_minus_standard_error", "mean_minus_downside_rms"}:
+        raise ValueError(f"unknown EAF-ICER local regret certificate_kind={certificate_kind}")
+    if not np.isfinite(downside_multiplier) or downside_multiplier < 0.0:
+        raise ValueError("EAF-ICER local downside multiplier invalid")
     if not (
         np.all(np.isfinite(memory))
         and np.all(np.isfinite(delta))
@@ -1989,7 +1949,7 @@ def _load_icer_local_regret_memory(
         and np.all(np.isfinite(metric_weight))
     ):
         raise ValueError("EAF-ICER local regret memory contains non-finite values")
-    return memory, delta, mean, np.maximum(std, 1.0e-6), names, metric_weight, ks, se_multiplier, material_delta_threshold, tail_se_multiplier
+    return memory, delta, mean, np.maximum(std, 1.0e-6), names, metric_weight, ks, se_multiplier, certificate_kind, downside_multiplier
 
 
 def _icer_local_regret_lower_bound(
@@ -2008,7 +1968,7 @@ def _icer_local_regret_lower_bound(
     coarser neighborhood support non-negative replacement improvement under the
     same fixed evidence/transition metric.
     """
-    memory, delta, mean, std, names, metric_weight, ks, se_multiplier, _, _ = _load_icer_local_regret_memory(
+    memory, delta, mean, std, names, metric_weight, ks, se_multiplier, certificate_kind, downside_multiplier = _load_icer_local_regret_memory(
         memory_path, memory_sha256
     )
     if list(names) != list(runtime_names):
@@ -2030,73 +1990,30 @@ def _icer_local_regret_lower_bound(
         w = w / np.maximum(np.sum(w, axis=1, keepdims=True), 1.0e-12)
         y = delta[nbr]
         local_mean = np.sum(w * y, axis=1)
-        local_var = np.sum(w * (y - local_mean[:, None]) ** 2, axis=1)
-        effective_n = 1.0 / np.maximum(np.sum(w * w, axis=1), 1.0e-12)
-        local_se = np.sqrt(local_var / np.maximum(effective_n, 1.0))
-        bounds.append(local_mean - se_multiplier * local_se)
+        if certificate_kind == "mean_minus_standard_error":
+            local_var = np.sum(w * (y - local_mean[:, None]) ** 2, axis=1)
+            effective_n = 1.0 / np.maximum(np.sum(w * w, axis=1), 1.0e-12)
+            local_se = np.sqrt(local_var / np.maximum(effective_n, 1.0))
+            bound = local_mean - se_multiplier * local_se
+        else:
+            # V64.3.24 outcome/downside certificate.  The V23 failure showed
+            # that confidence in a positive neighborhood *mean* does not bound
+            # the downside of one extremally selected replacement.  Penalize
+            # the weighted RMS magnitude of negative local outcomes directly.
+            downside = np.minimum(y, 0.0)
+            downside_rms = np.sqrt(np.sum(w * downside * downside, axis=1))
+            bound = local_mean - downside_multiplier * downside_rms
+        bounds.append(bound)
     return np.min(np.stack(bounds, axis=1), axis=1)
-
-
-def _icer_local_tail_coherence_lower_bound(
-    x: np.ndarray,
-    runtime_names: list[str],
-    memory_path: str,
-    memory_sha256: str,
-) -> np.ndarray:
-    """V64.3.24 multiscale mean-minus-material-downside coherence score.
-
-    The V23 mean-1SE score only constrains an average and can be positive in a
-    neighborhood containing a rare O(1) teacher-regret jump.  V24 keeps that
-    lower bound but subtracts a one-SE upper bound on the *lower partial moment*
-    beyond the pre-registered material threshold ``tau_delta_normalized``.  The
-    result is positive only when expected improvement survives an explicit
-    probability-times-magnitude downside penalty at both K=32 and K=64 scales.
-    """
-    memory, delta, mean, std, names, metric_weight, ks, se_multiplier, tau, tail_se_multiplier = _load_icer_local_regret_memory(
-        memory_path, memory_sha256
-    )
-    if list(names) != list(runtime_names):
-        raise ValueError("EAF-ICER local tail memory feature schema mismatch")
-    if not np.isfinite(tau) or tau < 0.0 or not np.isfinite(tail_se_multiplier) or tail_se_multiplier < 0.0:
-        raise ValueError("EAF-ICER local tail memory is missing valid material-tail parameters")
-    xx = np.asarray(x, dtype=np.float64)
-    if xx.ndim != 2 or xx.shape[1] != len(mean):
-        raise ValueError("EAF-ICER local tail runtime feature shape mismatch")
-    z = ((xx - mean[None, :]) / std[None, :]) * np.sqrt(metric_weight[None, :])
-    z2 = np.sum(z * z, axis=1, keepdims=True)
-    m2 = np.sum(memory * memory, axis=1, keepdims=False)[None, :]
-    d2 = np.maximum(z2 + m2 - 2.0 * (z @ memory.T), 0.0)
-    rows = np.arange(len(z))[:, None]
-    bounds: list[np.ndarray] = []
-    for k in ks:
-        kk = min(int(k), memory.shape[0])
-        nbr = np.argpartition(d2, kth=kk - 1, axis=1)[:, :kk]
-        dist = np.sqrt(d2[rows, nbr])
-        w = 1.0 / np.maximum(dist, 1.0e-6)
-        w = w / np.maximum(np.sum(w, axis=1, keepdims=True), 1.0e-12)
-        y = delta[nbr]
-        local_mean = np.sum(w * y, axis=1)
-        local_var = np.sum(w * (y - local_mean[:, None]) ** 2, axis=1)
-        effective_n = 1.0 / np.maximum(np.sum(w * w, axis=1), 1.0e-12)
-        local_se = np.sqrt(local_var / np.maximum(effective_n, 1.0))
-        mean_lb = local_mean - se_multiplier * local_se
-        material_downside = np.maximum(-y - tau, 0.0)
-        downside_mean = np.sum(w * material_downside, axis=1)
-        downside_var = np.sum(w * (material_downside - downside_mean[:, None]) ** 2, axis=1)
-        downside_se = np.sqrt(downside_var / np.maximum(effective_n, 1.0))
-        downside_ucb = downside_mean + tail_se_multiplier * downside_se
-        bounds.append(mean_lb - downside_ucb)
-    return np.min(np.stack(bounds, axis=1), axis=1)
-
 
 def _icer_regret_risk_feature_matrix(
     feat: np.ndarray,
     feature_names: list[str],
     transition_feat: np.ndarray,
     transition_names: list[str],
-    typed_feat: np.ndarray,
-    typed_names: list[str],
     mode: str,
+    attribution_resolved_feat: np.ndarray | None = None,
+    attribution_resolved_names: list[str] | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Auditable feature view for V64.3.22 regret-risk heads.
 
@@ -2113,17 +2030,18 @@ def _icer_regret_risk_feature_matrix(
     mode = str(mode).strip().lower()
     if mode == "evidence_only":
         return base, names
-    if mode == "transition_conditioned":
-        tr = np.asarray(transition_feat, dtype=np.float64)
-        if tr.ndim != 2 or tr.shape[0] != base.shape[0] or tr.shape[1] != len(transition_names):
-            raise ValueError("EAF-ICER transition feature matrix/schema mismatch")
-        return np.concatenate([base, tr], axis=1), names + [f"transition::{n}" for n in transition_names]
-    if mode == "typed_interaction":
-        ty = np.asarray(typed_feat, dtype=np.float64)
-        if ty.ndim != 2 or ty.shape[0] != base.shape[0] or ty.shape[1] != len(typed_names):
-            raise ValueError("EAF-ICER typed selected-evidence feature matrix/schema mismatch")
-        return np.concatenate([base, ty], axis=1), names + [f"typed::{n}" for n in typed_names]
-    raise ValueError(f"unknown EAF-ICER regret_risk_feature_mode={mode}")
+    if mode == "attribution_resolved":
+        ar = np.asarray(attribution_resolved_feat, dtype=np.float64) if attribution_resolved_feat is not None else np.zeros((0, 0), dtype=np.float64)
+        ar_names = list(attribution_resolved_names or [])
+        if ar.ndim != 2 or ar.shape[0] != base.shape[0] or ar.shape[1] != len(ar_names) or ar_names != list(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES):
+            raise ValueError("EAF-ICER attribution-resolved feature matrix/schema mismatch")
+        return np.concatenate([base, ar], axis=1), names + [f"attribution::{n}" for n in ar_names]
+    if mode != "transition_conditioned":
+        raise ValueError(f"unknown EAF-ICER regret_risk_feature_mode={mode}")
+    tr = np.asarray(transition_feat, dtype=np.float64)
+    if tr.ndim != 2 or tr.shape[0] != base.shape[0] or tr.shape[1] != len(transition_names):
+        raise ValueError("EAF-ICER transition feature matrix/schema mismatch")
+    return np.concatenate([base, tr], axis=1), names + [f"transition::{n}" for n in transition_names]
 
 
 def _icer_quadratic_interaction_features(
@@ -2173,9 +2091,6 @@ def _apply_decisive_frontier_icer(
     cfg: dict[str, Any],
     candidate_trajectories: np.ndarray | None = None,
     maneuver_ids: np.ndarray | None = None,
-    selected_atoms: list[int] | np.ndarray = (),
-    predicted_atom_costs: np.ndarray | None = None,
-    atom_types: list[str] | tuple[str, ...] | np.ndarray | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """V64.3.19+ incumbent-contrastive extremal recovery.
 
@@ -2215,6 +2130,9 @@ def _apply_decisive_frontier_icer(
         potential_diag, evidence_certificate_fraction, utility_refinement_diag,
         admissible, cfg,
     )
+    attribution_resolved, attribution_resolved_names = _icer_attribution_resolved_feature_matrix(
+        atom_contrib_star, valid, a, legacy
+    )
     transition_vs_incumbent, transition_names = _icer_transition_feature_matrix(
         candidate_trajectories, maneuver_ids, valid, legacy
     )
@@ -2223,14 +2141,6 @@ def _apply_decisive_frontier_icer(
     )
     if transition_names != transition_anchor_names:
         raise RuntimeError("ICER transition schemas differ between incumbent/anchor reference views")
-    typed_vs_incumbent, typed_names = _icer_typed_selected_evidence_feature_matrix(
-        predicted_atom_costs, selected_atoms, atom_types, valid, legacy
-    )
-    typed_vs_anchor, typed_anchor_names = _icer_typed_selected_evidence_feature_matrix(
-        predicted_atom_costs, selected_atoms, atom_types, valid, a
-    )
-    if typed_names != typed_anchor_names:
-        raise RuntimeError("ICER typed evidence schemas differ between incumbent/anchor reference views")
     support_logits = np.zeros((len(valid),), dtype=np.float64)
     dominance_logits = np.zeros((len(valid),), dtype=np.float64)
     # Always initialize the component-head diagnostics.  V64.3.20 deliberately
@@ -2399,13 +2309,13 @@ def _apply_decisive_frontier_icer(
                 geometry_available = bool(_tr_chk.ndim == 3 and _tr_chk.shape[0] >= len(valid) and _tr_chk.shape[1] >= 1 and _tr_chk.shape[2] >= 2)
             if regret_risk_mode == "transition_conditioned" and not geometry_available:
                 raise ValueError("EAF-ICER transition-conditioned regret risk requires the runtime candidate trajectory bank")
-            if regret_risk_mode == "typed_interaction" and (predicted_atom_costs is None or atom_types is None):
-                raise ValueError("EAF-ICER typed-interaction regret risk requires selected atom types and predicted atom costs")
             rep_x, rep_names = _icer_regret_risk_feature_matrix(
-                feat, names, transition_vs_incumbent, transition_names, typed_vs_incumbent, typed_names, regret_risk_mode
+                feat, names, transition_vs_incumbent, transition_names, regret_risk_mode,
+                attribution_resolved, attribution_resolved_names,
             )
             ret_x, ret_names = _icer_regret_risk_feature_matrix(
-                feat, names, transition_vs_anchor, transition_names, typed_vs_anchor, typed_names, regret_risk_mode
+                feat, names, transition_vs_anchor, transition_names, regret_risk_mode,
+                attribution_resolved, attribution_resolved_names,
             )
             if rep_names != ret_names:
                 raise RuntimeError("EAF-ICER replacement/retention regret-risk schemas diverged")
@@ -2422,15 +2332,8 @@ def _apply_decisive_frontier_icer(
 
             risk_model_type = str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower()
             if replacement_regret_risk_enabled:
-                if risk_model_type == "local_multiscale_regret_lower_bound":
+                if risk_model_type in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate"}:
                     replacement_regret_risk_logits = _icer_local_regret_lower_bound(
-                        rep_x,
-                        rep_names,
-                        str(icer_cfg.get("replacement_local_regret_memory_path", "")),
-                        str(icer_cfg.get("replacement_local_regret_memory_sha256", "")),
-                    )
-                elif risk_model_type == "local_multiscale_tail_coherence":
-                    replacement_regret_risk_logits = _icer_local_tail_coherence_lower_bound(
                         rep_x,
                         rep_names,
                         str(icer_cfg.get("replacement_local_regret_memory_path", "")),
@@ -2442,7 +2345,7 @@ def _apply_decisive_frontier_icer(
                     raise ValueError(f"unknown EAF-ICER regret_risk_model_type={risk_model_type}")
             if retention_regret_risk_enabled:
                 if risk_model_type != "linear_weighted_logistic":
-                    raise ValueError("local regret/tail memory is replacement-only; learned retention veto must remain disabled")
+                    raise ValueError("local regret memory is replacement-only; learned retention veto must remain disabled")
                 retention_regret_risk_logits = _read_regret_risk_head("retention_regret_risk", ret_x, ret_names)
 
         support_ok = admissible & np.isfinite(support_logits) & (support_logits > 0.0)
@@ -2475,28 +2378,17 @@ def _apply_decisive_frontier_icer(
                 replacement_positive = np.isfinite(replacement_regret_risk_logits) & (replacement_regret_risk_logits > 0.0)
             cand = np.flatnonzero(alternative & dominance_positive & replacement_positive).astype(np.int64)
             if cand.size:
-                replacement_rank_policy = str(icer_cfg.get("replacement_rank_policy", "dominance_first")).strip().lower()
-                if replacement_rank_policy == "regret_risk_first":
-                    rank_key = lambda b: (
-                        -float(replacement_regret_risk_logits[b]),
-                        -float(dominance_logits[b]),
-                        -float(support_logits[b]),
-                        -float(margin_star[b]),
-                        -int(utility_prior[b]),
-                        int(b),
-                    )
-                elif replacement_rank_policy == "dominance_first":
-                    rank_key = lambda b: (
+                best = sorted(
+                    cand.tolist(),
+                    key=lambda b: (
                         -float(dominance_logits[b]),
                         -float(replacement_regret_risk_logits[b]) if (regret_risk_enabled and replacement_regret_risk_enabled) else 0.0,
                         -float(support_logits[b]),
                         -float(margin_star[b]),
                         -int(utility_prior[b]),
                         int(b),
-                    )
-                else:
-                    raise ValueError(f"unknown EAF-ICER replacement_rank_policy={replacement_rank_policy}")
-                best = sorted(cand.tolist(), key=rank_key)[0]
+                    ),
+                )[0]
                 selected = int(best)
             else:
                 selected = int(baseline)
@@ -2541,10 +2433,9 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_retention_regret_risk_enabled": float(bool(icer_cfg.get("retention_regret_risk_enabled", icer_cfg.get("regret_risk_enabled", False)))),
         "decisive_frontier_icer_replacement_regret_risk_enabled": float(bool(icer_cfg.get("replacement_regret_risk_enabled", icer_cfg.get("regret_risk_enabled", False)))),
         "decisive_frontier_icer_regret_risk_transition_conditioned": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "transition_conditioned"),
-        "decisive_frontier_icer_regret_risk_local_memory": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_regret_lower_bound", "local_multiscale_tail_coherence"}),
-        "decisive_frontier_icer_regret_risk_typed_interaction": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "typed_interaction"),
-        "decisive_frontier_icer_regret_risk_tail_coherence": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() == "local_multiscale_tail_coherence"),
-        "decisive_frontier_icer_replacement_rank_regret_first": float(str(icer_cfg.get("replacement_rank_policy", "dominance_first")).strip().lower() == "regret_risk_first"),
+        "decisive_frontier_icer_regret_risk_attribution_resolved": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "attribution_resolved"),
+        "decisive_frontier_icer_regret_risk_local_memory": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate"}),
+        "decisive_frontier_icer_regret_risk_downside_certificate": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() == "local_multiscale_downside_regret_certificate"),
         "decisive_frontier_icer_selected_replacement_regret_risk_logit": float(replacement_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,
         "decisive_frontier_icer_legacy_retention_regret_risk_logit": float(retention_regret_risk_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
@@ -2559,6 +2450,8 @@ def _apply_decisive_frontier_icer(
         if attribution_star is None else np.asarray(attribution_star, dtype=np.float32),
         "_decisive_frontier_icer_feature_matrix": np.asarray(feat, dtype=np.float32),
         "_decisive_frontier_icer_feature_names": names,
+        "_decisive_frontier_icer_attribution_resolved_feature_matrix": np.asarray(attribution_resolved, dtype=np.float32),
+        "_decisive_frontier_icer_attribution_resolved_feature_names": list(attribution_resolved_names),
         "_decisive_frontier_icer_support_logit_star": np.asarray(support_logits, dtype=np.float32),
         "_decisive_frontier_icer_dominance_logit_star": np.asarray(dominance_logits, dtype=np.float32),
         "_decisive_frontier_icer_scalar_dominance_logit_star": np.asarray(scalar_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
@@ -2569,9 +2462,6 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_transition_vs_incumbent_feature_matrix": np.asarray(transition_vs_incumbent, dtype=np.float32),
         "_decisive_frontier_icer_transition_vs_anchor_feature_matrix": np.asarray(transition_vs_anchor, dtype=np.float32),
         "_decisive_frontier_icer_transition_feature_names": list(transition_names),
-        "_decisive_frontier_icer_typed_vs_incumbent_feature_matrix": np.asarray(typed_vs_incumbent, dtype=np.float32),
-        "_decisive_frontier_icer_typed_vs_anchor_feature_matrix": np.asarray(typed_vs_anchor, dtype=np.float32),
-        "_decisive_frontier_icer_typed_feature_names": list(typed_names),
         "_decisive_frontier_icer_admissible_mask": np.asarray(admissible, dtype=bool),
     }
     return int(selected), diag
@@ -2588,7 +2478,6 @@ def run_pair_conditioned_tournament(
     candidate_trajectories: np.ndarray | None = None,
     maneuver_ids: np.ndarray | None = None,
     predicted_atom_costs: np.ndarray | None = None,
-    atom_types: list[str] | tuple[str, ...] | np.ndarray | None = None,
     residual_action_potential: np.ndarray | None = None,
     residual_action_variance: np.ndarray | None = None,
     residual_set_atom_factors: np.ndarray | None = None,
@@ -2870,9 +2759,6 @@ def run_pair_conditioned_tournament(
             cfg,
             candidate_trajectories=candidate_trajectories,
             maneuver_ids=maneuver_ids,
-            selected_atoms=selected_atoms,
-            predicted_atom_costs=predicted_atom_costs,
-            atom_types=atom_types,
         )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))

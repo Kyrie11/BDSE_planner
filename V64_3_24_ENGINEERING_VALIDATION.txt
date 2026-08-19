@@ -1,44 +1,43 @@
-V64.3.24 EAF-ICER-TTCR engineering validation
+V64.3.24 EAF-ICER-ARC engineering validation
 
-1. Python syntax/import validation
-   - python -m compileall -q bdse: PASS
-   - py_compile on all modified/new Python modules: PASS
+Uploaded V23 execution audit:
+- TRAIN gate complete/pass: yes
+- A/B fresh blocks complete: yes, 500 unique tokens each
+- 5 arms per V23 block complete: yes
+- A/B overlap: 0
+- TRAIN/fresh overlap: 0
+- traceback/config/token mismatch: none found
+- V23 result suitable for algorithm attribution: yes
+- user split upload omits local-memory NPZ bytes; official runtime completion under SHA-checked loader makes this a packaging omission, not an execution failure
 
-2. Launcher validation
-   - bash -n RUN_V64_3_24_EAF_ICER_TYPED_TAIL_SCREEN_2GPU.sh: PASS
-   - permanent design exclusion: 5700 lines / 5700 unique tokens
-   - prior V23 design exclusion: 4700; exactly 1000 V23 A/B tokens added
+V24 implementation checks:
+- full B<=16 signed attribution spectrum: implemented
+- candidate-minus-incumbent full spectrum: implemented
+- attribution-resolved risk feature mode: implemented
+- downside-RMS local regret certificate: implemented
+- aggregate mean-SE / aggregate downside / attribution mean-SE / attribution downside causal configs: implemented
+- signed-profile ranking removed from V24 main: yes
+- transition geometry removed from V24 main: yes
+- incumbent->anchor learned veto remains disabled: yes
+- V24 design exclusion: 5700 unique validation tokens
+- V24 TRAIN/fresh explicit token overlap hard-stop: implemented
 
-3. Production call-site audit
-   - nuplan_planner.py: 3/3 pair-conditioned tournament calls pass predicted_atom_costs + atom_types
-   - evaluate_open_loop.py: 2/2 pass predicted_atom_costs + atom_types
-   - train.py: 2/2 pass predicted_atom_costs + atom_types
+Bugs found/fixed during implementation:
+1) ICER attribution-resolved diagnostic referenced before common ICER initialization -> fixed; caught by historical tests.
+2) user-uploaded V23 archive omitted historical V64_SAQA_BCC_NEXT_COMMANDS.sh -> exact verified 32559-byte V23 delivery copy restored; bash -n pass.
+3) new downside local-memory diagnostics extended so downside/attribution-resolved modes are reported explicitly rather than misclassified as non-local memory.
 
-4. Targeted historical regression
-   - V64.3.6 through V64.3.24 selected test suite: 118/118 PASS
-   - warnings: 6 existing PyTorch Transformer nested-tensor/norm_first warnings
+Validation:
+- python compileall: PASS
+- RUN_V64_3_24_EAF_ICER_ARC_SCREEN_2GPU.sh bash -n: PASS
+- V64.3.6-V64.3.24 targeted: 119/119 PASS, 6 existing warnings
+- repository tests, independent batches: 83/83 + 139/139 + 185/185 = 407/407 PASS
+- repository warnings: 36 total, all existing PyTorch Transformer nested_tensor/norm_first warning class
+- V24 synthetic fitter/config/contract smoke: PASS
+  * 400 synthetic TRAIN scenes
+  * 1200 replacement edges
+  * 5/5 main attribution-downside folds path-safe
+  * four memory/config artifacts emitted
+  * four contract checks pass
 
-5. V24-specific behavior
-   - typed selected-evidence contrast sign/schema unit test: PASS
-   - rare material-downside tail penalty unit test: PASS
-   - risk-first vs dominance-first integrated operator test: PASS
-   - 5700-token exclusion invariant: PASS
-
-6. Synthetic end-to-end TRAIN fitter/contract dry run
-   - eligible replacement edges: 1280
-   - unique scenes: 320
-   - evidence features: 18
-   - typed features: 67
-   - typed row coverage: 1.0
-   - fixed 5-fold TRAIN main gate: PASS on synthetic data
-   - generated configs: evidence-LCB, evidence-tail, typed-LCB, typed-tail/dominance-first, typed-tail/risk-first
-   - V24 contract checker: 5/5 PASS
-
-7. Diagnostic correctness change
-   - V24 split checker restricts regret-risk AUC/precision/gate diagnostics to the actual deployment-eligible alternatives: final-guard admissible AND support>0 AND scalar-dominance>0.
-   - This corrects a V23 diagnostic-population mismatch; it does not alter historical V23 actions.
-
-8. Not executed here
-   - actual 3000-scene nuPlan TRAIN typed-frontier replay
-   - fresh C/D GPU screen
-   These require the user's external dataset/cache/GPU environment and are intentionally the next experiment.
+No V24 fresh/test/closed-loop result has been used in design or implementation.

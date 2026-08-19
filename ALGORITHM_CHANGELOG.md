@@ -7923,237 +7923,234 @@ V23 therefore remains on the same CCF-A-oriented paper line. The headline novelt
 
 ---
 
-# V64.3.24 EAF-ICER-TTCR — Typed Tail-Coherent Incumbent-Contrastive Recovery
+# V64.3.23 uploaded double-fresh result audit -> V64.3.24 EAF-ICER-ARC
 
-## Status and reason for this iteration
+## 1. V64.3.23 execution integrity: the official result is valid for algorithm attribution
 
-V64.3.24 is the direct response to the completed V64.3.23 double-fresh A/B screen. Unlike V22, V23 did reach fresh validation; therefore the observed V23 failure is an algorithmic/mechanistic result and must not be explained away as an experiment-protocol failure.
+The uploaded V23 result was split across `configs+logs.zip`, `provenance-part1.zip`, and `provenance-part2.zip`.  The split packaging does not indicate an interrupted experiment.
 
-V23 established that the frozen EAF/ICER deployment interface is healthy, but its evidence-local mean-minus-one-SE RCR does not robustly justify incumbent replacement on a second untouched fresh block. The next iteration therefore **does not reopen** acquisition, selector, B/M, EAF, support/dominance heads, certificates, or structural guards. It upgrades only the information exposed to the incumbent-contrastive recovery layer and the object that layer must protect.
+Audit results:
 
-V24 main hypothesis:
+- TRAIN RCR gate completed and passed;
+- one untouched 1000-token validation set was deterministically split into A500/B500;
+- A and B each produced all five intended arms (`raw`, frozen `V20`, `evidence_scalar`, `evidence_rcr`, `transition_rcr`);
+- every arm contains exactly 500 unique ordered tokens and all paired-arm token identities agree;
+- A/B overlap is zero;
+- A/B overlap with the 3000-token TRAIN memory manifest is zero;
+- no traceback/config mix-up/replay truncation is present;
+- both split checkers and the final double-fresh checker completed.
 
-> Under a fixed budgeted evidence interface, selected evidence must be not only margin-sufficient on average but also **typed and tail-sufficient for the intervention being executed**. An incumbent may be replaced only when the already-selected evidence makes material downside locally identifiable and the replacement remains beneficial after an explicit lower-partial-moment penalty.
+The local-memory NPZ files were not included in the user's split provenance upload, but the official runtime configs/logs prove they existed during execution.  Re-running the V23 TRAIN fitter on the uploaded 3000-scene TRAIN frontier reproduces the reported TRAIN gate statistics and replacement population.  The exact original memory NPZ bytes are not present in the user upload, so their historical SHA cannot be independently regenerated/verified from the split package alone.  However, every official fresh RCR arm completed runtime lookup under the config-embedded SHA check; a missing or mismatched memory would have raised before producing the 500-scene rows/edges.  This is therefore a packaging omission, not evidence of an execution failure.
 
-This is named **TTCR: Typed Tail-Coherent Incumbent-Contrastive Recovery**.
+Therefore V23 is a reliable algorithm result and should **not** be rerun merely because the provenance upload was split.
 
-## 1. What V64.3.23 actually established on fresh A/B
+## 2. V23 official result
 
-Both fresh blocks passed the important engineering/interface checks: frozen-interface identity, complete EAF frontier instrumentation, healthy candidate support, frozen support/dominance signal, all-flagged structural delegation, and zero learned admissible-incumbent->anchor demotion in the RCR arms. Therefore the V23 STOP is not caused by a missing query, a broken candidate bank, or a structural-guard regression.
+TRAIN gate: **PASS**.
 
-The decisive result is the selected incumbent->alternative path:
+Double-fresh promotion: **FAIL**.
 
-- **Split A, evidence-local signed RCR:** 45 direct replacements; teacher-regret delta sum `-86669.1699` (beneficial); normalized teacher-improvement sum `+4.3334585`; worst selected replacement `-1.2314600`. The signed-profile ranking itself was not incremental over the otherwise matched scalar arm, so V21/V23 view-weight tuning remains forbidden.
-- **Split B, evidence-local signed RCR:** 29 direct replacements; teacher-regret delta sum `+57895.1897` (harmful); normalized teacher-improvement sum `-2.8947595`; worst selected replacement `-0.9898972`. Four rare material losses dominate the failure: approximately `-0.9899`, `-0.9884`, `-0.9290`, and `-0.9285` normalized teacher improvement. A large beneficial `safe_fallback -> decelerate_stop` replacement of about `+0.9800` exists in the same block, confirming that the mechanism is not uniformly conservative/bad; the failure is tail dominated.
-- **Transition-local RCR** is worse on B (`+115708.4408` direct replacement regret delta sum) and therefore must not be rescued by transition-weight tuning.
-- Frozen V20 remains a useful reproduced control, but its direct replacement path is also harmful on B (`+321112.0949`), showing that the residual problem is specifically how to justify replacement after an admissible incumbent is already available.
+Split A:
 
-The official V23 double-fresh screen therefore remains a STOP. A and B must not be pooled, and the 1000 inspected V23 fresh tokens are permanently added to the design exclusion set.
+- evidence-local selected replacement path: PASS (`45` direct replacements, regret-delta sum `-86669.17`);
+- evidence-local scalar path is even better (`48`, `-119410.75`);
+- transition-local diagnostic is best on A (`47`, `-174440.42`);
+- endpoint for evidence RCR passes (`match=18.0%`, regret `13904.29` vs raw `14077.62`);
+- signed-profile ranking is not incremental;
+- the historical preservation gate fails because it still requires `harmful` to fall by 5pp and `flip<raw`, which is structurally inconsistent with the V23 incumbent-default/no-anchor-veto operator.
 
-## 2. Why the V23 TRAIN gate gave false confidence
+Split B:
 
-V23's fixed 5-fold scene cross-fit checked only fold-level **aggregate** selected teacher-improvement sign. Evidence-local signed RCR passed 5/5 folds with aggregate `+9.8463`, but the fold-level worst selected outcomes were approximately:
+- evidence-local RCR direct replacement path **fails** (`29`, regret-delta sum `+57895.19`);
+- scalar is essentially identical (`31`, `+57819.90`);
+- transition-local is worse (`33`, `+115708.44`);
+- evidence-RCR regret `14392.97` > raw `14277.18`;
+- signed-profile ranking is not incremental;
+- transition conditioning is not incremental.
 
-- fold 0: `-0.00236`;
-- fold 1: `-0.00026`;
-- fold 2: `-0.00085`;
-- fold 3: `-0.00110`;
-- fold 4: **`-0.25515`**.
+Thus V23 does **not** establish that the key causal paths stably convert into preservation + endpoint across independent fresh splits.
 
-Thus “sum >= 0” was not a material-tail safety condition. The scalar arm was worse: fixed TRAIN folds exposed selected outcomes around `-1.7026`, `-0.9866`, and `-0.2552` while aggregate gains elsewhere could offset them.
+## 3. Per-scene attribution: V23 B failure is a heavy-tail failure, not broad low-quality recovery
 
-The frozen replacement target itself is strongly heavy-tailed: among the 1455 eligible TRAIN alternatives, the median teacher improvement is only about `8.9e-5`, while the 5th/95th percentiles are roughly `-0.99/+0.98`. This is a near-zero bulk plus rare O(1) hard-tier jump distribution. A local mean-minus-SE target is therefore misaligned with the failure mode.
+The B evidence-RCR selected replacement teacher-improvement sum is negative, but the loss is concentrated in four catastrophic replacements:
 
-## 3. Dominant bottleneck after V23
+- `0e612278ebd05d5e`: improvement `-0.989897`;
+- `5ef81ac81e9d54ed`: `-0.988400`;
+- `e384cbf203735c60`: `-0.929033`;
+- `6ab7225c12445343`: `-0.928512`.
 
-The bottleneck hierarchy is now frozen as follows.
+Their combined loss is about `-3.84`, larger in magnitude than the complete selected-path total (`-2.895` in normalized teacher-margin units).  The remaining positive selected replacements partially compensate them.
 
-### Primary: representation-level intervention identifiability
+Critically, the V23 local certificate is a confidence bound on a **neighborhood mean**.  Several catastrophic scenes have a positive `mean - one standard error` even when the K64 neighborhood contains approximately `-0.99` to `-1.23` TRAIN outcomes.  For example:
 
-The current V23 evidence-local representation (18 type-agnostic EAF reliability statistics), and even the 18+41 transition-conditioned representation, can place catastrophic and benign replacements very close together. TRAIN nearest-neighbor audits show examples where a selected outcome around `-1.70` or `-0.255` has nearby same-action/same-semantic neighbors with near-zero or positive outcomes. A larger classifier or a different K cannot recover information that the interface has already averaged away.
+- `5ef81...`: K64 mean `0.02965`, SE `0.02941`, lower bound `+0.000245`, yet runtime outcome `-0.9884`;
+- `e384...`: K64 mean `0.10493`, SE `0.05091`, lower bound `+0.05402`, yet outcome `-0.9290`;
+- `6ab7...`: K32 lower bound `+0.02224`, yet outcome `-0.9285`.
 
-The missing observable is the **type of already-selected evidence that supports or contradicts the incumbent replacement**, especially interaction/hard-event evidence such as occupancy/collision/TTC. This is compatible with the paper's original motivation: improve decision sufficiency of the fixed interface, not reconstruct more of the world.
+The V23 TRAIN replacement population itself is heavy tailed: `1455` selected-population alternatives, positive-sign rate about `62.1%`, but aggregate teacher-improvement mean remains negative (`~ -0.0361`).  Majority-positive binary reliability is therefore insufficient for extremal regret safety.
 
-### Secondary: objective mismatch
+The bottleneck is narrowed from
 
-V23 estimates only `E[Delta] - 1SE`, where `Delta` is candidate-minus-incumbent teacher improvement. The failure is driven by rare material negative jumps. V24 therefore adds a lower-partial-moment term that represents **probability x magnitude of material downside**, instead of trying to solve the tail by changing K, SE, or the zero threshold.
+> selection-conditioned local regret coherence
 
-### Tertiary: extremal operator/score mismatch
+into
 
-V23 uses the local regret score as a binary gate, then maximizes a different dominance score across surviving alternatives. This leaves a winner's-curse channel after the risk gate. Retrospective replay with the old representation shows that risk-first ranking alone does not solve split B, so this is not the primary bottleneck; it is nevertheless tested as a separately attributable final mechanism.
+> **outcome/downside regret certification under evidence-neighborhood aliasing**.
 
-### Explicitly not the current bottleneck
+The next scientific question is:
 
-Do not attribute V23 STOP to selector/acquisition, larger B/M, EAF value learning, support AUC, structural all-flagged behavior, or admissible-incumbent retention. Those interfaces were healthy in the uploaded screen and remain frozen.
+> **Does the exact within-budget selected-evidence attribution structure resolve hidden local outcome modes well enough to certify the downside risk of one extremally selected incumbent replacement, rather than only certifying that its neighborhood mean is positive?**
 
-## 4. Rejected follow-ups after the V23 tail audit
+## 4. Mechanisms to keep/drop after V23
 
-The following directions were examined and are **not** V24:
+### Keep
 
-- tuning K={32,64}, SE multiplier, or the `>0` boundary;
-- maneuver/action transition blacklists or a “seen one bad neighbor => veto forever” semantic blacklist;
-- simply increasing model capacity on the same 18/59-dimensional interface;
-- global conformal inflation on the current representation: the heavy-tail calibration required such a large correction that replacement collapsed toward zero, indicating insufficient conditional information rather than a useful deployment rule;
-- risk-first reranking with the old evidence-local representation: it remains harmful on fresh B;
-- changing B/M, acquisition, selector, EAF, certificates, or final/structural guards.
+- fixed planner-interface cap `B<=16`;
+- auditable selected evidence and exact EAF additive attribution;
+- frozen EAF complete DARM-anchor frontier;
+- complete final-guard-admissible challenger frontier;
+- frozen anchor-support and scalar incumbent-dominance heads;
+- all-flagged structural-domain delegation;
+- final-guard-admissible incumbent preserved by default;
+- path-level direct replacement precision/capture and teacher-regret-sum audits;
+- two independent fresh blocks with no pooled rescue.
 
-If V24 still leaks material negatives after the typed representation is present, do **not** return to these directions. The next audit must look for a finer missing runtime observable (for example actor-conditioned ownership/geometry of selected hard-interaction atoms) rather than another scalar threshold sweep.
+### Drop from the main mechanism
 
-## 5. V64.3.24 TTCR algorithm
+**Signed-profile equal-mean ranking.**  It is not incremental on either A or B.  Do not tune view weights.
 
-The frozen mainline becomes:
+**Transition-local main mechanism.**  It is better on A and substantially worse on B, consistent with its weaker TRAIN fold stability.  Do not tune transition group weights or promote trajectory geometry to the headline contribution.
 
-`fixed B<=16 planner-interface evidence -> frozen M=24 acquisition/selector -> selected B<=16 evidence -> frozen EAF complete DARM frontier -> exact selected-evidence attribution -> typed selected-evidence incumbent contrasts -> frozen support + scalar incumbent dominance -> TRAIN-only multiscale tail-coherence score -> incumbent-preserving replacement -> risk-aligned extremal ordering -> unchanged final/evidence/structural guards -> decision preservation`
+### Preservation checker correction
 
-### 5.1 Typed selected-evidence representation
+V23 uses an asymmetric operator that does not learned-veto an already-admissible incumbent.  Therefore the old abstention-oriented requirement `harmful reduction >=5pp AND flip<raw` is not a feasible invariant for the main mechanism.  Starting V24, preservation is pre-registered as:
 
-No new evidence atom is queried. From the already-selected B atoms and the frozen predicted per-atom action costs `g_i(a)`, V24 groups atom types into seven fixed semantic families:
+1. zero learned admissible-incumbent->anchor path;
+2. direct incumbent->alternative selected path teacher-regret delta sum <=0;
+3. harmful intervention rate must not increase materially relative to raw;
+4. flip rate must not increase materially relative to raw;
+5. endpoint match/regret constraints remain mandatory.
 
-1. occupancy: `occupancy`, `collision`;
-2. TTC: `ttc`;
-3. precedence: `gap`, `yield`;
-4. hard rule: `drivable_area`, `wrong_way`, `red_light`;
-5. soft rule/map: `speed_limit`, `route_connector`;
-6. kinematic: comfort accel/jerk/curvature/brake;
-7. other.
+Frozen V20 remains the explicit abstention/preservation control.  This is a mechanism-alignment correction made **before V24 fresh identities are selected**, not a post-hoc rescue of V24 results.
 
-For each family, relative to the current admissible incumbent, V24 logs seven deterministic runtime statistics: selected fraction, candidate cost sum, incumbent cost sum, signed improvement sum, upside mass, downside mass, and maximum downside. Costs are normalized by a per-scene RMS computed from the same selected evidence. The result is 49 typed features appended to the frozen 18 evidence-reliability features, for 67 dimensions total.
+## 5. V64.3.24 EAF-ICER-ARC
 
-The feature contract is explicitly `selected-B atom type + frozen predicted g(candidate)-g(incumbent) only`. It does not enlarge the query budget and does not access teacher/future labels online.
+ARC = **Attribution-Resolved Regret Certification**.
 
-### 5.2 Material-tail coherence objective
+Candidate headline refinement:
 
-Let `Delta` denote TRAIN candidate-minus-incumbent teacher improvement and let `tau` be the already-frozen V20 `fallback.tau_delta_normalized` (`0.004` in the current config). For each fixed K in `{32,64}`, V24 computes the existing inverse-distance weighted local mean lower bound
+> **evidence-attributed incumbent-contrastive regret certification for deployment-admissible extremal recovery under a fixed planner-interface evidence budget**.
 
-`mean_LB_K = mean_K(Delta) - 1SE_K(Delta)`
+This is a refinement of the existing reliability novelty, not a change of problem.  The paper mainline remains fixed-budget evidence -> exact attribution -> deployment-admissible complete frontier -> incumbent-relative reliability -> extremal recovery -> unchanged guards -> decision preservation.
 
-and the material downside lower-partial moment
+### 5.1 Full B<=16 attribution-resolved representation
 
-`LPM_K = E_K[max(-Delta - tau, 0)]`.
+Historical ICER profile features compressed exact selected-evidence attribution into L1/concentration statistics plus top-4 signed atoms.  V24 additionally exposes the **complete fixed-budget signed spectrum** without any new evidence query:
 
-Its upper-confidence penalty is
+- 16 candidate signed atom contributions, sorted by absolute magnitude and L1-normalized;
+- 16 candidate-minus-incumbent signed atom contributions, same representation;
+- zero padding when fewer than 16 eligible selected atoms exist.
 
-`downside_UCB_K = LPM_K + 1SE_K(max(-Delta - tau, 0))`.
+The existing 18 audited evidence-reliability features retain scale/magnitude information.  The new 32 dimensions preserve the full within-budget attribution shape rather than only top-4 summaries.
 
-The V24 tail-coherence score is
+The metric is group balanced:
 
-`R_TTCR = min_K [ mean_LB_K - downside_UCB_K ]`.
+1. 18 aggregate evidence features;
+2. 16 candidate signed-spectrum features;
+3. 16 candidate-minus-incumbent signed-spectrum features.
 
-Replacement eligibility requires frozen support `>0`, frozen scalar incumbent-dominance `>0`, and `R_TTCR>0`.
+Each group contributes one average standardized squared-distance unit.  No group weight is validation tuned.
 
-This is a risk-aware local coherence score, not a new formal paper “certificate”; the paper's reserved certificate terminology should remain attached to its calibrated margin guarantee.
+### 5.2 Downside-sensitive local regret certificate
 
-### 5.3 Extremal ordering
+V23 used `local mean - standard error`, which measures uncertainty of the estimated **mean**.  V24 adds a predictive/downside-oriented alternative:
 
-The full V24 main ranks surviving alternatives by `R_TTCR` first, then frozen scalar dominance/support/margin tie-breakers. A matched `typed-tail + dominance-first` arm is retained so the rank-alignment contribution is independently falsifiable.
+`certificate = local_mean_teacher_improvement - weighted_RMS(negative_teacher_improvement)`.
 
-The admissible raw-EAF incumbent remains the default. Learned incumbent->anchor veto stays disabled.
+The final score is the minimum across the same fixed `K={32,64}` neighborhoods.  Replacement still uses the semantic zero boundary.
 
-## 6. TRAIN gate is now tail aligned
+The downside multiplier is fixed to `1.0`; K, metric weights, and zero boundary are frozen before fresh validation.  No validation threshold sweep is allowed.
 
-V24 must replay the 3000-scene TRAIN frontier because V22/V23 frontier artifacts do not contain typed selected-evidence contrasts.
+### 5.3 Orthogonal causal TRAIN/fresh ablation
 
-The main `typed-tail + risk-first` arm uses a fixed 5-fold scene-level cross-fit. Every fold must satisfy all of:
+V24 fits four otherwise identical local memories:
 
-- at least 8 selected replacements;
-- selected teacher-improvement sum >= 0;
-- **zero selected material-negative replacements with `Delta < -0.004`**.
+1. `aggregate_meanSE` — V23-style 18-d aggregate + mean-SE control;
+2. `aggregate_downside` — risk-statistic-only intervention;
+3. `attribution_meanSE` — representation-only intervention;
+4. `attribution_downside` — **V24 main**.
 
-All five folds must pass. If this TRAIN gate fails, the launcher stops **before fresh token selection and before any fresh GPU replay**. K, SE, tau, and the zero boundary must not be changed to make the gate pass.
+All use the same frozen support-positive + scalar-dominance-positive TRAIN population and rank accepted alternatives by the same frozen scalar dominance.  Signed-profile ranking and transition geometry are not part of the main operator.
 
-## 7. Fresh C/D causal screen and novelty attribution
+This design separately asks:
 
-All 1000 V23 A/B tokens are now permanently excluded, so the V24 exclusion contains exactly **5700 unique inspected validation tokens**.
+- does downside-aware certification help beyond V23 mean confidence?
+- does complete selected-evidence attribution resolve local aliasing beyond aggregate evidence statistics?
+- does combining both produce a path-safe endpoint mechanism?
 
-V24 selects a new untouched 1000 validation tokens and freezes two independent blocks C/D of 500 each. Each block runs seven arms:
+### 5.4 TRAIN gate
+
+Because V23 edge logs did not serialize the complete attribution spectrum, V24 performs one frozen 3000-scene TRAIN instrumentation replay.  This is **not** EAF/acquisition/selector retraining.
+
+The attribution-resolved downside main must pass the same fixed 5-fold scene-level operator audit before any fresh validation:
+
+- sufficient replacement support;
+- >=64 selected replacements in aggregate;
+- selected teacher-improvement sum >=0;
+- **5/5 folds** have non-harmful selected replacement paths.
+
+If this fails, fresh A/B must not run.
+
+### 5.5 Fresh protocol
+
+V23 A/B are now design data.  Permanent validation exclusion becomes **5700 unique tokens** (`4700 prior + 1000 V23 A/B`, overlap zero).
+
+V24 selects a new untouched 1000-token set, deterministically splits it into A500/B500, and runs six paired arms independently on both blocks:
 
 1. raw EAF;
-2. frozen V20 dual ICER control;
-3. evidence-LCB + dominance-first (V23 scalar-style local baseline);
-4. evidence-tail + dominance-first (tail objective only);
-5. typed-LCB + dominance-first (representation only);
-6. typed-tail + dominance-first (representation x tail);
-7. typed-tail + risk-first (full V24 main).
+2. frozen V20 ICER-DC;
+3. aggregate mean-SE;
+4. aggregate downside;
+5. attribution-resolved mean-SE;
+6. attribution-resolved downside main.
 
-The causal checker now requires mechanisms to be incremental in the **matched context used by the main chain**:
+Both blocks must independently pass.  No pooling is allowed.
 
-- typed representation gate: `typed-tail/dominance-first` must improve over `evidence-tail/dominance-first`;
-- tail-objective gate: `typed-tail/dominance-first` must improve over `typed-LCB/dominance-first`;
-- extremal-rank gate: `typed-tail/risk-first` must improve over `typed-tail/dominance-first`.
+The main additionally must show:
 
-The corresponding cross-context comparisons (`typed-LCB vs evidence-LCB`, `evidence-tail vs evidence-LCB`) are still reported, but cannot rescue a negative interaction in the main context.
+- downside certificate incremental over aggregate mean-SE;
+- attribution-resolved downside incremental over aggregate downside;
+- zero learned incumbent->anchor path;
+- selected replacement path regret sum <=0;
+- direct precision/capture and recovery gates;
+- raw harmful/flip non-degradation under the asymmetric operator;
+- match >= DARM anchor +0.5pp;
+- regret <=1.02x raw and <=1.02x frozen V20.
 
-The full main also requires healthy instrumentation/support, zero admissible-incumbent->anchor events, at least 8 selected direct replacements, nonnegative selected teacher-improvement sum, zero material negatives, nontrivial recovery, preservation gain, and endpoint gain. C and D must pass independently; there is no pooled rescue.
+Passing only authorizes one frozen independent full-validation reproduction.  Test/closed-loop remain forbidden.
 
-A double-fresh pass authorizes only **one frozen independent full-validation reproduction**. Test and closed-loop remain forbidden until that reproduction is reviewed.
+## 6. Engineering fixes/audit for V64.3.24
 
-## 8. Engineering changes and audit fixes
+- New full-attribution spectrum is computed at the common ICER feature point and serialized only for deployment-admissible frontier edges to control provenance I/O size.
+- The first implementation exposed a diagnostic lifecycle bug (`attribution_resolved` referenced before ICER initialization); targeted regression caught it before delivery and it was fixed.
+- The user-uploaded V23 code archive omitted the historical root `V64_SAQA_BCC_NEXT_COMMANDS.sh`, causing an unrelated historical full-repository test failure.  V24 restores the exact verified 32,559-byte script from the previous V23 delivery package; no logic is rewritten.
+- V24-specific tests cover complete signed-spectrum preservation, candidate-minus-incumbent spectrum, attribution-resolved runtime feature schema, downside-tail veto, and backward mean-SE semantics.
+- Targeted V64.3.6-V64.3.24 tests pass.
+- Complete repository tests pass in three independent batches: **407/407 PASS**; warning count **36**, all pre-existing Transformer `nested_tensor/norm_first` warnings.
+- Synthetic end-to-end TRAIN fitter -> four configs -> four contract checks passes.
+- TRAIN/fresh token manifests are hard checked for zero overlap.
 
-V24 implementation changes are limited to the incumbent-contrastive recovery diagnostics/runtime and experiment tooling:
+## 7. New terminal constraints after V23
 
-- `bdse/planner/tournament.py`: typed selected-evidence features, tail-coherence local score, explicit `replacement_rank_policy`;
-- `bdse/planner/nuplan_planner.py`, `bdse/experiments/evaluate_open_loop.py`, `bdse/experiments/train.py`: pass atom types; serialize typed incumbent contrasts;
-- new TRAIN-only fitter and V24 contract/split/double-fresh checkers;
-- new fixed 5700-token exclusion;
-- new seven-arm two-GPU launcher;
-- new V24 unit/regression tests.
+In addition to all previous changelog constraints, do **not**:
 
-The V24 split checker also corrects a V23 **diagnostic-population bug**: V23 risk precision/AUC diagnostics included all admissible alternatives, although deployment risk is only consumed after frozen support>0 and scalar-dominance>0. V24 risk diagnostics are restricted to the actual deployment-eligible replacement population. This changes diagnostics only, not historical V23 actions.
+- restore signed-profile equal-mean ranking as main or tune its view weight;
+- promote transition geometry to main or tune transition group weights;
+- tune `K={32,64}`, downside multiplier `1.0`, local zero boundary, or attribution group weights on validation;
+- use action/maneuver blacklists to remove V23 catastrophic transitions;
+- lower the TRAIN fold/path gate merely to obtain fresh results;
+- claim attribution-resolved novelty if the attribution-downside arm is not incrementally better than aggregate-downside on both fresh blocks;
+- claim downside-certification novelty if aggregate-downside is not incrementally better than aggregate mean-SE;
+- use the already inspected V23 A/B tokens for V24 promotion.
 
-The V24 launcher additionally hard-checks that the 5700 exclusion entries are unique, checks TRAIN/fresh identity disjointness, verifies exact paired C/D token identity across all 14 fresh runs, SHA-locks TRAIN memories, and runs the V64.3.6--V64.3.24 targeted regression suite before spending experiment GPU.
-
-Local implementation validation after the final audit:
-
-- Python compile: PASS;
-- launcher `bash -n`: PASS;
-- V64.3.6--V64.3.24 targeted tests: **118/118 PASS** (6 pre-existing Transformer warnings);
-- V24 synthetic TRAIN fitter: PASS, 1280 eligible edges / 320 scenes / 67 typed features / 100% typed coverage;
-- all five generated synthetic V24 configs: contract checker PASS.
-
-The actual V24 nuPlan TRAIN/fresh experiment has **not** been run in this analysis environment; the next command below is the experiment to execute on the user's 2-GPU/data environment.
-
-## 9. CCF-A mainline/novelty freeze rule
-
-V23's broad mechanism stack should **not** be frozen as the final paper algorithm. The paper-level motivation remains strong, but V23 fresh B disproves the stronger claim that type-agnostic local mean coherence is sufficient for safe extremal intervention.
-
-V24 tightens the paper contribution around one falsifiable line:
-
-> **Budgeted decision-sufficient evidence is useful only if the selected interface remains sufficient for the downstream intervention. TTCR exposes the semantic type of already-selected evidence and protects the material downside of candidate-vs-incumbent replacement without increasing the evidence-query budget.**
-
-If C/D show that typed representation is not incremental in the typed-tail main context, drop typed aggregation rather than tune it. If the tail objective is not incremental under the typed representation, drop the tail penalty. If risk-first ordering is not incremental, revert to typed-tail dominance-first. Only components that reproduce their matched incremental effect on **both** C and D are eligible for the final paper mainline.
-
-If all three are incremental and the full main passes C/D plus one independent full-val reproduction, the novelty can be frozen as `BDSE + intervention-sufficient typed tail recovery`; the KNN implementation should be presented as an auditable estimator, not as the headline novelty. A later theory section should then formalize a tail-decision-sufficiency condition rather than claiming distribution-free coverage from this heuristic local score.
-
-## 10. New terminal do-not-repeat list
-
-All V23 terminal constraints remain. Add:
-
-- do not accept aggregate positive selected-path sum as sufficient if any selected `Delta < -tau_delta_normalized` remains;
-- do not tune K, SE, tau, or zero thresholds to eliminate material tail failures;
-- do not replace the typed representation with maneuver/action blacklists;
-- do not use global conformal inflation on the same insufficient representation as a rescue after it collapses replacement coverage;
-- do not justify typed/tail/risk-first components by an OR across unmatched ablation contexts;
-- do not reuse V23 TRAIN frontier edges for V24 because they lack typed selected-evidence fields;
-- do not reuse or pool the inspected A/B 1000 validation tokens;
-- do not promote on edge AUC when the selected path contains material negatives;
-- do not call the TTCR local score a formal certificate in the paper unless a separate calibrated guarantee is derived.
-
-## 11. Next command
-
-From the updated repository root, with the same dataset/cache/checkpoint environment used by V23:
-
-```bash
-bash RUN_V64_3_24_EAF_ICER_TYPED_TAIL_SCREEN_2GPU.sh
-```
-
-Expected output root:
-
-`outputs_v64_3_24_eaf_icer_typed_tail_screen_2gpu_v1`
-
-The first decision artifact to inspect is:
-
-`outputs_v64_3_24_eaf_icer_typed_tail_screen_2gpu_v1/provenance/v64_3_24_train_only_typed_tail_fit.json`
-
-If TRAIN passes, the final screen artifact is:
-
-`outputs_v64_3_24_eaf_icer_typed_tail_screen_2gpu_v1/provenance/v64_3_24_eaf_icer_typed_tail_double_fresh_screen.json`
+If aggregate-downside succeeds and attribution-downside does not, retain aggregate-downside and conclude that the current full attribution spectrum does not resolve the hidden mode.  If attribution-meanSE succeeds but downside does not, audit the downside statistic without tuning its multiplier on the fresh blocks.  If the attribution-downside main still produces a heavy negative tail, the next step is to audit whether the fixed evidence interface lacks the state needed to identify that tail **before** any broad representation unfreezing.
