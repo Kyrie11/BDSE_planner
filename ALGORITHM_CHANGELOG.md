@@ -8154,3 +8154,236 @@ In addition to all previous changelog constraints, do **not**:
 - use the already inspected V23 A/B tokens for V24 promotion.
 
 If aggregate-downside succeeds and attribution-downside does not, retain aggregate-downside and conclude that the current full attribution spectrum does not resolve the hidden mode.  If attribution-meanSE succeeds but downside does not, audit the downside statistic without tuning its multiplier on the fresh blocks.  If the attribution-downside main still produces a heavy negative tail, the next step is to audit whether the fixed evidence interface lacks the state needed to identify that tail **before** any broad representation unfreezing.
+
+---
+
+# V64.3.24 uploaded TRAIN result audit -> V64.3.25 EAF-ICER-DRC
+
+## 1. V64.3.24 execution status: correct fail-closed TRAIN STOP, not an engineering false negative
+
+The uploaded `outputs_v64_3_24_eaf_icer_arc_screen_2gpu_v1.zip` contains exactly eight artifacts.  The run completed prerequisites, the 3000-scene frozen V20/EAF TRAIN frontier replay, and entered the ARC fitter.  It contains **no fresh-token manifest and no A/B arm outputs** because the pre-registered V24 main TRAIN gate failed before fresh selection.
+
+The uploaded frontier itself is complete for the TRAIN attribution question:
+
+- `75,133` frontier rows;
+- exactly `3,000` unique TRAIN scenes;
+- `1,455` final-guard-admissible, support-positive, scalar-dominance-positive alternative edges from `310` scenes;
+- complete 18-D aggregate evidence features and complete 32-D full-attribution spectrum on the eligible replacement population;
+- positive teacher-improvement sign rate `0.62130584`, but population teacher-improvement sum `-52.588857` / mean `-0.03614354`, confirming the heavy-tail regime;
+- no runtime traceback or truncated frontier.
+
+Independent reproduction of the exact fixed V24 scene folds, KNN metric, `K={32,64}`, zero boundary, scalar ranking, and certificate math gives:
+
+| TRAIN arm | fold-safe | selected | selected teacher-improvement sum |
+|---|---:|---:|---:|
+| aggregate mean-SE | 4/5 | 111 | +9.096630 |
+| **aggregate downside** | **5/5** | **71** | **+5.527642** |
+| attribution mean-SE | 3/5 | 119 | +6.803271 |
+| attribution downside (V24 main) | **3/5** | 84 | +4.526551 |
+
+The V24 gate required the attribution-downside main to be selected-path safe in **all 5 fixed scene folds**, select at least 64 replacements, and have non-negative total improvement.  It fails the first condition, so the official STOP is scientifically correct and fresh validation must not be reconstructed or inferred.
+
+Two engineering issues were found, neither of which changes the V24 gate outcome:
+
+1. the V24 fitter raised `SystemExit` before serializing its TRAIN fit report/token manifest on gate failure; this is a diagnostic-lifecycle bug, not an action/gate bug;
+2. aggregate V24 configs inherited an attribution-resolved `model_type` metadata string even though runtime dispatch correctly used `regret_risk_feature_mode=evidence_only`; runtime actions are unaffected, but provenance semantics are misleading.
+
+The V25 delivery patches both issues.  Historical V24 numerical selection/certificate semantics are unchanged.
+
+## 2. V24 orthogonal ablation answers the intended causal question
+
+V24 was explicitly designed so that the next branch would be chosen without fresh-data tuning:
+
+- aggregate mean-SE -> aggregate downside isolates the **risk-statistic** intervention;
+- aggregate downside -> attribution downside isolates the **full-attribution representation** intervention.
+
+The result is decisive at the TRAIN gate:
+
+**Downside sensitivity survives.**  Aggregate downside is the only 5/5 fold-safe arm.  It removes the aggregate mean-SE fold-2 catastrophic path (`sum=-0.6953`, worst `-1.7026`) while keeping useful support (`71` selected replacements, total `+5.5276`).
+
+**The current full-attribution spectrum does not survive.**  Attribution downside is only 3/5 fold-safe.  Its fold 2 has selected sum about `-0.9092`; fold 4 is slightly negative.  Therefore the pre-registered V24 branch rule applies: retain aggregate downside and discard the full-attribution spectrum from the main mechanism; do not tune attribution group weights.
+
+## 3. Why the full-attribution spectrum fails: representation-induced neighborhood fragmentation
+
+The failure is stronger than “no incremental gain.”  The attribution-resolved metric actively re-admits catastrophic alternatives that the aggregate downside metric rejects.
+
+Four worst attribution-downside selected edges are:
+
+| token | action | true teacher improvement | attribution-downside score | same-edge aggregate-downside score |
+|---|---:|---:|---:|---:|
+| `67a57ae417045162` | 2 | -0.990634 | +0.028570 | -0.070323 |
+| `c34206b68ee6576f` | 21 | -0.989780 | +0.052723 | -0.128165 |
+| `441987f47a6f5784` | 2 | -0.928699 | +0.036416 | -0.175912 |
+| `479da12f5f165e29` | 5 | -0.927054 | +0.061433 | -1.060837 |
+
+Thus the downside statistic is not the failure on these edges: **changing the neighborhood geometry is**.
+
+Exact token+action selected-edge partitioning gives:
+
+- 31 shared aggregate/attribution selected edges: sum `+5.1491`, precision `74.2%`, worst `-0.00383`;
+- 40 aggregate-only edges: sum `+0.3785`, precision `67.5%`, worst `-0.54576`;
+- **53 attribution-only edges: sum `-0.6225`, precision `54.7%`, worst `-0.99063`**.
+
+The representation geometry explains why.  The 16-D candidate-minus-incumbent signed spectrum is nearly rank one after abs-sort/L1 normalization: mean absolute off-diagonal correlation is about `0.970`, the first standardized principal direction explains `97.16%` of variance, and the first three explain `99.47%`.  The candidate spectrum is also strongly redundant (first direction `62.89%`, first three `89.36%`).
+
+V24 then z-scores every dimension and assigns the candidate and delta spectrum groups a full group-level distance contribution.  This can amplify tiny residual shape differences while:
+
+- abs sorting removes atom identity;
+- independent candidate/delta sorting removes candidate-incumbent atom correspondence;
+- L1 normalization removes scale;
+- the delta group is almost one-dimensional despite receiving a complete group weight.
+
+The result is **attribution-shape aliasing / neighborhood fragmentation**: catastrophic candidates can become locally surrounded by apparently benign points even when the conservative 18-D aggregate evidence neighborhood contains the relevant negative mode.
+
+Therefore the post-V24 bottleneck is *not* evidence-interface capacity yet.  The evidence interface cannot be declared insufficient while the simpler frozen aggregate representation is 5/5 path-safe.  The current bottleneck is:
+
+> **selected-path downside certification under risk-geometry distortion: use a tail-sensitive certificate without letting an over-normalized attribution-shape metric hide the negative modes that the aggregate evidence geometry already exposes.**
+
+## 4. Mechanism decision after V24
+
+### Keep as main scientific chain
+
+- fixed planner-interface evidence cap `B<=16`;
+- auditable selected evidence and exact additive EAF attribution upstream;
+- frozen EAF complete DARM-anchor frontier;
+- complete final-guard-admissible frontier;
+- frozen support head and scalar incumbent-dominance head;
+- final-guard-admissible incumbent preserved by default;
+- replacement-only local regret veto;
+- fixed aggregate 18-D evidence-local geometry;
+- **downside-RMS regret certificate** with fixed `K={32,64}`, multiplier `1`, zero boundary;
+- scalar dominance ranking among accepted alternatives;
+- unchanged one-sided/evidence certificate, structural guard, and final decision preservation;
+- independent double-fresh blocks with no pooled rescue.
+
+### Keep only as upstream evidence instrumentation / historical ablation
+
+Exact selected-evidence attribution remains useful and central to EAF auditing/value construction, but the V24 abs-sorted/L1-normalized 32-D full spectrum is **not** a valid main regret-geometry contribution.
+
+### Drop / do not revisit as main
+
+- full attribution-resolved risk metric from V24;
+- attribution group-weight tuning;
+- signed-profile equal-mean ranking;
+- transition-conditioned main regret geometry;
+- learned admissible-incumbent->anchor veto;
+- action/maneuver blacklists;
+- threshold/K/downside-multiplier sweeps;
+- broad acquisition/selector/EAF unfreezing before the surviving aggregate-downside branch is tested fresh.
+
+## 5. Paper mainline / novelty tightening
+
+The paper line should be **maintained but narrowed**, not replaced.
+
+The current code no longer supports a headline claim of “attribution-resolved regret certification.”  The supported candidate mechanism is:
+
+> **evidence-attributed incumbent-contrastive downside-regret certification for deployment-admissible extremal recovery under a fixed planner-interface evidence budget.**
+
+“Evidence-attributed” remains justified by the frozen EAF pipeline and auditable selected-evidence construction upstream.  The regret certificate itself should now be described accurately as **aggregate evidence-local**, not full-spectrum attribution-resolved.
+
+The CCF-A-oriented contribution, if later fresh/full-val/closed-loop evidence supports it, is the complete mechanism chain rather than one new scalar score:
+
+`fixed auditable evidence interface -> evidence-attributed deployment-admissible frontier -> incumbent-relative replacement population -> downside-sensitive selected-path certificate -> asymmetric incumbent-default extremal recovery -> unchanged safety/structural guards -> decision preservation`.
+
+The key conceptual distinction from generic uncertainty gating is that the certificate is trained/evaluated on the **actual deployment replacement path** and penalizes the magnitude of local negative outcomes, because extremal action selection is dominated by rare catastrophic regret rather than average edge correctness.
+
+Do **not** claim CCF-A-level novelty is established yet.  V24 only selects the correct surviving TRAIN branch.  The core novelty becomes evidence-backed only if V25 independently converts this mechanism into path safety, recovery, preservation, and endpoint gain on both untouched A/B blocks and then reproduces once on independent full validation.
+
+## 6. V64.3.25 EAF-ICER-DRC
+
+DRC = **Downside Regret Certification**.
+
+V25 intentionally does **not** invent another representation after seeing V24.  It promotes the already pre-registered surviving V24 ablation to the next causal screen.
+
+Main arm:
+
+`aggregate-downside` = frozen 18-D aggregate evidence geometry + `mean - weighted RMS(negative outcomes)` at fixed K32/K64, minimum across scales, zero boundary.
+
+Control:
+
+`aggregate-meanSE` = the identical 18-D geometry/population/ranking with V23-style `mean - standard error`.
+
+Both use exactly the same frozen support-positive/scalar-dominance-positive TRAIN replacement population and rank accepted alternatives only by frozen scalar dominance.
+
+### TRAIN gate
+
+The V25 fitter reuses the already-computed V24 3000-scene TRAIN frontier whenever available; no fresh data were consumed by V24, so this is not validation reuse.  If the V24 frontier is absent on the server, the launcher replays the same frozen 3000-scene V20/EAF frontier once.
+
+The main aggregate-downside gate remains:
+
+- all 5 fixed scene folds selected-path safe;
+- at least 64 selected replacements total;
+- total selected teacher-improvement >=0.
+
+The uploaded frontier reproduces: **5/5, 71, +5.527642**, so V25 is scientifically authorized to spend fresh validation GPU.
+
+### Double-fresh screen
+
+Because V24 stopped before fresh-token selection, the permanent validation design exclusion remains exactly the existing **5700** inspected tokens.  V25 uses a new deterministic hash seed to select 1000 untouched validation scenes and splits them A500/B500.
+
+Each block runs only four paired arms:
+
+1. raw EAF;
+2. frozen V20 ICER-DC;
+3. aggregate mean-SE control;
+4. aggregate downside DRC main.
+
+The failed attribution arms do not consume fresh GPU.
+
+Each block independently requires:
+
+- instrumentation/frozen-interface identity;
+- structural all-flagged delegation;
+- candidate support and frozen support/dominance signal;
+- zero learned admissible-incumbent->anchor changes;
+- direct incumbent->alternative path count >=8 and teacher-regret delta sum <=0;
+- counterfactual recovery precision/capture gates;
+- DRC incremental path-level value over mean-SE while endpoint regret stays within 2%;
+- raw harmful/flip non-degradation under the asymmetric operator;
+- teacher match >= DARM anchor +0.5pp;
+- regret <=1.02x raw and <=1.02x frozen V20.
+
+DRC incremental diagnostics now explicitly serialize the selected replacement tail in both endpoint-regret units and normalized frontier teacher-improvement units (`positive regret RMS`, worst regret increase, negative teacher-improvement RMS, worst teacher improvement).  This directly tests the mechanism claimed by V25 rather than relying on edge AUC.
+
+Both A and B must pass.  No pooling is allowed.  Passing authorizes only one frozen independent full-validation reproduction; test/closed-loop remain forbidden.
+
+## 7. Engineering changes in the V25 delivery
+
+- Added memory-efficient streaming TRAIN frontier loader retaining only the fields used by the 18-D DRC fitter.  On the uploaded 747,232,170-byte frontier, end-to-end fit peak RSS is about **444 MB** and completes with the exact V24 aggregate cross-fit result.
+- V25 hard-requires exactly 3000 TRAIN scene identities and writes their manifest before fresh selection.
+- V25 always writes the TRAIN audit/token manifest **before** fail-closed exit, preserving diagnostics on a legitimate STOP.
+- V25 records input frontier path/bytes/SHA256 and population heavy-tail statistics.
+- V25 contract checker verifies 18-D exact schema, memory SHA, K32/K64, multiplier 1, certificate type, scalar-only dominance, incumbent-default retention, replacement-only risk, and frozen V20 support/dominance/profile heads.
+- Historical V24 fitter in the delivery is diagnostic-only patched to persist its fail report/token manifest and to label aggregate `model_type` accurately; numerical gate/action semantics are unchanged.
+- V25 launcher records stage timing even when TRAIN fitter fails and reports the retained audit path.
+- V25 launcher reuses the V24 TRAIN frontier by default when discoverable, with explicit `V24_TRAIN_EDGES` override and safe replay fallback.
+- V25 fresh arm count is reduced from 12 to 8 total A/B evaluations by removing the TRAIN-rejected attribution variants.
+- New selected-tail checker reports actual replacement regret positive RMS and frontier teacher-improvement negative RMS.
+
+Engineering verification on the delivered repository:
+
+- Python `compileall`: PASS;
+- launcher `bash -n`: PASS;
+- V25 unit tests: **5/5 PASS**;
+- V64.3.13-V64.3.25 targeted stack: **82/82 PASS**;
+- complete repository: **412/412 PASS**;
+- warnings: **36**, all existing PyTorch Transformer `nested_tensor/norm_first` warnings; no new warning class;
+- real uploaded 747MB TRAIN fitter smoke: PASS, exact `aggregate-downside = 5/5, 71, +5.527642`;
+- both generated V25 config/memory contracts: PASS.
+
+## 8. New terminal constraints after V24
+
+Do **not**:
+
+- rescue or reinterpret the V24 result as a fresh-screen result; fresh A/B never ran;
+- lower the attribution-downside V24 TRAIN gate to obtain fresh data;
+- tune attribution-spectrum group weights, atom sorting, normalization, K, downside multiplier, or zero boundary on validation;
+- reintroduce the V24 abs-sorted/L1-normalized full spectrum into the main before aggregate DRC is tested fresh;
+- claim that the fixed evidence interface lacks capacity from V24 alone; aggregate downside is 5/5 on the same frozen interface;
+- restore signed-profile/transition main mechanisms already rejected by V19-V24 evidence;
+- reopen acquisition, selector, B/M, EAF backbone, safety guard, or final guard for V25;
+- promote by TRAIN total sum alone when one fixed fold is harmful;
+- promote by fresh AUC while the actually selected direct replacement path is harmful;
+- use pooled A/B success to rescue one failed block.
+
+If V25 aggregate DRC passes both fresh blocks, freeze it and run exactly one independent full-validation reproduction.  If it is path-safe but not incremental over mean-SE, do not claim downside-certification novelty.  If it fails the catastrophic tail on fresh, only then investigate whether aggregate evidence lacks a semantically identifiable latent state; the next representation candidate must preserve **atom identity/family correspondence**, not repeat V24's sorted normalized spectrum.
