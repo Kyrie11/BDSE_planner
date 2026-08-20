@@ -1,0 +1,305 @@
+{
+  "asymmetric_preservation_non_degradation": false,
+  "audit": "v64_3_25_eaf_icer_drc_split",
+  "candidate_support_valid": true,
+  "counterfactual_recovery_mechanism": false,
+  "deployment_alignment": true,
+  "downside_certificate_incremental": false,
+  "edge_diagnostics": {
+    "aggregate_downside": {
+      "admissible_candidates_per_proposal_mean": 11.01814058956916,
+      "admissible_edge_count": 4859.0,
+      "alternative_recovery_precision": 0.9583333333333334,
+      "alternative_recovery_rate": 0.05442176870748299,
+      "alternative_teacher_margin_mean": 1.817954955854691,
+      "anchor_fallback_rate": 0.36054421768707484,
+      "anchor_recovery_precision": NaN,
+      "anchor_recovery_rate_on_proposals": 0.0,
+      "counterfactual_opportunity_capture_rate": 0.08235294117647059,
+      "counterfactual_opportunity_rate": 0.3854875283446712,
+      "counterfactual_recovery_precision": 0.5833333333333334,
+      "direct_counterfactual_dominance_auc": 0.7189916894076247,
+      "direct_counterfactual_dominance_edge_count": 4576.0,
+      "direct_incumbent_opportunity_capture_rate": 0.08284023668639054,
+      "direct_incumbent_opportunity_rate": 0.599290780141844,
+      "direct_incumbent_proposal_count": 282.0,
+      "direct_incumbent_replacement_precision": 0.5833333333333334,
+      "direct_incumbent_replacement_rate": 0.0851063829787234,
+      "multi_admissible_proposal_rate": 0.6281179138321995,
+      "profile_counterfactual_dominance_auc": NaN,
+      "proposal_changed_rate": 0.41496598639455784,
+      "proposal_scene_count": 441.0,
+      "scalar_counterfactual_dominance_auc": 0.7189916894076247,
+      "scene_count": 473.0,
+      "selected_nonanchor_teacher_better_rate": 0.7056737588652482,
+      "selected_teacher_margin_mean_including_anchor": 0.5196418017967323,
+      "strict_raw_top_counterfactual_recovery_precision": 0.5833333333333334,
+      "support_auc": 0.7839958733520035
+    },
+    "aggregate_meanse": {
+      "admissible_candidates_per_proposal_mean": 11.01814058956916,
+      "admissible_edge_count": 4859.0,
+      "alternative_recovery_precision": 0.9459459459459459,
+      "alternative_recovery_rate": 0.08390022675736962,
+      "alternative_teacher_margin_mean": 1.5560575832715944,
+      "anchor_fallback_rate": 0.36054421768707484,
+      "anchor_recovery_precision": NaN,
+      "anchor_recovery_rate_on_proposals": 0.0,
+      "counterfactual_opportunity_capture_rate": 0.14705882352941177,
+      "counterfactual_opportunity_rate": 0.3854875283446712,
+      "counterfactual_recovery_precision": 0.6756756756756757,
+      "direct_counterfactual_dominance_auc": 0.7189916894076247,
+      "direct_counterfactual_dominance_edge_count": 4576.0,
+      "direct_incumbent_opportunity_capture_rate": 0.14792899408284024,
+      "direct_incumbent_opportunity_rate": 0.599290780141844,
+      "direct_incumbent_proposal_count": 282.0,
+      "direct_incumbent_replacement_precision": 0.6756756756756757,
+      "direct_incumbent_replacement_rate": 0.13120567375886524,
+      "multi_admissible_proposal_rate": 0.6281179138321995,
+      "profile_counterfactual_dominance_auc": NaN,
+      "proposal_changed_rate": 0.4444444444444444,
+      "proposal_scene_count": 441.0,
+      "scalar_counterfactual_dominance_auc": 0.7189916894076247,
+      "scene_count": 473.0,
+      "selected_nonanchor_teacher_better_rate": 0.7092198581560284,
+      "selected_teacher_margin_mean_including_anchor": 0.524130413567768,
+      "strict_raw_top_counterfactual_recovery_precision": 0.6756756756756757,
+      "support_auc": 0.7839958733520035
+    },
+    "v20": {
+      "admissible_candidates_per_proposal_mean": 11.01814058956916,
+      "admissible_edge_count": 4859.0,
+      "alternative_recovery_precision": 0.9204545454545454,
+      "alternative_recovery_rate": 0.19954648526077098,
+      "alternative_teacher_margin_mean": 1.2377935049759377,
+      "anchor_fallback_rate": 0.5873015873015873,
+      "anchor_recovery_precision": NaN,
+      "anchor_recovery_rate_on_proposals": 0.0,
+      "counterfactual_opportunity_capture_rate": 0.31176470588235294,
+      "counterfactual_opportunity_rate": 0.3854875283446712,
+      "counterfactual_recovery_precision": 0.6022727272727273,
+      "direct_counterfactual_dominance_auc": 0.7404151666175547,
+      "direct_counterfactual_dominance_edge_count": 4576.0,
+      "direct_incumbent_opportunity_capture_rate": 0.3136094674556213,
+      "direct_incumbent_opportunity_rate": 0.599290780141844,
+      "direct_incumbent_proposal_count": 282.0,
+      "direct_incumbent_replacement_precision": 0.6022727272727273,
+      "direct_incumbent_replacement_rate": 0.3120567375886525,
+      "multi_admissible_proposal_rate": 0.6281179138321995,
+      "profile_counterfactual_dominance_auc": 0.7372223574579666,
+      "proposal_changed_rate": 0.7868480725623582,
+      "proposal_scene_count": 441.0,
+      "scalar_counterfactual_dominance_auc": 0.7189916894076247,
+      "scene_count": 473.0,
+      "selected_nonanchor_teacher_better_rate": 0.8791208791208791,
+      "selected_teacher_margin_mean_including_anchor": 0.49634304928471207,
+      "strict_raw_top_counterfactual_recovery_precision": 0.6022727272727273,
+      "support_auc": 0.7839958733520035
+    }
+  },
+  "endpoint_gain": false,
+  "frozen_interface": {
+    "decision_budget_atom_count": true,
+    "effective_selected_decisive_atom_recall": true,
+    "evidence_certificate_fraction": true,
+    "local_pair_full_interface_action_match": true,
+    "pair_full_interface_action_match": true,
+    "proposal_candidate_atom_count": true,
+    "proposal_decisive_atom_recall": true,
+    "selected_decisive_atom_recall": true,
+    "selected_local_anchor_action_match": true
+  },
+  "frozen_support_dominance_signal": true,
+  "full_split_pass": false,
+  "incumbent_default_invariant": true,
+  "instrumentation_valid": true,
+  "interpretation": "V25 tests only the V24 surviving causal branch.  The frozen aggregate evidence representation is held fixed while mean-SE and downside-RMS certificates differ only in tail sensitivity.  Promotion requires the main selected replacement path to be non-harmful, the downside arm to add path-level value over mean-SE, asymmetric incumbent preservation, and endpoint non-inferiority independently on this block.",
+  "main_algorithm_arm": "aggregate_downside",
+  "metrics": {
+    "aggregate_downside": {
+      "beneficial": 0.086,
+      "flip": 0.596,
+      "guard_block": 0.002,
+      "harmful": 0.09,
+      "match": 0.164,
+      "regret": 12850.076544455307
+    },
+    "aggregate_meanse": {
+      "beneficial": 0.088,
+      "flip": 0.596,
+      "guard_block": 0.002,
+      "harmful": 0.09,
+      "match": 0.166,
+      "regret": 12770.897432814234
+    },
+    "anchor": {
+      "match": 0.168,
+      "regret": 22169.275719557085
+    },
+    "raw": {
+      "beneficial": 0.084,
+      "flip": 0.596,
+      "guard_block": 0.32,
+      "harmful": 0.09,
+      "match": 0.162,
+      "regret": 12763.736126885186
+    },
+    "v20": {
+      "beneficial": 0.078,
+      "flip": 0.396,
+      "guard_block": 0.002,
+      "harmful": 0.014,
+      "match": 0.232,
+      "regret": 13261.06653876735
+    }
+  },
+  "next_action": "aggregate_downside_certificate_failed_selected_tail_do_not_tune_K_multiplier_or_zero_audit_missing_latent_state",
+  "path_diagnostics": {
+    "aggregate_downside": {
+      "admissible_incumbent_to_anchor": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      },
+      "all_flagged_delegated": {
+        "count": 27,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "direct_incumbent_to_alternative": {
+        "count": 24,
+        "regret_delta_mean": 1798.7586993776695,
+        "regret_delta_sum": 43170.20878506407
+      },
+      "inadmissible_incumbent_anchor_relative": {
+        "count": 159,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "keep_legacy": {
+        "count": 290,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "other": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      }
+    },
+    "aggregate_meanse": {
+      "admissible_incumbent_to_anchor": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      },
+      "all_flagged_delegated": {
+        "count": 27,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "direct_incumbent_to_alternative": {
+        "count": 37,
+        "regret_delta_mean": 96.77440444670808,
+        "regret_delta_sum": 3580.652964528199
+      },
+      "inadmissible_incumbent_anchor_relative": {
+        "count": 159,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "keep_legacy": {
+        "count": 277,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "other": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      }
+    },
+    "v20": {
+      "admissible_incumbent_to_anchor": {
+        "count": 100,
+        "regret_delta_mean": 2665.919035603594,
+        "regret_delta_sum": 266591.9035603594
+      },
+      "all_flagged_delegated": {
+        "count": 27,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "direct_incumbent_to_alternative": {
+        "count": 88,
+        "regret_delta_mean": -203.7124729463255,
+        "regret_delta_sum": -17926.697619276645
+      },
+      "inadmissible_incumbent_anchor_relative": {
+        "count": 159,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "keep_legacy": {
+        "count": 126,
+        "regret_delta_mean": 0.0,
+        "regret_delta_sum": 0.0
+      },
+      "other": {
+        "count": 0,
+        "regret_delta_mean": NaN,
+        "regret_delta_sum": 0.0
+      }
+    }
+  },
+  "selected_replacement_path_nonharmful": false,
+  "selected_replacement_tail_diagnostics": {
+    "aggregate_downside": {
+      "count": 24,
+      "regret_delta_mean": 1798.7586993776695,
+      "regret_delta_sum": 43170.20878506407,
+      "regret_positive_rms": 5764.197334393037,
+      "teacher_improvement_mean": -0.08993793496888347,
+      "teacher_improvement_sum": -2.1585104392532033,
+      "teacher_improvement_worst": -0.9903788652397809,
+      "teacher_negative_rms": 0.2882098667196519,
+      "teacher_positive_precision": 0.5833333333333334,
+      "token_count": 24,
+      "worst_regret_increase": 19807.577304795617
+    },
+    "aggregate_meanse": {
+      "count": 37,
+      "regret_delta_mean": 96.77440444670808,
+      "regret_delta_sum": 3580.652964528199,
+      "regret_positive_rms": 3310.9605992437823,
+      "teacher_improvement_mean": -0.004838720222335411,
+      "teacher_improvement_sum": -0.1790326482264102,
+      "teacher_improvement_worst": -0.9903788652397809,
+      "teacher_negative_rms": 0.16554802996218912,
+      "teacher_positive_precision": 0.7027027027027027,
+      "token_count": 37,
+      "worst_regret_increase": 19807.577304795617
+    }
+  },
+  "selected_tail_instrumentation_valid": true,
+  "split_name": "B",
+  "structural": {
+    "all_flagged_scene_count": 27,
+    "main_all_flagged_delegation_rate": 1.0,
+    "main_all_flagged_final_identity_vs_raw": 1.0,
+    "main_safe_guard_block_rate": 0.0
+  },
+  "thresholds": {
+    "K_downside_multiplier_zero_boundary": "fixed on TRAIN: K=32/64, multiplier=1, boundary=0; no validation sweep",
+    "capture_min": 0.08,
+    "direct_precision_min": 0.6,
+    "dominance_auc_min": 0.7,
+    "incumbent_to_anchor_count_max": 0,
+    "match_over_anchor_min": 0.005,
+    "raw_flip_non_degradation_tolerance": 0.01,
+    "raw_harmful_non_degradation_tolerance": 0.005,
+    "regret_tolerance": 0.02,
+    "replacement_path_regret_sum_max": 0.0,
+    "support_auc_min": 0.65
+  }
+}

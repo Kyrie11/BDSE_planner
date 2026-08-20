@@ -1,0 +1,50 @@
+V64.3.26 EAF-ICER-SARC — next server command
+================================================
+
+IMPORTANT SOURCE NOTE
+---------------------
+The code zip uploaded with the V25 result in this turn is an unrelated OC-RAP v48.56 repository.
+Use the delivered `bdse_v64_3_26_eaf_icer_sarc` directory as the V26 source tree.
+It was built from the previously verified V64.3.25 EAF-ICER-DRC package that matches the uploaded V25 result provenance.
+
+PRIMARY COMMAND
+---------------
+cd bdse_v64_3_26_eaf_icer_sarc
+bash RUN_V64_3_26_EAF_ICER_SARC_SCREEN_2GPU.sh
+
+The launcher will:
+1) re-audit the frozen V64.3.13 EAF checkpoint;
+2) run compile + targeted V64.3.13–V64.3.26 regression;
+3) replay exactly one frozen 3000-scene V20/EAF TRAIN frontier to instrument identity-preserving semantic-family coordinates (unless V26_TRAIN_EDGES points to an already completed V26 semantic frontier);
+4) fit/gate V25 aggregate-downside control vs V26 semantic-family-downside SARC on the same fixed 5 scene folds;
+5) STOP immediately if SARC is not 5/5 path-safe + >=64 selected + nonnegative total + non-worse/strictly-incremental selected tail over the aggregate DRC control;
+6) only on TRAIN PASS, select 1000 new validation scenes excluding the packaged 6700 inspected validation tokens;
+7) run A/B 500 each: raw / frozen V20 / V25 aggregate-downside / V26 semantic-family-downside;
+8) enforce exact manifest-set identity plus identical within-split arm row order;
+9) run independent A/B checkers and the double-fresh checker.
+
+OPTIONAL TRAIN FRONTIER REUSE
+-----------------------------
+If a previous V26 attempt already completed the 3000-scene semantic-family TRAIN instrumentation replay, avoid repeating it:
+
+V26_TRAIN_EDGES=/absolute/path/to/train_v20_semantic_family_frontier_edges.jsonl \
+  bash RUN_V64_3_26_EAF_ICER_SARC_SCREEN_2GPU.sh
+
+Do NOT point this variable at V24/V25 frontier files: they do not contain the required `icer_semantic_family_*` coordinates.
+
+FAIL-CLOSED RULES
+-----------------
+- TRAIN STOP: do not bypass and do not spend fresh GPU.
+- A or B STOP: no pooled rescue; do not run full-val/test/closed-loop.
+- Do not tune K={32,64}, downside multiplier=1, zero boundary, family/group weights, density thresholds, support thresholds, scalar-dominance thresholds, or semantic family definitions after seeing the result.
+- Do not reintroduce V24 abs-sorted/L1-normalized attribution spectrum, transition geometry, signed-profile ranking, action/maneuver blacklists, or learned embeddings as a rescue in this run.
+- Passing both A and B authorizes ONLY one frozen independent full-validation reproduction. Test/closed-loop remain forbidden until that reproduction passes.
+
+EXPECTED MAIN OUTPUTS
+---------------------
+outputs_v64_3_26_eaf_icer_sarc_screen_2gpu_v1/provenance/v64_3_26_train_sarc_fit.json
+outputs_v64_3_26_eaf_icer_sarc_screen_2gpu_v1/provenance/v64_3_26_split_A_screen.json
+outputs_v64_3_26_eaf_icer_sarc_screen_2gpu_v1/provenance/v64_3_26_split_B_screen.json
+outputs_v64_3_26_eaf_icer_sarc_screen_2gpu_v1/provenance/v64_3_26_eaf_icer_sarc_double_fresh_screen.json
+
+If the launcher stops at TRAIN, upload the whole output directory. If it reaches fresh screen, also upload the whole output directory; do not manually omit failed-stage provenance/logs.

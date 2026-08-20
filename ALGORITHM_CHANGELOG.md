@@ -8387,3 +8387,216 @@ Do **not**:
 - use pooled A/B success to rescue one failed block.
 
 If V25 aggregate DRC passes both fresh blocks, freeze it and run exactly one independent full-validation reproduction.  If it is path-safe but not incremental over mean-SE, do not claim downside-certification novelty.  If it fails the catastrophic tail on fresh, only then investigate whether aggregate evidence lacks a semantically identifiable latent state; the next representation candidate must preserve **atom identity/family correspondence**, not repeat V24's sorted normalized spectrum.
+
+# V64.3.25 uploaded fresh result audit -> V64.3.26 EAF-ICER-SARC
+
+## 1. V64.3.25 execution status: TRAIN PASS, then launcher false STOP before checker
+
+The uploaded V25 run **did not TRAIN STOP**.  The frozen aggregate-downside main passed its pre-registered TRAIN gate exactly as expected:
+
+- 5/5 fixed scene folds selected-path safe;
+- 71 selected replacements;
+- teacher-improvement sum **+5.527642**.
+
+Fresh selection and all eight A/B evaluations also completed.  The missing split/double-fresh reports were caused by an over-strong paired-identity assertion in the launcher: it required each evaluator JSONL row order to equal the hash-manifest order.  The evaluator correctly prefilters to the requested token set but emits cache traversal order.
+
+Independent identity audit proves the fresh action/metric artifacts are scientifically usable:
+
+- A and B are each 500 unique tokens;
+- A/B overlap = 0;
+- TRAIN/fresh overlap = 0;
+- all 8 arms contain exactly the corresponding 500-token manifest set;
+- within each split, all 4 arms have identical emitted row order;
+- all 8 arms report active pre-load scenario-token filtering.
+
+The V25 and V26 launchers in this delivery therefore use the correct paired contract: exact set equality to the manifest plus identical emitted order across paired arms.  This repairs checker reachability without changing action/metric semantics.
+
+## 2. Recovered V25 double-fresh result: scientific FAIL
+
+Running the original pre-registered V25 checker on the reliable A/B artifacts gives:
+
+- TRAIN pass: true;
+- split A pass: false;
+- split B pass: false;
+- full promotion: false.
+
+Split A aggregate DRC direct replacements:
+
+- 24 replacements;
+- regret delta sum **+19,786.41**;
+- normalized teacher-improvement sum **-0.98932**;
+- worst teacher improvement **-0.98677**.
+
+Split B:
+
+- 24 replacements;
+- regret delta sum **+43,170.21**;
+- teacher-improvement sum **-2.15851**;
+- worst **-0.99038**.
+
+Thus V25 cannot proceed to full-val/test/closed-loop even though A's coarse endpoint happens to remain within the endpoint tolerance.  The mechanism object itself—the actually selected incumbent->alternative path—is harmful on both independent blocks.
+
+## 3. What V25 says about downside sensitivity
+
+The V24 conclusion must be narrowed rather than discarded.
+
+**Retain:** catastrophic negative outcome magnitude is the correct risk object.  Aggregate downside was the only 5/5 TRAIN branch, and on split A its selected positive-regret RMS is lower than mean-SE.
+
+**Reject:** `local mean - local negative-outcome RMS` is not by itself a fresh-robust certificate.  On split B DRC is worse than mean-SE and introduces an additional approximately -0.99 teacher-improvement catastrophe that mean-SE does not select.
+
+DRC is not a monotonic tightening of mean-SE.  When local negative outcomes appear tiny, negative-RMS can be much smaller than standard error, allowing a candidate that mean-SE rejects.  This happened for `f2469e5f4c2853c1`: the K32 DRC bound is positive while the K32 mean-SE bound is slightly negative, yet the actual fresh teacher-improvement is about -0.98975.
+
+Therefore downside sensitivity remains a **tail objective/statistic**, not a standalone solved headline mechanism.
+
+## 4. Dominant bottleneck after V25
+
+V24's failure was risk-geometry distortion from the abs-sorted/L1-normalized full attribution spectrum.  V25 removes that representation and still fails.
+
+The remaining catastrophe is also not primarily a density/OOD issue.  Split-A scene `85b3a4ed30b65780` lies in a dense portion of the frozen 18-D TRAIN memory (approximately r32/r64 percentiles 49.5%/38.3%), yet its K32/K64 neighborhoods have worst TRAIN teacher-improvement only about -0.123 while the fresh candidate is -0.987.
+
+The bottleneck therefore tightens to:
+
+> **selected-path tail certification under semantic outcome aliasing in the regret representation**.
+
+The current aggregate representation is locally supported but not outcome-sufficient: semantically different selected-evidence states collapse to nearby 18-D aggregate statistics, so the catastrophic mode is absent from the local TRAIN neighborhood.
+
+## 5. Fixed B<=16 interface remains frozen, but its sufficiency is not yet proven
+
+V25 does **not** prove that the fixed planner-interface evidence budget lacks capacity.  Both representations tested so far discard semantic identity:
+
+- V24 abs-sorts and L1-normalizes the complete spectrum and independently sorts candidate/delta views, destroying atom identity/candidate-incumbent correspondence;
+- V25 compresses evidence into 18 aggregate statistics.
+
+The B<=16 interface still contains frozen atom family/type identity and exact per-selected-atom EAF contributions.  V26 therefore tests an identity-preserving representation before any acquisition/selector/EAF/B/M unfreezing.
+
+If identity-preserving semantic alignment also fails clean TRAIN/fresh tests, suspicion can move from representation insufficiency toward interface capacity.  Until then broad unfreezing is not justified.
+
+## 6. V64.3.26 EAF-ICER-SARC — Semantic-Aligned Regret Certification
+
+V26 makes **one causal mechanism change only**: replacement-regret representation.
+
+The frozen evidence families are:
+
+1. feasibility;
+2. reachability_interaction;
+3. precedence;
+4. decision_boundary;
+5. dynamic_regularity.
+
+For each candidate `b` and incumbent `i`, over the same selected B<=16 evidence atoms, V26 computes fixed family-coordinate signed sums:
+
+- candidate family sum `s_f(b) = sum_{e in family f} a_e(b)`;
+- incumbent contrast `d_f(b,i) = sum_{e in family f}(a_e(b)-a_e(i))`.
+
+This is a 10-D semantic vector.  It is concatenated with the frozen V25 18-D aggregate evidence vector for a 28-D SARC representation.
+
+Important constraints:
+
+- no magnitude sorting;
+- no candidate-specific L1 normalization;
+- exact candidate/incumbent correspondence on the same selected atoms;
+- no learned embedding;
+- no semantic group or family weight;
+- all 28 coordinates use equal per-dimension metric weight 1/28 after TRAIN-only standardization.
+
+The local risk objective is otherwise unchanged:
+
+- K={32,64};
+- inverse-distance weighting;
+- `mean - weighted RMS(negative teacher improvements)`;
+- downside multiplier=1;
+- zero boundary;
+- minimum across K32/K64.
+
+The action operator is unchanged:
+
+- final-guard-admissible incumbent preserved by default;
+- alternative requires support>0, frozen scalar dominance>0 and regret certificate>0;
+- surviving alternatives rank only by frozen scalar dominance;
+- no signed-profile, transition, sorted-spectrum, density or incumbent->anchor learned gate.
+
+## 7. V26 TRAIN causal gate
+
+Historical V24/V25 frontier provenance does not serialize semantic-family coordinates, so V26 performs one frozen 3000-scene V20/EAF **instrumentation replay**.  This is not EAF/selector retraining.
+
+Only two regret arms are compared on the identical frozen replacement population:
+
+1. V25 `aggregate_downside` 18-D control;
+2. V26 `semantic_family_downside` 28-D main.
+
+The same V23 scene-fold seed is retained.
+
+Before fresh GPU, SARC must satisfy:
+
+- 5/5 fixed folds selected-path non-harmful;
+- selected count >=64;
+- total teacher-improvement >=0;
+- selected negative RMS <= V25 aggregate DRC;
+- selected worst outcome >= V25 aggregate DRC;
+- at least one of the last two tail metrics strictly improves.
+
+Failure is a hard TRAIN STOP.  Do not tune family/group weights, K, multiplier, zero boundary or density thresholds.
+
+## 8. V26 double-fresh screen
+
+The V25 fresh 1000 tokens are now inspected and permanently excluded.  V26 packages an exact **6700 unique-token** design-exclusion manifest = previous 5700 + V25 fresh 1000, with zero overlap.
+
+A new hash seed selects 1000 untouched validation scenes, split A500/B500.
+
+Each block runs only:
+
+1. raw EAF;
+2. frozen V20;
+3. V25 aggregate-downside DRC control;
+4. V26 semantic-family-downside SARC main.
+
+Per-block promotion requires frozen-interface/deployment invariants, candidate support, frozen support/dominance signal, zero learned incumbent->anchor changes, non-harmful selected replacement path, recovery, **semantic-family selected-tail incrementality over V25 DRC**, asymmetric preservation and endpoint non-inferiority.
+
+Semantic-tail incrementality means main selected teacher-negative RMS and worst teacher improvement are both non-worse than the aggregate DRC control and at least one is strictly better, while endpoint regret stays within 2% of the control.
+
+Both A and B must independently pass.  No pooling.
+
+## 9. Paper/novelty update after V25
+
+The V24 candidate headline
+
+> evidence-attributed incumbent-contrastive downside-regret certification ...
+
+is now too strong because standalone aggregate DRC fails fresh selected-path safety.
+
+If V26 succeeds through independent full-val, the candidate headline should instead be:
+
+> **semantically aligned evidence-attributed incumbent-contrastive tail-regret certification for deployment-admissible extremal recovery under a fixed planner-interface evidence budget.**
+
+`evidence-attributed` remains justified because the semantic coordinates are constructed from exact selected-evidence EAF contributions.  `semantically aligned` becomes the causal representation claim.  `tail-regret` accurately treats downside as the target without claiming the V25 scalar statistic alone is sufficient.
+
+Remove from the main paper claim: full-spectrum attribution-resolved regret certification, transition-conditioned main geometry, signed-profile ranking, generic AUC as the final reliability definition, and standalone downside-RMS sufficiency.
+
+## 10. New no-repeat constraints after V25
+
+Do not:
+
+- restore V24 abs-sorted/L1-normalized spectra;
+- mix/tune mean-SE and DRC weights or thresholds;
+- tune K, downside multiplier or zero boundary;
+- add a standalone KNN radius/OOD threshold as the main fix (the split-A catastrophe is dense-support);
+- tune scalar-dominance/support thresholds to delete catastrophes;
+- restore signed-profile or transition main mechanisms;
+- use raw action/maneuver blacklists;
+- move directly to learned embeddings/bigger networks before semantic identity is tested;
+- unfreeze acquisition/selector/EAF/B/M/safety guards in V26;
+- rescue one failed fresh block with pooled statistics or endpoint noise.
+
+## 11. Engineering validation for V26 delivery
+
+- V26 unit tests: **6/6 PASS**;
+- V64.3.13--V64.3.26 targeted stack: **88/88 PASS**;
+- full repository in three batches: **95 + 153 + 170 = 418/418 PASS**;
+- warnings: **36**, all existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class;
+- Python compileall: PASS;
+- V25 and V26 launcher `bash -n`: PASS;
+- synthetic 18-D aggregate memory/config contract: PASS;
+- synthetic 28-D semantic-family memory/config contract: PASS;
+- V25 paired-identity false STOP fixed in both historical launcher and V26 launcher.
+
+The local environment does not contain the server nuPlan GPU/cache, so no V26 effect result is fabricated.  The next scientific result must come from the fail-closed V26 TRAIN gate and, only if that passes, new untouched A/B blocks.

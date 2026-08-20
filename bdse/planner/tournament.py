@@ -1577,6 +1577,78 @@ def _icer_attribution_resolved_feature_matrix(
     return out, list(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES)
 
 
+
+
+_ICER_SEMANTIC_FAMILY_IDS = (1, 2, 3, 4, 5)
+_ICER_SEMANTIC_FAMILY_NAMES = {
+    1: "feasibility",
+    2: "reachability_interaction",
+    3: "precedence",
+    4: "decision_boundary",
+    5: "dynamic_regularity",
+}
+_ICER_SEMANTIC_FAMILY_FEATURE_NAMES = (
+    [f"candidate_family_{_ICER_SEMANTIC_FAMILY_NAMES[f]}_signed_sum" for f in _ICER_SEMANTIC_FAMILY_IDS]
+    + [f"delta_family_{_ICER_SEMANTIC_FAMILY_NAMES[f]}_signed_sum" for f in _ICER_SEMANTIC_FAMILY_IDS]
+)
+
+
+def _icer_semantic_family_feature_matrix(
+    atom_contrib_star: np.ndarray | None,
+    selected_atom_family_ids: np.ndarray | list[int] | None,
+    valid_mask: np.ndarray,
+    anchor_action: int,
+    legacy_action: int,
+) -> tuple[np.ndarray, list[str]]:
+    """Identity-preserving selected-evidence attribution grouped by fixed semantic family.
+
+    V64.3.24 showed that absolute-magnitude sorting plus per-candidate L1
+    normalization can destroy atom identity and distort the local regret geometry.
+    V64.3.26 therefore keeps a fixed semantic coordinate system.  For each of the
+    five frozen evidence families it exposes (1) the candidate's signed selected-
+    evidence contribution sum and (2) the candidate-minus-incumbent signed sum on
+    the *same selected atoms*.  There is no sorting, L1 normalization, learned
+    embedding, validation-selected family weight, or family-specific threshold.
+    """
+    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
+    K = len(valid); a = int(anchor_action); legacy = int(legacy_action)
+    out = np.zeros((K, len(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)), dtype=np.float64)
+    contrib = np.zeros((0, K), dtype=np.float64)
+    if atom_contrib_star is not None:
+        raw = np.asarray(atom_contrib_star, dtype=np.float64)
+        if raw.ndim == 2 and raw.shape[1] >= K:
+            contrib = raw[:, :K]
+    if selected_atom_family_ids is None:
+        return out, list(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)
+    fam = np.asarray(selected_atom_family_ids, dtype=np.int64).reshape(-1)
+    if contrib.shape[0] != fam.size:
+        if contrib.shape[0] == 0 and fam.size == 0:
+            return out, list(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)
+        raise ValueError(
+            f"EAF-ICER semantic-family attribution requires one family id per selected atom: "
+            f"contrib_rows={contrib.shape[0]} family_ids={fam.size}"
+        )
+    unknown = sorted(set(int(x) for x in fam.tolist()) - {0, *_ICER_SEMANTIC_FAMILY_IDS})
+    if unknown:
+        raise ValueError(f"EAF-ICER semantic-family attribution received unknown family ids {unknown}")
+    legacy_vec = (
+        contrib[:, legacy]
+        if contrib.size and 0 <= legacy < K and legacy != a
+        else np.zeros((contrib.shape[0],), dtype=np.float64)
+    )
+    for b in np.flatnonzero(valid).tolist():
+        if b == a:
+            continue
+        cand = contrib[:, b] if contrib.size else np.zeros((0,), dtype=np.float64)
+        delta = cand - legacy_vec if contrib.size else np.zeros((0,), dtype=np.float64)
+        for j, f in enumerate(_ICER_SEMANTIC_FAMILY_IDS):
+            mask = fam == int(f)
+            if np.any(mask):
+                out[b, j] = float(np.sum(cand[mask]))
+                out[b, len(_ICER_SEMANTIC_FAMILY_IDS) + j] = float(np.sum(delta[mask]))
+    return out, list(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)
+
+
 def _decisive_frontier_dacer_features(
     margin_star: np.ndarray,
     attribution_star: np.ndarray | None,
@@ -2014,6 +2086,8 @@ def _icer_regret_risk_feature_matrix(
     mode: str,
     attribution_resolved_feat: np.ndarray | None = None,
     attribution_resolved_names: list[str] | None = None,
+    semantic_family_feat: np.ndarray | None = None,
+    semantic_family_names: list[str] | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Auditable feature view for V64.3.22 regret-risk heads.
 
@@ -2036,6 +2110,15 @@ def _icer_regret_risk_feature_matrix(
         if ar.ndim != 2 or ar.shape[0] != base.shape[0] or ar.shape[1] != len(ar_names) or ar_names != list(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES):
             raise ValueError("EAF-ICER attribution-resolved feature matrix/schema mismatch")
         return np.concatenate([base, ar], axis=1), names + [f"attribution::{n}" for n in ar_names]
+    if mode == "semantic_family_aligned":
+        sf = np.asarray(semantic_family_feat, dtype=np.float64) if semantic_family_feat is not None else np.zeros((0, 0), dtype=np.float64)
+        sf_names = list(semantic_family_names or [])
+        if sf.ndim != 2 or sf.shape[0] != base.shape[0] or sf.shape[1] != len(sf_names) or sf_names != list(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES):
+            raise ValueError("EAF-ICER semantic-family feature matrix/schema mismatch")
+        # Equal per-dimension weighting is applied by the frozen local-memory
+        # implementation.  We intentionally do not introduce a semantic-group
+        # weight after seeing V25 fresh results.
+        return np.concatenate([base, sf], axis=1), names + [f"semantic_family::{n}" for n in sf_names]
     if mode != "transition_conditioned":
         raise ValueError(f"unknown EAF-ICER regret_risk_feature_mode={mode}")
     tr = np.asarray(transition_feat, dtype=np.float64)
@@ -2091,6 +2174,7 @@ def _apply_decisive_frontier_icer(
     cfg: dict[str, Any],
     candidate_trajectories: np.ndarray | None = None,
     maneuver_ids: np.ndarray | None = None,
+    selected_atom_family_ids: np.ndarray | list[int] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """V64.3.19+ incumbent-contrastive extremal recovery.
 
@@ -2132,6 +2216,9 @@ def _apply_decisive_frontier_icer(
     )
     attribution_resolved, attribution_resolved_names = _icer_attribution_resolved_feature_matrix(
         atom_contrib_star, valid, a, legacy
+    )
+    semantic_family, semantic_family_names = _icer_semantic_family_feature_matrix(
+        atom_contrib_star, selected_atom_family_ids, valid, a, legacy
     )
     transition_vs_incumbent, transition_names = _icer_transition_feature_matrix(
         candidate_trajectories, maneuver_ids, valid, legacy
@@ -2309,13 +2396,20 @@ def _apply_decisive_frontier_icer(
                 geometry_available = bool(_tr_chk.ndim == 3 and _tr_chk.shape[0] >= len(valid) and _tr_chk.shape[1] >= 1 and _tr_chk.shape[2] >= 2)
             if regret_risk_mode == "transition_conditioned" and not geometry_available:
                 raise ValueError("EAF-ICER transition-conditioned regret risk requires the runtime candidate trajectory bank")
+            if regret_risk_mode == "semantic_family_aligned":
+                fam_runtime = np.asarray(selected_atom_family_ids if selected_atom_family_ids is not None else [], dtype=np.int64).reshape(-1)
+                contrib_rows = int(np.asarray(atom_contrib_star).shape[0]) if atom_contrib_star is not None and np.asarray(atom_contrib_star).ndim == 2 else 0
+                if selected_atom_family_ids is None or fam_runtime.size != contrib_rows:
+                    raise ValueError("EAF-ICER semantic-family regret risk requires exact selected-atom family ids aligned to selected attribution rows")
             rep_x, rep_names = _icer_regret_risk_feature_matrix(
                 feat, names, transition_vs_incumbent, transition_names, regret_risk_mode,
                 attribution_resolved, attribution_resolved_names,
+                semantic_family, semantic_family_names,
             )
             ret_x, ret_names = _icer_regret_risk_feature_matrix(
                 feat, names, transition_vs_anchor, transition_names, regret_risk_mode,
                 attribution_resolved, attribution_resolved_names,
+                semantic_family, semantic_family_names,
             )
             if rep_names != ret_names:
                 raise RuntimeError("EAF-ICER replacement/retention regret-risk schemas diverged")
@@ -2434,6 +2528,7 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_replacement_regret_risk_enabled": float(bool(icer_cfg.get("replacement_regret_risk_enabled", icer_cfg.get("regret_risk_enabled", False)))),
         "decisive_frontier_icer_regret_risk_transition_conditioned": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "transition_conditioned"),
         "decisive_frontier_icer_regret_risk_attribution_resolved": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "attribution_resolved"),
+        "decisive_frontier_icer_regret_risk_semantic_family_aligned": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "semantic_family_aligned"),
         "decisive_frontier_icer_regret_risk_local_memory": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate"}),
         "decisive_frontier_icer_regret_risk_downside_certificate": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() == "local_multiscale_downside_regret_certificate"),
         "decisive_frontier_icer_selected_replacement_regret_risk_logit": float(replacement_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,
@@ -2452,6 +2547,8 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_feature_names": names,
         "_decisive_frontier_icer_attribution_resolved_feature_matrix": np.asarray(attribution_resolved, dtype=np.float32),
         "_decisive_frontier_icer_attribution_resolved_feature_names": list(attribution_resolved_names),
+        "_decisive_frontier_icer_semantic_family_feature_matrix": np.asarray(semantic_family, dtype=np.float32),
+        "_decisive_frontier_icer_semantic_family_feature_names": list(semantic_family_names),
         "_decisive_frontier_icer_support_logit_star": np.asarray(support_logits, dtype=np.float32),
         "_decisive_frontier_icer_dominance_logit_star": np.asarray(dominance_logits, dtype=np.float32),
         "_decisive_frontier_icer_scalar_dominance_logit_star": np.asarray(scalar_dominance_logits, dtype=np.float32) if applies else np.zeros_like(margin_star, dtype=np.float32),
@@ -2487,6 +2584,7 @@ def run_pair_conditioned_tournament(
     frontier_value_action_context_factors: np.ndarray | None = None,
     frontier_value_scale: float = 1.0,
     evidence_certificate_fraction: float | None = None,
+    selected_atom_family_ids: np.ndarray | list[int] | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -2759,6 +2857,7 @@ def run_pair_conditioned_tournament(
             cfg,
             candidate_trajectories=candidate_trajectories,
             maneuver_ids=maneuver_ids,
+            selected_atom_family_ids=selected_atom_family_ids,
         )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))

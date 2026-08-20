@@ -1036,6 +1036,7 @@ class BDSEPlannerCore:
                     "evidence_certificate_fraction",
                     selection.diagnostics.get("aocc_certified_pair_fraction", None),
                 ),
+                selected_atom_family_ids=np.asarray(family_ids, dtype=np.int64)[np.asarray(selection.selected, dtype=np.int64)],
             )
         else:
             selector_started = time.perf_counter()

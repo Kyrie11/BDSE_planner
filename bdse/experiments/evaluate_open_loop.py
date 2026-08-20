@@ -1016,6 +1016,8 @@ def main() -> None:
             icer_transition_names = list(tour_diag.get("_decisive_frontier_icer_transition_feature_names", []))
             icer_attribution_resolved = tour_diag.get("_decisive_frontier_icer_attribution_resolved_feature_matrix", None)
             icer_attribution_resolved_names = list(tour_diag.get("_decisive_frontier_icer_attribution_resolved_feature_names", []))
+            icer_semantic_family = tour_diag.get("_decisive_frontier_icer_semantic_family_feature_matrix", None)
+            icer_semantic_family_names = list(tour_diag.get("_decisive_frontier_icer_semantic_family_feature_names", []))
             icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
             icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
@@ -1105,6 +1107,15 @@ def main() -> None:
                     if armat is not None and write_inc_transition and armat.ndim == 2 and armat.shape[0] == edge_valid.size and armat.shape[1] == len(icer_attribution_resolved_names):
                         for j, name in enumerate(icer_attribution_resolved_names):
                             row[f"icer_attribution_resolved_{name}"] = float(armat[challenger, j])
+                    sfmat = None if icer_semantic_family is None else np.asarray(icer_semantic_family, dtype=np.float64)
+                    # V64.3.26 logs only fixed semantic-family coordinates for
+                    # deployment-admissible challengers.  Unlike V24 spectra,
+                    # these coordinates preserve family identity and exact
+                    # candidate/incumbent correspondence without sorting or L1
+                    # normalization.
+                    if sfmat is not None and write_inc_transition and sfmat.ndim == 2 and sfmat.shape[0] == edge_valid.size and sfmat.shape[1] == len(icer_semantic_family_names):
+                        for j, name in enumerate(icer_semantic_family_names):
+                            row[f"icer_semantic_family_{name}"] = float(sfmat[challenger, j])
                     frontier_edge_file.write(json.dumps(row, sort_keys=True) + "\n")
         metric_means.update(diag)
         if args.per_sample_output:
