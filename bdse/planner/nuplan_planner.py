@@ -59,6 +59,7 @@ from bdse.planner.tournament import (
     TournamentResult,
     _trajectory_utility_cost_np,
 )
+from bdse.planner.frontier_contrast_rebinding import frontier_contrast_rebind
 
 
 _PLANNER_DEVICE_LOCK = threading.Lock()
@@ -947,6 +948,49 @@ class BDSEPlannerCore:
                     sel_cfg.get("deployment_coreset_budget_layer_diversity_distance", 2)
                 ),
             )
+
+            # V64.3.29 Frontier-Contrast Rebinding (FCR).
+            #
+            # The frozen AOCC selection remains the incumbent interface.  FCR is
+            # a post-EAF, teacher-free, same-cardinality refinement over the
+            # already queried Top-M evidence only.  It is allowed to replace the
+            # selected B-set *only* when it preserves both the full-M local anchor
+            # and the exact downstream full-M target action while strictly
+            # reducing complete DARM+EAF anchor-star compression error.  Any
+            # contract failure is a no-op fallback to AOCC.  This deliberately
+            # avoids reopening the historically exhausted learned acquisition or
+            # DACC/beam/swap search branches.
+            fcr_cfg = sel_cfg.get("frontier_contrast_rebinding", {}) or {}
+            if bool(fcr_cfg.get("enabled", False)):
+                fcr_runtime_cfg = stage_cfg.get("runtime", {}) if isinstance(stage_cfg, dict) else {}
+                fcr_frontier_cfg = fcr_runtime_cfg.get("decisive_frontier_value", {}) or {}
+                fcr_reference_atoms = np.flatnonzero(decision_atom_active).astype(np.int64).tolist()
+                fcr_result = frontier_contrast_rebind(
+                    baseline_selected=selection.selected,
+                    reference_atoms=fcr_reference_atoms,
+                    predicted_base_cost=J0,
+                    predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
+                    pair_indices=np.asarray(pred.get("rival_pair_indices", pred["pair_indices"]), dtype=np.int64),
+                    pair_atom_delta=np.asarray(pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]), dtype=np.float32),
+                    valid_mask=candidates.valid_mask,
+                    atom_budget_costs=evidence_bank.budget_costs(),
+                    budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
+                    normalize_margins=bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)),
+                    margin_scale=float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0))),
+                    pair_delta_includes_local=bool(fcr_runtime_cfg.get("pair_tournament_pair_delta_includes_local", True)),
+                    frontier_value_atom_factors=pred.get("frontier_value_atom_factors", None),
+                    frontier_value_action_signed_factors=pred.get("frontier_value_action_signed_factors", None),
+                    frontier_value_action_context_factors=pred.get("frontier_value_action_context_factors", None),
+                    frontier_value_scale=float(fcr_frontier_cfg.get("scale", pred.get("frontier_value_scale", 1.0))),
+                    deployment_evaluator=deployment_evaluator,
+                    full_target_action=adverse_target_action,
+                )
+                selection.selected = list(fcr_result.selected)
+                selection.diagnostics.update(fcr_result.diagnostics)
+            else:
+                selection.diagnostics["frontier_contrast_rebinding_enabled"] = 0.0
+                selection.diagnostics["frontier_contrast_rebinding_accepted"] = 0.0
+
             selection_finished = time.perf_counter()
             selection.diagnostics["deployment_coreset_search_uses_rival_graph"] = bool(
                 deployment_search_uses_rival_graph

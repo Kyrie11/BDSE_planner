@@ -8883,3 +8883,194 @@ Candidate novelty only after double-fresh + independent full-val:
 > **evidence-attributed proposal-conditioned catastrophic-mode certification for monotone deployment-admissible extremal recovery under a fixed planner-interface evidence budget.**
 
 This is not yet a claim.
+
+# V64.3.28 untouched double-fresh audit -> V64.3.29 EAF-ICER-FCR
+
+## V28 result: TRAIN-motivated PTMC does **not** survive untouched A/B
+
+The uploaded V28 result package is valid for causal analysis: the frozen V28 TRAIN design gate passes, the two untouched blocks are disjoint 500-scene splits, and both split screens fail for the intended algorithmic reason rather than a runtime/provenance error.
+
+### Split A (500 untouched scenes)
+
+| arm | match | mean regret | harmful | flip |
+|---|---:|---:|---:|---:|
+| raw | 0.136 | 14826.996 | 0.100 | 0.544 |
+| V20 | 0.220 | 14279.343 | 0.012 | 0.344 |
+| V25 aggregate DRC | 0.144 | 14755.026 | 0.100 | 0.544 |
+| V28 PTMC | 0.144 | 14755.040 | 0.100 | 0.544 |
+
+V25 direct selected replacements: 22, precision 0.7273, teacher-improvement sum +1.799253, worst -0.056853, negative RMS 0.012821. PTMC keeps 21, sum +1.798906, same worst -0.056853, but negative RMS worsens to 0.013123. Direct positive-opportunity edge capture is only 0.1074 for V25 and 0.1007 for PTMC, versus 0.3826 for V20.
+
+### Split B (500 untouched scenes)
+
+| arm | match | mean regret | harmful | flip |
+|---|---:|---:|---:|---:|
+| raw | 0.146 | 13715.526 | 0.092 | 0.580 |
+| V20 | 0.216 | 13013.992 | 0.004 | 0.344 |
+| V25 aggregate DRC | 0.158 | 13414.578 | 0.092 | 0.582 |
+| V28 PTMC | 0.154 | 13414.745 | 0.092 | 0.582 |
+
+V25 direct selected replacements: 26, precision 0.8077, teacher-improvement sum +1.250624, worst -0.000471, negative RMS 0.000129. PTMC keeps 24, sum +1.246454, same worst -0.000471, but negative RMS worsens to 0.000134. Direct positive-opportunity edge capture is 0.1364 for V25 and 0.1234 for PTMC, versus 0.3571 for V20.
+
+### Exact PTMC behavioral-veto attribution
+
+PTMC makes only three direct behavioral vetoes across A/B, and **all three veto teacher-positive proposals**:
+
+- A `62eb30e1177857a5`: incumbent 20, proposal 0, teacher improvement +0.00034693, DRC +0.062408, PTMC confirmation -2.50553;
+- B `cc8d5f615b4758fc`: incumbent 23, proposal 1 (teacher action), teacher improvement +0.00373245, DRC +0.027140, PTMC -2.93432;
+- B `1faefabae51b50c3`: incumbent 3, proposal 4 (teacher action), teacher improvement +0.00043727, DRC +0.037803, PTMC -0.43493.
+
+There is **no direct V25 proposal with teacher improvement <= -0.5 in either fresh block**, so V28 fresh does not directly falsify the proposition that B<=16 type evidence can sometimes expose the catastrophic latent mode. What it does falsify is the stronger deployable claim that the frozen PTMC model provides reliable, incremental high-retention tail confirmation out of sample. On these two blocks it has zero true harmful vetoes and three false positive vetoes.
+
+Therefore **do not** tune PTMC threshold, catastrophic threshold, positive-retention target, Gaussian variance, type weights, or replace it with another classifier-v2/v3 on the same representation.
+
+## V28 changes the dominant bottleneck
+
+V27 TRAIN localized the immediate problem to rare catastrophic-mode detection among 71 aggregate proposals. V28 untouched A/B show that this cannot remain the unconditional dominant endpoint diagnosis:
+
+1. current V25 direct tails are already clean on these A/B blocks;
+2. a veto-only Stage 2 cannot create missing recovery proposals;
+3. V25/DRC direct positive-opportunity capture is only about 10.7% / 13.6%, while V20 captures about 38.3% / 35.7%;
+4. the largest Stage-1 opportunity collapse occurs before selection, especially when the DRC risk gate is applied after support + scalar incumbent-dominance gating.
+
+For direct admissible-incumbent teacher-positive opportunity scenes:
+
+- A: 149 opportunities -> any support-positive 100 (67.1%) -> any scalar-positive 67 (45.0%) -> support+scalar 62 (41.6%) -> support+scalar+DRC-positive 17 (11.4%) -> selected positive 16 (10.7%);
+- B: 154 -> 104 (67.5%) -> 67 (43.5%) -> 58 (37.7%) -> 21 (13.6%) -> 21 (13.6%).
+
+The current dominant endpoint bottleneck is therefore tightened to:
+
+> **safe recovery coverage under a fixed planner-interface decision-evidence budget**
+
+or, in paper language:
+
+> **decision-evidence sufficiency for extremal recovery under a fixed planner-interface budget, subject to a non-negotiable catastrophic-tail constraint.**
+
+Tail safety is not discarded: historical V25 untouched blocks contained severe negative tails, so any mechanism that increases proposal coverage must still pass an absolute no-catastrophe gate. The change is that another veto head is no longer the highest-value next intervention.
+
+## Why V20 incumbent->anchor is still frozen
+
+V28 A/B again show large beneficial V20 incumbent->anchor aggregate regret deltas. This does **not** justify restoring that operator. Earlier independent splits proved sign instability:
+
+- V19 fresh: incumbent->anchor strongly beneficial;
+- V20 fresh: the same learned operator role becomes strongly harmful;
+- V21: split A beneficial while split B is harmful.
+
+The V23+ asymmetric incumbent-preservation invariant therefore remains frozen. V29 is not allowed to recover endpoint by reopening learned incumbent->anchor replacement.
+
+## B<=16 policy after V28
+
+Continue to freeze the **same literal B<=16 operating point for the next causal test**. The reason is experimental identifiability: V29 must distinguish whether a better allocation of the same evidence budget recovers missing decision information before claiming the interface capacity itself is insufficient.
+
+However, **B=16 is not the paper thesis**. The paper-level idea is a fixed/bounded planner-interface evidence budget that retains sufficient evidence for the final action decision. The concrete B=16 setting is an operating point and eventual budget-sensitivity ablation, not the novelty headline. Do not reopen a B/M sweep in V29.
+
+If same-budget rebinding demonstrably improves full-frontier fidelity but still cannot improve safe recovery coverage on fresh blocks, only then is a controlled budget-capacity diagnostic justified to separate allocation failure from true interface-capacity insufficiency.
+
+## New no-repeat constraints after V28
+
+Retain all previous no-repeat constraints and additionally do not:
+
+- create PTMC classifier-v2/v3 or tune its threshold/coverage/catastrophic cutoff/type weights;
+- use pooled A+B to rescue a failed split;
+- reopen learned incumbent->anchor replacement based on the favorable V28 blocks;
+- claim that tail safety is solved merely because V28 A/B contain no <=-0.5 direct V25 proposal;
+- use a broad B/M sweep as the next main experiment;
+- repeat V40-V43 DACC/beam/swap coreset search;
+- repeat V64.3.8-.12 learned acquisition-loss / HAP / BTP / RET / CET branches;
+- tune V25 support/scalar/downside thresholds as a surrogate for solving missing evidence;
+- increase neural/classifier capacity before testing the fixed-budget interface hypothesis.
+
+## V64.3.29 EAF-ICER-FCR
+
+Full name: **Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Frontier-Contrast Evidence Rebinding.**
+
+The single causal intervention is **post-EAF, fixed-cardinality evidence rebinding inside the already queried Top-M bank**. It does not change the evidence budget, Top-M candidate pool, EAF definition, ICER replacement policy, support/scalar gate semantics, DRC estimator family/hyperparameters, or the asymmetric incumbent-preservation rule.
+
+### FCR construction
+
+Let `S_AOCC` be the frozen baseline retained evidence set and `M` the already queried Top-M active evidence bank. Use the production EAF/DARM primitives on full M to construct the complete selected-local anchor-to-all-valid-challenger margin star. This full-M star is a **reference only**; it does not enlarge the runtime planner interface.
+
+FCR deterministically chooses a set `S_FCR subseteq M` with **exactly the same retained cardinality** as `S_AOCC`. Forward greedy additions minimize the lexicographic compression error to the full-M reference star:
+
+1. maximum absolute frontier-contrast error (`L_inf`), then
+2. RMS frontier-contrast error.
+
+No teacher label, validation statistic, learned model, KNN, classifier, action blacklist, beam search, swap search, or additional evidence query is used.
+
+### Hard accept / exact fallback contract
+
+The FCR set is accepted only if all of the following hold:
+
+- same selected cardinality and same `B<=16` budget as AOCC;
+- candidate set is a subset of the frozen Top-M active evidence bank;
+- selected-local anchor equals the full-M local anchor;
+- the exact downstream production action/certificate target equals the full-M target;
+- the complete frontier-contrast compression error strictly improves over AOCC.
+
+The final candidate is recomputed through the production pair-margin and EAF residual primitives before acceptance. Any failed invariant returns **exactly** to `S_AOCC`.
+
+The mechanism is therefore monotone with respect to the frozen interface contract: it cannot increase B, query new evidence, reopen incumbent->anchor, or silently change the downstream target merely to reduce a proxy loss.
+
+### Why this is not a repeat of old acquisition branches
+
+V40-V43 optimized action-preserving coresets through expensive combination/beam/swap search. V64.3.8-.12 used learned/teacher-shaped acquisition objectives. FCR is different on all three causal axes:
+
+- it runs **after** the frozen EAF representation exists;
+- its target is compression of the complete anchor-challenger frontier contrast, not action preservation alone and not teacher outcome;
+- action/certificate preservation is a hard admissibility contract, not the optimization objective.
+
+### V29 DRC fitting rule
+
+Because FCR changes the selected evidence distribution, the unchanged V25 aggregate-DRC recipe is re-fit on the **same frozen 3000 TRAIN scenes**. This is distribution-consistent re-estimation, not a new estimator mechanism. The launcher first replays the baseline V20/AOCC TRAIN arm and hard-reproduces the audited V25 provenance before fitting the FCR arm.
+
+Frozen baseline TRAIN controls:
+
+- 3000 unique tokens;
+- token SHA256 `b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4`;
+- 75,133 frontier rows;
+- 1,455 replacement edges;
+- 310 replacement scenes;
+- V25 aggregate DRC 5/5 fold-safe, 71 selected, teacher-improvement sum +5.527642.
+
+Any mismatch is an **engineering/provenance STOP** before fresh selection.
+
+### V29 untouched experiment
+
+V28 consumed 1000 new untouched scenes, so the V29 design exclusion is frozen to **7700 unique tokens** (previous 6700 + V28 A/B). V29 selects another untouched 1000 scenes as A=500/B=500.
+
+Five arms are run on identical token order:
+
+1. raw;
+2. V20/AOCC;
+3. V25 aggregate DRC on AOCC evidence;
+4. FCR-V20 (pure interface mediator control, no DRC intervention);
+5. FCR + unchanged aggregate-DRC recipe (main arm).
+
+Both A and B must independently pass. No pooled rescue.
+
+Required causal gates include:
+
+- FCR is actually active (accepted rebindings are nontrivial);
+- all cardinality/Top-M/anchor/exact-target/fallback contracts hold;
+- direct positive-opportunity recovery coverage rises by at least 3 percentage points and at least 5 additional positive recoveries versus matched V25 control;
+- selected-replacement tail is noninferior to V25 on negative RMS and worst outcome;
+- **absolute catastrophe-free gate:** no selected direct replacement with teacher improvement <= -0.5;
+- learned incumbent->anchor replacement remains zero;
+- structural-risk and endpoint gates pass;
+- A and B each pass independently.
+
+Interpretation:
+
+- FCR-V20 improves recovery and full-frontier fidelity -> evidence allocation is a real mediator;
+- FCR-V20 active/error-reducing but main safe coverage does not improve -> allocation target helps representation but downstream proposal objective remains mismatched;
+- FCR rarely activates or cannot improve frontier compression -> AOCC is already near this same-budget objective; stop optimizing this allocation proxy;
+- FCR improves coverage but creates catastrophic tail -> mechanism fails the paper safety thesis; do not tune it into acceptance;
+- no same-budget evidence allocation can expose sufficient recovery signal -> then, and only then, elevate to a genuine interface-capacity/candidate-specific-query problem.
+
+## V29 candidate paper contribution (not yet a claim)
+
+If V29 passes double-fresh and later independent full validation, the more defensible CCF-A-level mechanism story is:
+
+> Under a fixed planner-interface evidence budget, preserve not an arbitrary evidence subset or a single action label, but the evidence needed to retain the complete incumbent/anchor-to-challenger decision frontier; use this auditable bounded interface to support monotone deployment-admissible extremal recovery, while enforcing explicit catastrophic-tail and incumbent-preservation contracts.
+
+The novelty is **not** greedy selection, B=16, or a Gaussian/KNN head. It is the decomposition of bounded planning into (i) fixed-budget decision-sufficient frontier evidence, (ii) deployment-admissible extremal intervention, and (iii) monotone safety/preservation contracts, with causal ablations that distinguish allocation, proposal coverage, and tail observability.
