@@ -1,0 +1,275 @@
+{
+  "audit": "v64_3_26_uploaded_result_causal_audit",
+  "independent_selection_attribution": {
+    "aggregate_only": {
+      "count": 26,
+      "negative_rms": 0.0019398911684489859,
+      "positive_fraction": 0.6153846153846154,
+      "sum": 1.9142476294567758,
+      "worst": -0.00983716126978429
+    },
+    "aggregate_selected": {
+      "count": 71,
+      "negative_rms": 0.0647816355608886,
+      "positive_fraction": 0.704225352112676,
+      "sum": 5.527642325753739,
+      "worst": -0.5457565672151744
+    },
+    "semantic_only": {
+      "count": 19,
+      "negative_rms": 0.229078188886313,
+      "positive_fraction": 0.5263157894736842,
+      "sum": -0.0053021119525156835,
+      "worst": -0.998528437781427
+    },
+    "semantic_selected": {
+      "count": 64,
+      "negative_rms": 0.14224343981719886,
+      "positive_fraction": 0.6875,
+      "sum": 3.608092584344447,
+      "worst": -0.998528437781427
+    },
+    "shared": {
+      "count": 45,
+      "negative_rms": 0.08135860797189846,
+      "positive_fraction": 0.7555555555555555,
+      "sum": 3.6133946962969627,
+      "worst": -0.5457565672151744
+    }
+  },
+  "official_train_gate": {
+    "control": {
+      "all_folds_path_safe": true,
+      "certificate": "downside_rms",
+      "fold_pass_count": 5,
+      "folds": [
+        {
+          "capture": 0.25925925925925924,
+          "count": 22,
+          "fold": 0,
+          "hold_scenes": 74,
+          "mean": 0.0451508547719307,
+          "negative_rms": 0.0001551360978898107,
+          "negative_sq_sum": 5.294785951064925e-07,
+          "opportunities": 54,
+          "path_safe": true,
+          "precision": 0.6363636363636364,
+          "scene_count": 74,
+          "sum": 0.9933188049824753,
+          "worst": -0.0005360335323967291
+        },
+        {
+          "capture": 0.19642857142857142,
+          "count": 14,
+          "fold": 1,
+          "hold_scenes": 69,
+          "mean": 0.18625076332235688,
+          "negative_rms": 0.14588327053655137,
+          "negative_sq_sum": 0.2979470007141689,
+          "opportunities": 56,
+          "path_safe": true,
+          "precision": 0.7857142857142857,
+          "scene_count": 69,
+          "sum": 2.6075106865129962,
+          "worst": -0.5457565672151744
+        },
+        {
+          "capture": 0.25,
+          "count": 12,
+          "fold": 2,
+          "hold_scenes": 55,
+          "mean": 0.08290484493122606,
+          "negative_rms": 0.00012233677714800558,
+          "negative_sq_sum": 1.7959544451552936e-07,
+          "opportunities": 40,
+          "path_safe": true,
+          "precision": 0.8333333333333334,
+          "scene_count": 55,
+          "sum": 0.9948581391747128,
+          "worst": -0.00040563892025979875
+        },
+        {
+          "capture": 0.1891891891891892,
+          "count": 10,
+          "fold": 3,
+          "hold_scenes": 51,
+          "mean": 0.09315482863772254,
+          "negative_rms": 0.0002018776954041964,
+          "negative_sq_sum": 4.075460390170951e-07,
+          "opportunities": 37,
+          "path_safe": true,
+          "precision": 0.7,
+          "scene_count": 51,
+          "sum": 0.9315482863772254,
+          "worst": -0.00045463804826173515
+        },
+        {
+          "capture": 0.16,
+          "count": 13,
+          "fold": 4,
+          "hold_scenes": 61,
+          "mean": 3.1262208179146413e-05,
+          "negative_rms": 0.0010657026487146167,
+          "negative_sq_sum": 1.4764387761205545e-05,
+          "opportunities": 50,
+          "path_safe": true,
+          "precision": 0.6153846153846154,
+          "scene_count": 61,
+          "sum": 0.0004064087063289034,
+          "worst": -0.0038308846880124037
+        }
+      ],
+      "mean_capture": 0.21097540397540399,
+      "mean_precision": 0.7141591741591742,
+      "mode": "aggregate_evidence_only",
+      "selected_count": 71,
+      "selected_negative_rms": 0.06478163556088859,
+      "selected_worst": -0.5457565672151744,
+      "teacher_improvement_sum": 5.527642325753739
+    },
+    "semantic_family_main": {
+      "all_folds_path_safe": false,
+      "certificate": "downside_rms",
+      "fold_pass_count": 4,
+      "folds": [
+        {
+          "capture": 0.18518518518518517,
+          "count": 16,
+          "fold": 0,
+          "hold_scenes": 74,
+          "mean": 0.06202726280160111,
+          "negative_rms": 4.915310672948446e-05,
+          "negative_sq_sum": 3.8656446418561445e-08,
+          "opportunities": 54,
+          "path_safe": true,
+          "precision": 0.625,
+          "scene_count": 74,
+          "sum": 0.9924362048256178,
+          "worst": -0.00012697862088728584
+        },
+        {
+          "capture": 0.17857142857142858,
+          "count": 15,
+          "fold": 1,
+          "hold_scenes": 69,
+          "mean": 0.10788450502752663,
+          "negative_rms": 0.2938150622793921,
+          "negative_sq_sum": 1.2949093623336456,
+          "opportunities": 56,
+          "path_safe": true,
+          "precision": 0.6666666666666666,
+          "scene_count": 69,
+          "sum": 1.6182675754128995,
+          "worst": -0.998528437781427
+        },
+        {
+          "capture": 0.275,
+          "count": 12,
+          "fold": 2,
+          "hold_scenes": 55,
+          "mean": 0.08298574843999261,
+          "negative_rms": 3.5417169666224975e-05,
+          "negative_sq_sum": 1.5052510885994e-08,
+          "opportunities": 40,
+          "path_safe": true,
+          "precision": 0.9166666666666666,
+          "scene_count": 55,
+          "sum": 0.9958289812799114,
+          "worst": -0.00012268867464437783
+        },
+        {
+          "capture": 0.10810810810810811,
+          "count": 7,
+          "fold": 3,
+          "hold_scenes": 51,
+          "mean": 2.5331192210931164e-05,
+          "negative_rms": 0.00022973268813213617,
+          "negative_sq_sum": 3.6943975597492133e-07,
+          "opportunities": 37,
+          "path_safe": false,
+          "precision": 0.5714285714285714,
+          "scene_count": 51,
+          "sum": 0.00017731834547651815,
+          "worst": -0.0006010863602163852
+        },
+        {
+          "capture": 0.18,
+          "count": 14,
+          "fold": 4,
+          "hold_scenes": 61,
+          "mean": 9.875032003871035e-05,
+          "negative_rms": 0.0010271132745174807,
+          "negative_sq_sum": 1.4769463501660303e-05,
+          "opportunities": 50,
+          "path_safe": true,
+          "precision": 0.6428571428571429,
+          "scene_count": 61,
+          "sum": 0.0013825044805419449,
+          "worst": -0.0038308846880124037
+        }
+      ],
+      "mean_capture": 0.18537294437294438,
+      "mean_precision": 0.6845238095238094,
+      "mode": "aggregate_plus_identity_preserving_semantic_family",
+      "selected_count": 64,
+      "selected_negative_rms": 0.14224343981719886,
+      "selected_worst": -0.998528437781427,
+      "teacher_improvement_sum": 3.608092584344447
+    },
+    "semantic_tail_incremental_on_train": false,
+    "train_gate_pass": false
+  },
+  "posthoc_not_promotion_evidence": {
+    "aggregate_and_family_confirmation_no_fallback": {
+      "fold_pass_count": 3,
+      "negative_rms": 0.079609,
+      "note": "diagnostic only; not a preregistered V26 arm and not used for promotion",
+      "selected_count": 47,
+      "teacher_improvement_sum": 3.613424,
+      "worst": -0.5457565672151744
+    }
+  },
+  "result_validity": {
+    "correct_train_stop": true,
+    "engineering_failure_caused_stop": false,
+    "fresh_validation_used": false,
+    "frontier_bytes": 764601702,
+    "frontier_complete_marker_exists": true,
+    "frontier_row_count": 75133,
+    "frontier_sha256": "0d1d2442f6268b06a2590723bb765e60c0ca5c376233d7321da53f48c99e4c0a",
+    "runtime_exception_found": false,
+    "targeted_regression_server": "88 passed, 2 warnings",
+    "train_scene_count": 3000,
+    "train_token_count": 3000,
+    "train_token_unique": 3000,
+    "train_tokens_sha256": "b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4"
+  },
+  "scientific_conclusion": {
+    "dominant_bottleneck": "selected-path tail certification under representation-conditional neighborhood instability and within-interface semantic outcome aliasing",
+    "fixed_B16_interface_capacity_insufficient_proven": false,
+    "next_hypothesis": "preserve V25 aggregate proposal geometry and let a finer fixed atom-type view only veto the same proposed candidate, with no fallback/reselection",
+    "semantic_aligned_tail_regret_headline_supported": false
+  },
+  "semantic_geometry_diagnostic": {
+    "decision_boundary_candidate_zero_fraction": 1.0,
+    "decision_boundary_delta_zero_fraction": 1.0,
+    "mean_absolute_interdimension_correlation": 0.40684915505543245,
+    "standardized_pca_top3_explained_fraction": 0.9445221690998697,
+    "standardized_pca_top5_explained_fraction": 0.9886305121613512
+  },
+  "worst_semantic_only_scene": {
+    "aggregate_drc_score": -0.0035520640144222505,
+    "aggregate_k64_downside_rms": 0.014487266418067921,
+    "aggregate_k64_mu": 0.01093520240364567,
+    "challenger_action": 21,
+    "fold": 1,
+    "scalar_dominance_logit": 1.1006947755813599,
+    "scenario_token": "faf93d61f8bd5238",
+    "semantic_family_sarc_score": 0.023354202565144214,
+    "semantic_k32_downside_rms": 0.0005332848113356008,
+    "semantic_k32_mu": 0.023887487376479815,
+    "semantic_k32_neighbor_worst": -0.0018350873696210328,
+    "support_logit": 0.47813963890075684,
+    "teacher_improvement": -0.998528437781427
+  }
+}

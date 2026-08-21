@@ -1,0 +1,23 @@
+V64.3.27 EAF-ICER-TRCC — next server command
+================================================
+
+Primary command:
+
+  cd bdse_v64_3_27_eaf_icer_trcc
+  bash RUN_V64_3_27_EAF_ICER_TRCC_SCREEN_2GPU.sh
+
+Important protocol constraints:
+
+1. V26 was a correct TRAIN STOP and used no fresh validation scenes. V27 therefore keeps the frozen 6700-token design exclusion and selects a new untouched 1000 only if V27 TRAIN passes.
+2. V26 TRAIN frontier CANNOT be reused for V27 because it does not serialize the 12 atom-type / 24 signed type-coordinate features required by TRCC.
+3. V27 performs one frozen 3000-scene V20/EAF instrumentation replay. This is not EAF/selector retraining.
+4. TRAIN gate is fail-closed. Do not bypass a STOP and do not tune K, downside multiplier, zero boundary, type/group weights, support threshold, dominance threshold, or selected-count floor.
+5. If TRAIN passes, A and B are independent 500-scene fresh blocks. Either block failing means STOP; no pooling.
+6. TRCC's hard invariant is no fallback: the type view may only confirm/veto the single V25 aggregate-DRC proposed candidate. A veto returns directly to the incumbent.
+
+Reuse after a completed V27 TRAIN instrumentation replay only:
+
+  V27_TRAIN_EDGES=/absolute/path/to/train_v20_type_resolved_frontier_edges.jsonl \
+  bash RUN_V64_3_27_EAF_ICER_TRCC_SCREEN_2GPU.sh
+
+Do NOT point V27_TRAIN_EDGES at V24/V25/V26 frontier provenance.

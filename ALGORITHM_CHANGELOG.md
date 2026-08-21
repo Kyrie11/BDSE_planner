@@ -8600,3 +8600,215 @@ Do not:
 - V25 paired-identity false STOP fixed in both historical launcher and V26 launcher.
 
 The local environment does not contain the server nuPlan GPU/cache, so no V26 effect result is fabricated.  The next scientific result must come from the fail-closed V26 TRAIN gate and, only if that passes, new untouched A/B blocks.
+
+# V64.3.26 uploaded TRAIN result audit -> V64.3.27 EAF-ICER-TRCC
+
+## 1. V64.3.26 execution status: correct algorithmic TRAIN STOP
+
+The uploaded V26 result is complete enough for reliable TRAIN attribution and correctly fail-closed before fresh validation.
+
+Execution audit:
+
+- exactly 3000 TRAIN tokens;
+- 75,133 frontier rows;
+- 764,601,702-byte semantic-family frontier provenance;
+- frontier SHA256 `0d1d2442f6268b06a2590723bb765e60c0ca5c376233d7321da53f48c99e4c0a`;
+- TRAIN token SHA256 `b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4`;
+- complete replay marker present;
+- server targeted regression 88/88 PASS (2 existing Transformer warnings);
+- no traceback/runtime exception;
+- `fresh_validation_used=false`.
+
+The stop is therefore **algorithmic**, not an engineering false STOP.
+
+Official fixed-fold gate:
+
+| arm | safe folds | selected | teacher-improvement sum | negative RMS | worst |
+|---|---:|---:|---:|---:|---:|
+| V25 aggregate DRC | **5/5** | 71 | **+5.527642** | **0.064782** | **-0.545757** |
+| V26 semantic-family SARC | **4/5** | 64 | +3.608093 | **0.142243** | **-0.998528** |
+
+Fold 3 of SARC has only 7 replacements and therefore fails the frozen >=8 support floor. More importantly, even if that support condition were relaxed, SARC still fails the preregistered tail-incrementality contract by a large margin. Do not rescue V26 by changing the support floor.
+
+## 2. V26 scene-level attribution
+
+The decisive catastrophe is TRAIN scene `faf93d61f8bd5238`, action 21:
+
+- actual teacher improvement = **-0.998528**;
+- support logit = +0.47814;
+- scalar dominance = +1.10069;
+- V25 aggregate DRC score on the same edge = **-0.003552** -> rejected;
+- V26 semantic-family SARC score = **+0.023354** -> accepted;
+- semantic K32 mean = +0.023887;
+- semantic K32 downside RMS = 0.000533;
+- semantic K32 worst neighbor = only -0.001835.
+
+Therefore the new family geometry removes the adverse modes visible to the aggregate geometry and makes the catastrophic candidate appear locally benign.
+
+Exact selected-population decomposition:
+
+| population | count | teacher sum | positive ratio | worst | negative RMS |
+|---|---:|---:|---:|---:|---:|
+| shared | 45 | +3.613395 | 75.6% | -0.545757 | 0.081359 |
+| aggregate-only | 26 | **+1.914248** | 61.5% | **-0.009837** | **0.001940** |
+| semantic-only | 19 | **-0.005302** | 52.6% | **-0.998528** | **0.229078** |
+
+The semantic-only selected population is the new failure source.
+
+## 3. Mechanism conclusion after V26
+
+Do **not** finalize the paper as `semantic-aligned tail-regret certification`.
+
+V26 falsifies:
+
+> coarse semantic-family coordinates flat-concatenated into one aggregate+semantic KNN risk geometry.
+
+V26 does **not** yet prove that fixed `B<=16` evidence capacity is insufficient. The tested semantic representation still compresses the interface heavily:
+
+- five family sums for candidate + five candidate-incumbent sums;
+- `decision_boundary` is zero throughout the current population;
+- mean absolute inter-dimension correlation about 0.407;
+- standardized PCA top-3 explains about 94.45%; top-5 about 98.86%.
+
+The interface still exposes finer actual atom-type identity and exact selected-atom candidate/incumbent contributions.
+
+Dominant bottleneck is tightened to:
+
+> **selected-path tail certification under representation-conditional neighborhood instability and within-interface semantic outcome aliasing.**
+
+The next design must not allow a newly introduced representation to change the replacement proposal itself.
+
+## 4. New no-repeat constraints after V26
+
+Do not:
+
+- concatenate more semantic dimensions into the same single KNN metric;
+- tune family/type/group metric weights;
+- restore V24 sorted/L1-normalized attribution spectra;
+- mix mean-SE and DRC scores;
+- tune K, downside multiplier or zero boundary;
+- add standalone KNN-radius/OOD threshold as the primary fix;
+- tune support/scalar-dominance thresholds or action blacklists to delete failures;
+- restore transition geometry or signed-profile ranking as the main mechanism;
+- broad-unfreeze EAF/acquisition/selector/B/M before the remaining within-interface semantic test;
+- rescue one bad fold/block by pooled sums.
+
+Post-hoc diagnostic only: `aggregate DRC AND V26 family DRC` with no fallback is only 3/5 fold-safe, retains 47 replacements, and therefore is **not** promoted into V27.
+
+## 5. V64.3.27 EAF-ICER-TRCC
+
+Full name:
+
+**Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Type-Resolved Tail-Regret Candidate Confirmation.**
+
+V27 introduces a structural separation between proposal and confirmation.
+
+### Frozen stage 1: V25 aggregate proposal
+
+Exactly preserve:
+
+- fixed B<=16 interface;
+- frozen EAF complete DARM-anchor frontier;
+- final-guard-admissible population;
+- support >0;
+- frozen scalar dominance >0;
+- aggregate 18-D downside certificate;
+- K={32,64};
+- inverse-distance weighting;
+- downside multiplier=1;
+- zero boundary;
+- scalar-dominance extremal proposal/tie rule;
+- incumbent default preservation.
+
+### New stage 2: independent 24-D atom-type confirmation
+
+Fixed current evidence atom types:
+
+`occupancy, ttc, gap, drivable_area, wrong_way, speed_limit, red_light, route_connector, local_comfort_accel, local_comfort_jerk, local_comfort_curvature, local_comfort_brake`.
+
+For each type, expose:
+
+- candidate signed selected-attribution sum;
+- candidate-minus-incumbent signed sum on the same selected atoms.
+
+No sorting, no L1 normalization, no learned embedding, no type/group weight, no aggregate+type concatenation.
+
+The type view uses the same K={32,64}, downside-RMS statistic, multiplier=1 and zero boundary.
+
+### Hard monotonicity / no-fallback contract
+
+The type view inspects **only the single candidate already proposed by V25 aggregate DRC**.
+
+- positive type certificate -> keep that same replacement;
+- non-positive type certificate -> preserve incumbent;
+- never select a second alternative after a veto.
+
+Structural invariant:
+
+`TRCC selected replacements subseteq V25 aggregate-DRC selected replacements`.
+
+Thus V27's new semantic view cannot reproduce the V24/V26 failure mode of resurrecting a new replacement.
+
+## 6. V27 TRAIN causal matrix
+
+One new frozen 3000-scene instrumentation replay is required because V26 provenance lacks atom-type coordinates. No EAF/selector/frontier retraining.
+
+Same fixed scene folds compare:
+
+1. V25 aggregate DRC control;
+2. type-only direct-selector diagnostic (diagnostic only);
+3. TRCC main: aggregate propose -> type confirm -> no fallback.
+
+Main gate before fresh:
+
+- 5/5 fixed folds path-safe;
+- selected >=64 total;
+- teacher-improvement sum >=0;
+- subset/no-fallback invariant in every fold;
+- selected negative RMS <= aggregate control;
+- selected worst >= aggregate control;
+- at least one of those tail metrics strictly improves.
+
+Failure is a hard TRAIN STOP; do not tune type weights/K/downside multiplier/zero/support/dominance.
+
+## 7. V27 double-fresh protocol if TRAIN passes
+
+V26 consumed no fresh validation scenes, therefore V27 retains the exact frozen **6700-token** design exclusion and uses a new hash seed to select a new untouched 1000 scenes (A500/B500).
+
+Four arms per block:
+
+- raw;
+- V20;
+- V25 aggregate DRC;
+- V27 TRCC.
+
+Both blocks independently require the subset/no-fallback invariant, selected-path non-harm, recovery, selected-tail improvement over V25 aggregate, asymmetric preservation and endpoint non-inferiority/gain. No pooled rescue.
+
+## 8. Paper mainline / novelty candidate after V26
+
+Do not use the V26 candidate headline `semantically aligned ... tail-regret certification` as a claim.
+
+V27 code-faithful mechanism chain is:
+
+`fixed B<=16 -> auditable selected evidence / exact EAF attribution -> frozen complete DARM-anchor frontier -> deployment-admissible frontier -> frozen support/scalar dominance -> aggregate downside proposal -> type-resolved confirmation of that same candidate -> no-fallback incumbent preservation -> unchanged evidence/one-sided certificate -> unchanged structural-risk guard -> final decision preservation -> preservation + endpoint`.
+
+Only if V27 survives TRAIN + double-fresh + independent full-val, candidate novelty becomes:
+
+> **evidence-attributed monotone cross-view incumbent-contrastive tail-regret confirmation for deployment-admissible extremal recovery under a fixed planner-interface evidence budget.**
+
+If V27 also fails, evidence that the current fixed evidence interface is not outcome-sufficient becomes substantially stronger; at that point stop iterating KNN representation variants and reconsider evidence-interface/acquisition capacity or a fundamentally different distributional model.
+
+## 9. V27 delivery engineering validation
+
+- V27-specific tests: **7/7 PASS**;
+- V64.3.13--V64.3.27 targeted mechanism stack: **95/95 PASS**;
+- full repository: **425/425 PASS** in five execution batches;
+- warnings: **36**, all existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class;
+- Python compileall: PASS;
+- V26 and V27 launcher `bash -n`: PASS;
+- frozen 6700-token design exclusion uniqueness: PASS;
+- synthetic 18-D aggregate memory/config contract: PASS;
+- synthetic 24-D type-confirmation memory/config contract: PASS;
+- no-fallback runtime helper and fresh selected-set subset checker: PASS.
+
+The local environment does not contain server nuPlan GPU/cache; no V27 effect result is fabricated. The next result must come from the fail-closed V27 TRAIN gate.

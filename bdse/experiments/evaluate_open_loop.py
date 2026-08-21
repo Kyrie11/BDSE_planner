@@ -1010,6 +1010,7 @@ def main() -> None:
             icer_profile_dominance_logits = np.asarray(tour_diag.get("_decisive_frontier_icer_profile_dominance_logit_star", []), dtype=np.float64).reshape(-1)
             icer_retention_margin = np.asarray(tour_diag.get("_decisive_frontier_icer_incumbent_retention_margin_star", []), dtype=np.float64).reshape(-1)
             icer_replacement_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_replacement_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_replacement_confirmation_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
             icer_retention_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_retention_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
             icer_transition_inc = tour_diag.get("_decisive_frontier_icer_transition_vs_incumbent_feature_matrix", None)
             icer_transition_anchor = tour_diag.get("_decisive_frontier_icer_transition_vs_anchor_feature_matrix", None)
@@ -1018,6 +1019,8 @@ def main() -> None:
             icer_attribution_resolved_names = list(tour_diag.get("_decisive_frontier_icer_attribution_resolved_feature_names", []))
             icer_semantic_family = tour_diag.get("_decisive_frontier_icer_semantic_family_feature_matrix", None)
             icer_semantic_family_names = list(tour_diag.get("_decisive_frontier_icer_semantic_family_feature_names", []))
+            icer_semantic_type = tour_diag.get("_decisive_frontier_icer_semantic_type_feature_matrix", None)
+            icer_semantic_type_names = list(tour_diag.get("_decisive_frontier_icer_semantic_type_feature_names", []))
             icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
             icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
@@ -1066,6 +1069,7 @@ def main() -> None:
                         "icer_profile_dominance_logit": float(icer_profile_dominance_logits[challenger]) if icer_profile_dominance_logits.size == edge_valid.size else float("nan"),
                         "icer_incumbent_retention_margin": float(icer_retention_margin[challenger]) if icer_retention_margin.size == edge_valid.size else float("nan"),
                         "icer_replacement_regret_risk_logit": float(icer_replacement_risk[challenger]) if icer_replacement_risk.size == edge_valid.size else float("nan"),
+                        "icer_replacement_confirmation_regret_risk_logit": float(icer_replacement_confirmation_risk[challenger]) if icer_replacement_confirmation_risk.size == edge_valid.size else float("nan"),
                         "icer_retention_regret_risk_logit": float(icer_retention_risk[challenger]) if icer_retention_risk.size == edge_valid.size else float("nan"),
                         "icer_admissible": float(icer_admissible[challenger]) if icer_admissible.size == edge_valid.size else 0.0,
                     }
@@ -1116,6 +1120,14 @@ def main() -> None:
                     if sfmat is not None and write_inc_transition and sfmat.ndim == 2 and sfmat.shape[0] == edge_valid.size and sfmat.shape[1] == len(icer_semantic_family_names):
                         for j, name in enumerate(icer_semantic_family_names):
                             row[f"icer_semantic_family_{name}"] = float(sfmat[challenger, j])
+                    stmat = None if icer_semantic_type is None else np.asarray(icer_semantic_type, dtype=np.float64)
+                    # V64.3.27 instruments fixed atom-type coordinates.  These
+                    # are the finer semantic view used only to confirm the
+                    # aggregate-DRC proposed replacement; they never re-rank a
+                    # candidate or alter the frozen B<=16 evidence interface.
+                    if stmat is not None and write_inc_transition and stmat.ndim == 2 and stmat.shape[0] == edge_valid.size and stmat.shape[1] == len(icer_semantic_type_names):
+                        for j, name in enumerate(icer_semantic_type_names):
+                            row[f"icer_semantic_type_{name}"] = float(stmat[challenger, j])
                     frontier_edge_file.write(json.dumps(row, sort_keys=True) + "\n")
         metric_means.update(diag)
         if args.per_sample_output:
