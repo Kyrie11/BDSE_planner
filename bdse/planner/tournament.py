@@ -2100,6 +2100,69 @@ def _load_icer_local_regret_memory(
     return memory, delta, mean, np.maximum(std, 1.0e-6), names, metric_weight, ks, se_multiplier, certificate_kind, downside_multiplier
 
 
+@lru_cache(maxsize=16)
+def _load_icer_global_tail_mode_model(
+    path_str: str,
+    expected_sha256: str,
+) -> tuple[np.ndarray, np.ndarray, tuple[str, ...], np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float]:
+    """Load immutable TRAIN-only V64.3.28 global catastrophic-mode model."""
+    path = Path(path_str)
+    if not path.is_file():
+        raise ValueError(f"missing EAF-ICER global tail-mode model: {path}")
+    if expected_sha256:
+        h = hashlib.sha256(path.read_bytes()).hexdigest()
+        if h != expected_sha256:
+            raise ValueError(f"EAF-ICER global tail-mode model SHA256 mismatch: {path}")
+    with np.load(path, allow_pickle=False) as z:
+        mean = np.asarray(z["feature_mean"], dtype=np.float64).reshape(-1)
+        std = np.asarray(z["feature_std"], dtype=np.float64).reshape(-1)
+        names = tuple(str(x) for x in np.asarray(z["feature_names"]).reshape(-1).tolist())
+        cat_mean = np.asarray(z["catastrophic_mean"], dtype=np.float64).reshape(-1)
+        cat_var = np.asarray(z["catastrophic_var"], dtype=np.float64).reshape(-1)
+        benign_mean = np.asarray(z["benign_mean"], dtype=np.float64).reshape(-1)
+        benign_var = np.asarray(z["benign_var"], dtype=np.float64).reshape(-1)
+        risk_threshold = float(np.asarray(z["risk_threshold"]).reshape(-1)[0])
+        catastrophic_delta_threshold = float(np.asarray(z["catastrophic_delta_threshold"]).reshape(-1)[0])
+        positive_proposal_coverage = float(np.asarray(z["positive_proposal_coverage"]).reshape(-1)[0])
+    n = len(names)
+    if not (n and len(mean) == len(std) == len(cat_mean) == len(cat_var) == len(benign_mean) == len(benign_var) == n):
+        raise ValueError("EAF-ICER global tail-mode model schema is inconsistent")
+    if not all(np.all(np.isfinite(a)) for a in (mean, std, cat_mean, cat_var, benign_mean, benign_var)):
+        raise ValueError("EAF-ICER global tail-mode model contains non-finite arrays")
+    if np.any(std <= 0.0) or np.any(cat_var <= 0.0) or np.any(benign_var <= 0.0):
+        raise ValueError("EAF-ICER global tail-mode model has non-positive scale/variance")
+    if not (np.isfinite(risk_threshold) and np.isfinite(catastrophic_delta_threshold) and 0.0 < positive_proposal_coverage < 1.0):
+        raise ValueError("EAF-ICER global tail-mode model scalar contract invalid")
+    return mean, std, names, cat_mean, cat_var, benign_mean, benign_var, risk_threshold, catastrophic_delta_threshold, positive_proposal_coverage
+
+
+def _icer_global_tail_mode_confirmation_score(
+    x: np.ndarray,
+    runtime_names: list[str],
+    model_path: str,
+    model_sha256: str,
+) -> np.ndarray:
+    """Return a zero-boundary confirmation score for V64.3.28.
+
+    Risk is the equal-prior diagonal-Gaussian log likelihood ratio
+    ``log p(x|catastrophic) - log p(x|non-catastrophic)``.  Positive output
+    means the proposal lies below the immutable TRAIN-calibrated risk threshold.
+    """
+    mean, std, names, cat_mean, cat_var, benign_mean, benign_var, risk_threshold, _, _ = _load_icer_global_tail_mode_model(
+        model_path, model_sha256
+    )
+    if list(names) != list(runtime_names):
+        raise ValueError("EAF-ICER global tail-mode feature schema mismatch")
+    xx = np.asarray(x, dtype=np.float64)
+    if xx.ndim != 2 or xx.shape[1] != len(mean):
+        raise ValueError("EAF-ICER global tail-mode runtime feature shape mismatch")
+    z = (xx - mean[None, :]) / std[None, :]
+    log_cat = -0.5 * np.sum(np.log(cat_var)[None, :] + ((z - cat_mean[None, :]) ** 2) / cat_var[None, :], axis=1)
+    log_benign = -0.5 * np.sum(np.log(benign_var)[None, :] + ((z - benign_mean[None, :]) ** 2) / benign_var[None, :], axis=1)
+    risk = log_cat - log_benign
+    return risk_threshold - risk
+
+
 def _icer_local_regret_lower_bound(
     x: np.ndarray,
     runtime_names: list[str],
@@ -2552,14 +2615,14 @@ def _apply_decisive_frontier_icer(
 
             risk_model_type = str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower()
             if replacement_regret_risk_enabled:
-                if risk_model_type in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation"}:
+                if risk_model_type in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}:
                     replacement_regret_risk_logits = _icer_local_regret_lower_bound(
                         rep_x,
                         rep_names,
                         str(icer_cfg.get("replacement_local_regret_memory_path", "")),
                         str(icer_cfg.get("replacement_local_regret_memory_sha256", "")),
                     )
-                    if risk_model_type == "local_multiscale_downside_regret_with_type_confirmation":
+                    if risk_model_type in {"local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}:
                         if selected_atom_type_names is None:
                             raise ValueError("EAF-ICER type confirmation requires exact selected atom type names")
                         type_x, type_names = _icer_regret_risk_feature_matrix(
@@ -2568,12 +2631,20 @@ def _apply_decisive_frontier_icer(
                             semantic_family, semantic_family_names,
                             semantic_type, semantic_type_names,
                         )
-                        replacement_confirmation_regret_risk_logits = _icer_local_regret_lower_bound(
-                            type_x,
-                            type_names,
-                            str(icer_cfg.get("replacement_confirmation_local_regret_memory_path", "")),
-                            str(icer_cfg.get("replacement_confirmation_local_regret_memory_sha256", "")),
-                        )
+                        if risk_model_type == "local_multiscale_downside_regret_with_type_confirmation":
+                            replacement_confirmation_regret_risk_logits = _icer_local_regret_lower_bound(
+                                type_x,
+                                type_names,
+                                str(icer_cfg.get("replacement_confirmation_local_regret_memory_path", "")),
+                                str(icer_cfg.get("replacement_confirmation_local_regret_memory_sha256", "")),
+                            )
+                        else:
+                            replacement_confirmation_regret_risk_logits = _icer_global_tail_mode_confirmation_score(
+                                type_x,
+                                type_names,
+                                str(icer_cfg.get("replacement_confirmation_tail_mode_model_path", "")),
+                                str(icer_cfg.get("replacement_confirmation_tail_mode_model_sha256", "")),
+                            )
                 elif risk_model_type == "linear_weighted_logistic":
                     replacement_regret_risk_logits = _read_regret_risk_head("replacement_regret_risk", rep_x, rep_names)
                 else:
@@ -2616,7 +2687,7 @@ def _apply_decisive_frontier_icer(
             if (
                 regret_risk_enabled
                 and replacement_regret_risk_enabled
-                and risk_model_type == "local_multiscale_downside_regret_with_type_confirmation"
+                and risk_model_type in {"local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}
             ):
                 confirmation_logits = replacement_confirmation_regret_risk_logits
             # V64.3.27 monotone candidate confirmation: the aggregate-DRC
@@ -2678,8 +2749,9 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_regret_risk_transition_conditioned": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "transition_conditioned"),
         "decisive_frontier_icer_regret_risk_attribution_resolved": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "attribution_resolved"),
         "decisive_frontier_icer_regret_risk_semantic_family_aligned": float(str(icer_cfg.get("regret_risk_feature_mode", "evidence_only")).strip().lower() == "semantic_family_aligned"),
-        "decisive_frontier_icer_regret_risk_type_confirmation": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() == "local_multiscale_downside_regret_with_type_confirmation"),
-        "decisive_frontier_icer_regret_risk_local_memory": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation"}),
+        "decisive_frontier_icer_regret_risk_type_confirmation": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}),
+        "decisive_frontier_icer_regret_risk_global_tail_mode_confirmation": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() == "local_multiscale_downside_regret_with_global_type_tail_confirmation"),
+        "decisive_frontier_icer_regret_risk_local_memory": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}),
         "decisive_frontier_icer_regret_risk_downside_certificate": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation"}),
         "decisive_frontier_icer_selected_replacement_regret_risk_logit": float(replacement_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,
         "decisive_frontier_icer_selected_replacement_confirmation_regret_risk_logit": float(replacement_confirmation_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,

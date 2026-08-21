@@ -1,0 +1,59 @@
+V64.3.28 EAF-ICER-PTMC engineering validation
+==============================================
+
+Uploaded V27 result audit
+-------------------------
+- V27 STOP independently replayed from uploaded 3000-TRAIN type-resolved frontier: PASS / identical algorithmic STOP.
+- TRAIN scene identity: 3000 unique.
+- frontier rows: 75,133.
+- replacement population: 1,455 edges / 310 scenes.
+- frozen TRAIN token SHA256: b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4.
+- no fresh validation used by V27.
+- no runtime traceback / engineering exception found.
+
+V28 real-frontier fitter/config smoke
+-------------------------------------
+Input: uploaded V27 768MB type-resolved TRAIN frontier.
+- exact frozen TRAIN identity contract: PASS.
+- V28 cross-fold design gate: PASS (design/implementation check only; not independent scientific evidence).
+- PTMC main: 5/5 folds, 68 retained, teacher-improvement sum +6.0725582591, negative RMS 0.0012871027, worst -0.0098371613.
+- V25 aggregate control reproduced: 5/5, 71, +5.5276423258, negative RMS 0.0647816356, worst -0.5457565672.
+- global aggregate control: 4/5, 68, worst -0.5457565672.
+- global aggregate+type concatenation control: 4/5, 67, worst -0.5457565672.
+- aggregate memory contract: PASS (18-D, equal coordinate metric, K=32/64, downside multiplier=1, SHA checked).
+- type tail-mode model contract: PASS (24-D exact type schema, SHA checked, threshold=-0.5, positive-proposal coverage=0.95).
+- runtime/offline tail likelihood-ratio score equality unit test: PASS.
+- no-fallback / no-reselection helper test: PASS.
+
+Static / shell validation
+-------------------------
+- python compileall bdse: PASS.
+- RUN_V64_3_28_EAF_ICER_PTMC_SCREEN_2GPU.sh bash -n: PASS.
+- V28 launcher includes V27 regression test: PASS.
+- V28 launcher uses corrected paired identity contract: exact token set + identical within-split arm order, not manifest-order equality: PASS.
+- V28 launcher supports direct reuse of V27 type-resolved TRAIN frontier: PASS.
+- frozen design exclusion: 6700 unique tokens.
+
+Tests
+-----
+- V28-specific: 7/7 PASS.
+- V64.3.13--V64.3.28 targeted mechanism stack: 102/102 PASS.
+- complete repository: 432/432 PASS, executed in four batches:
+    batch 0: 69 PASS, 9 warnings
+    batch 1: 83 PASS, 0 warnings
+    batch 2: 132 PASS, 6 warnings
+    batch 3: 148 PASS, 21 warnings
+- total warnings: 36.
+- all warnings are existing PyTorch Transformer nested_tensor/norm_first warnings; no new warning class.
+
+Engineering fixes made during final audit
+-----------------------------------------
+1. Added immutable global tail-mode model SHA/schema/scalar contracts.
+2. Added exact frozen TRAIN token SHA, frontier-row, replacement-edge and replacement-scene contracts so an incorrect 3000-scene provenance cannot silently substitute for the audited V27 population.
+3. Fixed V28 launcher versioned provenance/config names left by initial V27-to-V28 adaptation.
+4. Restored V27 regression in V28 targeted launcher stack.
+5. Reused the corrected V25 paired-identity semantics.
+6. Added global-tail-mode runtime instrumentation requirement to the fresh checker.
+7. Added selected-action subset/no-fallback checker: any PTMC alternative differing from the V25 aggregate proposal is an engineering failure, not an algorithm result.
+
+No server-side V28 fresh effect result is fabricated in this package.

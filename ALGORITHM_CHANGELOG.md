@@ -8812,3 +8812,74 @@ If V27 also fails, evidence that the current fixed evidence interface is not out
 - no-fallback runtime helper and fresh selected-set subset checker: PASS.
 
 The local environment does not contain server nuPlan GPU/cache; no V27 effect result is fabricated. The next result must come from the fail-closed V27 TRAIN gate.
+
+# V64.3.27 uploaded TRAIN audit -> V64.3.28 EAF-ICER-PTMC
+
+## V27 result: valid algorithmic TRAIN STOP
+
+- uploaded V27 provenance is complete for TRAIN attribution: 3000 unique TRAIN scenes, 75,133 frontier rows, 1,455 eligible replacement edges / 310 scenes;
+- frozen TRAIN token SHA256: `b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4`;
+- independent fitter replay reproduces the server gate; no engineering false STOP;
+- V25 aggregate DRC control remains 5/5 fold-safe, 71 selected, +5.527642 teacher improvement, negative RMS 0.064782, worst -0.545757;
+- V27 type-only KNN is 3/5, 65 selected, negative RMS 0.311892, worst -1.959070;
+- V27 TRCC retains only 19/71 proposals, 0/5 folds meet the >=8 path-support gate, vetoes 52 proposals including 35 teacher-positive proposals, and still retains the -0.545757 catastrophe;
+- no-fallback subset monotonicity itself is correct and is retained as a structural invariant.
+
+Key V27 scene: `b003a3bfbdb252e3`, action 19, actual improvement -0.5457565672; aggregate DRC score +0.020969 and type-KNN score +0.081467, so V27 fails to veto the catastrophic aggregate proposal. Large beneficial proposals (+2.168968, +0.989941, +0.929244) are incorrectly vetoed by type KNN.
+
+Proposal-conditioned type-KNN discrimination is weak: AUC 0.6210, Pearson correlation 0.0211, Spearman 0.2525. A threshold sweep constrained to retain >=64/71 proposals cannot improve negative RMS or worst outcome. **Do not tune the V27 confirmation threshold/weight/K.**
+
+Dominant bottleneck is tightened to:
+
+> **proposal-conditioned rare catastrophic-mode detection under a high-retention constraint.**
+
+The previous candidate headline `monotone cross-view ... tail-regret confirmation` is not supported by V27 and must not be claimed.
+
+## New no-repeat constraints after V27
+
+In addition to prior exclusions, do not:
+
+- continue local type-KNN confirmation by tuning threshold/K/type weights;
+- concatenate additional semantic coordinates into one KNN geometry;
+- use naive aggregate+type feature concatenation with another global classifier as the next main mechanism;
+- relax the >=64 retention/support gate to rescue V27;
+- broad-unfreeze B/M/acquisition/selector/EAF before the V28 existing-interface rare-mode test;
+- tune a V28 catastrophic threshold or proposal-coverage threshold on fresh validation.
+
+## V64.3.28 EAF-ICER-PTMC
+
+Full name: **Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Proposal-Conditioned Tail-Mode Confirmation.**
+
+Single causal change versus V27:
+
+- Stage 1 remains frozen V25 aggregate DRC: 18-D evidence-only, K={32,64}, downside-RMS multiplier=1, boundary=0, support>0, scalar dominance>0, scalar extremal ranking.
+- Stage 2 keeps the exact same V27 24-D atom-type representation but replaces local KNN continuous-regret confirmation with a **global catastrophic-mode class-conditional likelihood-ratio model**.
+- catastrophic TRAIN label is frozen at teacher improvement `<= -0.5` before any V28 fresh selection;
+- the type model uses standardized features and equal-prior diagonal Gaussian catastrophic/non-catastrophic class conditionals;
+- confirmation threshold is TRAIN-calibrated to preserve 95% of teacher-positive **aggregate proposals**;
+- the type model may inspect only the one aggregate-proposed candidate; failure returns to incumbent; no fallback/reselection;
+- structural invariant remains `PTMC selected replacements subseteq V25 aggregate-DRC selected replacements`.
+
+V28 TRAIN design diagnostic (not independent paper evidence because designed after V27 TRAIN):
+
+| view/estimator | fold-safe | retained | sum | neg RMS | worst |
+|---|---:|---:|---:|---:|---:|
+| V25 aggregate DRC | 5/5 | 71 | +5.527642 | 0.064782 | -0.545757 |
+| V27 local type-KNN | 0/5 | 19 | +1.442087 | 0.125205 | -0.545757 |
+| global tail model on 18-D aggregate | 4/5 | 68 | +5.524821 | 0.066195 | -0.545757 |
+| global tail model on naive 42-D concat | 4/5 | 67 | +5.523452 | 0.066687 | -0.545757 |
+| **proposal-conditioned global type tail mode** | **5/5** | **68** | **+6.072558** | **0.001287** | **-0.009837** |
+
+This diagnostic motivates V28 but does not validate it. Only new untouched V28 A/B may support the mechanism.
+
+V26 and V27 consumed no fresh validation scenes, so V28 keeps the exact **6700-token** design exclusion and selects a new untouched 1000 (A500/B500) with a new hash seed.
+
+Fresh arms: raw / V20 / V25 aggregate DRC / V28 PTMC. Both blocks independently require token identity, subset/no-fallback, selected-path non-harm, recovery, strict selected-tail incrementality, preservation and endpoint. No pooled rescue.
+
+If V28 fresh fails, do not create another KNN/type-threshold variant; elevate the research bottleneck to **fixed evidence-interface catastrophic-state observability/capacity** and reopen interface/acquisition only then.
+
+Candidate novelty only after double-fresh + independent full-val:
+
+> **evidence-attributed proposal-conditioned catastrophic-mode certification for monotone deployment-admissible extremal recovery under a fixed planner-interface evidence budget.**
+
+This is not yet a claim.
