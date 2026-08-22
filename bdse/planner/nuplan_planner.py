@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import deepcopy
 from typing import Any
 
 import atexit
@@ -60,6 +61,7 @@ from bdse.planner.tournament import (
     _trajectory_utility_cost_np,
 )
 from bdse.planner.frontier_contrast_rebinding import frontier_contrast_rebind
+from bdse.planner.proposal_conditioned_witness_rebinding import proposal_conditioned_witness_rebind
 
 
 _PLANNER_DEVICE_LOCK = threading.Lock()
@@ -949,6 +951,102 @@ class BDSEPlannerCore:
                 ),
             )
 
+            # V64.3.30 Proposal-Conditioned Witness Evidence Rebinding (PCWER).
+            #
+            # V29 showed that compressing the complete anchor/challenger star can
+            # improve global frontier fidelity while *worsening* the direct
+            # recovery DRC gate.  PCWER therefore conditions the fixed-B evidence
+            # interface on the unique risk-free ICER direct proposal and preserves
+            # only the proposal/anchor and proposal/incumbent decision witnesses.
+            # The proposal is frozen before rebinding; after an accepted rebind the
+            # downstream DRC may confirm or veto only that same proposal.
+            recovery_proposal_action = None
+            pcwer_cfg = sel_cfg.get("proposal_conditioned_witness_rebinding", {}) or {}
+            if bool(pcwer_cfg.get("enabled", False)):
+                if bool((sel_cfg.get("frontier_contrast_rebinding", {}) or {}).get("enabled", False)):
+                    raise ValueError("V64.3.30 PCWER and V64.3.29 FCR are mutually exclusive causal arms")
+
+                proposal_cfg = deepcopy(tournament_cfg)
+                proposal_runtime = proposal_cfg.setdefault("runtime", {})
+                proposal_frontier = proposal_runtime.setdefault("decisive_frontier_value", {})
+                proposal_icer = proposal_frontier.setdefault("incumbent_contrastive_extremal_recovery", {})
+                # Proposal generation is the frozen V20-style support + incumbent
+                # dominance operator.  Outcome/DRC risk is deliberately removed
+                # here; it returns only after the evidence view has been rebound.
+                proposal_icer["regret_risk_enabled"] = False
+                proposal_icer["replacement_regret_risk_enabled"] = False
+                proposal_icer["retention_regret_risk_enabled"] = False
+
+                def pcwer_proposal_evaluator(selected_atoms: list[int]):
+                    idx = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
+                    trial = run_pair_conditioned_tournament(
+                        J0,
+                        pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
+                        pred.get("rival_pair_indices", pred["pair_indices"]),
+                        selected_atoms,
+                        candidates.valid_mask,
+                        runtime_flags,
+                        proposal_cfg,
+                        pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
+                        candidate_trajectories=candidates.trajectories,
+                        maneuver_ids=candidates.maneuver_ids,
+                        predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
+                        residual_action_potential=pred.get("residual_action_potential", None),
+                        residual_action_variance=pred.get("residual_action_var", None),
+                        residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
+                        residual_set_action_factors=pred.get("residual_set_action_factors", None),
+                        frontier_value_atom_factors=pred.get("frontier_value_atom_factors", None),
+                        frontier_value_action_signed_factors=pred.get("frontier_value_action_signed_factors", None),
+                        frontier_value_action_context_factors=pred.get("frontier_value_action_context_factors", None),
+                        frontier_value_scale=float(pred.get("frontier_value_scale", 1.0)),
+                        # This is a proposal-generation diagnostic over already
+                        # queried evidence; final DA-EPC still supplies the actual
+                        # deployment certificate after selection.
+                        evidence_certificate_fraction=1.0,
+                        selected_atom_family_ids=np.asarray(family_ids, dtype=np.int64)[idx],
+                        selected_atom_type_names=[str(evidence_bank.atoms[int(i)].type) for i in idx.tolist()],
+                    )
+                    d = dict(trial.diagnostics)
+                    return {
+                        "proposal_action": int(d.get("decisive_frontier_icer_selected_action", -1)),
+                        "incumbent_action": int(d.get("decisive_frontier_icer_legacy_selected_action", -1)),
+                        "anchor_action": int(d.get("_decisive_frontier_icer_anchor_action", d.get("pair_action_anchor_action", -1))),
+                        "incumbent_admissible": bool(float(d.get("decisive_frontier_icer_legacy_admissible", 0.0)) >= 0.5),
+                    }
+
+                valid_runtime = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
+                flags_runtime = np.asarray(runtime_flags, dtype=bool).reshape(-1)
+                all_flagged_domain = bool(np.any(valid_runtime) and np.all(flags_runtime[: len(valid_runtime)][valid_runtime]))
+                pcwer_reference_atoms = np.flatnonzero(decision_atom_active).astype(np.int64).tolist()
+                pcwer_result = proposal_conditioned_witness_rebind(
+                    baseline_selected=selection.selected,
+                    reference_atoms=pcwer_reference_atoms,
+                    predicted_base_cost=J0,
+                    predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
+                    pair_indices=np.asarray(pred.get("rival_pair_indices", pred["pair_indices"]), dtype=np.int64),
+                    pair_atom_delta=np.asarray(pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]), dtype=np.float32),
+                    valid_mask=candidates.valid_mask,
+                    atom_budget_costs=evidence_bank.budget_costs(),
+                    budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
+                    normalize_margins=bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)),
+                    margin_scale=float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0))),
+                    pair_delta_includes_local=bool((stage_cfg.get("runtime", {}) or {}).get("pair_tournament_pair_delta_includes_local", True)),
+                    frontier_value_atom_factors=pred.get("frontier_value_atom_factors", None),
+                    frontier_value_action_signed_factors=pred.get("frontier_value_action_signed_factors", None),
+                    frontier_value_action_context_factors=pred.get("frontier_value_action_context_factors", None),
+                    frontier_value_scale=float(((stage_cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("scale", pred.get("frontier_value_scale", 1.0))),
+                    proposal_evaluator=pcwer_proposal_evaluator,
+                    rebind_enabled=bool(pcwer_cfg.get("rebind_enabled", True)),
+                    structural_bypass=all_flagged_domain,
+                )
+                selection.selected = list(pcwer_result.selected)
+                selection.diagnostics.update(pcwer_result.diagnostics)
+                if bool(pcwer_result.proposal_lock):
+                    recovery_proposal_action = int(pcwer_result.proposal_action)
+            else:
+                selection.diagnostics["proposal_conditioned_witness_rebinding_enabled"] = 0.0
+                selection.diagnostics["proposal_conditioned_witness_rebinding_accepted"] = 0.0
+
             # V64.3.29 Frontier-Contrast Rebinding (FCR).
             #
             # The frozen AOCC selection remains the incumbent interface.  FCR is
@@ -1082,6 +1180,7 @@ class BDSEPlannerCore:
                 ),
                 selected_atom_family_ids=np.asarray(family_ids, dtype=np.int64)[np.asarray(selection.selected, dtype=np.int64)],
                 selected_atom_type_names=[str(evidence_bank.atoms[int(i)].type) for i in np.asarray(selection.selected, dtype=np.int64).tolist()],
+                recovery_proposal_action=recovery_proposal_action,
             )
         else:
             selector_started = time.perf_counter()

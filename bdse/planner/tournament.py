@@ -2358,6 +2358,7 @@ def _apply_decisive_frontier_icer(
     maneuver_ids: np.ndarray | None = None,
     selected_atom_family_ids: np.ndarray | list[int] | None = None,
     selected_atom_type_names: list[str] | np.ndarray | None = None,
+    forced_proposal_action: int | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """V64.3.19+ incumbent-contrastive extremal recovery.
 
@@ -2427,6 +2428,8 @@ def _apply_decisive_frontier_icer(
     retention_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     selected = legacy
     baseline = legacy
+    proposal_lock_enabled = False
+    proposal_lock_target = -1
     flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
     if flags.shape[0] < len(valid):
         flags = np.pad(flags, (0, len(valid) - flags.shape[0]), constant_values=False)
@@ -2655,6 +2658,8 @@ def _apply_decisive_frontier_icer(
                 retention_regret_risk_logits = _read_regret_risk_head("retention_regret_risk", ret_x, ret_names)
 
         support_ok = admissible & np.isfinite(support_logits) & (support_logits > 0.0)
+        proposal_lock_enabled = False
+        proposal_lock_target = -1
         legacy_admissible = bool(0 <= legacy < len(valid) and admissible[legacy])
         legacy_supported = bool(legacy_admissible and support_ok[legacy])
         if regret_risk_enabled and retention_regret_risk_enabled:
@@ -2696,15 +2701,29 @@ def _apply_decisive_frontier_icer(
             # through to a lower-ranked alternative.  Hence the selected
             # replacement path is a structural subset of the V25 aggregate
             # control and a new representation cannot resurrect a candidate.
-            best = _icer_select_extremal_candidate_with_optional_confirmation(
-                cand,
-                dominance_logits,
-                replacement_regret_risk_logits if (regret_risk_enabled and replacement_regret_risk_enabled) else np.zeros_like(dominance_logits),
-                support_logits,
-                margin_star,
-                utility_prior,
-                confirmation_logits=confirmation_logits,
-            )
+            # V64.3.30 PCWER proposal lock.  When a proposal-conditioned
+            # evidence rebind is accepted, the risk-free generator has already
+            # committed to one direct proposal.  The changed evidence view may
+            # only confirm that same proposal or abstain to the preserved
+            # incumbent; it may not rerank into a second-best alternative.
+            proposal_lock_enabled = forced_proposal_action is not None
+            proposal_lock_target = int(forced_proposal_action) if proposal_lock_enabled else -1
+            if proposal_lock_enabled:
+                best = proposal_lock_target if proposal_lock_target in set(int(x) for x in cand.tolist()) else None
+                if best is not None and confirmation_logits is not None:
+                    c = np.asarray(confirmation_logits, dtype=np.float64).reshape(-1)
+                    if best >= len(c) or not (np.isfinite(c[best]) and c[best] > 0.0):
+                        best = None
+            else:
+                best = _icer_select_extremal_candidate_with_optional_confirmation(
+                    cand,
+                    dominance_logits,
+                    replacement_regret_risk_logits if (regret_risk_enabled and replacement_regret_risk_enabled) else np.zeros_like(dominance_logits),
+                    support_logits,
+                    margin_star,
+                    utility_prior,
+                    confirmation_logits=confirmation_logits,
+                )
             selected = int(baseline if best is None else best)
         else:
             # If raw top is not deployment-admissible, the actual deployment
@@ -2754,6 +2773,9 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_regret_risk_local_memory": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}),
         "decisive_frontier_icer_regret_risk_downside_certificate": float(str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower() in {"local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation"}),
         "decisive_frontier_icer_selected_replacement_regret_risk_logit": float(replacement_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,
+        "decisive_frontier_icer_proposal_lock_enabled": float(bool(proposal_lock_enabled)),
+        "decisive_frontier_icer_proposal_lock_target_action": float(proposal_lock_target),
+        "decisive_frontier_icer_proposal_lock_confirmed": float(bool(proposal_lock_enabled and selected == proposal_lock_target)),
         "decisive_frontier_icer_selected_replacement_confirmation_regret_risk_logit": float(replacement_confirmation_regret_risk_logits[selected]) if 0 <= selected < len(valid) and selected not in {a, legacy} else 0.0,
         "decisive_frontier_icer_legacy_retention_regret_risk_logit": float(retention_regret_risk_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_admissible_candidate_count": float(np.asarray(admissible, dtype=bool).sum()),
@@ -2812,6 +2834,7 @@ def run_pair_conditioned_tournament(
     evidence_certificate_fraction: float | None = None,
     selected_atom_family_ids: np.ndarray | list[int] | None = None,
     selected_atom_type_names: list[str] | np.ndarray | None = None,
+    recovery_proposal_action: int | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -3086,6 +3109,7 @@ def run_pair_conditioned_tournament(
             maneuver_ids=maneuver_ids,
             selected_atom_family_ids=selected_atom_family_ids,
             selected_atom_type_names=selected_atom_type_names,
+            forced_proposal_action=recovery_proposal_action,
         )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))

@@ -1,0 +1,47 @@
+V64.3.30 EAF-ICER-PCWER engineering validation
+================================================
+
+Validated locally against the user-uploaded V64.3.29 source tree.
+No server nuPlan GPU cache/checkpoint is available locally, so no V30 effectiveness result is fabricated.
+
+1. Python compile
+   python -m compileall -q bdse
+   PASS
+
+2. V13–V30 targeted regression
+   114 passed / 0 failed
+   2 warnings, both pre-existing PyTorch Transformer nested_tensor/norm_first warnings.
+
+3. Launcher syntax
+   bash -n RUN_V64_3_30_EAF_ICER_PCWER_SCREEN_2GPU.sh
+   PASS
+
+4. Full repository regression
+   443 passed / 1 failed / 36 warnings
+
+   Sole failure:
+   bdse/tests/test_v64_2_gatefix.py::test_pipeline_calibration_locals_are_nounset_safe
+
+   Cause:
+   the uploaded V64.3.29 bdse.zip does not contain the historical root script
+   V64_SAQA_BCC_NEXT_COMMANDS.sh, which that legacy test opens directly.
+   ALGORITHM_CHANGELOG.md records an earlier packaging omission/restoration episode for the same historical script,
+   but the verified historical file bytes are not present in the supplied artifacts. No fabricated stub was added.
+   The V30 launcher and V30 targeted dependency chain do not depend on this missing historical file.
+
+   The 36 warnings are the pre-existing PyTorch Transformer nested_tensor/norm_first class; no new V30 warning class observed.
+
+5. PCWER formula/contract audit
+   - B remains exactly the baseline retained cardinality (operating point B=16).
+   - reference atoms are restricted to the already queried Top-M bank (M=24); zero new evidence query.
+   - attribution witness uses the production EAF atom-contribution root-sum-square definition.
+   - final candidate witness errors are recomputed through production _frontier_star and EAF primitives.
+   - accepted rebinding must preserve exact risk-free proposal, incumbent, incumbent admissibility, and selected-local anchor.
+   - final ICER is proposal-locked: DRC can confirm/veto only the same tentative proposal; no second-best reranking.
+   - all-flagged structural domain bypasses rebinding and keeps baseline evidence.
+
+6. Experimental identifiability audit
+   - frozen TRAIN manifest: 3000 unique tokens, SHA256 b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4.
+   - V30 design exclusion: exactly 8700 unique inspected validation tokens = previous 7700 + V29 fresh 1000.
+   - proposal-lock-only DRC control isolates operator semantics from PCWER evidence rebinding.
+   - TRAIN gate strengthened to require catastrophe-free folds before spending fresh validation GPU.
