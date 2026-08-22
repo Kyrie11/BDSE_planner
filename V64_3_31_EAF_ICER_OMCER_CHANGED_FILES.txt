@@ -1,0 +1,15 @@
+ALGORITHM_CHANGELOG.md
+NEXT_COMMANDS_V64_3_31_EAF_ICER_OMCER.txt
+RUN_V64_3_31_EAF_ICER_OMCER_SCREEN_2GPU.sh
+V64_3_30_CORRECTED_CAUSAL_AUDIT_FOR_V31.json
+V64_3_30_CORRECTED_POSTMORTEM_AND_V64_3_31_OMCER.md
+V64_3_31_ENGINEERING_VALIDATION.txt
+V64_3_31_FROZEN_TRAIN_DESIGN_AUDIT.json
+bdse/configs/v64_3_31_design_exclude_v64_3_30_train_stop_tokens.txt
+bdse/configs/v64_3_31_frozen_train_3000_tokens.txt
+bdse/planner/tournament.py
+bdse/tests/test_v64_3_31_eaf_icer_omcer.py
+bdse/tools/check_v64_3_31_eaf_icer_omcer_contract.py
+bdse/tools/check_v64_3_31_eaf_icer_omcer_screen.py
+bdse/tools/check_v64_3_31_eaf_icer_omcer_split.py
+bdse/tools/fit_v64_3_31_eaf_icer_omcer.py

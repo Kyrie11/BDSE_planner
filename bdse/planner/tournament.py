@@ -2045,7 +2045,7 @@ _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES = list(_ICER_DOMINANCE_PROFILE_BASE_NAMES[
 def _load_icer_local_regret_memory(
     path_str: str,
     expected_sha256: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[str, ...], np.ndarray, tuple[int, ...], float, str, float]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[str, ...], np.ndarray, tuple[int, ...], float, str, float, float]:
     """Load one immutable TRAIN-only V64.3.23 regret-coherence memory.
 
     The memory is deliberately small and auditable.  It stores only frozen
@@ -2072,6 +2072,7 @@ def _load_icer_local_regret_memory(
         se_multiplier = float(np.asarray(z["se_multiplier"]).reshape(-1)[0])
         certificate_kind = str(np.asarray(z["certificate_kind"]).reshape(-1)[0]) if "certificate_kind" in z.files else "mean_minus_standard_error"
         downside_multiplier = float(np.asarray(z["downside_multiplier"]).reshape(-1)[0]) if "downside_multiplier" in z.files else 1.0
+        catastrophic_delta_threshold = float(np.asarray(z["catastrophic_delta_threshold"]).reshape(-1)[0]) if "catastrophic_delta_threshold" in z.files else -0.5
     if (
         memory.ndim != 2
         or memory.shape[0] != len(delta)
@@ -2085,10 +2086,16 @@ def _load_icer_local_regret_memory(
         raise ValueError("EAF-ICER local regret memory has insufficient TRAIN support")
     if np.any(metric_weight <= 0.0) or not np.isfinite(se_multiplier) or se_multiplier < 0.0:
         raise ValueError("EAF-ICER local regret metric/lower-bound parameters invalid")
-    if certificate_kind not in {"mean_minus_standard_error", "mean_minus_downside_rms"}:
+    if certificate_kind not in {
+        "mean_minus_standard_error",
+        "mean_minus_downside_rms",
+        "mean_minus_catastrophic_excess_rms",
+    }:
         raise ValueError(f"unknown EAF-ICER local regret certificate_kind={certificate_kind}")
     if not np.isfinite(downside_multiplier) or downside_multiplier < 0.0:
         raise ValueError("EAF-ICER local downside multiplier invalid")
+    if not np.isfinite(catastrophic_delta_threshold) or catastrophic_delta_threshold >= 0.0:
+        raise ValueError("EAF-ICER catastrophic delta threshold must be finite and negative")
     if not (
         np.all(np.isfinite(memory))
         and np.all(np.isfinite(delta))
@@ -2097,7 +2104,19 @@ def _load_icer_local_regret_memory(
         and np.all(np.isfinite(metric_weight))
     ):
         raise ValueError("EAF-ICER local regret memory contains non-finite values")
-    return memory, delta, mean, np.maximum(std, 1.0e-6), names, metric_weight, ks, se_multiplier, certificate_kind, downside_multiplier
+    return (
+        memory,
+        delta,
+        mean,
+        np.maximum(std, 1.0e-6),
+        names,
+        metric_weight,
+        ks,
+        se_multiplier,
+        certificate_kind,
+        downside_multiplier,
+        catastrophic_delta_threshold,
+    )
 
 
 @lru_cache(maxsize=16)
@@ -2179,7 +2198,19 @@ def _icer_local_regret_lower_bound(
     coarser neighborhood support non-negative replacement improvement under the
     same fixed evidence/transition metric.
     """
-    memory, delta, mean, std, names, metric_weight, ks, se_multiplier, certificate_kind, downside_multiplier = _load_icer_local_regret_memory(
+    (
+        memory,
+        delta,
+        mean,
+        std,
+        names,
+        metric_weight,
+        ks,
+        se_multiplier,
+        certificate_kind,
+        downside_multiplier,
+        catastrophic_delta_threshold,
+    ) = _load_icer_local_regret_memory(
         memory_path, memory_sha256
     )
     if list(names) != list(runtime_names):
@@ -2206,7 +2237,7 @@ def _icer_local_regret_lower_bound(
             effective_n = 1.0 / np.maximum(np.sum(w * w, axis=1), 1.0e-12)
             local_se = np.sqrt(local_var / np.maximum(effective_n, 1.0))
             bound = local_mean - se_multiplier * local_se
-        else:
+        elif certificate_kind == "mean_minus_downside_rms":
             # V64.3.24 outcome/downside certificate.  The V23 failure showed
             # that confidence in a positive neighborhood *mean* does not bound
             # the downside of one extremally selected replacement.  Penalize
@@ -2214,6 +2245,20 @@ def _icer_local_regret_lower_bound(
             downside = np.minimum(y, 0.0)
             downside_rms = np.sqrt(np.sum(w * downside * downside, axis=1))
             bound = local_mean - downside_multiplier * downside_rms
+        elif certificate_kind == "mean_minus_catastrophic_excess_rms":
+            # V64.3.31 OMCER.  The V30 corrected TRAIN audit showed that the
+            # all-negative downside RMS is simultaneously (i) conservative on
+            # many tiny non-catastrophic losses and (ii) blind to the extremal
+            # selector state that produced the candidate.  The new statistic
+            # keeps the local mean as the value term but penalizes only the
+            # *excess* below the already pre-registered catastrophic boundary.
+            # This is not a validation-tuned threshold: -0.5 was the frozen
+            # V29/V30 catastrophic-tail contract before V31 was designed.
+            catastrophic_excess = np.minimum(y - catastrophic_delta_threshold, 0.0)
+            catastrophic_excess_rms = np.sqrt(np.sum(w * catastrophic_excess * catastrophic_excess, axis=1))
+            bound = local_mean - downside_multiplier * catastrophic_excess_rms
+        else:
+            raise ValueError(f"unknown EAF-ICER local regret certificate_kind={certificate_kind}")
         bounds.append(bound)
     return np.min(np.stack(bounds, axis=1), axis=1)
 
@@ -2591,18 +2636,35 @@ def _apply_decisive_frontier_icer(
                 contrib_rows = int(np.asarray(atom_contrib_star).shape[0]) if atom_contrib_star is not None and np.asarray(atom_contrib_star).ndim == 2 else 0
                 if selected_atom_family_ids is None or fam_runtime.size != contrib_rows:
                     raise ValueError("EAF-ICER semantic-family regret risk requires exact selected-atom family ids aligned to selected attribution rows")
+            # V64.3.31 OMCER conditions the risk geometry on the *operator
+            # margin* that actually defines candidate eligibility.  The frozen
+            # V25 operator requires support>0 AND scalar_dominance>0; therefore
+            # min(support, scalar_dominance) is the exact weakest-link distance
+            # to that joint semantic zero boundary.  It is already computed by
+            # the frozen runtime heads and adds no evidence query or learned
+            # parameter.  The 18 evidence coordinates remain unchanged.
+            matrix_mode = "evidence_only" if regret_risk_mode == "operator_margin_evidence" else regret_risk_mode
             rep_x, rep_names = _icer_regret_risk_feature_matrix(
-                feat, names, transition_vs_incumbent, transition_names, regret_risk_mode,
+                feat, names, transition_vs_incumbent, transition_names, matrix_mode,
                 attribution_resolved, attribution_resolved_names,
                 semantic_family, semantic_family_names,
                 semantic_type, semantic_type_names,
             )
             ret_x, ret_names = _icer_regret_risk_feature_matrix(
-                feat, names, transition_vs_anchor, transition_names, regret_risk_mode,
+                feat, names, transition_vs_anchor, transition_names, matrix_mode,
                 attribution_resolved, attribution_resolved_names,
                 semantic_family, semantic_family_names,
                 semantic_type, semantic_type_names,
             )
+            if regret_risk_mode == "operator_margin_evidence":
+                operator_margin = np.minimum(
+                    np.asarray(support_logits, dtype=np.float64),
+                    np.asarray(scalar_dominance_logits, dtype=np.float64),
+                ).reshape(-1, 1)
+                rep_x = np.concatenate([rep_x, operator_margin], axis=1)
+                ret_x = np.concatenate([ret_x, operator_margin], axis=1)
+                rep_names = list(rep_names) + ["operator::min_support_scalar_dominance_logit"]
+                ret_names = list(ret_names) + ["operator::min_support_scalar_dominance_logit"]
             if rep_names != ret_names:
                 raise RuntimeError("EAF-ICER replacement/retention regret-risk schemas diverged")
 
@@ -2618,7 +2680,13 @@ def _apply_decisive_frontier_icer(
 
             risk_model_type = str(icer_cfg.get("regret_risk_model_type", "linear_weighted_logistic")).strip().lower()
             if replacement_regret_risk_enabled:
-                if risk_model_type in {"local_multiscale_regret_lower_bound", "local_multiscale_downside_regret_certificate", "local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}:
+                if risk_model_type in {
+                    "local_multiscale_regret_lower_bound",
+                    "local_multiscale_downside_regret_certificate",
+                    "local_multiscale_catastrophic_excess_regret_certificate",
+                    "local_multiscale_downside_regret_with_type_confirmation",
+                    "local_multiscale_downside_regret_with_global_type_tail_confirmation",
+                }:
                     replacement_regret_risk_logits = _icer_local_regret_lower_bound(
                         rep_x,
                         rep_names,

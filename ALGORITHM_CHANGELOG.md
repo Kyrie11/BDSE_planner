@@ -9264,3 +9264,187 @@ Engineering changes only:
 An offline replay of the repaired fitter on the **old, bug-generated** TRAIN provenance is useful only as an engineering sanity check: it no longer produces zero selection, confirming the root cause.  It is not a valid V30 mechanism verdict because fixing the runtime proposal-lock/abstention semantics changes the generated TRAIN provenance and some DRC evidence features.  A clean V30 rerun is therefore mandatory before any algorithm-level attribution.
 
 No fresh result from the stopped V1 run may be inferred, pooled, or used for tuning.  If the repaired V30 TRAIN gate still fails, stop before fresh exactly as pre-registered and analyze that corrected TRAIN failure rather than tuning B/M, witness weights, DRC K/boundary, or adding a classifier.
+
+---
+
+# V64.3.30 corrected TRAIN result -> V64.3.31 EAF-ICER-OMCER
+
+## Corrected V30 result is attributable, but TRAIN-only
+
+The repaired V30 launcher run is engineering-valid. The previous `selected_count=0` fitter artifact is gone: the authoritative selector provenance contains 327 proposal locks and the corrected fitter selects 38 proposals. Raw row/edge SHA values match the fitter report, the exact frozen 3000-scene manifest is preserved, and historical V25 is reproduced exactly (75,133 frontier rows, 1,455 replacement edges, 310 replacement scenes, 71 selected, +5.5276423258 teacher-improvement sum).
+
+The run stops at the pre-registered TRAIN gate before `fresh_selection`; therefore **no new validation tokens were consumed** and the design exclusion remains exactly 8,700 inspected validation tokens.
+
+Corrected PCWER-DRC TRAIN cross-fit:
+
+- PCWER proposal attempts: 327;
+- accepted rebindings: 126;
+- selected: 38;
+- mean positive-opportunity capture: 12.697%;
+- teacher-improvement sum: +1.001646;
+- only 2/5 full path-safe folds;
+- two selected catastrophes, worst outcomes approximately -0.99063 and -0.98936.
+
+No new engineering defect explains these failures. This is a legitimate V30 mechanism STOP.
+
+## New V30 causal conclusion: PCWER witness fidelity is not outcome-risk sufficiency
+
+A same-proposal control on the **original AOCC evidence** selects 35 proposals, teacher sum +1.99445, mean capture 12.329%, and has zero selected catastrophe (worst only about -5.36e-4). Thus the V30 same-proposal/no-second-best operator is retained as a safety invariant.
+
+The two PCWER catastrophes occur on accepted rebindings and are DRC sign flips for the same proposal:
+
+- `67a57ae417045162`: q=2, delta=-0.9906338, original DRC -0.070323 -> PCWER +0.030633;
+- `bb77e9686029538d`: q=20, delta=-0.9893588, original DRC -0.223642 -> PCWER +0.175645.
+
+Therefore V29's conclusion is strengthened:
+
+1. better **global complete-frontier reconstruction** does not imply downstream decision sufficiency;
+2. better **proposal-conditioned proposal/anchor/incumbent witness reconstruction** still does not imply **selected-outcome risk sufficiency**.
+
+FCR and PCWER are both removed from the main V31 path. Do not build FCR-v2/PCWER-v2, tune witness weights/order/acceptance thresholds, or enlarge B/M to rescue these objectives.
+
+## Dominant bottleneck narrowed again
+
+The exact V30 risk-free proposal population has 327 proposal scenes, of which 219 are teacher-positive and 26 have teacher improvement <= -0.5; the worst is -9.839625. There is therefore substantial recoverable positive mass together with a sparse heavy tail.
+
+The bottleneck is now recorded as:
+
+> **safe extremal proposal coverage under operator-induced post-selection / winner's-curse risk mismatch**.
+
+The current DRC memory is learned from the full support-positive/scalar-dominance-positive edge population while deployment extremizes using those same support/dominance scores. The 18-D evidence-only risk certificate does not see the selector state that made one candidate the extremal winner.
+
+This is not evidence that B=16 is the capacity bottleneck. Keep B=16/M=24 frozen for V31.
+
+## Rejected corrected-V30 TRAIN diagnostics: terminal no-repeat
+
+To localize the failure, several TRAIN-only diagnostics were run. They are **not** new candidate branches and must not be retried/tuned:
+
+- proposal-only/q-only KNN memory: support collapses, only 18 selections, precision about 61%, catastrophic failures recur;
+- scene-deduplicated one-edge-per-source-scene local memory: zero-selection collapse;
+- generic selector residual/gap/count concatenations: no reliable safe-coverage restoration;
+- evidence-only catastrophic-excess without operator state: coverage increases but a -1.7026 catastrophe appears;
+- operator-margin plus historical all-negative downside: catastrophe-free but too conservative, only 56 selections and 4/5 full folds;
+- transition geometry, signed profile, full attribution-spectrum, KNN radius/OOD, action blacklist and naive classifier rescue remain historically forbidden.
+
+Do not rescue any of the above by sweeping K, thresholds, feature weights, profile/transition combinations, or B/M.
+
+## Structural refinement: risk admissibility must precede the single extremization event
+
+V30's strict `risk-free scalar argmax q -> risk confirm/veto same q` is safe on original evidence but censors recoverable coverage: if the scalar-best q is risky, no-fallback preserves the incumbent even if another candidate could be safe and beneficial.
+
+V31 keeps the **no rerank/no second-best fallback invariant after proposal formation**, but moves risk into candidate admissibility **before proposal formation**:
+
+1. deployment-admissible support/scalar-positive alternatives;
+2. operator-aligned risk certificate evaluated for every alternative;
+3. one extremization over the risk-admissible set;
+4. after that one proposal exists, no independent mechanism may rerank into a different alternative.
+
+This is not post-veto fallback because there is only one proposal-selection event.
+
+A fixed TRAIN placement control with the same new certificate gives:
+
+- post-extremal same-q confirmation: 43 selected, +4.1616 teacher sum, 14.78% mean capture, zero catastrophe, 4/5 full folds;
+- **pre-extremal risk admissibility**: 80 selected, +8.7537, 26.46% capture, zero catastrophe, 5/5 folds.
+
+## V64.3.31 algorithm: Operator-Margin Catastrophic-Excess Regret Certification (OMCER)
+
+### Runtime representation
+
+Return to the original AOCC B-set. Disable/remove FCR and PCWER from the main arm. Keep:
+
+- retained evidence budget B=16;
+- proposal Top-M=24;
+- frozen EAF complete deployment-admissible frontier;
+- frozen support and scalar-dominance heads;
+- preserve admissible incumbent;
+- all-flagged structural delegation;
+- no learned incumbent->anchor intervention.
+
+### Operator conditioning
+
+Append exactly one already-computed selector statistic to the historical 18-D aggregate evidence risk vector:
+
+`operator_margin = min(support_logit, scalar_dominance_logit)`.
+
+It is the weakest-link signed distance to the existing joint eligibility boundary `support>0 AND scalar_dominance>0`. It adds no evidence query, no learned head, no validation-selected weight and no new decision threshold.
+
+### Catastrophic-excess certificate
+
+Keep the full 1,455-edge TRAIN memory, inverse-distance local estimation, K={32,64}, equal feature metric weights, downside multiplier=1 and runtime zero boundary.
+
+Reuse the already frozen catastrophic contract `tau_cat=-0.5`; for local outcome y define:
+
+`e = min(y - tau_cat, 0)`.
+
+At each K:
+
+`certificate_K = local_mean - RMS_weighted(catastrophic_excess)`.
+
+Runtime risk score is the minimum over K=32/64. This avoids treating tiny non-catastrophic negative outcomes as catastrophic downside while still penalizing local support below the exact pre-existing tail boundary.
+
+### Frozen TRAIN 2x2 evidence
+
+- 18D + historical downside: 71 selections, +5.527642, 21.10% capture, one -0.5458 catastrophe;
+- 18D + catastrophic-excess: 94, +4.3720, 28.41% capture, one -1.7026 catastrophe;
+- 19D operator-margin + historical downside: 56, +6.1351, 17.64% capture, zero catastrophe but only 4/5 full folds;
+- **19D operator-margin + catastrophic-excess OMCER**: **80**, **+8.7537**, **26.46%**, **zero catastrophe**, **5/5 full folds**.
+
+The two factors are complementary on frozen TRAIN. This only licenses the fresh test; it is not a validated paper claim.
+
+## Updated candidate mechanism chain
+
+Replace the V30 candidate chain
+
+`bounded evidence interface -> attributed complete frontier -> unique proposal -> proposal-conditioned witness compression -> same-proposal downside confirmation -> incumbent preservation -> structural guard`
+
+with the tighter V31 candidate:
+
+> **bounded evidence interface -> attributed deployment-admissible complete frontier -> frozen support/scalar eligibility -> operator-conditioned catastrophic-tail risk admissibility -> single incumbent-contrastive extremization -> incumbent-default monotone intervention -> structural deployment guard**.
+
+`proposal-conditioned witness compression` is deleted. Post-extremal DRC confirmation is no longer the primary risk stage. No-fallback remains a post-proposal structural invariant.
+
+## V31 experiment protocol
+
+TRAIN:
+
+- exact frozen 3000 manifest / historical fold seed;
+- exact V25 reproduction required;
+- 2x2 diagnostics remain TRAIN-only;
+- OMCER must be 5/5 path-safe + catastrophe-free;
+- >=64 selections, >=5 selections above V25, >=+3pp mean capture over V25, nonnegative teacher sum, negative RMS noninferior;
+- TRAIN fail stops before fresh and forbids K/-0.5/multiplier/zero/operator-margin/B/M tuning.
+
+Fresh:
+
+- exclusion remains exactly 8700 because corrected V30 spent no fresh scenes;
+- new hash seed selects untouched 1000, A/B=500/500;
+- five arms: raw, V20, V25 aggregate-downside, V30 proposal-lock-only DRC, V31 OMCER;
+- A and B each independently require instrumentation/structural/incumbent invariants;
+- no selected teacher improvement <= -0.5;
+- direct replacement path count >=8 and regret-delta sum <=0;
+- OMCER direct positive-opportunity capture >= V25 +3pp and >=5 extra positive replacements;
+- OMCER capture >= lock-only +3pp and >=5 extra positives;
+- selected tail noninferior to both V25 and lock-only;
+- endpoint noninferior; at least one block must show strict endpoint signal before independent full-val reproduction;
+- no pooled rescue.
+
+Passing double-fresh licenses one independent full-validation reproduction only. Test/closed-loop remain forbidden.
+
+## V31 terminal no-repeat conditions
+
+If V31 tail fails, stop OMCER. Do not tune K, `-0.5`, multiplier, zero boundary, operator-margin transform/weight, B or M.
+
+If tail is safe but coverage gain fails, do not feature-search additional selector context. Audit proposal-generation semantics or run a controlled observability/capacity diagnostic.
+
+If mechanism succeeds but endpoint fails, audit final-guard mediation before changing the risk certificate.
+
+All previous prohibitions remain: PTMC/type-KNN, FCR, PCWER, learned incumbent->anchor, signed-profile/transition/full-attribution rescue, action blacklists, KNN radius/OOD, DACC/beam/swap, V64.3.8-.12 acquisition branches, and pooled A+B rescue.
+
+## Engineering validation
+
+- V31 fitter reproduces the frozen TRAIN 2x2 exactly.
+- V31 config/memory hard contract: PASS.
+- V13--V31 targeted tests: **122/122 PASS**.
+- full repository: **451 PASS / 1 inherited packaging FAIL / 36 warnings**; the sole failure is the unchanged missing historical root `V64_SAQA_BCC_NEXT_COMMANDS.sh` test fixture.
+- V31 launcher `bash -n`: PASS.
+- no local fresh result is fabricated.

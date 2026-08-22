@@ -1,0 +1,67 @@
+{
+  "audit": "v64_3_30_corrected_train_causal_audit_for_v31",
+  "result_reliability": {
+    "engineering_valid": true,
+    "mechanism_attribution_allowed": true,
+    "scope": "frozen TRAIN gate only",
+    "fresh_validation_consumed": false,
+    "validation_exclusion_count_remains": 8700,
+    "prior_zero_selection_bug_fixed": true
+  },
+  "v30_corrected": {
+    "pcwer_attempted": 327,
+    "pcwer_accepted": 126,
+    "proposal_locked_drc_selected": 38,
+    "proposal_locked_drc_teacher_sum": 1.001645530762918,
+    "proposal_locked_drc_mean_capture": 0.1269702547369546,
+    "proposal_locked_drc_fold_pass_count": 2,
+    "proposal_locked_drc_catastrophe_count": 2,
+    "proposal_locked_drc_worst": -0.9906337633781135
+  },
+  "same_proposal_original_evidence_control": {
+    "selected": 35,
+    "teacher_sum": 1.9944510092966798,
+    "mean_capture": 0.1232936,
+    "catastrophe_count": 0,
+    "interpretation": "same-proposal/no-fallback is a retained safety invariant; PCWER representation change causes the new tail failure"
+  },
+  "risk_free_proposal_population": {
+    "proposal_scene_count": 327,
+    "teacher_positive_count": 219,
+    "catastrophic_count_le_minus_0_5": 26,
+    "teacher_improvement_sum": -9.83945306018606,
+    "worst": -9.839625339961703
+  },
+  "critical_conclusions": [
+    "global complete-frontier reconstruction fidelity is not downstream decision sufficiency",
+    "proposal-conditioned witness reconstruction fidelity is not selected-outcome risk sufficiency",
+    "the dominant bottleneck narrows to operator-aligned tail-risk admissibility under extremal post-selection",
+    "fixed B=16 is not yet shown to be the capacity bottleneck",
+    "PCWER should stop rather than be tuned"
+  ],
+  "rejected_train_diagnostics": {
+    "proposal_only_knn_memory": "unsafe and sparse; do not retry",
+    "scene_deduplicated_memory": "zero-selection collapse; do not retry",
+    "generic_selection_context_concat": "no sufficient safe-coverage gain; do not feature-search",
+    "historical_signed_profile_transition_full_attribution": "remain frozen as failed branches"
+  },
+  "v31_train_2x2": {
+    "evidence_downside": {"selected": 71, "teacher_sum": 5.527642325753739, "mean_capture": 0.21097540397540399, "catastrophes": 1},
+    "evidence_catastrophic_excess": {"selected": 94, "teacher_sum": 4.372022949398376, "mean_capture": 0.28407393107393103, "catastrophes": 1},
+    "operator_margin_downside": {"selected": 56, "teacher_sum": 6.135109345177054, "mean_capture": 0.17637494637494638, "catastrophes": 0},
+    "omcer_main": {"selected": 80, "teacher_sum": 8.753724635542207, "mean_capture": 0.2645825825825826, "catastrophes": 0, "five_fold_gate": true}
+  },
+  "v31": {
+    "name": "V64.3.31 EAF-ICER-OMCER",
+    "operator_margin": "min(support_logit, scalar_dominance_logit)",
+    "catastrophic_delta_threshold": -0.5,
+    "risk_placement": "candidate-level admissibility before the single extremization event",
+    "B": 16,
+    "M": 24,
+    "K": [32, 64],
+    "decision_boundary": 0.0,
+    "downside_multiplier": 1.0,
+    "fresh_exclusion": 8700,
+    "fresh_design": "new untouched 1000 split A/B=500/500, no pooled rescue"
+  }
+}
