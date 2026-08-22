@@ -9219,3 +9219,48 @@ If PCWER improves its proposal-conditioned witness fidelity but does not improve
 - Full repository: **443 PASS / 1 inherited packaging FAIL / 36 warnings**.  The only failure is `test_v64_2_gatefix.py` reading historical root `V64_SAQA_BCC_NEXT_COMMANDS.sh`, which is absent from the user-uploaded V29 `bdse.zip`.  The changelog itself records an earlier archive-omission episode for this same historical file.  No fabricated replacement/stub is introduced because the verified historical 32,559-byte script is not present in the supplied artifacts.
 - The 36 warnings are the pre-existing PyTorch Transformer `nested_tensor/norm_first` class; no new V30 warning class was observed.
 - Local environment lacks the server nuPlan GPU cache/checkpoint, so no V30 effectiveness result is fabricated.
+
+---
+
+# V64.3.30 engineering gatefix after uploaded TRAIN-only run (no fresh spent)
+
+## Uploaded-run status
+
+The uploaded V30 output is **not a scientific mechanism result**.  The launcher correctly stopped before fresh selection at `pcwer_v30_fit`; therefore none of the new V30 A/B=500/500 validation scenes were selected or evaluated and the frozen 8700 validation exclusion remains the complete inspected set.
+
+Historical/provenance controls before the stop were valid:
+
+- frozen TRAIN identity: 3000 unique scenes, unchanged SHA;
+- historical V25 TRAIN reproduction: 75,133 frontier rows, 1,455 replacement edges, 310 replacement scenes, 5/5 path-safe folds, 71 selected, teacher-improvement sum +5.527642;
+- PCWER TRAIN evaluation completed for all 3000 paired scenes;
+- PCWER selector instrumentation was active: 327 direct-proposal attempts and 126 accepted evidence rebinds; accepted budget/cardinality/proposal/incumbent/anchor contracts were valid.
+
+The reported proposal-locked DRC `selected_count=0` is an **engineering artifact**, not a falsification of PCWER.
+
+## Root-cause engineering defects
+
+Three coupled proposal-lock plumbing defects were found.
+
+1. **Fitter provenance-field loss.** `fit_v64_3_30_eaf_icer_pcwer.py` called the V25 memory-efficient frontier loader.  That loader intentionally does not retain `icer_selected_action`, while the V30 `_proposal_map()` attempted to read that dropped field.  Every proposal therefore became `-1`, forcing all five cross-fit folds to select zero replacements.
+
+2. **Post-proposal fail-closed path dropped the proposal lock.**  After a valid risk-free proposal `q` had already been generated, PCWER failure modes such as no strict witness improvement or candidate proposal/anchor/incumbent mismatch correctly restored the original AOCC B-set but incorrectly returned `proposal_lock=False`.  This reopened candidate generation in downstream DRC and contradicted the V30 same-proposal-only contract.
+
+3. **No-proposal path did not explicitly abstain.**  With PCWER enabled but no valid risk-free direct proposal, `recovery_proposal_action=None` caused final ICER/DRC to fall back to its ordinary candidate search.  This violated the intended `unique proposal -> confirmation/veto` decomposition: absence of a generated proposal must not allow the confirmation stage to create one.
+
+## Gatefix
+
+The scientific V30 mechanism and all frozen experimental knobs remain unchanged: B=16, M=24, DRC K={32,64}, downside multiplier=1, zero decision boundary, frozen 3000 TRAIN, 8700 validation exclusion, fresh hash seed, and all promotion thresholds.
+
+Engineering changes only:
+
+- the fitter now builds its proposal map from the authoritative per-scene selector diagnostics (`proposal_conditioned_witness_rebinding_*`) rather than reconstructing it from a lossy frontier-edge loader;
+- once a valid baseline proposal exists, later rebinding failures fail closed on the **evidence subset only** and retain the original proposal lock for downstream confirmation;
+- while PCWER is enabled, `recovery_proposal_action=-1` is an explicit locked-abstention sentinel until a valid proposal is supplied; downstream DRC therefore cannot generate a replacement when the risk-free generator produced none;
+- the TRAIN audit now records `proposal_lock_count` and validates that the runtime proposal-lock map is at least consistent with all accepted rebinds;
+- the launcher default output root is changed to `outputs_v64_3_30_eaf_icer_pcwer_screen_2gpu_v2_gatefix` so the repaired run cannot mix with the stopped V1 artifacts.
+
+## Interpretation discipline
+
+An offline replay of the repaired fitter on the **old, bug-generated** TRAIN provenance is useful only as an engineering sanity check: it no longer produces zero selection, confirming the root cause.  It is not a valid V30 mechanism verdict because fixing the runtime proposal-lock/abstention semantics changes the generated TRAIN provenance and some DRC evidence features.  A clean V30 rerun is therefore mandatory before any algorithm-level attribution.
+
+No fresh result from the stopped V1 run may be inferred, pooled, or used for tuning.  If the repaired V30 TRAIN gate still fails, stop before fresh exactly as pre-registered and analyze that corrected TRAIN failure rather than tuning B/M, witness weights, DRC K/boundary, or adding a classifier.

@@ -963,6 +963,11 @@ class BDSEPlannerCore:
             recovery_proposal_action = None
             pcwer_cfg = sel_cfg.get("proposal_conditioned_witness_rebinding", {}) or {}
             if bool(pcwer_cfg.get("enabled", False)):
+                # PCWER is a generation-then-confirmation operator.  -1 is an
+                # explicit locked abstention sentinel: if the risk-free generator
+                # yields no valid direct proposal, downstream DRC must preserve the
+                # incumbent instead of generating a replacement on its own.
+                recovery_proposal_action = -1
                 if bool((sel_cfg.get("frontier_contrast_rebinding", {}) or {}).get("enabled", False)):
                     raise ValueError("V64.3.30 PCWER and V64.3.29 FCR are mutually exclusive causal arms")
 

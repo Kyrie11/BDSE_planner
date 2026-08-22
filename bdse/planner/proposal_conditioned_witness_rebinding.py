@@ -189,6 +189,19 @@ def proposal_conditioned_witness_rebind(
             selected=list(baseline), proposal_action=None, proposal_lock=False, diagnostics=dict(diag)
         )
 
+    def fallback_locked(reason: int, proposal_action: int, **extra: Any) -> ProposalConditionedWitnessRebindingResult:
+        # Once the frozen risk-free generator has produced a valid direct proposal,
+        # every later PCWER failure must fail closed on the *evidence rebind only*.
+        # The proposal itself remains locked so downstream DRC can only confirm/veto
+        # that same action.  Dropping the lock here would silently reopen candidate
+        # generation and violate the V30 operator contract.
+        diag["proposal_conditioned_witness_rebinding_reason_code"] = float(reason)
+        diag["proposal_conditioned_witness_rebinding_proposal_lock"] = 1.0
+        diag.update(extra)
+        return ProposalConditionedWitnessRebindingResult(
+            selected=list(baseline), proposal_action=int(proposal_action), proposal_lock=True, diagnostics=dict(diag)
+        )
+
     if structural_bypass or not baseline or not reference or len(baseline) > len(reference):
         return fallback(1)
     if proposal_evaluator is None:
@@ -366,7 +379,7 @@ def proposal_conditioned_witness_rebind(
                 best_key = key; best_idx = int(atom_idx)
                 best_darm = cd; best_eaf = ce; best_sq = cs
         if best_idx is None or best_darm is None or best_eaf is None or best_sq is None:
-            return fallback(5, proposal_conditioned_witness_rebinding_partial_count=float(len(chosen)))
+            return fallback_locked(5, q, proposal_conditioned_witness_rebinding_partial_count=float(len(chosen)))
         chosen.append(best_idx); spent += float(costs[best_idx])
         sum_darm = best_darm; sum_eaf = best_eaf; sum_eaf_sq = best_sq
 
@@ -392,12 +405,12 @@ def proposal_conditioned_witness_rebind(
         "proposal_conditioned_witness_rebinding_budget_preserved": float(candidate_cost <= float(budget) + eps),
     })
     if not _strict_lexicographic_improvement(candidate_error, baseline_error, eps):
-        return fallback(6)
+        return fallback_locked(6, q)
 
     try:
         cand_eval = dict(proposal_evaluator(list(chosen)))
     except Exception:
-        return fallback(4)
+        return fallback_locked(4, q)
     cq = int(cand_eval.get("proposal_action", -1))
     ci = int(cand_eval.get("incumbent_action", -1))
     ca = int(cand_eval.get("anchor_action", -1))
@@ -409,7 +422,7 @@ def proposal_conditioned_witness_rebind(
         "proposal_conditioned_witness_rebinding_candidate_incumbent_admissible": float(cadm),
     })
     if cq != q or ci != incumbent or ca != anchor or not cadm:
-        return fallback(8)
+        return fallback_locked(8, q)
 
     changed = len(set(baseline) ^ set(chosen))
     diag.update({

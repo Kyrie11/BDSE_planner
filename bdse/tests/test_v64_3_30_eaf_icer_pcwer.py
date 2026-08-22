@@ -8,6 +8,7 @@ import yaml
 
 from bdse.planner.proposal_conditioned_witness_rebinding import proposal_conditioned_witness_rebind
 from bdse.planner.tournament import run_pair_conditioned_tournament
+from bdse.tools.fit_v64_3_30_eaf_icer_pcwer import _proposal_map
 
 
 def _problem():
@@ -57,9 +58,45 @@ def test_pcwer_fails_closed_if_exact_proposal_changes():
         frontier_value_action_context_factors=context,frontier_value_scale=1.0,proposal_evaluator=_eval_factory(fail_candidate=True),
     )
     assert r.selected==[0,1]
-    assert not r.proposal_lock
+    assert r.proposal_lock and r.proposal_action==2
     assert r.diagnostics['proposal_conditioned_witness_rebinding_accepted']==0.0
     assert r.diagnostics['proposal_conditioned_witness_rebinding_reason_code']==8.0
+
+
+
+def test_pcwer_no_improvement_fails_closed_on_evidence_but_keeps_same_proposal_lock():
+    j0,g,valid,pairs,delta,af,signed,context=_problem()
+    r=proposal_conditioned_witness_rebind(
+        baseline_selected=[0,1],reference_atoms=[0,1],predicted_base_cost=j0,predicted_atom_costs=g,
+        pair_indices=pairs,pair_atom_delta=delta,valid_mask=valid,atom_budget_costs=np.ones(3,dtype=np.float32),budget=2.0,
+        normalize_margins=False,margin_scale=1.0,pair_delta_includes_local=True,
+        frontier_value_atom_factors=af,frontier_value_action_signed_factors=signed,
+        frontier_value_action_context_factors=context,frontier_value_scale=1.0,proposal_evaluator=_eval_factory(),
+    )
+    assert r.selected==[0,1]
+    assert r.proposal_lock and r.proposal_action==2
+    assert r.diagnostics['proposal_conditioned_witness_rebinding_accepted']==0.0
+    assert r.diagnostics['proposal_conditioned_witness_rebinding_reason_code']==6.0
+
+
+def test_v30_fitter_reads_proposal_from_selector_lock_diagnostics_not_frontier_selected_action():
+    p='selector_proposal_conditioned_witness_rebinding_'
+    rows=[{
+        'scenario_token':'scene-a',
+        p+'proposal_lock':1.0,
+        p+'baseline_proposal_action':7.0,
+        p+'baseline_incumbent_action':3.0,
+        p+'baseline_anchor_action':1.0,
+        'icer_selected_action':9.0,
+    },{
+        'scenario_token':'scene-b',
+        p+'proposal_lock':0.0,
+        p+'baseline_proposal_action':5.0,
+        p+'baseline_incumbent_action':2.0,
+        p+'baseline_anchor_action':1.0,
+        'icer_selected_action':5.0,
+    }]
+    assert _proposal_map(rows)=={'scene-a':7}
 
 
 def test_proposal_lock_only_control_keeps_original_evidence_and_locks_proposal():
@@ -109,6 +146,9 @@ def test_v30_tournament_api_has_same_proposal_lock_and_no_second_best_contract()
     assert 'recovery_proposal_action' in sig.parameters
     src=inspect.getsource(run_pair_conditioned_tournament)
     assert 'forced_proposal_action=recovery_proposal_action' in src
+    planner_src=Path('bdse/planner/nuplan_planner.py').read_text()
+    assert 'recovery_proposal_action = -1' in planner_src
+    assert 'explicit locked abstention sentinel' in planner_src
 
 
 def test_v30_exclusion_contains_8700_unique_inspected_tokens():

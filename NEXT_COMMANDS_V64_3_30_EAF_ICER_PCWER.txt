@@ -1,8 +1,8 @@
-# V64.3.30 EAF-ICER-PCWER — next server command
-# Main causal operating point remains M=24 / B=16.
+# V64.3.30 EAF-ICER-PCWER engineering gatefix — next server command
+# Main causal operating point remains M=24 / B=16.  This is an engineering-only rerun; no scientific knobs changed.
 # Do not tune B/M, PCWER witness ordering/weights, DRC K/boundary, or pool A+B if the screen fails.
 
-cd bdse_v64_3_30_eaf_icer_pcwer
+cd bdse_v64_3_30_eaf_icer_pcwer_gatefix
 bash RUN_V64_3_30_EAF_ICER_PCWER_SCREEN_2GPU.sh
 
 # The launcher is fail-closed:

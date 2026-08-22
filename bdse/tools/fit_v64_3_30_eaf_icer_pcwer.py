@@ -111,11 +111,28 @@ def _pcwer_audit(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return report
 
 
-def _proposal_map(by: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+def _proposal_map(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Return the exact runtime PCWER proposal-lock map from per-scene diagnostics.
+
+    Do not reconstruct this from frontier edges: V25's memory-efficient frontier
+    loader intentionally drops `icer_selected_action`, and, more importantly, the
+    final V20 ICER action is not the V30 proposal contract on fail-closed rebinding
+    paths.  The selector diagnostics are the authoritative source because they are
+    emitted at the generation/rebinding boundary that supplies
+    `recovery_proposal_action` to the downstream tournament.
+    """
     out: dict[str, int] = {}
-    for token, rows in by.items():
-        if rows:
-            out[str(token)] = int(rows[0].get('icer_selected_action', -1))
+    prefix = 'selector_proposal_conditioned_witness_rebinding_'
+    for r in rows:
+        token = str(r.get('scenario_token', ''))
+        if not token or _f(r, prefix + 'proposal_lock', 0.0) < 0.5:
+            continue
+        q = int(round(_f(r, prefix + 'baseline_proposal_action', -1.0)))
+        incumbent = int(round(_f(r, prefix + 'baseline_incumbent_action', -1.0)))
+        anchor = int(round(_f(r, prefix + 'baseline_anchor_action', -1.0)))
+        if min(q, incumbent, anchor) < 0 or q in {incumbent, anchor}:
+            raise SystemExit(f'STOP TRAIN INSTRUMENTATION: invalid locked PCWER proposal for {token}: q={q} incumbent={incumbent} anchor={anchor}')
+        out[token] = q
     return out
 
 
@@ -175,8 +192,8 @@ def _crossfit_locked(data: dict[str, Any], proposal: dict[str, int]) -> dict[str
         'fold_pass_count':int(sum(x['path_safe'] for x in folds)),
         'selected_count':int(sum(x['count'] for x in folds)),
         'teacher_improvement_sum':float(sum(x['sum'] for x in folds)),
-        'mean_precision':float(np.nanmean([x['precision'] for x in folds])),
-        'mean_capture':float(np.nanmean([x['capture'] for x in folds])),
+        'mean_precision':float(np.nanmean([x['precision'] for x in folds])) if any(np.isfinite(x['precision']) for x in folds) else float('nan'),
+        'mean_capture':float(np.nanmean([x['capture'] for x in folds])) if any(np.isfinite(x['capture']) for x in folds) else float('nan'),
     }
 
 
@@ -218,9 +235,13 @@ def main() -> None:
     if not row_path.is_file() or row_path.stat().st_size<=0: raise SystemExit(f'STOP TRAIN DATA: missing rows {row_path}')
     by,nrows=v25._load_minimal_scenes(edge_path)
     if len(by)!=EXPECTED_TRAIN_SCENES: raise SystemExit(f'STOP TRAIN DATA: expected 3000 scenes, got {len(by)}')
-    data=v25._build(by); proposal=_proposal_map(by)
+    sample_rows=_load_rows(row_path)
+    data=v25._build(by); proposal=_proposal_map(sample_rows)
     crossfit=_crossfit_locked(data,proposal)
-    pcwer=_pcwer_audit(_load_rows(row_path))
+    pcwer=_pcwer_audit(sample_rows)
+    pcwer['proposal_lock_count'] = int(len(proposal))
+    pcwer['proposal_lock_map_complete'] = bool(len(proposal) >= pcwer['accepted_count'])
+    pcwer['gate_pass'] = bool(pcwer['gate_pass'] and pcwer['proposal_lock_map_complete'])
     drc_gate=bool(
         crossfit['all_folds_path_safe']
         and crossfit['all_folds_catastrophe_free']

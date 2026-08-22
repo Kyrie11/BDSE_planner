@@ -1,0 +1,32 @@
+V64.3.30 uploaded result engineering audit and gatefix
+
+VERDICT
+- The uploaded output is TRAIN-only and cannot support V30 fresh mechanism attribution.
+- The launcher stopped at pcwer_v30_fit before fresh_selection. No new V30 validation tokens were selected/evaluated.
+- Historical V25 TRAIN reproduction is correct: 75,133 frontier rows; 1,455 replacement edges; 310 replacement scenes; 5/5 path-safe; 71 selected; teacher-improvement sum 5.527642325753739.
+- PCWER TRAIN evaluation completed on the paired 3000 scenes and selector instrumentation was active (327 attempted direct proposals, 126 accepted rebinds, accepted contracts valid).
+- The reported proposal-locked crossfit selected_count=0 is an engineering artifact.
+
+ROOT CAUSE
+1) fit_v64_3_30_eaf_icer_pcwer.py used V25 _load_minimal_scenes(), whose retained key set drops icer_selected_action, then _proposal_map() attempted to read that missing key. All q became -1.
+2) After a valid q existed, PCWER fail-closed rebinding paths restored AOCC evidence but dropped proposal_lock, reopening downstream candidate generation.
+3) With PCWER enabled and no valid q, recovery_proposal_action=None allowed downstream DRC to generate a replacement, violating generation-then-confirmation semantics.
+
+GATEFIX
+- Build the TRAIN proposal map from authoritative per-scene selector proposal-lock diagnostics.
+- Preserve q lock on all post-proposal PCWER rebind failures; only the evidence subset falls back.
+- Use recovery_proposal_action=-1 as explicit locked abstention while PCWER is enabled and no valid proposal exists.
+- Add proposal_lock_count/proposal_lock_map_complete audit fields.
+- Default OUT_ROOT changed to outputs_v64_3_30_eaf_icer_pcwer_screen_2gpu_v2_gatefix to prevent stale V1 mixing.
+- B=16, M=24, DRC K={32,64}, boundary=0, downside multiplier=1, 3000 TRAIN manifest, 8700 exclusion, fresh seed and promotion thresholds are unchanged.
+
+VALIDATION
+- python compileall: PASS
+- launcher bash -n: PASS
+- V13-V30 targeted regression: 116 PASS
+- All repository tests excluding the inherited missing-file test_v64_2_gatefix.py: 442 PASS in four shards
+- test_v64_2_gatefix.py: 3 PASS / 1 inherited packaging FAIL because root V64_SAQA_BCC_NEXT_COMMANDS.sh is absent from the uploaded package; no fabricated historical stub was added.
+- Offline replay of the repaired fitter on old bug-generated TRAIN provenance no longer yields zero selection, confirming the plumbing root cause. It is NOT a scientific V30 verdict because the runtime gatefix changes proposal-lock/abstention semantics and therefore requires a clean rerun.
+
+NEXT STEP
+Run the same V30 launcher from the gatefixed code package. The new default output root is v2_gatefix. If corrected TRAIN still fails, stop there and upload the new configs/logs/provenance; do not tune B/M or DRC/PCWER knobs.
