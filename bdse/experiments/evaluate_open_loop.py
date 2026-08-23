@@ -764,8 +764,14 @@ def main() -> None:
         planner_latencies_ms.append(float(planner_latency_ms))
         qdiag = runtime_query_diagnostics(pred, sel.selected)
         qdiag["planner_latency_ms"] = float(planner_latency_ms)
-        qdiag["configured_decision_budget_atom_count"] = float(
-            max(1, int((cfg.get("evidence", {}) or {}).get("budget", 1)))
+        upstream_budget = float(max(1, int((cfg.get("evidence", {}) or {}).get("budget", 1))))
+        qdiag["upstream_configured_decision_budget_atom_count"] = upstream_budget
+        configured_retained_budget = float(
+            qdiag.get("configured_decision_budget_atom_count", upstream_budget)
+        )
+        qdiag["configured_decision_budget_atom_count"] = configured_retained_budget
+        qdiag["retained_interface_atom_budget_pass"] = float(
+            len(sel.selected) <= configured_retained_budget + 1.0e-8
         )
         tour_diag = getattr(tour, "diagnostics", {}) or {}
         qdiag.update({k: v for k, v in tour_diag.items() if k in {"normalized_margins", "margin_scale", "epsilon_cal", "pair_conditioned", "selected_action_safety_flag", "avoidable_selected_action_safety_flag", "all_actions_safety_flagged", "all_flagged_risk_guard_applied", "all_flagged_hard_risk_regret", "hard_filter_applied", "safe_action_available"}})

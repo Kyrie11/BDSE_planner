@@ -1,0 +1,23 @@
+V64.3.26 EAF-ICER-SARC changed files relative to verified V64.3.25 source
+=======================================================================
+MODIFIED	ALGORITHM_CHANGELOG.md
+ADDED	NEXT_COMMANDS_V64_3_26_EAF_ICER_SARC.txt
+MODIFIED	RUN_V64_3_25_EAF_ICER_DRC_SCREEN_2GPU.sh
+ADDED	RUN_V64_3_26_EAF_ICER_SARC_SCREEN_2GPU.sh
+ADDED	V64_3_25_DOUBLE_FRESH_SCREEN_RECOVERED.json
+ADDED	V64_3_25_DRC_POSTMORTEM_AND_V64_3_26_SARC.md
+ADDED	V64_3_25_SPLIT_A_SCREEN_RECOVERED.json
+ADDED	V64_3_25_SPLIT_B_SCREEN_RECOVERED.json
+ADDED	V64_3_25_UPLOADED_RESULT_CAUSAL_AUDIT.json
+ADDED	V64_3_26_ENGINEERING_VALIDATION.txt
+ADDED	bdse/configs/v64_3_26_design_exclude_v64_3_25_screen_tokens.txt
+MODIFIED	bdse/experiments/evaluate_open_loop.py
+MODIFIED	bdse/planner/nuplan_planner.py
+MODIFIED	bdse/planner/tournament.py
+ADDED	bdse/tests/test_v64_3_26_eaf_icer_sarc.py
+ADDED	bdse/tools/check_v64_3_26_eaf_icer_sarc_contract.py
+ADDED	bdse/tools/check_v64_3_26_eaf_icer_sarc_screen.py
+ADDED	bdse/tools/check_v64_3_26_eaf_icer_sarc_split.py
+ADDED	bdse/tools/fit_v64_3_26_eaf_icer_sarc.py
+
+TOTAL_CHANGED=19

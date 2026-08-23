@@ -9075,376 +9075,252 @@ If V29 passes double-fresh and later independent full validation, the more defen
 
 The novelty is **not** greedy selection, B=16, or a Gaussian/KNN head. It is the decomposition of bounded planning into (i) fixed-budget decision-sufficient frontier evidence, (ii) deployment-admissible extremal intervention, and (iii) monotone safety/preservation contracts, with causal ablations that distinguish allocation, proposal coverage, and tail observability.
 
----
+# V64.3.29 uploaded untouched result audit -> V64.3.30 EAF-ICER-FBIC
 
-# V64.3.29 uploaded fresh audit -> V64.3.30 EAF-ICER-PCWER
+## 1. V29 execution status: valid mechanism failure, not an engineering/runtime failure
 
-## 1. V64.3.29 FCR decision: STOP as a deployable novelty mechanism
+The uploaded V64.3.29 package is complete enough for causal attribution. The TRAIN gate passes, the frozen 3000-scene provenance is reproduced, the FCR selector is active, and both untouched 500-scene blocks were executed with paired arms. The official double-fresh screen correctly returns FAIL. No traceback, CUDA/OOM, truncated result, or provenance mismatch explains the stop.
 
-The uploaded V64.3.29 `RUN_V64_3_29_EAF_ICER_FCR_SCREEN_2GPU.sh` outputs were audited from the paired configs/logs/provenance archives.  The deterministic same-budget Frontier-Contrast Rebinding implementation itself is active and contract-correct, but the fresh mechanism claim fails independently.
+TRAIN itself looked mechanism-positive but is development evidence only:
 
-- TRAIN: FCR accepts 2339/3000 scenes (77.97%), all accepted contracts valid, mean complete-frontier L_inf reduction 0.04409 and RMS reduction 0.03525.
-- Fresh A: 361/500 accepted (72.2%), contracts valid; direct positive-opportunity capture drops from V25 11.66% to FCR+DRC 4.91%.  The selected tail is much safer on this split, but all-flagged final identity is only 0.90 (2/20 scenes changed), so preservation fails.
-- Fresh B: 367/500 accepted (73.4%), contracts valid; direct capture drops from 9.32% to 5.00%; selected worst teacher improvement deteriorates from -0.6051 to -0.9898, selected regret delta sum becomes +51,696, and endpoint non-inferiority fails.
-- Double-fresh promotion therefore fails.  Pooling A/B is forbidden.
+- FCR accepted `2339 / 3000 = 77.97%` of TRAIN scenes;
+- every accepted rebind satisfied the encoded local contract;
+- accepted complete-frontier error improved by mean `L_inf=0.04409` and RMS `0.03525`;
+- the unchanged aggregate DRC recipe re-fit on the FCR representation passed `5/5` scene folds, selected `107` edges, and had teacher-improvement sum `+11.763551`.
 
-The strongest scientific conclusion is not that the FCR implementation failed.  It is that **strictly improving a complete full-M anchor/challenger frontier under the same B does not imply a more decision-sufficient representation for downstream incumbent-contrastive extremal recovery**.
+This did **not** reproduce on untouched A/B, so the TRAIN fit must not be promoted into a paper claim.
 
-### Gate decomposition after FCR
+## 2. FCR optimizes its own proxy, but that proxy is not the missing decision-sufficiency mediator
 
-Using the exact direct-admissible teacher-positive opportunity definition:
+FCR is not failing because it is dormant or because the greedy optimizer cannot reduce its objective.
 
-- A V25: `163 -> support 115 -> scalar 77 -> support+scalar 68 -> DRC+ 20 -> selected+ 19`.
-- A FCR: `163 -> 122 -> 83 -> 78 -> 9 -> 8`.
-- B V25: `161 -> 117 -> 66 -> 57 -> 15 -> 15`.
-- B FCR: `160 -> 120 -> 71 -> 66 -> 10 -> 8`.
+| untouched block | FCR accepted | contract pass | mean accepted L_inf reduction | mean RMS reduction |
+|---|---:|---:|---:|---:|
+| A | 361/500 = 72.2% | 100% | 0.03075 | 0.02206 |
+| B | 367/500 = 73.4% | 100% | 0.03275 | 0.02359 |
 
-Support/scalar visibility is stable-to-improved.  The new collapse occurs at the aggregate DRC-positive gate.  Candidate-level DRC discrimination is also weak and representation-sensitive (A approximate DRC AUC 0.6097 -> 0.5855; B 0.6026 -> 0.6019).
+However the pure interface control shows almost no recovery gain:
 
-### Contract-gap counterexamples
+| block | V20 direct positive-opportunity capture | FCR-V20 capture | absolute gain |
+|---|---:|---:|---:|
+| A | 34.97% | 36.20% | +1.23 pp |
+| B | 31.68% | 31.88% | +0.20 pp |
 
-- B `66c3346eaa795dd1`: incumbent 24, selected-local/full-M anchor 28.  V25 action 1 has regret 0.828.  FCR is accepted with 12 changed atoms and full-M exact target still 28, but action-23 DRC moves from -0.00103 to +0.01860 and FCR+DRC selects action 23 with regret 19,796.
-- B `444554532a375e54`: incumbent 13, anchor/full-M target 18.  V25 preserves incumbent (regret 1.743).  FCR is accepted with 16 changed atoms; action-3 DRC moves from -0.32068 to +0.10016 and final regret becomes 19,789.
-- B `dec739cd22e05639`: the pre-existing V25 catastrophe persists (action 0, regret 51,706; DRC +0.0881 -> +0.1007).
-- A all-flagged `8fc79d869dcb594b` and `1b1a8a5fd2205cfd`: FCR is accepted and changes the final raw identity despite ICER structural delegation.  Future evidence rebinding must be disabled in the all-flagged structural domain.
+Both are below the pre-registered +3 pp capacity/allocation signal. Therefore:
 
-The V29 exact downstream target contract is therefore diagnosed as an **anchor/pre-recovery contract**, not a final ICER recovery-semantic contract.  Preserving that target is insufficient.
+> **better global full-M anchor-frontier compression is not sufficient evidence of better recovery decision sufficiency.**
 
-## 2. V29 TRAIN-gate protocol correction
+Do not tune FCR greedy order, L_inf/RMS weights, acceptance epsilon, or exact-target tolerance. The scientific target, not optimizer strength, is the problem.
 
-V29's old TRAIN gate passes with 107 selected proposals and teacher-improvement sum +11.7636, but its five fold worst outcomes are approximately:
+## 3. FCR changes the representation in a way that destabilizes DRC on fresh data
 
-`[-0.99063, -0.98053, -0.97861, -0.000455, -0.00823]`.
+The direct teacher-positive opportunity decomposition localizes the main collapse.
 
-Thus three TRAIN folds already expose catastrophic outcomes even though the old count/sum path gate passes.  Starting V64.3.30, a changed-representation DRC TRAIN gate must require **all five held-out folds to be catastrophe-free (`worst teacher improvement > -0.5`) before any fresh scene is spent**.
+### Split A
 
-## 3. Bottleneck update after V29
+- V25/AOCC: `163 -> support 115 -> scalar 77 -> support+scalar 68 -> +DRC 20 -> selected positive 19`;
+- FCR: `163 -> 122 -> 83 -> 78 -> 9 -> 8`.
 
-V28's dominant bottleneck statement remains directionally correct but is refined to:
+FCR therefore **improves** the number of teacher-positive opportunities that have support/scalar signal, but DRC-positive scenes collapse `20 -> 9`. Even more diagnostic, the 19 V25 positive captures and 8 FCR positive captures have **zero common captured scenes**: 19 are lost and 8 entirely different ones are gained.
 
-> **safe recovery coverage under operator-/proposal-conditioned decision-evidence transmission, with a representation-sensitive outcome-risk confirmation stage under a fixed planner-interface budget.**
+### Split B
 
-Coverage is still the dominant endpoint gap relative to historical V20; tail risk remains a binding safety constraint and is explicitly not solved.
+- V25/AOCC: `161 -> 117 -> 66 -> 57 -> 15 -> 15`;
+- FCR: `160 -> 120 -> 71 -> 66 -> 10 -> 8`;
+- capture overlap: 6 common, 9 V25 captures lost, only 2 new FCR captures gained.
 
-B=16 and M=24 remain frozen for the next mechanism test.  V29 proves that substantial global compression improvement is possible at B=16; it does **not** prove that B=16 is intrinsically insufficient.  A capacity diagnostic may only be opened after the fixed-B operator-conditioned test is resolved and must not be mixed into the V30 promotion experiment.
+Thus the fresh failure is not primarily a support/scalar starvation problem. FCR changes the aggregate feature geometry/proposal identity enough that the unchanged DRC family, even after distribution-consistent re-estimation on the same 3000 TRAIN scenes, does not maintain its fresh decision boundary.
 
-## 4. New V64.3.30 mechanism: Proposal-Conditioned Witness Evidence Rebinding (PCWER)
+Current interpretation:
 
-V30 does not tune FCR, PTMC, DRC thresholds, acquisition heads, B, or M.
+> **representation-conditioned recovery reliability is unstable; global frontier fidelity and local replacement reliability are not interchangeable objectives.**
 
-### Stage A: unique risk-free proposal
+## 4. Tail evidence is split-unstable: FCR can remove one catastrophe and create two new ones
 
-On the original AOCC B-set, run the frozen deployment-admissible ICER support + scalar incumbent-dominance operator with outcome/DRC risk disabled.  This returns at most one direct tentative proposal `q`.  No proposal means no PCWER intervention.
+On split A, FCR+DRC improves the selected direct tail dramatically:
 
-### Stage B: same-budget proposal-conditioned evidence
+- V25: 28 direct replacements, 19 positive, sum `-0.914731`, worst `-0.929157`, NegRMS `0.175594`;
+- FCR: 18 replacements, 8 positive, sum `+2.341384`, worst `-0.022551`, NegRMS `0.005319`.
 
-Within the already queried Top-M=24 and retaining the exact same AOCC cardinality/B=16, construct a new evidence subset that lexicographically minimizes error only for the downstream witnesses consumed by this proposal:
+But this is **not reproducible safety evidence**. On split B:
 
-1. proposal vs selected-local anchor margin;
-2. proposal vs frozen incumbent margin;
-3. corresponding EAF attribution-scale witnesses;
-4. margin RMS then attribution RMS as deterministic tie-break dimensions.
+- V25: 25 direct replacements, 15 positive, sum `+0.383170`, worst `-0.605138`, NegRMS `0.121033`;
+- FCR: 21 replacements, 9 positive, sum `-2.581144`, worst `-0.989800`, NegRMS `0.332721`.
 
-No validation-selected weighting is introduced.
+FCR introduces two new approximately `-0.99` catastrophic direct replacements on B:
 
-### Hard acceptance contract
+- token `444554532a375e54`: incumbent 13 -> action 3, teacher improvement `-0.989379`, FCR changed all `16/16` retained atoms, candidate DRC `+0.100162`;
+- token `66c3346eaa795dd1`: incumbent 24 -> action 23, teacher improvement `-0.989800`, FCR changed `12/16` atoms, candidate DRC `+0.018597`.
 
-The rebind is accepted only when:
+The pre-existing V25 catastrophe `dec739cd22e05639` (incumbent 7 -> action 0, `-0.605138`) also remains under FCR. By contrast, the V25 A catastrophe `eca13b6114895ee4` (`-0.929157`) is removed by FCR.
 
-- same selected cardinality and budget;
-- atoms are only from the already queried Top-M;
-- proposal-conditioned witness error strictly improves;
-- the exact risk-free proposal identity remains `q`;
-- incumbent identity and deployment admissibility remain unchanged;
-- recovery anchor identity remains unchanged;
-- all-flagged structural domains are bypassed entirely.
+This A/B sign reversal is strong evidence against continuing the same global-rebinding mechanism. Do not rescue it with tail thresholds or a second confirmation head.
 
-Otherwise return the original AOCC B-set.
+## 5. V29 also exposes a structural-contract gap in the FCR acceptance definition
 
-### Stage C: same-proposal-only DRC
+Split A contains 20 all-flagged structural-domain scenes. The ICER diagnostic reports delegation on all 20, but FCR final identity versus raw is only `0.90`: two structural scenes change final action:
 
-After an accepted rebind, the final DRC may only confirm/veto the same proposal `q`.  A failed support, dominance, DRC, or optional confirmation condition returns directly to the incumbent.  It cannot re-rank alternatives and cannot fall through to a second-best candidate.
+- `8fc79d869dcb594b`: raw action 0 -> FCR final action 9, FCR accepted and changed 12 atoms;
+- `1b1a8a5fd2205cfd`: raw action 3 -> FCR final action 10, FCR accepted and changed 12 atoms.
 
-This preserves the useful V28 structural distinction between proposal generation and proposal confirmation while moving the evidence objective to the downstream operator exposed by the V29 failure.
+The code-level reason is conceptual: FCR's exact acceptance target audits an intermediate full-M tournament target, not the complete final recovery + structural-domain operator. An evidence rebind can therefore pass the encoded exact-target check yet still perturb the final all-flagged path through changed tournament scores/incumbent context.
 
-## 5. New causal control: proposal-lock-only DRC
+This is a **logic-contract error**, not a Python/runtime error. V30 fixes it structurally by making any capacity intervention a strict no-op in the all-flagged domain. Do not attempt to patch FCR by adding another target-preservation term; the main FCR objective is already falsified by the pure-control result.
 
-V30 adds a separate control arm with **no evidence rebinding**.  It generates the same risk-free unique proposal on the original AOCC B-set and applies the same-proposal-only DRC semantics using the frozen V25 DRC memory.
+## 6. Evidence chain through V29
 
-This separates two causal changes:
+The cumulative causal chain is now:
 
-- proposal-lock/no-fallback operator semantics;
-- PCWER evidence rebinding.
+1. **V64.3.9--.12**: semantics-correct acquisition/proposal-loss work becomes terminally exhausted; selector/acquisition optimization is not allowed to continue indefinitely.
+2. **V64.3.13+ EAF pivot**: the major bottleneck moves to selected evidence -> decisive value/frontier, establishing EAF/exact attribution as useful planner instrumentation.
+3. **V24**: full attribution-spectrum KNN geometry fragments neighborhoods and re-admits catastrophic edges; aggregate downside is the only 5/5 TRAIN-safe risk statistic. Keep exact attribution as instrumentation, reject the sorted/L1 full-spectrum regret geometry.
+4. **V25**: aggregate DRC can generate high-precision useful replacements but has severe split-dependent catastrophic tails on untouched data.
+5. **V26/V27**: semantic-family/local-type regret geometries do not solve reliability; V27 high-retention local confirmation effectively prefers no veto.
+6. **V28**: global type-tail PTMC looks strong on TRAIN but on new untouched A/B vetoes 0 harmful and 3 beneficial proposals. Tail-classifier iteration is falsified; endpoint bottleneck moves to safe recovery coverage.
+7. **V29**: same-B FCR materially improves its own complete-frontier compression proxy yet barely improves pure V20 recovery and makes DRC coverage/tail less stable. Therefore global full-frontier reconstruction fidelity is **not** the missing decision-sufficiency target.
 
-PCWER's primary fresh coverage claim is therefore measured against this proposal-lock-only control, not only against V25.
+The remaining high-value ambiguity is now much narrower:
 
-## 6. V30 experimental protocol
+> **At the direct incumbent->alternative intervention boundary, is useful candidate-specific signal missing because B=16 discards information that already exists in the queried M=24 bank, or because the downstream recovery semantics/operator cannot use that information reliably?**
 
-- Frozen TRAIN manifest remains the exact previous 3000 scenes and SHA `b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4`.
-- Main B=16, M=24; DRC K={32,64}, downside multiplier=1, decision boundary=0 remain fixed.
-- V29's 1000 fresh scenes are added to the previous 7700 design exclusions.  V30 design exclusion is exactly 8700 unique inspected validation tokens.
-- New untouched 1000 scenes are split A/B=500/500 and judged independently.
-- Six arms: raw; V20; historical V25 aggregate DRC; proposal-lock-only DRC; PCWER-V20; PCWER+proposal-locked DRC main.
-- TRAIN must pass both mechanism contracts and proposal-locked 5-fold DRC path + catastrophe-free gates before selecting fresh tokens.
-- Fresh main must gain >=3 percentage points direct positive-opportunity capture and >=5 positive direct replacements over proposal-lock-only DRC on **each** split, while not falling below historical V25 coverage.
-- Main selected tail must be non-inferior to both lock-only and V25 controls, with no selected teacher improvement <= -0.5.
-- Learned admissible incumbent->anchor remains exactly zero.
-- all-flagged final identity vs raw must be exactly 1.0.
-- endpoint must be non-inferior to V25 on each split; at least one split must show a strict endpoint signal.
-- No pooled rescue.  Passing A/B authorizes exactly one frozen independent full-validation reproduction; test/closed-loop remain forbidden.
+That ambiguity should be resolved before inventing another selector or classifier.
 
-## 7. New terminal no-repeat constraints after V29
+## 7. Dominant bottleneck after V29
 
-In addition to all previous constraints, do **not**:
+The V28 phrase "safe recovery coverage under fixed-budget decision-evidence transmission" remains directionally correct but should be tightened to:
 
-- create FCR-v2/v3 or tune global full-frontier L_inf/RMS weights/acceptance thresholds;
-- interpret global complete-frontier compression error as a recovery-sufficiency objective without new causal evidence;
-- tune DRC K, zero boundary, downside multiplier, support/dominance thresholds, or learned head capacity to rescue V30;
-- re-enable PTMC/type-KNN variants or tune their thresholds/type weights/catastrophic cutoff;
-- use B/M changes inside the V30 promotion experiment;
-- permit evidence rebinding inside the all-flagged structural domain;
-- permit an accepted changed evidence view to re-rank into a different recovery proposal or second-best fallback;
-- restore learned incumbent->anchor intervention;
-- repeat DACC/beam/swap or V64.3.8-.12 learned acquisition branches;
-- use action blacklists, KNN radius/OOD patches, transition geometry, signed-profile weighting, failed-view AND stacking, or naive concatenated classifiers as post-hoc rescue;
-- pool A and B.
+> **candidate-/intervention-conditioned decision sufficiency at the direct incumbent-replacement boundary, under a bounded auditable interface and a hard catastrophic-tail constraint.**
 
-If PCWER improves its proposal-conditioned witness fidelity but does not improve safe confirmation coverage over the proposal-lock-only control, stop PCWER objective tuning.  The next scientific branch is a controlled observability/capacity diagnostic or a new proposal-conditioned risk-sufficient statistic, not another global subset objective.
+Equivalently:
 
-## 8. Engineering status at delivery
+> **the missing signal is not global frontier reconstruction; it is the evidence/reliability needed to decide one concrete incumbent->challenger intervention.**
 
-- Python compile/compileall: PASS for V30 files/repository.
-- V13--V30 targeted regression: **114/114 PASS**.
-- V30 launcher `bash -n`: PASS.
-- Full repository: **443 PASS / 1 inherited packaging FAIL / 36 warnings**.  The only failure is `test_v64_2_gatefix.py` reading historical root `V64_SAQA_BCC_NEXT_COMMANDS.sh`, which is absent from the user-uploaded V29 `bdse.zip`.  The changelog itself records an earlier archive-omission episode for this same historical file.  No fabricated replacement/stub is introduced because the verified historical 32,559-byte script is not present in the supplied artifacts.
-- The 36 warnings are the pre-existing PyTorch Transformer `nested_tensor/norm_first` class; no new V30 warning class was observed.
-- Local environment lacks the server nuPlan GPU cache/checkpoint, so no V30 effectiveness result is fabricated.
+Whether the first-order missing mediator is literal retained capacity or the recovery consumer is deliberately left unresolved until V30.
 
----
+## 8. Paper-mainline tightening after V29
 
-# V64.3.30 engineering gatefix after uploaded TRAIN-only run (no fresh spent)
+The current PTMC-centric manuscript cannot be the final submission in its present form: V28 has already falsified the deployable PTMC claim, and V29 further falsifies the stronger assumption that complete full-M frontier compression is itself a useful decision-sufficiency objective.
 
-## Uploaded-run status
+Keep as the stable paper backbone:
 
-The uploaded V30 output is **not a scientific mechanism result**.  The launcher correctly stopped before fresh selection at `pcwer_v30_fit`; therefore none of the new V30 A/B=500/500 validation scenes were selected or evaluated and the frozen 8700 validation exclusion remains the complete inspected set.
+- a fixed/bounded, auditable planner evidence interface as the problem setting;
+- EAF as a complete deployment-admissible anchor/challenger decision instrumentation with exact selected-evidence attribution;
+- incumbent-contrastive extremal recovery;
+- asymmetric admissible-incumbent preservation;
+- structural-domain separation;
+- no-fallback / monotone intervention containment;
+- independent fresh fail-closed evaluation.
 
-Historical/provenance controls before the stop were valid:
+Remove from the novelty headline unless future independent evidence revives them:
 
-- frozen TRAIN identity: 3000 unique scenes, unchanged SHA;
-- historical V25 TRAIN reproduction: 75,133 frontier rows, 1,455 replacement edges, 310 replacement scenes, 5/5 path-safe folds, 71 selected, teacher-improvement sum +5.527642;
-- PCWER TRAIN evaluation completed for all 3000 paired scenes;
-- PCWER selector instrumentation was active: 327 direct-proposal attempts and 126 accepted evidence rebinds; accepted budget/cardinality/proposal/incumbent/anchor contracts were valid.
+- PTMC/Gaussian/type classifier;
+- FCR/global full-frontier compression as the definition of decision sufficiency;
+- literal `B=16` as a contribution;
+- any particular KNN/threshold/greedy algorithm.
 
-The reported proposal-locked DRC `selected_count=0` is an **engineering artifact**, not a falsification of PCWER.
+The strongest current CCF-A-oriented research statement is a **problem/mechanism thesis**, not yet a validated final method:
 
-## Root-cause engineering defects
+> Under a bounded auditable planner interface, decision sufficiency must be defined at the intervention boundary: retain/expose the evidence needed to support or reject a concrete deployment-admissible incumbent replacement, while structurally preventing learned recovery from opening new unsafe paths.
 
-Three coupled proposal-lock plumbing defects were found.
+The next experiment determines whether the final method should implement adaptive candidate-conditioned evidence completion or instead redesign the candidate-conditioned recovery semantics on the existing bounded interface.
 
-1. **Fitter provenance-field loss.** `fit_v64_3_30_eaf_icer_pcwer.py` called the V25 memory-efficient frontier loader.  That loader intentionally does not retain `icer_selected_action`, while the V30 `_proposal_map()` attempted to read that dropped field.  Every proposal therefore became `-1`, forcing all five cross-fit folds to select zero replacements.
+# V64.3.30 EAF-ICER-FBIC
 
-2. **Post-proposal fail-closed path dropped the proposal lock.**  After a valid risk-free proposal `q` had already been generated, PCWER failure modes such as no strict witness improvement or candidate proposal/anchor/incumbent mismatch correctly restored the original AOCC B-set but incorrectly returned `proposal_lock=False`.  This reopened candidate generation in downstream DRC and contradicted the V30 same-proposal-only contract.
+Full name: **Evidence-Attributed Incumbent-Contrastive Extremal Recovery with Full-Bank Interface Capacity Ceiling.**
 
-3. **No-proposal path did not explicitly abstain.**  With PCWER enabled but no valid risk-free direct proposal, `recovery_proposal_action=None` caused final ICER/DRC to fall back to its ordinary candidate search.  This violated the intended `unique proposal -> confirmation/veto` decomposition: absence of a generated proposal must not allow the confirmation stage to create one.
+V30 is intentionally a **single-point causal capacity diagnostic**, not the final paper algorithm and not a broad budget sweep.
 
-## Gatefix
+## 9. V30 causal intervention
 
-The scientific V30 mechanism and all frozen experimental knobs remain unchanged: B=16, M=24, DRC K={32,64}, downside multiplier=1, zero decision boundary, frozen 3000 TRAIN, 8700 validation exclusion, fresh hash seed, and all promotion thresholds.
+Freeze the entire upstream V20/V25 interface construction:
 
-Engineering changes only:
+- global `evidence.budget = 16` remains unchanged;
+- fallback budget stage remains `[16]`;
+- proposal Top-M remains `M=24`;
+- historical AOCC is still constructed at B=16;
+- acquisition/model/EAF/support/scalar/structural heads remain frozen;
+- no FCR;
+- no teacher label at runtime;
+- no new evidence/model query.
 
-- the fitter now builds its proposal map from the authoritative per-scene selector diagnostics (`proposal_conditioned_witness_rebinding_*`) rather than reconstructing it from a lossy frontier-edge loader;
-- once a valid baseline proposal exists, later rebinding failures fail closed on the **evidence subset only** and retain the original proposal lock for downstream confirmation;
-- while PCWER is enabled, `recovery_proposal_action=-1` is an explicit locked-abstention sentinel until a valid proposal is supplied; downstream DRC therefore cannot generate a replacement when the risk-free generator produced none;
-- the TRAIN audit now records `proposal_lock_count` and validates that the runtime proposal-lock map is at least consistent with all accepted rebinds;
-- the launcher default output root is changed to `outputs_v64_3_30_eaf_icer_pcwer_screen_2gpu_v2_gatefix` so the repaired run cannot mix with the stopped V1 artifacts.
+Only after the frozen B16 selector completes, in the **non-structural safe domain**, FBIC exposes the complete set of already-queried decision Top-M atoms to downstream EAF/ICER, with a separate diagnostic retained-interface ceiling `interface_budget=24`.
 
-## Interpretation discipline
+This distinction is critical: the global `evidence.budget` must **not** be changed to 24, because doing so would also alter upstream selection/fallback semantics and confound acquisition with retained capacity.
 
-An offline replay of the repaired fitter on the **old, bug-generated** TRAIN provenance is useful only as an engineering sanity check: it no longer produces zero selection, confirming the root cause.  It is not a valid V30 mechanism verdict because fixing the runtime proposal-lock/abstention semantics changes the generated TRAIN provenance and some DRC evidence features.  A clean V30 rerun is therefore mandatory before any algorithm-level attribution.
+## 10. FBIC hard capacity-only contract
 
-No fresh result from the stopped V1 run may be inferred, pooled, or used for tuning.  If the repaired V30 TRAIN gate still fails, stop before fresh exactly as pre-registered and analyze that corrected TRAIN failure rather than tuning B/M, witness weights, DRC K/boundary, or adding a classifier.
+FBIC applies only when all conditions hold:
 
----
+- the baseline B16 selection is valid and unique;
+- the reference bank is the already-queried active decision Top-M only;
+- every baseline selected atom is contained in that reference bank (capacity expansion may add atoms but may never remove/reallocate a B16 atom);
+- the complete bank is feasible under the separate interface ceiling 24;
+- the reference does not exceed the expected M=24 bank;
+- there is a nontrivial cardinality expansion;
+- the scene is not in the all-flagged structural domain.
 
-# V64.3.30 corrected TRAIN result -> V64.3.31 EAF-ICER-OMCER
+Any failure returns the exact frozen B16 selection. Applied FBIC therefore satisfies:
 
-## Corrected V30 result is attributable, but TRAIN-only
+`S_B16 subset S_FBIC subseteq queried_TopM`, no extra query, no allocation objective.
 
-The repaired V30 launcher run is engineering-valid. The previous `selected_count=0` fitter artifact is gone: the authoritative selector provenance contains 327 proposal locks and the corrected fitter selects 38 proposals. Raw row/edge SHA values match the fitter report, the exact frozen 3000-scene manifest is preserved, and historical V25 is reproduced exactly (75,133 frontier rows, 1,455 replacement edges, 310 replacement scenes, 71 selected, +5.5276423258 teacher-improvement sum).
+The all-flagged domain is a forced no-op, directly preventing the V29 structural leakage.
 
-The run stops at the pre-registered TRAIN gate before `fresh_selection`; therefore **no new validation tokens were consumed** and the design exclusion remains exactly 8,700 inspected validation tokens.
+Engineering-audit correction before release: the generic evaluator historically overwrote `configured_decision_budget_atom_count` from global `evidence.budget`. Under FBIC that would incorrectly label a valid B24 retained-interface scene as a budget violation because the upstream budget intentionally remains B16. V30 therefore records the two contracts separately: `upstream_configured_decision_budget_atom_count=16`, `configured_decision_budget_atom_count=24` for the retained interface, and recomputes `retained_interface_atom_budget_pass` against the latter. The split checker hard-requires all three accounting conditions, so this logging bug cannot silently invalidate or falsely fail the capacity experiment.
 
-Corrected PCWER-DRC TRAIN cross-fit:
+## 11. V30 arms and branch logic
 
-- PCWER proposal attempts: 327;
-- accepted rebindings: 126;
-- selected: 38;
-- mean positive-opportunity capture: 12.697%;
-- teacher-improvement sum: +1.001646;
-- only 2/5 full path-safe folds;
-- two selected catastrophes, worst outcomes approximately -0.99063 and -0.98936.
+Use five paired arms on each new untouched 500-scene block:
 
-No new engineering defect explains these failures. This is a legitimate V30 mechanism STOP.
+1. raw;
+2. B16 V20/AOCC;
+3. B16 V25 aggregate DRC;
+4. FBIC full-bank V20 control (pure retained-capacity mediator);
+5. FBIC full-bank + the **unchanged V25 DRC recipe**, re-estimated only on the same frozen 3000 TRAIN scenes because the representation cardinality changes.
 
-## New V30 causal conclusion: PCWER witness fidelity is not outcome-risk sufficiency
+The query bank M=24 and exact per-scene query counts must match B16 controls. The V30 checker also reports gate decomposition `opportunity -> support -> scalar -> support+scalar -> DRC -> selected` so a capacity effect cannot be hidden inside an endpoint average.
 
-A same-proposal control on the **original AOCC evidence** selects 35 proposals, teacher sum +1.99445, mean capture 12.329%, and has zero selected catastrophe (worst only about -5.36e-4). Thus the V30 same-proposal/no-second-best operator is retained as a safety invariant.
+Interpretation is pre-registered:
 
-The two PCWER catastrophes occur on accepted rebindings and are DRC sign flips for the same proposal:
+- **Pure FBIC-V20 capture gains >=3 pp on both A/B, and FBIC+DRC gains safely:** retained-interface capacity is a real mediator. Next version may design an adaptive bounded candidate-conditioned completion that approaches the full-bank signal without making B=24 the thesis.
+- **Pure FBIC-V20 gains on both A/B, but FBIC+DRC is unsafe/low coverage:** capacity exposes useful signal, while aggregate DRC is the dominant mismatched consumer. Stop selector work; redesign candidate-conditioned recovery reliability on the capacity-complete view.
+- **Pure FBIC-V20 does not reproducibly gain:** capacity-only expansion is not sufficient under frozen downstream semantics. Stop B sweeps and same-bank allocation objectives; focus on candidate-conditioned counterfactual recovery semantics/operator mismatch. This does **not** prove that M=24 contains no useful latent information; it proves that simply transmitting more of it through the current downstream semantics is not the causal solution.
 
-- `67a57ae417045162`: q=2, delta=-0.9906338, original DRC -0.070323 -> PCWER +0.030633;
-- `bb77e9686029538d`: q=20, delta=-0.9893588, original DRC -0.223642 -> PCWER +0.175645.
+No pooled rescue is allowed.
 
-Therefore V29's conclusion is strengthened:
+## 12. V30 data discipline
 
-1. better **global complete-frontier reconstruction** does not imply downstream decision sufficiency;
-2. better **proposal-conditioned proposal/anchor/incumbent witness reconstruction** still does not imply **selected-outcome risk sufficiency**.
+V29 consumed 1000 additional untouched scenes. V30 therefore freezes a new exclusion manifest equal to the previous 7700 inspected tokens union the exact V29 1000 fresh tokens:
 
-FCR and PCWER are both removed from the main V31 path. Do not build FCR-v2/PCWER-v2, tune witness weights/order/acceptance thresholds, or enlarge B/M to rescue these objectives.
+- exclusion count: **8700 unique tokens**;
+- exclusion SHA256: `d868dce298250a78ac74cc0b443eed8b6364acfbdd6daef50bacacf37ac6ff53`;
+- V30 selects another untouched 1000 and splits A/B=500/500;
+- the frozen 3000 TRAIN token manifest remains unchanged;
+- the launcher must first reproduce historical V25 `3000 / 75,133 / 1,455 / 310 / 5-of-5 / 71 / +5.527642` before any new fresh interpretation.
 
-## Dominant bottleneck narrowed again
+## 13. New no-repeat constraints after V29
 
-The exact V30 risk-free proposal population has 327 proposal scenes, of which 219 are teacher-positive and 26 have teacher improvement <= -0.5; the worst is -9.839625. There is therefore substantial recoverable positive mass together with a sparse heavy tail.
+Retain all historical no-repeat constraints. Additionally, do not:
 
-The bottleneck is now recorded as:
+- tune FCR L_inf/RMS weights, greedy order, acceptance epsilon, or target-preservation tolerance;
+- define decision sufficiency as global full-M frontier compression error without a new independent causal mediator;
+- add a tail classifier to repair FCR-created catastrophes;
+- use a same-B selector/rebinding v2 after the pure FCR-V20 control showed negligible gain;
+- change global `evidence.budget` to 24 in the V30 capacity test;
+- run a broad B={8,12,16,20,24,...} sweep before the single B16->queried-bank ceiling is interpreted;
+- permit the capacity probe to remove/reallocate any baseline B16 atom;
+- let any evidence reconfiguration act in the all-flagged structural domain;
+- interpret a B24/full-bank diagnostic win as evidence that literal B=24 is the paper contribution;
+- interpret a full-bank diagnostic failure as proof that the queried M=24 contains no latent signal; it only falsifies capacity-only transmission under the frozen consumer.
 
-> **safe extremal proposal coverage under operator-induced post-selection / winner's-curse risk mismatch**.
+## 14. V30 final engineering validation before release
 
-The current DRC memory is learned from the full support-positive/scalar-dominance-positive edge population while deployment extremizes using those same support/dominance scores. The 18-D evidence-only risk certificate does not see the selector state that made one candidate the extremal winner.
+Final local validation after the FBIC capacity/accounting hardening:
 
-This is not evidence that B=16 is the capacity bottleneck. Keep B=16/M=24 frozen for V31.
+- Python compile: **PASS**;
+- `RUN_V64_3_30_EAF_ICER_FBIC_SCREEN_2GPU.sh` shell syntax: **PASS**;
+- V29+V30 focused tests: **13/13 PASS**;
+- V13--V30 targeted regression: **115/115 PASS**;
+- repository full regression: **445/445 PASS**;
+- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
 
-## Rejected corrected-V30 TRAIN diagnostics: terminal no-repeat
-
-To localize the failure, several TRAIN-only diagnostics were run. They are **not** new candidate branches and must not be retried/tuned:
-
-- proposal-only/q-only KNN memory: support collapses, only 18 selections, precision about 61%, catastrophic failures recur;
-- scene-deduplicated one-edge-per-source-scene local memory: zero-selection collapse;
-- generic selector residual/gap/count concatenations: no reliable safe-coverage restoration;
-- evidence-only catastrophic-excess without operator state: coverage increases but a -1.7026 catastrophe appears;
-- operator-margin plus historical all-negative downside: catastrophe-free but too conservative, only 56 selections and 4/5 full folds;
-- transition geometry, signed profile, full attribution-spectrum, KNN radius/OOD, action blacklist and naive classifier rescue remain historically forbidden.
-
-Do not rescue any of the above by sweeping K, thresholds, feature weights, profile/transition combinations, or B/M.
-
-## Structural refinement: risk admissibility must precede the single extremization event
-
-V30's strict `risk-free scalar argmax q -> risk confirm/veto same q` is safe on original evidence but censors recoverable coverage: if the scalar-best q is risky, no-fallback preserves the incumbent even if another candidate could be safe and beneficial.
-
-V31 keeps the **no rerank/no second-best fallback invariant after proposal formation**, but moves risk into candidate admissibility **before proposal formation**:
-
-1. deployment-admissible support/scalar-positive alternatives;
-2. operator-aligned risk certificate evaluated for every alternative;
-3. one extremization over the risk-admissible set;
-4. after that one proposal exists, no independent mechanism may rerank into a different alternative.
-
-This is not post-veto fallback because there is only one proposal-selection event.
-
-A fixed TRAIN placement control with the same new certificate gives:
-
-- post-extremal same-q confirmation: 43 selected, +4.1616 teacher sum, 14.78% mean capture, zero catastrophe, 4/5 full folds;
-- **pre-extremal risk admissibility**: 80 selected, +8.7537, 26.46% capture, zero catastrophe, 5/5 folds.
-
-## V64.3.31 algorithm: Operator-Margin Catastrophic-Excess Regret Certification (OMCER)
-
-### Runtime representation
-
-Return to the original AOCC B-set. Disable/remove FCR and PCWER from the main arm. Keep:
-
-- retained evidence budget B=16;
-- proposal Top-M=24;
-- frozen EAF complete deployment-admissible frontier;
-- frozen support and scalar-dominance heads;
-- preserve admissible incumbent;
-- all-flagged structural delegation;
-- no learned incumbent->anchor intervention.
-
-### Operator conditioning
-
-Append exactly one already-computed selector statistic to the historical 18-D aggregate evidence risk vector:
-
-`operator_margin = min(support_logit, scalar_dominance_logit)`.
-
-It is the weakest-link signed distance to the existing joint eligibility boundary `support>0 AND scalar_dominance>0`. It adds no evidence query, no learned head, no validation-selected weight and no new decision threshold.
-
-### Catastrophic-excess certificate
-
-Keep the full 1,455-edge TRAIN memory, inverse-distance local estimation, K={32,64}, equal feature metric weights, downside multiplier=1 and runtime zero boundary.
-
-Reuse the already frozen catastrophic contract `tau_cat=-0.5`; for local outcome y define:
-
-`e = min(y - tau_cat, 0)`.
-
-At each K:
-
-`certificate_K = local_mean - RMS_weighted(catastrophic_excess)`.
-
-Runtime risk score is the minimum over K=32/64. This avoids treating tiny non-catastrophic negative outcomes as catastrophic downside while still penalizing local support below the exact pre-existing tail boundary.
-
-### Frozen TRAIN 2x2 evidence
-
-- 18D + historical downside: 71 selections, +5.527642, 21.10% capture, one -0.5458 catastrophe;
-- 18D + catastrophic-excess: 94, +4.3720, 28.41% capture, one -1.7026 catastrophe;
-- 19D operator-margin + historical downside: 56, +6.1351, 17.64% capture, zero catastrophe but only 4/5 full folds;
-- **19D operator-margin + catastrophic-excess OMCER**: **80**, **+8.7537**, **26.46%**, **zero catastrophe**, **5/5 full folds**.
-
-The two factors are complementary on frozen TRAIN. This only licenses the fresh test; it is not a validated paper claim.
-
-## Updated candidate mechanism chain
-
-Replace the V30 candidate chain
-
-`bounded evidence interface -> attributed complete frontier -> unique proposal -> proposal-conditioned witness compression -> same-proposal downside confirmation -> incumbent preservation -> structural guard`
-
-with the tighter V31 candidate:
-
-> **bounded evidence interface -> attributed deployment-admissible complete frontier -> frozen support/scalar eligibility -> operator-conditioned catastrophic-tail risk admissibility -> single incumbent-contrastive extremization -> incumbent-default monotone intervention -> structural deployment guard**.
-
-`proposal-conditioned witness compression` is deleted. Post-extremal DRC confirmation is no longer the primary risk stage. No-fallback remains a post-proposal structural invariant.
-
-## V31 experiment protocol
-
-TRAIN:
-
-- exact frozen 3000 manifest / historical fold seed;
-- exact V25 reproduction required;
-- 2x2 diagnostics remain TRAIN-only;
-- OMCER must be 5/5 path-safe + catastrophe-free;
-- >=64 selections, >=5 selections above V25, >=+3pp mean capture over V25, nonnegative teacher sum, negative RMS noninferior;
-- TRAIN fail stops before fresh and forbids K/-0.5/multiplier/zero/operator-margin/B/M tuning.
-
-Fresh:
-
-- exclusion remains exactly 8700 because corrected V30 spent no fresh scenes;
-- new hash seed selects untouched 1000, A/B=500/500;
-- five arms: raw, V20, V25 aggregate-downside, V30 proposal-lock-only DRC, V31 OMCER;
-- A and B each independently require instrumentation/structural/incumbent invariants;
-- no selected teacher improvement <= -0.5;
-- direct replacement path count >=8 and regret-delta sum <=0;
-- OMCER direct positive-opportunity capture >= V25 +3pp and >=5 extra positive replacements;
-- OMCER capture >= lock-only +3pp and >=5 extra positives;
-- selected tail noninferior to both V25 and lock-only;
-- endpoint noninferior; at least one block must show strict endpoint signal before independent full-val reproduction;
-- no pooled rescue.
-
-Passing double-fresh licenses one independent full-validation reproduction only. Test/closed-loop remain forbidden.
-
-## V31 terminal no-repeat conditions
-
-If V31 tail fails, stop OMCER. Do not tune K, `-0.5`, multiplier, zero boundary, operator-margin transform/weight, B or M.
-
-If tail is safe but coverage gain fails, do not feature-search additional selector context. Audit proposal-generation semantics or run a controlled observability/capacity diagnostic.
-
-If mechanism succeeds but endpoint fails, audit final-guard mediation before changing the risk certificate.
-
-All previous prohibitions remain: PTMC/type-KNN, FCR, PCWER, learned incumbent->anchor, signed-profile/transition/full-attribution rescue, action blacklists, KNN radius/OOD, DACC/beam/swap, V64.3.8-.12 acquisition branches, and pooled A+B rescue.
-
-## Engineering validation
-
-- V31 fitter reproduces the frozen TRAIN 2x2 exactly.
-- V31 config/memory hard contract: PASS.
-- V13--V31 targeted tests: **122/122 PASS**.
-- full repository: **451 PASS / 1 inherited packaging FAIL / 36 warnings**; the sole failure is the unchanged missing historical root `V64_SAQA_BCC_NEXT_COMMANDS.sh` test fixture.
-- V31 launcher `bash -n`: PASS.
-- no local fresh result is fabricated.
+A final audit found and fixed one instrumentation-only bug before packaging: generic open-loop/train evaluation previously overwrote the actual retained-interface ceiling from global `evidence.budget`. Under the deliberately isolated FBIC design, that would have reported configured B=16 even when the post-selector retained interface was validly opened to 24. V30 now logs `upstream_configured_decision_budget_atom_count=16` and `configured_decision_budget_atom_count=24` separately, recomputes `retained_interface_atom_budget_pass` against 24, and hard-gates these fields in both the TRAIN isolation check and fresh split checker. This fix changes no planner action; it prevents a false engineering failure or a misleading budget claim.

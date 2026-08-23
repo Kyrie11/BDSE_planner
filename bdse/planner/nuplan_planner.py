@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from copy import deepcopy
 from typing import Any
 
 import atexit
@@ -61,7 +60,7 @@ from bdse.planner.tournament import (
     _trajectory_utility_cost_np,
 )
 from bdse.planner.frontier_contrast_rebinding import frontier_contrast_rebind
-from bdse.planner.proposal_conditioned_witness_rebinding import proposal_conditioned_witness_rebind
+from bdse.planner.full_bank_capacity_probe import full_bank_capacity_probe
 
 
 _PLANNER_DEVICE_LOCK = threading.Lock()
@@ -236,6 +235,7 @@ def runtime_query_diagnostics(
         selected_certificate = int(selected_count * len(actions))
 
     budget_atom_count = int(pred.get("configured_decision_budget_atom_count", selected_count))
+    upstream_budget_atom_count = int(pred.get("upstream_configured_decision_budget_atom_count", budget_atom_count))
     acquisition_expansion = float(len(topm) / max(selected_count, 1)) if selected_count else float("nan")
     return {
         "proposal_atom_count": int(len(topm)),
@@ -250,6 +250,7 @@ def runtime_query_diagnostics(
         "acquisition_action_atom_query_count": action_atom,
         "proposal_to_certificate_atom_expansion": acquisition_expansion,
         "configured_decision_budget_atom_count": budget_atom_count,
+        "upstream_configured_decision_budget_atom_count": upstream_budget_atom_count,
         "retained_interface_atom_budget_pass": float(selected_count <= budget_atom_count),
         "selector_pair_atom_query_count": selector_pair_atom,
         "tournament_pair_atom_query_count": tournament_pair_atom,
@@ -804,6 +805,13 @@ class BDSEPlannerCore:
             )
 
             selector_started = time.perf_counter()
+            # FBIC keeps the historical B=16 AOCC construction frozen and only
+            # expands the *post-selector retained interface*.  This avoids
+            # confounding the capacity ceiling with a different greedy search.
+            fbic_cfg_pre = sel_cfg.get("full_bank_capacity_probe", {}) or {}
+            selector_budget = float(stage_cfg.get("evidence", {}).get("budget", 16))
+            if bool(fbic_cfg_pre.get("enabled", False)):
+                selector_budget = float(fbic_cfg_pre.get("baseline_selector_budget", 16))
             selection = runtime_greedy_selector_pair_conditioned(
                 J0,
                 search_pair_delta,
@@ -812,7 +820,7 @@ class BDSEPlannerCore:
                 evidence_bank.budget_costs(),
                 candidates.valid_mask,
                 runtime_flags,
-                budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
+                budget=selector_budget,
                 gamma_max=float(sel_cfg.get("normalized_gamma_max", 5.0) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("gamma_max_default", 100.0)),
                 eta_pred=float(sel_cfg.get("normalized_eta_pred", 0.1) if bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)) else sel_cfg.get("eta_pred", 1.0)),
                 atom_active_mask=decision_atom_active,
@@ -951,106 +959,58 @@ class BDSEPlannerCore:
                 ),
             )
 
-            # V64.3.30 Proposal-Conditioned Witness Evidence Rebinding (PCWER).
+            # V64.3.30 Full-Bank Interface Capacity (FBIC) probe.
             #
-            # V29 showed that compressing the complete anchor/challenger star can
-            # improve global frontier fidelity while *worsening* the direct
-            # recovery DRC gate.  PCWER therefore conditions the fixed-B evidence
-            # interface on the unique risk-free ICER direct proposal and preserves
-            # only the proposal/anchor and proposal/incumbent decision witnesses.
-            # The proposal is frozen before rebinding; after an accepted rebind the
-            # downstream DRC may confirm or veto only that same proposal.
-            recovery_proposal_action = None
-            pcwer_cfg = sel_cfg.get("proposal_conditioned_witness_rebinding", {}) or {}
-            if bool(pcwer_cfg.get("enabled", False)):
-                # PCWER is a generation-then-confirmation operator.  -1 is an
-                # explicit locked abstention sentinel: if the risk-free generator
-                # yields no valid direct proposal, downstream DRC must preserve the
-                # incumbent instead of generating a replacement on its own.
-                recovery_proposal_action = -1
-                if bool((sel_cfg.get("frontier_contrast_rebinding", {}) or {}).get("enabled", False)):
-                    raise ValueError("V64.3.30 PCWER and V64.3.29 FCR are mutually exclusive causal arms")
-
-                proposal_cfg = deepcopy(tournament_cfg)
-                proposal_runtime = proposal_cfg.setdefault("runtime", {})
-                proposal_frontier = proposal_runtime.setdefault("decisive_frontier_value", {})
-                proposal_icer = proposal_frontier.setdefault("incumbent_contrastive_extremal_recovery", {})
-                # Proposal generation is the frozen V20-style support + incumbent
-                # dominance operator.  Outcome/DRC risk is deliberately removed
-                # here; it returns only after the evidence view has been rebound.
-                proposal_icer["regret_risk_enabled"] = False
-                proposal_icer["replacement_regret_risk_enabled"] = False
-                proposal_icer["retention_regret_risk_enabled"] = False
-
-                def pcwer_proposal_evaluator(selected_atoms: list[int]):
-                    idx = np.asarray(selected_atoms, dtype=np.int64).reshape(-1)
-                    trial = run_pair_conditioned_tournament(
-                        J0,
-                        pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]),
-                        pred.get("rival_pair_indices", pred["pair_indices"]),
-                        selected_atoms,
-                        candidates.valid_mask,
-                        runtime_flags,
-                        proposal_cfg,
-                        pair_atom_variance=pred.get("rival_pair_atom_var", pred.get("pair_atom_var", None)),
-                        candidate_trajectories=candidates.trajectories,
-                        maneuver_ids=candidates.maneuver_ids,
-                        predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
-                        residual_action_potential=pred.get("residual_action_potential", None),
-                        residual_action_variance=pred.get("residual_action_var", None),
-                        residual_set_atom_factors=pred.get("residual_set_atom_factors", None),
-                        residual_set_action_factors=pred.get("residual_set_action_factors", None),
-                        frontier_value_atom_factors=pred.get("frontier_value_atom_factors", None),
-                        frontier_value_action_signed_factors=pred.get("frontier_value_action_signed_factors", None),
-                        frontier_value_action_context_factors=pred.get("frontier_value_action_context_factors", None),
-                        frontier_value_scale=float(pred.get("frontier_value_scale", 1.0)),
-                        # This is a proposal-generation diagnostic over already
-                        # queried evidence; final DA-EPC still supplies the actual
-                        # deployment certificate after selection.
-                        evidence_certificate_fraction=1.0,
-                        selected_atom_family_ids=np.asarray(family_ids, dtype=np.int64)[idx],
-                        selected_atom_type_names=[str(evidence_bank.atoms[int(i)].type) for i in idx.tolist()],
-                    )
-                    d = dict(trial.diagnostics)
-                    return {
-                        "proposal_action": int(d.get("decisive_frontier_icer_selected_action", -1)),
-                        "incumbent_action": int(d.get("decisive_frontier_icer_legacy_selected_action", -1)),
-                        "anchor_action": int(d.get("_decisive_frontier_icer_anchor_action", d.get("pair_action_anchor_action", -1))),
-                        "incumbent_admissible": bool(float(d.get("decisive_frontier_icer_legacy_admissible", 0.0)) >= 0.5),
-                    }
-
-                valid_runtime = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
-                flags_runtime = np.asarray(runtime_flags, dtype=bool).reshape(-1)
-                all_flagged_domain = bool(np.any(valid_runtime) and np.all(flags_runtime[: len(valid_runtime)][valid_runtime]))
-                pcwer_reference_atoms = np.flatnonzero(decision_atom_active).astype(np.int64).tolist()
-                pcwer_result = proposal_conditioned_witness_rebind(
-                    baseline_selected=selection.selected,
-                    reference_atoms=pcwer_reference_atoms,
-                    predicted_base_cost=J0,
-                    predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
-                    pair_indices=np.asarray(pred.get("rival_pair_indices", pred["pair_indices"]), dtype=np.int64),
-                    pair_atom_delta=np.asarray(pred.get("rival_pair_atom_delta", pred["pair_atom_delta"]), dtype=np.float32),
-                    valid_mask=candidates.valid_mask,
-                    atom_budget_costs=evidence_bank.budget_costs(),
-                    budget=float(stage_cfg.get("evidence", {}).get("budget", 16)),
-                    normalize_margins=bool(stage_cfg.get("model", {}).get("pair_margin_normalized", True)),
-                    margin_scale=float(pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 100.0))),
-                    pair_delta_includes_local=bool((stage_cfg.get("runtime", {}) or {}).get("pair_tournament_pair_delta_includes_local", True)),
-                    frontier_value_atom_factors=pred.get("frontier_value_atom_factors", None),
-                    frontier_value_action_signed_factors=pred.get("frontier_value_action_signed_factors", None),
-                    frontier_value_action_context_factors=pred.get("frontier_value_action_context_factors", None),
-                    frontier_value_scale=float(((stage_cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("scale", pred.get("frontier_value_scale", 1.0))),
-                    proposal_evaluator=pcwer_proposal_evaluator,
-                    rebind_enabled=bool(pcwer_cfg.get("rebind_enabled", True)),
-                    structural_bypass=all_flagged_domain,
+            # V29 showed that same-B frontier-fidelity rebinding can change most
+            # selected atoms and improve its own full-M compression objective
+            # without improving fresh recovery.  The next pre-registered causal
+            # question is therefore capacity, not another B=16 allocation proxy.
+            # FBIC exposes the complete *already queried* decision Top-M bank to
+            # downstream EAF/ICER when B=24 can pay it.  It is a one-point upper
+            # ceiling, adds no evidence query, sees no teacher label, and is a
+            # strict no-op in the all-flagged structural domain.
+            fbic_cfg = sel_cfg.get("full_bank_capacity_probe", {}) or {}
+            if bool(fbic_cfg.get("enabled", False)):
+                valid_for_fbic = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
+                flags_for_fbic = np.asarray(runtime_flags, dtype=bool).reshape(-1)
+                k_fbic = min(valid_for_fbic.shape[0], flags_for_fbic.shape[0])
+                structural_domain_fbic = bool(
+                    k_fbic > 0
+                    and bool(valid_for_fbic[:k_fbic].any())
+                    and not bool((valid_for_fbic[:k_fbic] & ~flags_for_fbic[:k_fbic]).any())
                 )
-                selection.selected = list(pcwer_result.selected)
-                selection.diagnostics.update(pcwer_result.diagnostics)
-                if bool(pcwer_result.proposal_lock):
-                    recovery_proposal_action = int(pcwer_result.proposal_action)
+                fbic_reference_atoms = np.flatnonzero(decision_atom_active).astype(np.int64).tolist()
+                fbic_interface_budget = float(
+                    fbic_cfg.get("interface_budget", stage_cfg.get("evidence", {}).get("budget", 16))
+                )
+                fbic_upstream_budget = float(stage_cfg.get("evidence", {}).get("budget", 16))
+                fbic_result = full_bank_capacity_probe(
+                    baseline_selected=selection.selected,
+                    reference_atoms=fbic_reference_atoms,
+                    atom_budget_costs=evidence_bank.budget_costs(),
+                    # Important causal-isolation detail: the global evidence
+                    # budget remains the frozen B=16 upstream setting.  FBIC's
+                    # separate interface_budget opens only the post-selector
+                    # retained view over atoms that were already queried.
+                    budget=fbic_interface_budget,
+                    structural_domain=structural_domain_fbic,
+                    expected_top_m=int(fbic_cfg.get("expected_top_m", sel_cfg.get("proposal_top_m", 24))),
+                )
+                selection.selected = list(fbic_result.selected)
+                selection.diagnostics.update(fbic_result.diagnostics)
+                # Runtime query accounting historically reads the configured
+                # decision budget from the model prediction.  For FBIC that
+                # field must describe the *retained interface* ceiling (24),
+                # while the frozen upstream selector budget remains separately
+                # auditable as 16.  Otherwise a valid capacity-ceiling arm is
+                # spuriously logged as a budget violation.
+                pred = dict(pred)
+                pred["upstream_configured_decision_budget_atom_count"] = int(round(fbic_upstream_budget))
+                pred["configured_decision_budget_atom_count"] = int(round(fbic_interface_budget))
             else:
-                selection.diagnostics["proposal_conditioned_witness_rebinding_enabled"] = 0.0
-                selection.diagnostics["proposal_conditioned_witness_rebinding_accepted"] = 0.0
+                selection.diagnostics["full_bank_capacity_probe_enabled"] = 0.0
+                selection.diagnostics["full_bank_capacity_probe_attempted"] = 0.0
+                selection.diagnostics["full_bank_capacity_probe_applied"] = 0.0
 
             # V64.3.29 Frontier-Contrast Rebinding (FCR).
             #
@@ -1185,7 +1145,6 @@ class BDSEPlannerCore:
                 ),
                 selected_atom_family_ids=np.asarray(family_ids, dtype=np.int64)[np.asarray(selection.selected, dtype=np.int64)],
                 selected_atom_type_names=[str(evidence_bank.atoms[int(i)].type) for i in np.asarray(selection.selected, dtype=np.int64).tolist()],
-                recovery_proposal_action=recovery_proposal_action,
             )
         else:
             selector_started = time.perf_counter()

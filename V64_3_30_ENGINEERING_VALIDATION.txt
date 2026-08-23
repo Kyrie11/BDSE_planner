@@ -1,47 +1,67 @@
-V64.3.30 EAF-ICER-PCWER engineering validation
-================================================
+V64.3.30 EAF-ICER-FBIC ENGINEERING VALIDATION
+===============================================
 
-Validated locally against the user-uploaded V64.3.29 source tree.
-No server nuPlan GPU cache/checkpoint is available locally, so no V30 effectiveness result is fabricated.
+Scope
+-----
+V64.3.30 is a one-point retained-interface capacity ceiling diagnostic over the
+already queried M=24 decision-evidence bank. The upstream selector/acquisition
+budget remains B=16. The post-selector retained interface may expose the full
+already-queried bank up to interface_budget=24 only in the non-structural safe
+domain. No additional evidence/model query or teacher label is introduced.
 
-1. Python compile
-   python -m compileall -q bdse
-   PASS
+Final causal/config contract
+----------------------------
+PASS:
+- upstream evidence budget frozen at 16
+- fallback budget stage frozen at 16
+- historical AOCC baseline budget 16
+- proposal Top-M frozen at 24
+- FBIC interface ceiling 24
+- all non-capacity algorithm fields frozen against V64.3.20 V20 control
+- FCR disabled
+- teacher-free runtime
+- zero additional queries
 
-2. V13–V30 targeted regression
-   114 passed / 0 failed
-   2 warnings, both pre-existing PyTorch Transformer nested_tensor/norm_first warnings.
+Logic hardening
+---------------
+1. All-flagged structural domain: strict FBIC no-op.
+2. Capacity-only nesting: B16 baseline must be a subset of the full queried
+   reference bank; FBIC may add atoms but may not delete/reallocate a B16 atom.
+3. Duplicate/invalid baseline or reference indices: fail closed.
+4. Full-bank budget infeasibility or reference > expected M: fail closed.
+5. No nontrivial expansion: fail closed.
+6. Global evidence.budget remains 16; only the post-selector retained-interface
+   ceiling is 24.
+7. Budget-accounting bug fixed before release: generic evaluation previously
+   rewrote configured decision budget to global B16. V30 now records
+   upstream_configured_decision_budget_atom_count=16 and
+   configured_decision_budget_atom_count=24 separately and evaluates
+   retained_interface_atom_budget_pass against the latter. TRAIN and fresh
+   screen contracts hard-check these fields.
+8. Paired screen hard-checks exact per-scene action/query counts, so a B24 result
+   cannot be explained by extra evidence/model queries.
 
-3. Launcher syntax
-   bash -n RUN_V64_3_30_EAF_ICER_PCWER_SCREEN_2GPU.sh
-   PASS
+Static / regression validation
+------------------------------
+python -m compileall -q bdse                         PASS
+bash -n RUN_V64_3_30_EAF_ICER_FBIC_SCREEN_2GPU.sh  PASS
+V29+V30 focused tests                               13/13 PASS
+V13-V30 targeted regression                         115/115 PASS
+Repository full regression                          445/445 PASS
+Warnings                                             36
+Warning classes                                      existing PyTorch Transformer
+                                                     nested_tensor/norm_first only
+New warning class                                    none
 
-4. Full repository regression
-   443 passed / 1 failed / 36 warnings
+The full repository regression was rerun alone after a previous combined shell
+command was interrupted by the execution environment timeout. The authoritative
+final run completed with 445/445 PASS in 21.76 s.
 
-   Sole failure:
-   bdse/tests/test_v64_2_gatefix.py::test_pipeline_calibration_locals_are_nounset_safe
-
-   Cause:
-   the uploaded V64.3.29 bdse.zip does not contain the historical root script
-   V64_SAQA_BCC_NEXT_COMMANDS.sh, which that legacy test opens directly.
-   ALGORITHM_CHANGELOG.md records an earlier packaging omission/restoration episode for the same historical script,
-   but the verified historical file bytes are not present in the supplied artifacts. No fabricated stub was added.
-   The V30 launcher and V30 targeted dependency chain do not depend on this missing historical file.
-
-   The 36 warnings are the pre-existing PyTorch Transformer nested_tensor/norm_first class; no new V30 warning class observed.
-
-5. PCWER formula/contract audit
-   - B remains exactly the baseline retained cardinality (operating point B=16).
-   - reference atoms are restricted to the already queried Top-M bank (M=24); zero new evidence query.
-   - attribution witness uses the production EAF atom-contribution root-sum-square definition.
-   - final candidate witness errors are recomputed through production _frontier_star and EAF primitives.
-   - accepted rebinding must preserve exact risk-free proposal, incumbent, incumbent admissibility, and selected-local anchor.
-   - final ICER is proposal-locked: DRC can confirm/veto only the same tentative proposal; no second-best reranking.
-   - all-flagged structural domain bypasses rebinding and keeps baseline evidence.
-
-6. Experimental identifiability audit
-   - frozen TRAIN manifest: 3000 unique tokens, SHA256 b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4.
-   - V30 design exclusion: exactly 8700 unique inspected validation tokens = previous 7700 + V29 fresh 1000.
-   - proposal-lock-only DRC control isolates operator semantics from PCWER evidence rebinding.
-   - TRAIN gate strengthened to require catastrophe-free folds before spending fresh validation GPU.
+Experiment execution status
+---------------------------
+No nuPlan server GPU/cache/checkpoint is available in this local environment, so
+no V64.3.30 TRAIN/fresh performance result is fabricated here. The delivered
+launcher first replays the frozen 3000 TRAIN set and requires exact historical
+V25 provenance reproduction (3000 scenes / 75,133 frontier rows / 1,455 eligible
+replacement edges / 310 replacement scenes / 5-of-5 / 71 selected /
++5.527642 teacher-improvement sum) before new untouched fresh interpretation.

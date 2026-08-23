@@ -1,0 +1,193 @@
+{
+  "B_catastrophic_selected_replacements": [
+    {
+      "delta": -0.9898971941839116,
+      "evidence_only_lb32": 2.2407779577091717e-05,
+      "evidence_only_lb64": 0.0002544671611515,
+      "evidence_only_min64": -0.0024380034301429,
+      "evidence_only_mu32": 0.0001590521744558,
+      "evidence_only_mu64": 0.0003787974860435,
+      "evidence_only_se32": 0.0001366443948787,
+      "evidence_only_se64": 0.0001243303248919,
+      "legacy": 5.0,
+      "risk_e": 2.2407775759347714e-05,
+      "sel": 19.0,
+      "tok": "0e612278ebd05d5e"
+    },
+    {
+      "delta": -0.9884002542957664,
+      "evidence_only_lb32": 0.0340689376542699,
+      "evidence_only_lb64": 0.0002453311797602,
+      "evidence_only_min64": -0.9893587231636048,
+      "evidence_only_mu32": 0.0808299529128441,
+      "evidence_only_mu64": 0.0296542659267816,
+      "evidence_only_se32": 0.0467610152585741,
+      "evidence_only_se64": 0.0294089347470213,
+      "legacy": 4.0,
+      "risk_e": 0.0002453297202009,
+      "sel": 2.0,
+      "tok": "5ef81ac81e9d54ed"
+    },
+    {
+      "delta": -0.9290326928495256,
+      "evidence_only_lb32": 0.0909503532910791,
+      "evidence_only_lb64": 0.0540184856275883,
+      "evidence_only_min64": -0.9894043803215028,
+      "evidence_only_mu32": 0.1568973998064259,
+      "evidence_only_mu64": 0.104930653802244,
+      "evidence_only_se32": 0.0659470465153468,
+      "evidence_only_se64": 0.0509121681746557,
+      "legacy": 0.0,
+      "risk_e": 0.0540184900164604,
+      "sel": 21.0,
+      "tok": "e384cbf203735c60"
+    },
+    {
+      "delta": -0.9285117576174438,
+      "evidence_only_lb32": 0.0222386556979471,
+      "evidence_only_lb64": 0.0276593353561098,
+      "evidence_only_min64": -1.2321261167526243,
+      "evidence_only_mu32": 0.0725265770922836,
+      "evidence_only_mu64": 0.0712340279120784,
+      "evidence_only_se32": 0.0502879213943365,
+      "evidence_only_se64": 0.0435746925559685,
+      "legacy": 26.0,
+      "risk_e": 0.0222386624664068,
+      "sel": 10.0,
+      "tok": "6ab7225c12445343"
+    }
+  ],
+  "audit": "v64_3_23_uploaded_result_causal_audit_for_v64_3_24",
+  "execution_integrity": {
+    "A_B_overlap": 0,
+    "algorithm_attribution_reliable": true,
+    "double_checker_complete": true,
+    "five_arms_each_block_complete": true,
+    "fresh_A_500_complete": true,
+    "fresh_B_500_complete": true,
+    "full_screen_executed": true,
+    "memory_npz_present_in_user_split_upload": false,
+    "memory_packaging_interpretation": "packaging omission only; official fresh runtime would fail on missing/SHA-mismatched memory before producing rows/edges",
+    "paired_token_identity_verified": true,
+    "split_checkers_complete": true,
+    "train_fresh_overlap": 0,
+    "train_gate_pass": true
+  },
+  "mechanism_conclusion": {
+    "cross_split_stability_established": false,
+    "main_failure": "confidence bound on local conditional mean does not control downside of one extremally selected outcome under heavy-tailed/multimodal neighborhood aliasing",
+    "next_key_question": "Does the full within-budget selected-evidence attribution structure resolve hidden local outcome modes sufficiently for downside/predictive regret certification of an individual incumbent replacement?",
+    "signed_profile_ranking_keep_in_main": false,
+    "transition_geometry_keep_in_main": false,
+    "v23_local_regret_coherence_has_real_signal": true
+  },
+  "official_double_fresh": {
+    "audit": "v64_3_23_eaf_icer_rcr_double_fresh_screen",
+    "both_independent_500_scene_blocks_pass": false,
+    "full_promotion_to_independent_full_val_reproduction": false,
+    "next_action": "split_A_failed_follow_split_A_next_action_no_pooled_rescue",
+    "signed_profile_ranking_incremental_both": false,
+    "split_A_next_action": "signed_profile_ranking_not_incremental_keep_evidence_local_scalar_RCR_as_candidate_do_not_tune_view_weights",
+    "split_A_pass": false,
+    "split_B_next_action": "evidence_local_regret_coherence_failed_on_selected_replacement_path_do_not_tune_K_or_zero_boundary_audit_local_tail_structure",
+    "split_B_pass": false,
+    "test_closed_loop_allowed": false,
+    "train_gate_pass": true,
+    "transition_conditioning_incremental_both_diagnostic": false,
+    "transition_conditioning_required_for_main_promotion": false
+  },
+  "split_A": {
+    "endpoint_gain": true,
+    "main_metrics": {
+      "beneficial": 0.124,
+      "flip": 0.592,
+      "guard_block": 0.0,
+      "harmful": 0.07,
+      "match": 0.18,
+      "regret": 13904.28528477107
+    },
+    "main_path": {
+      "count": 45,
+      "regret_delta_mean": -1925.9815531465476,
+      "regret_delta_sum": -86669.16989159465
+    },
+    "main_risk": {
+      "edge_count": 4799.0,
+      "local_lower_bound_auc": 0.6182818215588174,
+      "positive_gate_precision": 0.5691699604743083,
+      "positive_gate_rate": 0.05271931652427589,
+      "positive_gate_teacher_improvement_sum": -5.994009916409951
+    },
+    "preservation_gate": false,
+    "raw_metrics": {
+      "beneficial": 0.098,
+      "flip": 0.592,
+      "guard_block": 0.324,
+      "harmful": 0.07,
+      "match": 0.154,
+      "regret": 14077.623624554264
+    },
+    "scalar_path": {
+      "count": 48,
+      "regret_delta_mean": -2487.723956866308,
+      "regret_delta_sum": -119410.74992958279
+    },
+    "signed_incremental": false,
+    "transition_incremental": true,
+    "transition_path": {
+      "count": 47,
+      "regret_delta_mean": -3711.4982362546825,
+      "regret_delta_sum": -174440.41710397007
+    }
+  },
+  "split_B": {
+    "endpoint_gain": false,
+    "main_metrics": {
+      "beneficial": 0.092,
+      "flip": 0.6,
+      "guard_block": 0.002,
+      "harmful": 0.088,
+      "match": 0.176,
+      "regret": 14392.971823713673
+    },
+    "main_path": {
+      "count": 29,
+      "regret_delta_mean": 1996.3858517833658,
+      "regret_delta_sum": 57895.18970171761
+    },
+    "main_risk": {
+      "edge_count": 4756.0,
+      "local_lower_bound_auc": 0.5849941728987986,
+      "positive_gate_precision": 0.3711340206185567,
+      "positive_gate_rate": 0.0407905803195963,
+      "positive_gate_teacher_improvement_sum": -14.875790540506166
+    },
+    "preservation_gate": false,
+    "raw_metrics": {
+      "beneficial": 0.088,
+      "flip": 0.6,
+      "guard_block": 0.312,
+      "harmful": 0.088,
+      "match": 0.172,
+      "regret": 14277.18144431024
+    },
+    "scalar_path": {
+      "count": 31,
+      "regret_delta_mean": 1865.1581577622208,
+      "regret_delta_sum": 57819.902890628844
+    },
+    "signed_incremental": false,
+    "transition_incremental": false,
+    "transition_path": {
+      "count": 33,
+      "regret_delta_mean": 3506.3163892728076,
+      "regret_delta_sum": 115708.44084600265
+    }
+  },
+  "train_gate": {
+    "evidence_fold_pass_count": 5,
+    "evidence_selected_teacher_improvement_sum": 9.846292821842354,
+    "transition_fold_pass_count": 3,
+    "transition_selected_teacher_improvement_sum": 14.41316699154504
+  }
+}

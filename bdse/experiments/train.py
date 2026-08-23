@@ -1194,8 +1194,14 @@ def _run_validation_open_loop(
                     )
             qdiag = runtime_query_diagnostics(pred, sel.selected)
             qdiag["planner_latency_ms"] = float(planner_latency_ms)
-            qdiag["configured_decision_budget_atom_count"] = float(
-                max(1, int((cfg.get("evidence", {}) or {}).get("budget", 1)))
+            upstream_budget = float(max(1, int((cfg.get("evidence", {}) or {}).get("budget", 1))))
+            qdiag["upstream_configured_decision_budget_atom_count"] = upstream_budget
+            configured_retained_budget = float(
+                qdiag.get("configured_decision_budget_atom_count", upstream_budget)
+            )
+            qdiag["configured_decision_budget_atom_count"] = configured_retained_budget
+            qdiag["retained_interface_atom_budget_pass"] = float(
+                len(sel.selected) <= configured_retained_budget + 1.0e-8
             )
             tour_diag = getattr(tour, "diagnostics", {}) or {}
             for key, value in tour_diag.items():

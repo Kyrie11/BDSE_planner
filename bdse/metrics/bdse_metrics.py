@@ -430,6 +430,12 @@ def compute_bdse_diagnostics(
         "structural_safety_atom_count": float(len(structural_set)),
         "decision_budget_atom_count": float(len(selected_set)),
         "configured_decision_budget_atom_count": float(qdiag.get("configured_decision_budget_atom_count", max(len(selected_set), 1))),
+        "upstream_configured_decision_budget_atom_count": float(
+            qdiag.get(
+                "upstream_configured_decision_budget_atom_count",
+                qdiag.get("configured_decision_budget_atom_count", max(len(selected_set), 1)),
+            )
+        ),
         "fallback_would_trigger_rate": float(bool(qdiag.get("fallback_would_trigger", False))),
         "selected_action_safety_flag_rate": float(bool(qdiag.get("selected_action_safety_flag", False))),
         "avoidable_selected_action_safety_flag_rate": float(bool(qdiag.get("avoidable_selected_action_safety_flag", False))),
