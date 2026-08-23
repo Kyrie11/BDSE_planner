@@ -1,0 +1,51 @@
+V64.3.30.1 EAF-ICER-FBIC ENGINEERING HOTFIX VALIDATION
+=======================================================
+
+Uploaded-run status
+-------------------
+SCIENTIFIC INTERPRETATION: NOT ALLOWED
+Reason: B24 TRAIN arm crashed before any B24 row/edge was emitted.
+B16 TRAIN rows: 3000
+B16 TRAIN frontier edges: 75133
+B24 TRAIN rows: 0
+B24 TRAIN frontier edges: 0
+Fresh selection reached: no
+Fresh A/B evaluation reached: no
+
+Root cause
+----------
+Historical V24 attribution-resolved instrumentation was globally hard-coded to
+16 selected atoms and was unconditionally constructed by ICER. FBIC legally
+retains 24 already-queried atoms, causing:
+  ValueError: selected evidence count 24 exceeds attribution spectrum budget 16
+
+Hotfix contract
+---------------
+- historical/default B16 attribution diagnostic schema remains 32-D (16+16)
+- FBIC B24 attribution diagnostic schema is 48-D (24+24)
+- no truncation of B24 attribution instrumentation
+- dynamic diagnostic schema validation is self-consistent
+- learned memory stored-schema validation remains strict
+- V30 DRC remains evidence_only; widened attribution diagnostics do not enter DRC
+- upstream evidence budget remains 16
+- AOCC baseline selector budget remains 16
+- fallback budget stage remains 16
+- queried Top-M remains 24
+- retained FBIC interface ceiling remains 24
+- FCR remains disabled
+- no additional evidence/model query
+- all-flagged structural-domain FBIC no-op remains unchanged
+
+Validation
+----------
+python -m compileall -q bdse                         PASS
+bash -n RUN_V64_3_30_EAF_ICER_FBIC_SCREEN_2GPU.sh  PASS
+bash -n RUN_V64_3_30_1_EAF_ICER_FBIC_HOTFIX_SCREEN_2GPU.sh PASS
+V13-V30 targeted regression                         119/119 PASS
+Repository full regression                          449/449 PASS
+Warnings                                             36
+New warning classes                                  none
+Existing warning class                               PyTorch Transformer nested_tensor/norm_first
+
+A synthetic full ICER runtime using the exact V30 config and 24 selected atoms
+is included in regression tests and passes.

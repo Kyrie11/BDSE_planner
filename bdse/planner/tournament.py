@@ -1513,10 +1513,49 @@ def _signed_atom_profile(vec: np.ndarray, *, top_k: int = 4) -> list[float]:
 
 
 _ICER_ATTRIBUTION_SPECTRUM_BUDGET = 16
-_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES = (
-    [f"candidate_atom_signed_spectrum_{i:02d}" for i in range(_ICER_ATTRIBUTION_SPECTRUM_BUDGET)]
-    + [f"delta_atom_signed_spectrum_{i:02d}" for i in range(_ICER_ATTRIBUTION_SPECTRUM_BUDGET)]
+
+
+def _icer_attribution_resolved_feature_names(budget: int) -> list[str]:
+    """Return the fixed signed-spectrum schema for one retained-interface ceiling.
+
+    Historical V24--V29 arms use B<=16 and therefore retain the exact legacy
+    32-dimensional schema.  V64.3.30 is a capacity-ceiling diagnostic whose
+    post-selector retained interface may contain all 24 already-queried atoms;
+    its instrumentation must therefore be able to represent 24 candidate and
+    24 candidate-minus-incumbent contributions without truncation.
+    """
+    b = int(budget)
+    if b <= 0:
+        raise ValueError(f"attribution spectrum budget must be positive, got {budget}")
+    return (
+        [f"candidate_atom_signed_spectrum_{i:02d}" for i in range(b)]
+        + [f"delta_atom_signed_spectrum_{i:02d}" for i in range(b)]
+    )
+
+
+_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES = _icer_attribution_resolved_feature_names(
+    _ICER_ATTRIBUTION_SPECTRUM_BUDGET
 )
+
+
+def _icer_runtime_attribution_spectrum_budget(cfg: dict[str, Any]) -> int:
+    """Resolve the instrumentation width without changing historical B16 semantics.
+
+    The global ``evidence.budget`` remains the frozen upstream AOCC budget in
+    FBIC.  Only ``selector.full_bank_capacity_probe.interface_budget`` describes
+    the post-selector retained-interface ceiling.  Reading that field here is an
+    instrumentation compatibility fix, not a new selector or decision rule.
+    """
+    budget = int(_ICER_ATTRIBUTION_SPECTRUM_BUDGET)
+    selector_cfg = (cfg.get("selector", {}) or {}) if isinstance(cfg, dict) else {}
+    probe = selector_cfg.get("full_bank_capacity_probe", {}) or {}
+    if bool(probe.get("enabled", False)):
+        try:
+            interface_budget = int(round(float(probe.get("interface_budget", budget))))
+        except Exception as exc:
+            raise ValueError("invalid FBIC retained-interface budget") from exc
+        budget = max(budget, interface_budget)
+    return int(budget)
 
 
 def _signed_attribution_spectrum(vec: np.ndarray, *, budget: int = _ICER_ATTRIBUTION_SPECTRUM_BUDGET) -> np.ndarray:
@@ -1547,20 +1586,28 @@ def _icer_attribution_resolved_feature_matrix(
     valid_mask: np.ndarray,
     anchor_action: int,
     legacy_action: int,
+    *,
+    budget: int = _ICER_ATTRIBUTION_SPECTRUM_BUDGET,
 ) -> tuple[np.ndarray, list[str]]:
-    """Candidate and candidate-minus-incumbent full signed evidence spectra."""
+    """Candidate and candidate-minus-incumbent full signed evidence spectra.
+
+    ``budget`` is the retained-interface instrumentation ceiling.  The default
+    remains 16 for strict backward compatibility with V24--V29.
+    """
+    spectrum_budget = int(budget)
+    names = _icer_attribution_resolved_feature_names(spectrum_budget)
     valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
     K = len(valid); a = int(anchor_action); legacy = int(legacy_action)
-    out = np.zeros((K, len(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES)), dtype=np.float64)
+    out = np.zeros((K, len(names)), dtype=np.float64)
     contrib = np.zeros((0, K), dtype=np.float64)
     if atom_contrib_star is not None:
         raw = np.asarray(atom_contrib_star, dtype=np.float64)
         if raw.ndim == 2 and raw.shape[1] >= K:
             contrib = raw[:, :K]
-    if contrib.shape[0] > _ICER_ATTRIBUTION_SPECTRUM_BUDGET:
+    if contrib.shape[0] > spectrum_budget:
         raise ValueError(
             f"selected evidence count {contrib.shape[0]} exceeds attribution spectrum budget "
-            f"{_ICER_ATTRIBUTION_SPECTRUM_BUDGET}"
+            f"{spectrum_budget}"
         )
     legacy_vec = (
         contrib[:, legacy]
@@ -1572,9 +1619,9 @@ def _icer_attribution_resolved_feature_matrix(
             continue
         cand = contrib[:, b] if contrib.size else np.zeros((0,), dtype=np.float64)
         delta = cand - legacy_vec if contrib.size else np.zeros((0,), dtype=np.float64)
-        out[b, :_ICER_ATTRIBUTION_SPECTRUM_BUDGET] = _signed_attribution_spectrum(cand)
-        out[b, _ICER_ATTRIBUTION_SPECTRUM_BUDGET:] = _signed_attribution_spectrum(delta)
-    return out, list(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES)
+        out[b, :spectrum_budget] = _signed_attribution_spectrum(cand, budget=spectrum_budget)
+        out[b, spectrum_budget:] = _signed_attribution_spectrum(delta, budget=spectrum_budget)
+    return out, names
 
 
 
@@ -2286,7 +2333,9 @@ def _icer_regret_risk_feature_matrix(
     if mode == "attribution_resolved":
         ar = np.asarray(attribution_resolved_feat, dtype=np.float64) if attribution_resolved_feat is not None else np.zeros((0, 0), dtype=np.float64)
         ar_names = list(attribution_resolved_names or [])
-        if ar.ndim != 2 or ar.shape[0] != base.shape[0] or ar.shape[1] != len(ar_names) or ar_names != list(_ICER_ATTRIBUTION_RESOLVED_FEATURE_NAMES):
+        ar_budget = ar.shape[1] // 2 if ar.ndim == 2 and ar.shape[1] % 2 == 0 else 0
+        expected_ar_names = _icer_attribution_resolved_feature_names(ar_budget) if ar_budget > 0 else []
+        if ar.ndim != 2 or ar.shape[0] != base.shape[0] or ar.shape[1] != len(ar_names) or ar_names != expected_ar_names:
             raise ValueError("EAF-ICER attribution-resolved feature matrix/schema mismatch")
         return np.concatenate([base, ar], axis=1), names + [f"attribution::{n}" for n in ar_names]
     if mode == "semantic_family_aligned":
@@ -2398,7 +2447,8 @@ def _apply_decisive_frontier_icer(
         admissible, cfg,
     )
     attribution_resolved, attribution_resolved_names = _icer_attribution_resolved_feature_matrix(
-        atom_contrib_star, valid, a, legacy
+        atom_contrib_star, valid, a, legacy,
+        budget=_icer_runtime_attribution_spectrum_budget(cfg),
     )
     semantic_family, semantic_family_names = _icer_semantic_family_feature_matrix(
         atom_contrib_star, selected_atom_family_ids, valid, a, legacy

@@ -9324,3 +9324,46 @@ Final local validation after the FBIC capacity/accounting hardening:
 - warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
 
 A final audit found and fixed one instrumentation-only bug before packaging: generic open-loop/train evaluation previously overwrote the actual retained-interface ceiling from global `evidence.budget`. Under the deliberately isolated FBIC design, that would have reported configured B=16 even when the post-selector retained interface was validly opened to 24. V30 now logs `upstream_configured_decision_budget_atom_count=16` and `configured_decision_budget_atom_count=24` separately, recomputes `retained_interface_atom_budget_pass` against 24, and hard-gates these fields in both the TRAIN isolation check and fresh split checker. This fix changes no planner action; it prevents a false engineering failure or a misleading budget claim.
+
+# V64.3.30 uploaded execution: ENGINEERING-INVALID; V64.3.30.1 hotfix only
+
+The uploaded `outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_v1` must **not** be used for scientific attribution.
+
+Observed execution state:
+
+- prerequisite/config contract completed and passed;
+- targeted regression in the uploaded run completed (`115 passed` before this hotfix added new regression cases);
+- frozen B16 TRAIN replay completed with exactly 3000 per-scene rows and 75,133 frontier-edge rows;
+- B24 TRAIN replay crashed before emitting any row/edge (`train_b24_v20_rows.jsonl` and `train_b24_v20_edges.jsonl` are both zero bytes);
+- no B24 DRC fit was produced;
+- no fresh token selection, A/B arm evaluation, or V30 screen was reached;
+- stage timing contains only the completed `prerequisites` stage.
+
+Root cause is an engineering-only shape contract leaked from the historical V24 attribution-resolved diagnostic. `_icer_attribution_resolved_feature_matrix` had a global fixed `_ICER_ATTRIBUTION_SPECTRUM_BUDGET=16` and was constructed unconditionally inside ICER. FBIC legitimately exposes 24 already-queried atoms to downstream ICER, so the unused historical diagnostic raised:
+
+`ValueError: selected evidence count 24 exceeds attribution spectrum budget 16`
+
+before the capacity arm could produce a decision. This failure says **nothing** about whether B16 discards useful signal and nothing about recovery semantics/operator quality.
+
+## V64.3.30.1 engineering hotfix
+
+Scientific algorithm/configuration is unchanged. The hotfix only makes historical attribution instrumentation compatible with the pre-registered retained-interface capacity ceiling:
+
+1. V24--V29/default B16 attribution schema remains exactly 32-D (16 candidate + 16 candidate-minus-incumbent).
+2. When `selector.full_bank_capacity_probe.enabled=true`, the attribution instrumentation ceiling is read from the separate FBIC `interface_budget`; V30 therefore obtains a 48-D diagnostic schema (24 + 24) with no truncation.
+3. Dynamic attribution-schema validation now checks self-consistency from the actual diagnostic width. Learned local-memory models still enforce their exact stored feature-name schema later, so no learned-model compatibility check is weakened.
+4. Current V30 B24 DRC remains `regret_risk_feature_mode=evidence_only`; the newly widened attribution diagnostic is not added to the V30 decision rule or DRC metric.
+5. The exact B16 scientific controls, global `evidence.budget=16`, fallback stage 16, queried Top-M=24, FBIC retained ceiling=24, no-extra-query contract, structural-domain no-op, and fresh seed all remain frozen.
+
+New regression coverage explicitly executes a synthetic full ICER tournament with 24 selected atoms under the exact V30 config, checks B24 48-D attribution instrumentation, verifies the legacy B16 32-D schema is unchanged, and verifies the generated V30 DRC stays evidence-only.
+
+Final local validation after hotfix:
+
+- Python compile: PASS;
+- original V30 launcher shell syntax: PASS;
+- hotfix wrapper shell syntax: PASS;
+- V13--V30 targeted regression: **119/119 PASS**;
+- repository full regression: **449/449 PASS**;
+- warnings: **36**, all existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
+
+Because the uploaded invalid run stopped before fresh-token selection, rerun **the same scientific V30 experiment and the same fresh hash seed**. Do not create V31 and do not change B, DRC, selector, threshold, or fresh population until the repaired V30 capacity diagnostic completes.
