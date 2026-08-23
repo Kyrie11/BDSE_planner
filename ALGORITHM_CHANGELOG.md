@@ -9367,3 +9367,134 @@ Final local validation after hotfix:
 - warnings: **36**, all existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
 
 Because the uploaded invalid run stopped before fresh-token selection, rerun **the same scientific V30 experiment and the same fresh hash seed**. Do not create V31 and do not change B, DRC, selector, threshold, or fresh population until the repaired V30 capacity diagnostic completes.
+
+
+# V64.3.30.1 repaired execution -> V64.3.30.2 pure-capacity mediator completion
+
+## Status of the uploaded repaired V30.1 result
+
+The repaired V30.1 execution is **engineering-valid through paired B16/B24 frozen TRAIN and B24 DRC fitting**, but it is **scientifically incomplete for the central capacity-mediator question** because the launcher correctly stops on a B24 DRC TRAIN fold-safety failure before untouched token selection.
+
+This result supersedes the previous engineering-invalid V30 attempt without changing its scientific design. Do **not** record V30.1 as a fresh failure and do **not** spend a new fresh seed.
+
+### Engineering/capacity contract reproduced
+
+- exact paired TRAIN scenes: 3000/3000;
+- complete frontier rows: 75,133 in both arms;
+- upstream evidence/selector budget: 16 in both arms;
+- queried decision bank: M=24 in both arms;
+- B24 retained-interface ceiling: 24 only after the frozen B16 selector;
+- safe-domain baseline selected count mean 15.9496 -> final/reference 23.7560;
+- mean added already-queried atoms 7.8064; mean removed B16 atoms 0;
+- all-flagged structural scenes 262; FBIC application rate in that domain 0;
+- exact per-scene query-count parity for action-atom, proposal-candidate-atom, and effective-query counts;
+- retained-interface budget-pass rate 1.0; no-new-query rate 1.0.
+
+Historical B16 V25 provenance is exactly reproduced: `3000 / 75,133 / 1,455 / 310 / 5-of-5 / 71 / +5.527642`.
+
+### B24 DRC TRAIN failure is algorithmic, not engineering
+
+Opening the retained interface changes the eligible edge population:
+
+- eligible direct replacement edges `1455 -> 3821`;
+- replacement scenes `310 -> 483`;
+- teacher-positive edge fraction `62.13% -> 40.23%`;
+- population teacher-improvement sum `-52.589 -> -590.668`;
+- unchanged aggregate-downside DRC fixed-fold safety `5/5 -> 4/5`.
+
+The failing B24 fold is fold 2: 22 selected, sum `-0.041637`, worst `-1.051350`, NegRMS `0.306225`. The overall B24 selected sum remains `+9.308571`, but the pre-registered rule requires all five scene folds non-harmful. Therefore the B24 DRC must remain fail-closed; **do not tune K, threshold, downside multiplier, support/scalar boundaries, or run B24 DRC on fresh data**.
+
+### Development-only capacity signal
+
+B24 materially improves evidence transmission on frozen TRAIN:
+
+- selected decisive-atom recall `0.5305 -> 0.7158`;
+- effective decisive recall `0.7580 -> 0.9433`;
+- interaction decisive recall `0.4823 -> 0.6904`;
+- soft-interaction decisive recall `0.6332 -> 0.9068`;
+- evidence certificate fraction `0.8753 -> 0.9823`;
+- scalar-positive opportunity scenes `248 -> 327`;
+- support+scalar-positive opportunity scenes `229 -> 305`.
+
+But the frozen pure V20 consumer worsens:
+
+- selected positive recovery `206/803 = 25.65% -> 141/787 = 17.92%`;
+- teacher action match `22.47% -> 20.57%`;
+- mean teacher regret `15405.18 -> 16323.01`;
+- 742 safe-domain action changes have `B16 regret - B24 regret` sum `-2,753,490.91` (337 B24-beneficial, 403 B24-harmful, 2 equal).
+
+This is strong **TRAIN-only directional evidence** that more evidence visibility and better evidence coverage are not being converted into reliable interventions. It shifts the working hypothesis toward downstream selection/recovery semantics, but cannot be promoted to independent evidence that B16 retained capacity is irrelevant.
+
+## V30.2: complete the missing untouched pure-capacity control
+
+The original V30 launcher placed the B24 DRC TRAIN gate before fresh selection. That is correct for preventing an unsafe DRC arm from spending fresh data, but it also prevents the scientifically necessary pure B24-V20 control from answering the primary capacity-mediator question. V30.2 fixes **only this orchestration**.
+
+Frozen constraints:
+
+- same frozen 3000 TRAIN;
+- same 8700-token exclusion manifest;
+- same still-untouched V30 hash seed `v64.3.30-eaf-icer-fbic-double-fresh-v1`;
+- upstream B=16 remains unchanged and is an **operating point only**, not the paper thesis;
+- M=24 and exact query counts remain fixed;
+- post-selector B24 is a diagnostic capacity ceiling, not a proposed production budget;
+- B24 DRC TRAIN failure must reproduce and remains fail-closed;
+- no B24 DRC fresh arm;
+- fresh arms are exactly `raw / B16-V20 / B24-V20` on A/B=500/500.
+
+V30.2 adds paired diagnostics that cannot be rescued by a changed opportunity denominator:
+
+1. direct positive-opportunity capture gain, with the original +3 pp signal threshold;
+2. paired teacher-regret effect over every safe scene where B24 changes the B16 action;
+3. paired teacher-regret effect on the **B16-defined** positive-opportunity scene set;
+4. endpoint non-inferiority, structural no-op, capacity-superset accounting, and exact query parity.
+
+Branch interpretation is pre-registered:
+
+- pure B24 useful/non-harmful on both A/B -> retained capacity is a real mediator, but unchanged DRC is already TRAIN-falsified; next mechanism must be a selection-aware candidate-conditioned consumer, not a B24 thesis;
+- pure capture increases but paired/endpoint effects are harmful -> evidence is exposed but the downstream operator converts it unsafely; consumer/operator is dominant;
+- pure capacity fails to reproducibly improve both A/B -> capacity-only transmission is not the first-order missing mediator; terminate B sweeps/same-bank selector/rebinding and redesign intervention-conditioned counterfactual/extremal recovery semantics.
+
+No pooled rescue.
+
+## Paper-mainline update after repaired V30.1
+
+Do not promote literal B=16 or B=24. The candidate paper thesis is now:
+
+> **Intervention-conditioned decision sufficiency under a bounded auditable planner interface: evidence should be judged by whether it supports or rejects a concrete deployment-admissible incumbent-to-challenger intervention under extremal selection, not by world reconstruction, global frontier fidelity, or retained cardinality alone.**
+
+Candidate core mechanism novelty (still requiring independent validation):
+
+> **Evidence-attributed, deployment-admissible incumbent-contrastive recovery with monotone/incumbent-default intervention containment, where reliability is defined at the selected intervention boundary.**
+
+Stable components to preserve: bounded/auditable interface; EAF/exact attribution; deployment-admissible domain separation; incumbent-contrastive direct recovery; asymmetric admissible-incumbent preservation; all-flagged structural delegation; no-fallback/incumbent-default monotonicity; independent fail-closed evaluation.
+
+Do not headline PTMC, FCR, DRC/KNN/Gaussian, a threshold, or a particular budget count.
+
+## Provisional dominant bottleneck
+
+Until V30.2 resolves the capacity mediator, the tightest supported statement is:
+
+> **selection-conditioned counterfactual reliability at the direct incumbent-replacement boundary: the model lacks a stable mechanism that converts candidate-specific evidence into high-coverage extremal replacements without cross-population tail failure.**
+
+For fixed-budget closed-loop SOTA, the remaining gap is not just evidence recall; it is safe useful-recovery coverage under extremal selection, while preserving structural/incumbent behavior and closed-loop endpoint quality.
+
+## New no-repeat constraints
+
+In addition to all prior prohibitions, do not:
+
+- interpret repaired V30.1 as an untouched/fresh capacity result;
+- lower the failed B24 DRC 5-fold TRAIN safety gate;
+- run a B24 DRC fresh arm;
+- spend a new fresh seed before the original V30 pure-capacity mediator is completed;
+- begin a broad B sweep or treat B24 as the method;
+- infer that higher decisive-evidence recall alone establishes decision sufficiency;
+- begin V31 selector/classifier/operator tuning before the pure-capacity A/B branch is known.
+
+## V30.2 engineering validation
+
+- Python compile: PASS;
+- V30.2 launcher shell syntax: PASS;
+- V30.2/FBIC focused tests: 16/16 PASS;
+- V13--V30.2 targeted: **123/123 PASS**;
+- repository full tests: **453/453 PASS**;
+- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.

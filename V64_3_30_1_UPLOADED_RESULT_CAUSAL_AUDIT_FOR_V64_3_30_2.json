@@ -1,0 +1,631 @@
+{
+  "B16_DRC_fit_report": {
+    "aggregate_feature_coverage": 1.0,
+    "algorithm": "V64.3.25 EAF-ICER-DRC",
+    "audit": "v64_3_25_eaf_icer_drc_train_fit",
+    "configs": {
+      "aggregate_downside": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_downside.yaml",
+      "aggregate_meanse": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_meanse.yaml"
+    },
+    "crossfit": {
+      "aggregate_downside": {
+        "all_folds_path_safe": true,
+        "certificate": "downside_rms",
+        "fold_pass_count": 5,
+        "folds": [
+          {
+            "capture": 0.25925925925925924,
+            "count": 22,
+            "fold": 0,
+            "hold_scenes": 74,
+            "mean": 0.0451508547719307,
+            "negative_rms": 0.0001551360978898107,
+            "opportunities": 54,
+            "path_safe": true,
+            "precision": 0.6363636363636364,
+            "scene_count": 74,
+            "selected_token_count": 22,
+            "sum": 0.9933188049824753,
+            "worst": -0.0005360335323967291
+          },
+          {
+            "capture": 0.19642857142857142,
+            "count": 14,
+            "fold": 1,
+            "hold_scenes": 69,
+            "mean": 0.18625076332235688,
+            "negative_rms": 0.14588327053655137,
+            "opportunities": 56,
+            "path_safe": true,
+            "precision": 0.7857142857142857,
+            "scene_count": 69,
+            "selected_token_count": 14,
+            "sum": 2.6075106865129962,
+            "worst": -0.5457565672151744
+          },
+          {
+            "capture": 0.25,
+            "count": 12,
+            "fold": 2,
+            "hold_scenes": 55,
+            "mean": 0.08290484493122606,
+            "negative_rms": 0.00012233677714800558,
+            "opportunities": 40,
+            "path_safe": true,
+            "precision": 0.8333333333333334,
+            "scene_count": 55,
+            "selected_token_count": 12,
+            "sum": 0.9948581391747128,
+            "worst": -0.00040563892025979875
+          },
+          {
+            "capture": 0.1891891891891892,
+            "count": 10,
+            "fold": 3,
+            "hold_scenes": 51,
+            "mean": 0.09315482863772254,
+            "negative_rms": 0.0002018776954041964,
+            "opportunities": 37,
+            "path_safe": true,
+            "precision": 0.7,
+            "scene_count": 51,
+            "selected_token_count": 10,
+            "sum": 0.9315482863772254,
+            "worst": -0.00045463804826173515
+          },
+          {
+            "capture": 0.16,
+            "count": 13,
+            "fold": 4,
+            "hold_scenes": 61,
+            "mean": 3.1262208179146413e-05,
+            "negative_rms": 0.0010657026487146167,
+            "opportunities": 50,
+            "path_safe": true,
+            "precision": 0.6153846153846154,
+            "scene_count": 61,
+            "selected_token_count": 13,
+            "sum": 0.0004064087063289034,
+            "worst": -0.0038308846880124037
+          }
+        ],
+        "mean_capture": 0.21097540397540399,
+        "mean_precision": 0.7141591741591742,
+        "mode": "aggregate_evidence_only",
+        "selected_count": 71,
+        "teacher_improvement_sum": 5.527642325753739
+      },
+      "aggregate_meanse": {
+        "all_folds_path_safe": false,
+        "certificate": "mean_se",
+        "fold_pass_count": 4,
+        "folds": [
+          {
+            "capture": 0.3148148148148148,
+            "count": 24,
+            "fold": 0,
+            "hold_scenes": 74,
+            "mean": 0.08278284310743761,
+            "negative_rms": 0.0004959404908629087,
+            "opportunities": 54,
+            "path_safe": true,
+            "precision": 0.7083333333333334,
+            "scene_count": 74,
+            "selected_token_count": 24,
+            "sum": 1.9867882345785026,
+            "worst": -0.002361465603113011
+          },
+          {
+            "capture": 0.3392857142857143,
+            "count": 24,
+            "fold": 1,
+            "hold_scenes": 69,
+            "mean": 0.1774442994639082,
+            "negative_rms": 0.00018936995719155643,
+            "opportunities": 56,
+            "path_safe": true,
+            "precision": 0.7916666666666666,
+            "scene_count": 69,
+            "selected_token_count": 24,
+            "sum": 4.258663187133797,
+            "worst": -0.0008613491043445443
+          },
+          {
+            "capture": 0.35,
+            "count": 18,
+            "fold": 2,
+            "hold_scenes": 55,
+            "mean": -0.038627204301830094,
+            "negative_rms": 0.40131064296102337,
+            "opportunities": 40,
+            "path_safe": false,
+            "precision": 0.7777777777777778,
+            "scene_count": 55,
+            "selected_token_count": 18,
+            "sum": -0.6952896774329417,
+            "worst": -1.7026166456802834
+          },
+          {
+            "capture": 0.35135135135135137,
+            "count": 22,
+            "fold": 3,
+            "hold_scenes": 51,
+            "mean": 0.12729676600614204,
+            "negative_rms": 0.21033804148798033,
+            "opportunities": 37,
+            "path_safe": true,
+            "precision": 0.5909090909090909,
+            "scene_count": 51,
+            "selected_token_count": 22,
+            "sum": 2.800528852135125,
+            "worst": -0.9865714945818296
+          },
+          {
+            "capture": 0.32,
+            "count": 23,
+            "fold": 4,
+            "hold_scenes": 61,
+            "mean": 0.032432133245042453,
+            "negative_rms": 0.05320291585587993,
+            "opportunities": 50,
+            "path_safe": true,
+            "precision": 0.6956521739130435,
+            "scene_count": 61,
+            "selected_token_count": 23,
+            "sum": 0.7459390646359765,
+            "worst": -0.25515214426409427
+          }
+        ],
+        "mean_capture": 0.33509037609037606,
+        "mean_precision": 0.7128678085199824,
+        "mode": "aggregate_evidence_only",
+        "selected_count": 111,
+        "teacher_improvement_sum": 9.09662966105046
+      }
+    },
+    "decision_boundary": 0.0,
+    "diagnostic_note": "V24 attribution-resolved variants are intentionally not carried forward: the pre-registered V24 TRAIN branch selected aggregate-downside. This fitter writes the full TRAIN report before any fail-closed exit so a legitimate STOP remains auditable.",
+    "downside_multiplier": 1.0,
+    "fold_seed": "v64.3.23-eaf-icer-rcr-scene-crossfit-v1",
+    "fresh_validation_used": false,
+    "frontier_row_count": 75133,
+    "gate_contract": {
+      "all_5_scene_folds_selected_path_nonharmful": true,
+      "fresh_validation_must_not_be_used_on_train_gate_fail": true,
+      "main": "aggregate_downside",
+      "selected_count_min": 64,
+      "teacher_improvement_sum_min": 0.0
+    },
+    "input_frontier": {
+      "bytes": 804471628,
+      "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/provenance/train_b16_v20_edges.jsonl",
+      "sha256": "b922fd60d6f38ede6eef434921ebbe00d7de63b80f580f30b5b607839b861653"
+    },
+    "memories": {
+      "aggregate_downside": {
+        "certificate": "downside_rms",
+        "feature_count": 18,
+        "mode": "evidence_only",
+        "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_downside_memory.npz",
+        "row_count": 1455,
+        "sha256": "748d34cb0563cb9450d1ddb66c75b4fb37bd70e42923ee1e307fb4fa41935a58"
+      },
+      "aggregate_meanse": {
+        "certificate": "mean_se",
+        "feature_count": 18,
+        "mode": "evidence_only",
+        "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_meanse_memory.npz",
+        "row_count": 1455,
+        "sha256": "b46ca30a254d882233cc8d2c7c8a13f47204c2ed9fe96ff77ffd55e387f28fe5"
+      }
+    },
+    "neighbor_k_values": [
+      32,
+      64
+    ],
+    "population_teacher_improvement_mean": -0.03614354435930589,
+    "population_teacher_improvement_sum": -52.58885704279007,
+    "population_teacher_improvement_worst": -9.839625339961703,
+    "population_teacher_positive_fraction": 0.6213058419243986,
+    "replacement_edges": 1455,
+    "replacement_scenes": 310,
+    "train_gate_pass": true,
+    "train_scene_count": 3000,
+    "train_token_manifest": {
+      "count": 3000,
+      "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/provenance/v64_3_30_baseline_train_tokens.txt",
+      "sha256": "b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4"
+    }
+  },
+  "B16_metrics": {
+    "beneficial": 0.07066666666666667,
+    "flip": 0.339,
+    "guard_block": 0.019,
+    "harmful": 0.017,
+    "match": 0.22466666666666665,
+    "regret": 15405.179467154674
+  },
+  "B16_vs_B24_DRC_population_shift": {
+    "B16": {
+      "downside_crossfit_fold_pass_count": 5,
+      "downside_selected_count": 71,
+      "downside_selected_teacher_improvement_sum": 5.527642325753739,
+      "eligible_replacement_edges": 1455,
+      "population_teacher_improvement_sum": -52.588857,
+      "replacement_scenes": 310,
+      "teacher_positive_edge_fraction": 0.6213058419
+    },
+    "B24": {
+      "downside_crossfit_fold_pass_count": 4,
+      "downside_selected_count": 84,
+      "downside_selected_teacher_improvement_sum": 9.308571438081039,
+      "eligible_replacement_edges": 3821,
+      "failing_fold": {
+        "capture": 0.2542372881355932,
+        "count": 22,
+        "fold": 2,
+        "negative_rms": 0.3062245086423807,
+        "precision": 0.6818181818181818,
+        "teacher_improvement_sum": -0.04163708599843341,
+        "worst": -1.0513503789288543
+      },
+      "population_teacher_improvement_sum": -590.66844057,
+      "population_worst_teacher_improvement": -9.83962534,
+      "replacement_scenes": 483,
+      "teacher_positive_edge_fraction": 0.4022507197
+    }
+  },
+  "B24_DRC_fail_is_selected_path_fold_safety_failure_not_runtime_error": true,
+  "B24_DRC_fit_report": {
+    "algorithm": "V64.3.30 EAF-ICER-FBIC with unchanged V25 DRC recipe",
+    "audit": "v64_3_30_eaf_icer_fbic_train_fit",
+    "causal_contract": {
+      "DRC_estimator_family_changed": false,
+      "K_changed": false,
+      "only_selected_evidence_distribution_changed_by_FBIC": true,
+      "teacher_feature_added": false,
+      "threshold_changed": false
+    },
+    "configs": {},
+    "crossfit": {
+      "aggregate_downside": {
+        "all_folds_path_safe": false,
+        "certificate": "downside_rms",
+        "fold_pass_count": 4,
+        "folds": [
+          {
+            "capture": 0.2222222222222222,
+            "count": 20,
+            "fold": 0,
+            "hold_scenes": 107,
+            "mean": 0.11020258705328509,
+            "negative_rms": 0.22151260613240606,
+            "opportunities": 63,
+            "path_safe": true,
+            "precision": 0.7,
+            "scene_count": 107,
+            "selected_token_count": 20,
+            "sum": 2.204051741065702,
+            "worst": -0.9906337633781135
+          },
+          {
+            "capture": 0.1095890410958904,
+            "count": 10,
+            "fold": 1,
+            "hold_scenes": 96,
+            "mean": 0.41409593479315865,
+            "negative_rms": 0.0011544165898838205,
+            "opportunities": 73,
+            "path_safe": true,
+            "precision": 0.8,
+            "scene_count": 96,
+            "selected_token_count": 10,
+            "sum": 4.140959347931586,
+            "worst": -0.0036505828193214257
+          },
+          {
+            "capture": 0.2542372881355932,
+            "count": 22,
+            "fold": 2,
+            "hold_scenes": 93,
+            "mean": -0.0018925948181106095,
+            "negative_rms": 0.3062245086423807,
+            "opportunities": 59,
+            "path_safe": false,
+            "precision": 0.6818181818181818,
+            "scene_count": 93,
+            "selected_token_count": 22,
+            "sum": -0.04163708599843341,
+            "worst": -1.0513503789288543
+          },
+          {
+            "capture": 0.16666666666666666,
+            "count": 16,
+            "fold": 3,
+            "hold_scenes": 88,
+            "mean": 0.1265546491720164,
+            "negative_rms": 0.0001971479673444711,
+            "opportunities": 54,
+            "path_safe": true,
+            "precision": 0.5625,
+            "scene_count": 88,
+            "selected_token_count": 16,
+            "sum": 2.0248743867522623,
+            "worst": -0.0006010863602163852
+          },
+          {
+            "capture": 0.13432835820895522,
+            "count": 16,
+            "fold": 4,
+            "hold_scenes": 99,
+            "mean": 0.061270190520620126,
+            "negative_rms": 0.06282198201644483,
+            "opportunities": 67,
+            "path_safe": true,
+            "precision": 0.5625,
+            "scene_count": 99,
+            "selected_token_count": 16,
+            "sum": 0.980323048329922,
+            "worst": -0.25128463695537295
+          }
+        ],
+        "mean_capture": 0.17740871526586552,
+        "mean_precision": 0.6613636363636364,
+        "mode": "aggregate_evidence_only",
+        "selected_count": 84,
+        "teacher_improvement_sum": 9.308571438081039
+      },
+      "aggregate_meanse": {
+        "all_folds_path_safe": false,
+        "certificate": "mean_se",
+        "fold_pass_count": 4,
+        "folds": [
+          {
+            "capture": 0.25396825396825395,
+            "count": 24,
+            "fold": 0,
+            "hold_scenes": 107,
+            "mean": 0.12353615638641297,
+            "negative_rms": 0.0003281537487945448,
+            "opportunities": 63,
+            "path_safe": true,
+            "precision": 0.6666666666666666,
+            "scene_count": 107,
+            "selected_token_count": 24,
+            "sum": 2.964867753273911,
+            "worst": -0.0012010433740918813
+          },
+          {
+            "capture": 0.3013698630136986,
+            "count": 28,
+            "fold": 1,
+            "hold_scenes": 96,
+            "mean": 0.3791704461773477,
+            "negative_rms": 0.0015782559316423873,
+            "opportunities": 73,
+            "path_safe": true,
+            "precision": 0.7857142857142857,
+            "scene_count": 96,
+            "selected_token_count": 28,
+            "sum": 10.616772492965735,
+            "worst": -0.007495092636533585
+          },
+          {
+            "capture": 0.2711864406779661,
+            "count": 23,
+            "fold": 2,
+            "hold_scenes": 93,
+            "mean": 0.10883333211136821,
+            "negative_rms": 0.409484413885407,
+            "opportunities": 59,
+            "path_safe": true,
+            "precision": 0.6956521739130435,
+            "scene_count": 93,
+            "selected_token_count": 23,
+            "sum": 2.503166638561469,
+            "worst": -1.7026166456802834
+          },
+          {
+            "capture": 0.24074074074074073,
+            "count": 23,
+            "fold": 3,
+            "hold_scenes": 88,
+            "mean": 0.1585982983237328,
+            "negative_rms": 0.0003980505305355323,
+            "opportunities": 54,
+            "path_safe": true,
+            "precision": 0.5652173913043478,
+            "scene_count": 88,
+            "selected_token_count": 23,
+            "sum": 3.647760861445854,
+            "worst": -0.0016910766631363927
+          },
+          {
+            "capture": 0.1791044776119403,
+            "count": 26,
+            "fold": 4,
+            "hold_scenes": 99,
+            "mean": -0.06859237206072683,
+            "negative_rms": 0.4416501913875288,
+            "opportunities": 67,
+            "path_safe": false,
+            "precision": 0.46153846153846156,
+            "scene_count": 99,
+            "selected_token_count": 26,
+            "sum": -1.7834016735788973,
+            "worst": -2.0229625809788705
+          }
+        ],
+        "mean_capture": 0.24927395520251996,
+        "mean_precision": 0.634957795827361,
+        "mode": "aggregate_evidence_only",
+        "selected_count": 124,
+        "teacher_improvement_sum": 17.94916607266807
+      }
+    },
+    "decision_boundary": 0.0,
+    "fold_seed": "v64.3.23-eaf-icer-rcr-scene-crossfit-v1",
+    "fresh_validation_used": false,
+    "frontier_row_count": 75133,
+    "memories": {},
+    "neighbor_k_values": [
+      32,
+      64
+    ],
+    "population_teacher_improvement_sum": -590.6684405696607,
+    "population_teacher_improvement_worst": -9.839625339961703,
+    "population_teacher_positive_fraction": 0.40225071970688303,
+    "replacement_edges": 3821,
+    "replacement_scenes": 483,
+    "train_gate_pass": false,
+    "train_scene_count": 3000
+  },
+  "B24_DRC_train_gate_pass": false,
+  "B24_metrics": {
+    "beneficial": 0.04933333333333333,
+    "flip": 0.317,
+    "guard_block": 0.019,
+    "harmful": 0.012,
+    "match": 0.20566666666666666,
+    "regret": 16323.009768831782
+  },
+  "V64_3_30_2_design": {
+    "B16_is_operating_point_not_novelty": true,
+    "M_fixed": 24,
+    "additional_evidence_queries": 0,
+    "fresh_DRC_arms_allowed": false,
+    "fresh_arms_per_split": [
+      "raw",
+      "B16-V20",
+      "B24-V20"
+    ],
+    "fresh_seed": "v64.3.30-eaf-icer-fbic-double-fresh-v1",
+    "paired_diagnostics": [
+      "direct positive-opportunity capture",
+      "all changed-action teacher-regret effect",
+      "fixed-B16-positive-opportunity paired teacher-regret effect",
+      "endpoint noninferiority",
+      "structural no-op",
+      "query parity"
+    ],
+    "post_selector_retained_ceiling_capacity_probe": 24,
+    "purpose": "complete the missing untouched pure-capacity mediator test without lowering the failed B24 DRC gate",
+    "same_original_V30_fresh_seed": true,
+    "upstream_selector_budget_fixed": 16
+  },
+  "additional_evidence_transmission_metrics": {
+    "budget_vs_full_action_match": {
+      "B16": 0.213667,
+      "B24": 0.245333
+    },
+    "effective_selected_decisive_atom_recall": {
+      "B16": 0.75795,
+      "B24": 0.94325
+    },
+    "selected_interaction_decisive_recall": {
+      "B16": 0.48225,
+      "B24": 0.69035
+    },
+    "selected_soft_interaction_decisive_recall": {
+      "B16": 0.63318,
+      "B24": 0.90684
+    }
+  },
+  "all_flagged_scene_count": 262,
+  "audit": "v64_3_30_1_repaired_fbic_train_result",
+  "capacity_action_switch": {
+    "B16_minus_B24_teacher_regret_mean_on_changed_actions": -3710.904184678252,
+    "B16_minus_B24_teacher_regret_sum_on_changed_actions": -2753490.905031263,
+    "B24_beneficial_change_count": 337,
+    "B24_best_regret_reduction_on_changed_actions": 209157.4161164984,
+    "B24_equal_change_count": 2,
+    "B24_harmful_change_count": 403,
+    "B24_worst_regret_increase_on_changed_actions": 270855.3306287527,
+    "safe_action_change_count": 742
+  },
+  "causal_status": {
+    "algorithmic_result": "B24 unchanged DRC recipe fails pre-registered TRAIN fold-safety gate (4/5); this is valid development evidence",
+    "central_capacity_question": "UNRESOLVED because launcher stopped before untouched pure B16-V20 vs B24-V20 A/B",
+    "engineering_result": "VALID through paired B16/B24 TRAIN and B24 DRC fit; no runtime or accounting blocker found",
+    "posterior_direction_only": "TRAIN strongly favors downstream consumer/operator mismatch over simple retained-capacity loss, but this must not be promoted to an independent/final claim without untouched pure-capacity A/B."
+  },
+  "development_interpretation": "FBIC materially increases evidence transmission/coverage, but on frozen TRAIN the pure downstream endpoint worsens and the unchanged DRC loses fold safety. This is directional evidence for downstream operator/reliability mismatch, not independent evidence that B16 capacity is irrelevant.",
+  "engineering_contract_valid": true,
+  "evidence_certificate_fraction": {
+    "B16": 0.8753333333333333,
+    "B24": 0.9823333333333333
+  },
+  "fbic_diagnostics": {
+    "enabled_rate": 1.0,
+    "no_new_query_rate": 1.0,
+    "reason_code_counts": {
+      "0": 2691,
+      "1": 262,
+      "6": 47
+    },
+    "retained_interface_budget_pass_rate": 1.0,
+    "retained_interface_configured_budget_mean": 24.0,
+    "safe_added_atom_count_mean": 7.806428049671293,
+    "safe_applied_rate": 0.9828341855368883,
+    "safe_baseline_count_mean": 15.949598246895544,
+    "safe_final_count_mean": 23.756026296566837,
+    "safe_reference_count_mean": 23.756026296566837,
+    "safe_removed_atom_count_mean": 0.0,
+    "scene_count": 3000,
+    "structural_applied_rate": 0.0,
+    "upstream_configured_budget_mean": 16.0
+  },
+  "fresh_capacity_question_resolved": false,
+  "fresh_validation_used": false,
+  "historical_B16_V25_reproduced": true,
+  "next_experiment": "untouched double-fresh raw/B16-V20/B24-V20 pure-capacity screen; B24 DRC remains fail-closed",
+  "pure_v20_train_gate_decomposition": {
+    "B16": {
+      "positive_opportunity_capture_rate": 0.25653798256537985,
+      "scalar_positive_opportunity_scenes": 248,
+      "selected_teacher_positive_recovery_scenes": 206,
+      "support_and_scalar_positive_opportunity_scenes": 229,
+      "support_positive_opportunity_scenes": 552,
+      "teacher_positive_direct_admissible_opportunities": 803
+    },
+    "B24": {
+      "positive_opportunity_capture_rate": 0.17916137229987295,
+      "scalar_positive_opportunity_scenes": 327,
+      "selected_teacher_positive_recovery_scenes": 141,
+      "support_and_scalar_positive_opportunity_scenes": 305,
+      "support_positive_opportunity_scenes": 551,
+      "teacher_positive_direct_admissible_opportunities": 787
+    }
+  },
+  "query_accounting": {
+    "action_atom_query_count": {
+      "b16_mean": 619.5873333333333,
+      "b24_mean": 619.5873333333333,
+      "exact_scene_parity": true
+    },
+    "all_query_counts_exact_scene_parity": true,
+    "effective_query_action_count": {
+      "b16_mean": 26.044333333333334,
+      "b24_mean": 26.044333333333334,
+      "exact_scene_parity": true
+    },
+    "proposal_candidate_atom_count": {
+      "b16_mean": 23.776666666666667,
+      "b24_mean": 23.776666666666667,
+      "exact_scene_parity": true
+    }
+  },
+  "safe_scene_count": 2738,
+  "scientific_scope": "development-only; untouched A/B pure-capacity evaluation remains required",
+  "selected_decisive_atom_recall": {
+    "B16": 0.5304979546063938,
+    "B24": 0.7157990088958471
+  },
+  "uploaded_artifact_sha256": {
+    "code_zip": "43edc801711b42092ff2ba4bf6d382a5615e54c21fd986b0453f79f853e29b9e",
+    "configs_zip": "80cbb0487af4ba9956dfa98a2100145c6b19e4e5b4b435bb29b515221c132295",
+    "logs_zip": "5de838d1e861d9ef3caa2930a77ab40a2eb60186c3355a28323207293a2be73a",
+    "provenance_part1_zip": "e40f2c6984710150c2ebf330985f6af27f12d4c117491009aa6aedaa579617bf",
+    "provenance_part2_zip": "7b60f93f45e58638b04f5709dbaf42bc499c2e42579bfbd80c9642c2df77ee66"
+  }
+}

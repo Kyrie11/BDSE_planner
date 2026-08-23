@@ -1,0 +1,9 @@
+V64.3.30.2 EAF-ICER-FBIC pure-capacity mediator completion
+
+Run exactly:
+
+cd bdse_v64_3_30_2_eaf_icer_fbic_pure
+bash RUN_V64_3_30_2_EAF_ICER_FBIC_PURE_SCREEN_2GPU.sh
+
+Do not change B/M, K, DRC threshold/downside multiplier, support/scalar boundaries, exclusion manifest, or fresh hash seed.
+The B24 DRC TRAIN failure is expected to reproduce and remains fail-closed; V30.2 spends untouched data only on raw/B16-V20/B24-V20 pure-capacity arms.

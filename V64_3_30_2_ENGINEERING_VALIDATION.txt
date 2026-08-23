@@ -1,0 +1,39 @@
+V64.3.30.2 EAF-ICER-FBIC PURE — ENGINEERING VALIDATION
+
+Purpose
+-------
+Complete the missing untouched pure-capacity mediator test after repaired V30.1 validly showed the unchanged B24 DRC recipe is not 5/5 TRAIN fold-safe. No new planning algorithm, budget sweep, or DRC rescue is introduced.
+
+Scientific isolation
+--------------------
+- upstream evidence/selector operating point: B=16 (unchanged)
+- queried bank: M=24 (unchanged)
+- post-selector diagnostic retained ceiling: 24
+- additional evidence queries: 0
+- B24 set must be a superset of B16; removal/reallocation is forbidden
+- all-flagged structural domain: FBIC no-op
+- B24 DRC TRAIN failure: required to reproduce; no fresh DRC arm
+- untouched seed: v64.3.30-eaf-icer-fbic-double-fresh-v1 (same still-unspent V30 seed)
+- fresh arms: raw / B16-V20 / B24-V20 only, A/B independently
+
+Validation
+----------
+Python compile: PASS
+V30.2 launcher bash -n: PASS
+V30.2 + FBIC focused tests: 16/16 PASS
+V13--V30.2 targeted regression: 123/123 PASS
+Repository full regression: 453/453 PASS
+Warnings: 36; all are pre-existing PyTorch Transformer nested_tensor/norm_first warnings; no new warning class.
+
+Uploaded repaired V30.1 provenance audit
+----------------------------------------
+engineering_contract_valid: true
+historical_B16_V25_reproduced: true
+B24_DRC_train_gate_pass: false
+B24 DRC failure type: selected-path fixed-fold safety failure, not runtime/shape/accounting error
+fresh_validation_used: false
+central capacity question resolved: false
+
+Current development signal
+--------------------------
+B24 increases decisive-evidence transmission and evidence-certificate coverage, but pure TRAIN endpoint/capture worsen and unchanged DRC loses fold safety. This is development-only directional evidence for a downstream consumer/operator mismatch; V30.2 untouched pure-capacity A/B is required before promotion.
