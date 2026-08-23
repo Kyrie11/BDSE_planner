@@ -9498,3 +9498,35 @@ In addition to all prior prohibitions, do not:
 - V13--V30.2 targeted: **123/123 PASS**;
 - repository full tests: **453/453 PASS**;
 - warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
+
+# V64.3.30.2 uploaded fresh result -> V64.3.30.3 FBIC-PURE audit-fix rerun
+
+## Status
+
+The uploaded V64.3.30.2 planner evaluations are not a runtime/crash failure: all six fresh arms completed, query parity and structural preservation are intact, and FBIC reason codes are limited to the intended `0/1/6` paths. Nevertheless the frozen V30.2 checker serializes `capacity_probe_safe_applied_rate_min=0.90` as a preregistered engineering threshold, while A/B realize only `0.862869 / 0.849687` safe application prevalence. The official double-fresh screen therefore returns `engineering_valid=false`.
+
+This threshold is a checker-contract error. `safe_applied_rate` measures how often the already-queried reference bank is strictly larger than the frozen B16 baseline, not whether FBIC executes correctly. Reason code 6 is the designed no-op for `reference_count == baseline_count`. For the uploaded B block, a pointwise re-audit confirms 407/407 expandable safe scenes applied, 72/72 non-expandable safe scenes are exact reason-6 no-ops, 21/21 structural scenes are exact reason-1 no-ops, and there are zero budget/query/accounting violations. A's serialized report likewise contains only reasons 0/1/6, exact query parity, zero removed atoms, no-new-query=1, retained-budget pass=1, and structural identity=1.
+
+Because the defective 0.90 test existed before the run and appears under `preregistered_thresholds`, it is **forbidden** to remove it after observing A/B and then promote the same 1000 scenes to a paper-level capacity conclusion. V30.2 fresh is now spent diagnostic evidence. No algorithm/mechanism conclusion is promoted in this changelog entry.
+
+## V64.3.30.3 engineering-only changes
+
+1. Add an opportunity-conditional FBIC integrity audit:
+   - safe + `reference > baseline`: reason 0, applied=1, final=reference, exact added count;
+   - safe + `reference == baseline`: reason 6, applied=0, final=baseline=reference;
+   - structural: reason 1, applied=0, final=baseline;
+   - any invalid reason, query mismatch, B16 deletion, budget mismatch, retained-budget failure, or new query remains a hard engineering STOP.
+2. `safe_applied_rate` is renamed in interpretation to population-level `safe_expandable_rate` and is descriptive only. The pre-existing mean retained-atom increase >=4 remains a separate design-exposure gate.
+3. Add the spent V30.2 1000 fresh tokens to the design exclusion: 9700 unique tokens total, SHA256 `cc2f7228ed802f8f605f8d1c7a48f3fe889130daa89307a4b0118c373ee33253`.
+4. Use new fresh seed `v64.3.30.3-eaf-icer-fbic-pure-auditfix-double-fresh-v1`.
+5. Reuse/re-audit the already-valid V30.2 TRAIN provenance rather than re-running 6000 TRAIN evaluations; only new raw/B16-V20/B24-V20 A/B are evaluated.
+6. Generate a SHA256 manifest for every provenance file at the end of the run so multipart review uploads can be checked for completeness. The uploaded V30.2 review bundle omitted `A_b24_v20_rows.jsonl`; this was a packaging omission, not a planner execution failure.
+7. No planner algorithm, EAF/ICER head, B/M, DRC gate, support/scalar threshold, selector objective, evidence query, structural operator, or capacity intervention is changed.
+
+## No-repeat / protocol constraints added
+
+- Do not reinterpret the spent V30.2 fresh sample as formal independent evidence after the checker repair.
+- Do not restore a population-level minimum FBIC application rate as an engineering gate; validate application conditional on expansion opportunity instead.
+- Do not synthesize extra atoms or alter upstream acquisition to increase FBIC application prevalence.
+- Do not begin V31 or any new recovery/operator optimization until V30.3 completes on the new untouched A/B and passes the corrected pointwise integrity + exposure + structural contracts.
+- Do not omit required per-sample rows from future review bundles; verify the generated provenance SHA256 manifest before upload.

@@ -1,0 +1,22 @@
+V64.3.30.3 EAF-ICER-FBIC-PURE-AUDITFIX engineering validation
+
+Scope: audit semantics / orchestration only; no planner algorithm change.
+
+- Python compileall: PASS
+- launcher bash -n: PASS
+- V30.3 focused + V30.2 + FBIC focused: 20/20 PASS
+- V13 -> V30.3 targeted regression: 127/127 PASS
+- repository full regression: 457/457 PASS
+- full-suite warnings: 36
+- warning classes: existing PyTorch Transformer nested_tensor/norm_first warnings only
+- uploaded V30.2 split-B re-audit with pointwise V30.3 contract: PASS
+  - safe expandable: 407/407 applied correctly
+  - safe no-expansion: 72/72 reason-6 exact no-op
+  - structural: 21/21 reason-1 exact no-op
+  - global budget/query/accounting violations: 0
+- new design exclusion: 9700 unique tokens = historical 8700 + spent V30.2 fresh 1000
+- exclusion SHA256: cc2f7228ed802f8f605f8d1c7a48f3fe889130daa89307a4b0118c373ee33253
+- fresh seed: v64.3.30.3-eaf-icer-fbic-pure-auditfix-double-fresh-v1
+- no B24 DRC fresh arm
+- no B/threshold/DRC/support/scalar/selector/acquisition change
+- V30.2 fresh results are explicitly not promoted after post-hoc checker repair
