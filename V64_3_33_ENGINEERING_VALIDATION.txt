@@ -1,0 +1,27 @@
+V64.3.33 EAF-ICER-SPCR local engineering validation
+====================================================
+
+Scope
+- Built from the uploaded V64.3.32.1 WEIGHTFIX repository.
+- No change to tournament runtime action-path implementation was required; V33 reuses the existing rank_only/conformal_veto monotone SCIR runtime semantics.
+- New mechanism code is limited to structured TRAIN fitting, selected-policy calibration, contract/split/screen audits, launcher, and tests.
+
+Validation
+- python -m compileall -q bdse: PASS
+- bash -n RUN_V64_3_33_EAF_ICER_SPCR_SCREEN_2GPU.sh: PASS
+- V33 focused tests: 6/6 PASS
+- V13-V33 targeted regression: 146/146 PASS
+- Full repository collection: 476 tests
+- Full repository regression: 476/476 PASS, executed as deterministic 238 + 238 halves to stay inside the outer execution window
+- Full repository warnings: 36 total, all pre-existing PyTorch Transformer nested_tensor/norm_first warning class; 0 new warning class
+
+Mechanism-specific regression coverage
+- incumbent pseudo-item wins non-positive/no-opportunity teacher scenes
+- each scene has total structured pair-loss mass exactly one
+- structured ridge retains fixed lambda=1 without the historical global weight normalization bug
+- zero-preserving pair-gap scoring keeps incumbent runtime score exactly zero
+- RANK/MAIN proposal identity and no-second-best fallback are preserved
+- selected-policy calibrator contributes at most one residual per frozen proposal scene and freezes alpha=0.05
+- contract checker requires exact same RANK selector in MAIN and exact calibration quantile
+
+No nuPlan V33 result is fabricated locally. The launcher must first reproduce the exact uploaded V32.1 TRAIN failure and no-opportunity failure slice, then run V33's nested TRAIN full-mechanism gate. If that gate fails, it stops before CAL/fresh selection.

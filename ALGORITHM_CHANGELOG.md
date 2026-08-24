@@ -9868,3 +9868,171 @@ Local validation of V64.3.32.1:
 - dedicated regression test reproduces the exact intended scene-total-weight-1 ridge solution and verifies it differs from the historical globally normalized objective.
 
 No nuPlan outcome is fabricated locally. V64.3.32.1 must be run before any further algorithm-level attribution.
+
+# V64.3.32.1 uploaded execution audit → V64.3.33 EAF-ICER-SPCR
+
+## 1. V64.3.32.1 is engineering-valid for TRAIN-level attribution
+
+The repaired V64.3.32.1 WEIGHTFIX execution correctly implements the frozen scene-equal ridge objective and reaches the preregistered nested TRAIN scientific gate without runtime/engineering failure. No CAL500/A500/B500 tokens were selected, so the result is development-level only and the next fresh population remains unspent.
+
+Verified V32.1 objective-scale contract in every outer fit:
+
+- fit scene / squared-loss mass: 483/483, 500/500, 461/461, 450/450, 452/452;
+- feature moments alone use normalized moment weights;
+- ridge loss and ridge-leverage Gram use unnormalized scene-total-one loss weights;
+- fixed `lambda=1`, fixed `alpha=0.05`, candidate set, structural delegation, incumbent default and no-fallback semantics are unchanged.
+
+There is no second implementation blocker that invalidates the observed nested TRAIN behavior.
+
+## 2. V64.3.32.1 SSIR result
+
+Corrected MEAN cross-fit:
+
+- selected: **476**;
+- selected positive: **260**;
+- precision: **54.62%**;
+- positive-opportunity capture: **45.30%**;
+- selected teacher-improvement sum: **-18.0303795**;
+- worst: **-6.7353768**;
+- NegRMS: **0.62699**;
+- selected catastrophes `Delta_T<=-0.5`: **47**.
+
+The corrected mean therefore still contains signal but is not selection-stable. It is not valid to restore the historical V31 algorithm conclusion solely by saying the mean scorer is signal-free.
+
+The V31-style selected-proposal common conformal replay retains only **3** proposals, with one positive and worst **-1.2330**. A common post-selection veto on the corrected MEAN scorer is therefore not an adequate rescue.
+
+V32 SSIR scene-simultaneous LCB selects **0** proposals in all five outer folds. The five scene-max q values are approximately **2.995 / 4.035 / 3.291 / 4.845 / 4.752**, while selected leverage scales remain near one. The frozen V32 mechanism fails because its complete-candidate simultaneous positive-certificate requirement collapses recovery coverage.
+
+This falsifies the V32 sub-hypothesis that all-candidate simultaneous lower-bound ordering is the appropriate first-order solution for the repaired selected-path problem. It does **not** justify alpha, leverage, threshold, or candidate-set tuning.
+
+## 3. New decisive failure slice: no-intervention is a first-class structured alternative
+
+The serialized V32.1 TRAIN audit gives a stronger causal decomposition:
+
+- MEAN non-positive selected proposals: **216**;
+- MEAN selected catastrophes `<=-0.5`: **47**;
+- selected proposals in scenes with **no positive challenger at all**: **110**;
+- those no-opportunity scenes contribute selected teacher-improvement sum **-60.15197**;
+- they account for **110/216 = 50.9%** of non-positive proposals;
+- they account for **31/47 = 66.0%** of catastrophes.
+
+On selected scenes that do contain at least one positive challenger:
+
+- selected: 366;
+- positive: 260;
+- precision: **71.04%**;
+- selected sum: **+42.12159**;
+- catastrophes: 16.
+
+Therefore the dominant error is not only wrong winner identity among candidate interventions. A large fraction of the harmful tail comes from scenes in which the correct structured decision is **incumbent / no intervention**, but the historical edge-wise positive-score operator learns intervention existence only indirectly.
+
+## 4. Dominant-bottleneck tightening after V32.1
+
+Previous wording:
+
+> selection-stable counterfactual lower-bound ordering at the direct incumbent-replacement boundary.
+
+New wording:
+
+> **scene-structured intervention-existence plus selected-policy ordering reliability at the direct incumbent-replacement boundary.**
+
+The deployment object is `argmax({incumbent/no-op} union challengers)`, not a collection of independent edge labels. The next mechanism must align both the training objective and the statistical calibration population with that scene-level structured choice.
+
+## 5. New no-repeat constraints after V32.1
+
+Retain every historical no-repeat constraint. Additionally, do **not**:
+
+- sweep or weaken the V32 simultaneous conformal alpha/q, leverage multiplier, or positive-LCB boundary to manufacture coverage;
+- post-hoc restrict the simultaneous candidate set after observing V32.1;
+- treat the 0-selection SSIR result as motivation for a lower confidence level without a new mechanism hypothesis;
+- add another intervention/no-intervention binary classifier or generic tail head;
+- add another generic edge/listwise score that omits the incumbent as an explicit null alternative;
+- interpret a high score threshold counterfactual as a mechanism solution: simple mean-score thresholding still leaves catastrophic selected proposals and is already outside the frozen threshold discipline;
+- consume fresh A/B unless the complete scene-structured mechanism itself passes nested TRAIN.
+
+## 6. V64.3.33 EAF-ICER-SPCR
+
+Full name: **Evidence-Attributed Incumbent-Contrastive Structured Policy-Calibrated Recovery**.
+
+V33 preserves B16/M24, upstream acquisition, EAF, the 19-D same-scene candidate-minus-incumbent evidence representation, admissibility/support prerequisites, incumbent-default policy, structural delegation, and no-fallback containment. It changes the **decision/training unit** and the **calibration unit**.
+
+### 6.1 Incumbent-augmented scene-structured selector
+
+For direct scene challengers `b`, keep V32.1 feature `x_b` and teacher improvement `Delta_b = J_T(i)-J_T(b)`. Add the incumbent pseudo-item:
+
+- `x_i=0`;
+- `Delta_i=0`;
+- runtime score `s_i=0` exactly.
+
+Let `b_T` be the teacher-best item over incumbent plus challengers. Incumbent wins every non-positive/tied no-opportunity scene.
+
+Fit a fixed linear ridge on teacher-best-vs-rival pair gaps:
+
+`d_{b_T,r}=x_{b_T}-x_r`,
+
+`g_{b_T,r}=Delta_{b_T}-Delta_r >= 0`.
+
+Each direct scene contributes total pair-loss mass exactly one. Use fixed ridge `lambda=1`, zero-preserving RMS feature scale, no mean centering and no intercept. Thus the semantic intervention boundary is structurally the incumbent score zero, not a validation threshold.
+
+RANK selects the maximum positive structured challenger score; otherwise it preserves the incumbent.
+
+### 6.2 Selected-policy conformal certificate
+
+After the structured selector is frozen, calibration collects **one** residual only from the proposal actually emitted by that frozen selector:
+
+`R = s_{b_hat} - Delta_T(b_hat;i)`.
+
+Fixed `alpha=0.05` split conformal gives one q. MAIN executes exactly the same proposal iff
+
+`s_{b_hat}-q > 0`,
+
+otherwise it returns the incumbent. No re-ranking, second-best fallback, or new action path is permitted.
+
+Under exchangeability of the filtered proposal-emitting direct-scene population after the X-only selector is frozen, this supplies marginal one-sided coverage for the selected policy output. The claim is not per-scene conditional, distribution-shift, or closed-loop absolute safety.
+
+### 6.3 Causal controls
+
+V33 fresh protocol retains:
+
+- `PRESERVE`: incumbent-default control;
+- `MEAN`: exact repaired V32.1 edge-mean control;
+- `SPCR-RANK`: structured selector only;
+- `SPCR-MAIN`: same structured proposal plus selected-policy conformal certificate.
+
+This isolates structured decision alignment from calibration.
+
+### 6.4 Nested TRAIN gate
+
+Reuse the exact V32 fold hash. For each outer fold: 3 fit / 1 selected-policy calibration / 1 test.
+
+Before selecting any CAL/fresh population require:
+
+- aggregate RANK no-positive-opportunity false interventions < corrected MEAN;
+- RANK catastrophic count <= MEAN;
+- RANK has strict selected-sum or catastrophic-count improvement over MEAN;
+- all 5 MAIN test folds have selected teacher-improvement sum >=0 and zero selected catastrophes `<=-0.5`;
+- aggregate MAIN selected >=64 and positive >=32.
+
+Failure stops before fresh. No lambda/alpha/feature/threshold rescue.
+
+### 6.5 Independent fresh protocol
+
+V32.1 did not consume fresh data. V33 keeps the permanent 10700-token design exclusion and uses a new label-free seed:
+
+`v64.3.33-eaf-icer-spcr-cal500-double-fresh-v1`.
+
+Only after TRAIN pass select CAL500 + A500 + B500. CAL requires >=64 structured proposals and determines exactly one q.
+
+A/B each run six arms:
+
+`RAW / V20 / PRESERVE / MEAN / SPCR-RANK / SPCR-MAIN`.
+
+Each block is judged independently. The RANK mechanism must reduce no-opportunity false interventions versus MEAN. MAIN must obtain >=3 pp useful direct capture over PRESERVE, selected count >=8, selected sum >=0, worst >-0.5, tail/precision non-inferiority, exact same-proposal/no-fallback containment, and endpoint non-inferiority to both PRESERVE and V20. No A/B pooling.
+
+## 7. Paper-line implication
+
+The current CCF-A-oriented mainline should no longer be PTMC/FCR/SSIR-module-centric. The higher-level contribution stack is:
+
+`bounded auditable evidence interface -> exact EAF action-local attribution -> incumbent-augmented structured intervention sufficiency -> selected-policy reliability calibration -> monotone incumbent/no-fallback containment -> independent double-fresh/full-validation/closed-loop evidence`.
+
+The conceptual novelty is the alignment of **decision sufficiency, structured null-action extremal selection, and policy-level reliability** under a fixed auditable interface. Pairwise ridge or conformal prediction alone are not claimed as novel.
