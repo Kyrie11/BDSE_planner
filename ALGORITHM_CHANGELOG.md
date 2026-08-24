@@ -9530,3 +9530,88 @@ Because the defective 0.90 test existed before the run and appears under `prereg
 - Do not synthesize extra atoms or alter upstream acquisition to increase FBIC application prevalence.
 - Do not begin V31 or any new recovery/operator optimization until V30.3 completes on the new untouched A/B and passes the corrected pointwise integrity + exposure + structural contracts.
 - Do not omit required per-sample rows from future review bundles; verify the generated provenance SHA256 manifest before upload.
+
+# V64.3.30.3 untouched capacity closure -> V64.3.31 EAF-ICER-SCIR
+
+Date: 2026-08-24
+
+## V30.3 result status: engineering/protocol valid for algorithm attribution
+
+The uploaded V64.3.30.3 run is the first V30 capacity experiment whose corrected pointwise FBIC contract and new untouched A/B both close. All six fresh arms completed, A/B each contain 500 unique scenes, A/B are disjoint, the 1000 fresh scenes have zero overlap with the 9700-token design exclusion and frozen TRAIN, and the selection is hash-based/label-free. FBIC query parity, B16-subset/no-deletion, no-new-query accounting, retained-ceiling accounting, structural reason-1 delegation, reason-6 exact no-expansion no-op, and reason-0 exact expansion all pass on both splits.
+
+One packaging-only provenance defect was found: `v64_3_30_3_stage_timing.tsv` was hashed before the launcher appended its `TOTAL` line, so that timing file alone mismatches `v64_3_30_3_provenance_sha256.txt`. All scientific configs, rows, edges, token manifests, per-split reports, and official screens match their recorded hashes. This does not affect planner execution or the frozen scientific protocol, so the V30.3 result remains valid for algorithm attribution. The V30.3 launcher carried in this package is repaired by appending `TOTAL` before generating the provenance manifest.
+
+## V30.3 independent capacity conclusion
+
+V30.3 formally closes the remaining pure-capacity ambiguity under the frozen V20 consumer. Increasing the retained interface from B16 to the already-queried M24 bank substantially increases decisive-evidence visibility on both independent splits, but it does not improve direct recovery reliably.
+
+Split A: selected decisive recall `0.5501 -> 0.7344`, effective decisive recall `0.7772 -> 0.9615`, interaction decisive recall `0.5000 -> 0.7044`, soft-interaction decisive recall `0.6685 -> 0.9325`, while direct positive-opportunity capture falls `55/168 = 32.74% -> 38/164 = 23.17%`, direct replacement precision falls `57.89% -> 42.22%`, and incumbent-dominance AUC falls `0.7708 -> 0.7259`. B24-vs-B16 action switches are net harmful by `-405621.45` teacher-regret units.
+
+Split B: selected decisive recall `0.5644 -> 0.7486`, effective decisive recall `0.7826 -> 0.9668`, interaction decisive recall `0.5157 -> 0.7239`, soft-interaction decisive recall `0.6703 -> 0.9372`, while direct positive-opportunity capture falls `51/152 = 33.55% -> 41/151 = 27.15%`, direct replacement precision falls `62.96% -> 53.25%`, and incumbent-dominance AUC falls `0.7703 -> 0.7470`. The total endpoint happens to improve on B, so endpoint sign is cross-split unstable and must not be used to rescue the direct-mechanism failure.
+
+Anchor-relative support remains stable under capacity expansion (`A: 0.8109 -> 0.8080`, `B: 0.8106 -> 0.8174` AUC), whereas incumbent-relative dominance degrades on both splits. This localizes the failure more tightly than V30.1: candidate evidence/support is present, but the incumbent-contrastive ordering semantics and extremal selection operator do not stably convert it into the correct replacement.
+
+Formal scoped paper-level answer after V30.3:
+
+> Under the current frozen downstream semantics, simple retained-capacity expansion inside the already-queried bank is not a reproducible first-order missing mediator. More candidate-specific/decisive evidence becomes visible, yet direct incumbent-replacement reliability degrades on both independent fresh blocks. The dominant missing mechanism is therefore downstream intervention-conditioned, selection-conditioned recovery semantics/operator reliability rather than capacity-only transmission.
+
+This does **not** claim that B16 never discards useful information, that interface capacity is universally irrelevant, or that M24 contains no latent signal. It falsifies `capacity-only + frozen consumer` as the first-order causal solution.
+
+## Mainline and dominant-bottleneck update
+
+Decision sufficiency is no longer treated as a property of the retained representation alone. Under extremal recovery it is a **joint property of intervention-conditioned evidence and the operator that consumes it after selection**.
+
+Updated mechanism chain:
+
+`bounded auditable evidence interface -> exact EAF action-local attribution -> deployment-admissible incumbent-contrastive intervention -> evidence-visibility/sufficiency diagnostic -> selection-conditioned counterfactual ordering -> extremal-selection-stable intervention operator -> incumbent-default / monotone containment -> structural + catastrophic-tail safety -> double-fresh and independent closed-loop validation`.
+
+The current dominant bottleneck is tightened to:
+
+> **selection-conditioned incumbent-contrastive ordering reliability at the direct replacement boundary, together with post-selection calibration.**
+
+The stable anchor-support signal is not the main bottleneck. The weak link is converting same-scene challenger-vs-incumbent evidence into a calibrated extremal replacement after winner selection without cross-population tail failure.
+
+## No-repeat constraints added after V30.3
+
+In addition to all previously frozen failed directions, stop capacity-only B sweeps, same-bank rebinding/selector rescue, and any attempt to treat B24 as the novelty. Do not infer decision sufficiency from decisive-evidence recall alone. Do not rescue a failed direct-replacement mechanism by pooling endpoint improvements from anchor/structural/inadmissible paths or by A/B sign cancellation. Do not reuse the 1000 V30.3 fresh scenes for V31 fitting, calibration, threshold selection, or promotion. Do not return to PTMC/classifier/KNN, DRC threshold/K/downside, FCR/global reconstruction, support/scalar threshold tuning, generic acquisition/coreset/beam/swap, naive feature concatenation, or learned incumbent-to-anchor veto. Generic shared edge/listwise scoring is also not a substitute for a same-scene incumbent-conditioned selected-path objective.
+
+## V64.3.31: EAF-ICER-SCIR (Selection-Conditioned Intervention Recovery)
+
+V31 changes only the direct incumbent-replacement consumer. Upstream B=16 / M=24 acquisition, EAF exact attribution, candidate bank, anchor support, admissibility, structural delegation, execution guards, and evidence-query accounting remain frozen. FBIC, FCR, DRC, and PTMC are disabled in the V31 promotion arms.
+
+### 1. PRESERVE causal control
+
+A dedicated `PRESERVE` arm keeps the frozen V20 direct dominance semantics but forces an admissible incumbent to remain the default instead of allowing the historical learned incumbent-to-anchor veto. This isolates the effect of incumbent-default semantics from the effect of the new SCIR direct operator.
+
+### 2. Same-scene continuous intervention ordering
+
+SCIR replaces the old binary scalar-dominance gate/rank on the direct path with a continuous same-scene challenger-vs-incumbent target. A fixed 19-D contrast representation is constructed from the frozen 18-D EAF evidence view as challenger-minus-incumbent plus the frozen support-logit difference. TRAIN supervision is the continuous teacher improvement `Delta_T(challenger; incumbent)`, not a generic positive/negative edge label. A ridge-linear model with fixed lambda=1 and scene-equal weighting is fit once; no validation sweep is allowed. The old scalar-dominance output remains logged as a diagnostic but is not used to gate or rank the SCIR direct arm.
+
+The `SCIR-RANK` arm considers only deployment-admissible, support-positive direct alternatives with predicted improvement `>0`, and selects exactly one proposal by maximum predicted same-scene improvement with deterministic tie breaking. The incumbent is the semantic zero/default. There is no learned incumbent-to-anchor direct veto.
+
+### 3. Independent selected-proposal conformal certificate
+
+V31 introduces one independent CAL500 population selected label-free after fitting but before any promotion A/B labels are observed. The rank predictor and proposal operator are frozen before CAL labels are used. On CAL selected proposals, residuals are `r = predicted_improvement - teacher_improvement`. With fixed `alpha=0.05`, the one-sided finite-sample split-conformal quantile is the order statistic `ceil((n+1)(1-alpha))`, conservatively floored at zero. The main arm executes the **same** rank proposal only when `predicted_improvement - q > 0`; otherwise it returns directly to the incumbent. It cannot re-rank or fall through to a second action.
+
+Under exchangeability of the selected-proposal calibration and future selected-proposal populations, and with predictor/proposal frozen before calibration, this yields marginal finite-sample coverage for the proposal-level lower bound. Therefore a harmful accepted proposal (`true improvement <= 0` while lower bound `>0`) must occur inside the lower-bound miscoverage event. This is a selected-proposal marginal guarantee, not a per-scene or closed-loop absolute safety theorem.
+
+### 4. V31 protocol
+
+The 1000 V30.3 fresh tokens are added to the permanent design exclusion, producing 10700 unique excluded tokens with SHA256 `041ec824756777576391756ef3721617459bb0c0a45f7f43226b52254d951473`.
+
+Before spending CAL/fresh data, 5 fixed scene folds on frozen TRAIN must pass the SCIR-RANK selected-path gate; aggregate selected count must be at least 64 and positive selected count at least 32. No fold may have a negative selected-path teacher-improvement sum. Failure stops the experiment without calibration or fresh selection.
+
+A new label-free 1500-scene manifest is split deterministically into `CAL500 / A500 / B500`, all disjoint from TRAIN and the 10700-token design exclusion. CAL only calibrates the one fixed conformal quantile; no alpha/feature/model sweep is permitted. A/B each evaluate `RAW / frozen V20 / PRESERVE / SCIR-RANK / SCIR-MAIN` and are screened independently. Promotion requires the rank arm to increase direct positive-opportunity capture over PRESERVE by at least 3 pp, the main arm to retain at least PRESERVE capture and precision, non-catastrophic/nonnegative selected direct tail behavior, certificate improvement relative to rank, zero structural/query/containment violations, and endpoint non-inferiority to both PRESERVE and frozen V20. No pooled A/B rescue is permitted.
+
+## Engineering validation for V31 implementation
+
+- Python compile: PASS.
+- V31 focused tests: **5/5 PASS**.
+- V13--V31 targeted regression: **132/132 PASS** (2 pre-existing PyTorch warnings).
+- repository full regression after restoring a missing historical root compatibility entrypoint: **462/462 PASS**, 36 pre-existing PyTorch Transformer warnings and no new warning class.
+- `RUN_V64_3_31_EAF_ICER_SCIR_SCREEN_2GPU.sh` shell syntax: PASS.
+- V31 config-contract checker synthetic sanity test: PASS.
+
+The uploaded archive was missing the historical root file `V64_SAQA_BCC_NEXT_COMMANDS.sh`, causing one repository packaging test to fail despite unrelated V31 code. Because the exact legacy script bytes are not recoverable from the supplied archive, V31 restores a fail-closed compatibility entrypoint that points to the preserved historical review-artifact instructions and refuses to silently invent legacy experiment semantics.
+
+No nuPlan GPU/cache/checkpoint run is fabricated locally. The next scientific evidence must come from the server execution of the V31 launcher.

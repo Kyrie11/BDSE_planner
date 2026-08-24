@@ -1,0 +1,45 @@
+V64.3.31 EAF-ICER-SCIR engineering validation
+Date: 2026-08-24
+
+Scope
+-----
+This validation covers static code correctness, focused SCIR semantics, historical regression, launcher syntax, config-contract sanity, result/provenance audit code, and package completeness. It does not claim a nuPlan/GPU scientific result; no local cache/checkpoint/GPU result is fabricated.
+
+Uploaded V30.3 result audit
+---------------------------
+PASS: official V30.3 engineering_valid=true.
+PASS: corrected FBIC pointwise reason-0/reason-1/reason-6 integrity on both splits.
+PASS: B16/B24 query parity, no-new-query, subset/no-deletion, retained-ceiling, structural identity.
+PASS: fresh A/B are 500/500, disjoint, hash-selected/label-free, and zero-overlap with design/TRAIN exclusions.
+PASS: science/provenance files used for attribution match their manifest hashes.
+NON-BLOCKING PACKAGING BUG: only v64_3_30_3_stage_timing.tsv mismatches because TOTAL was appended after the manifest was generated. V31 carries a packaging-only repair to the V30.3 launcher: stage TOTAL is written before provenance hashing.
+
+V31 implementation validation
+------------------------------
+PASS: python -m compileall -q bdse
+PASS: V31 focused tests = 5/5
+PASS: V13--V31 targeted regression = 132/132
+PASS: repository full regression = 462/462
+PASS: historical warnings only: 36 PyTorch Transformer nested_tensor/norm_first warnings; no new warning class
+PASS: bash -n RUN_V64_3_31_EAF_ICER_SCIR_SCREEN_2GPU.sh
+PASS: bash -n patched RUN_V64_3_30_3_EAF_ICER_FBIC_PURE_AUDITFIX_SCREEN_2GPU.sh
+PASS: V31 config-contract checker synthetic sanity test
+PASS: 10700-token exclusion cardinality/hash contract
+
+Focused semantic checks
+-----------------------
+PASS: SCIR continuous same-scene improvement can override a negative legacy scalar-dominance diagnostic without silently disabling the old diagnostic output.
+PASS: conformal veto is proposal-only: reject returns incumbent, never second-best fallback or re-ranking.
+PASS: all-flagged structural domain remains exact delegation/no-op.
+PASS: SCIR feature schema mismatch fails closed.
+PASS: disabling SCIR preserves legacy behavior.
+PASS: PRESERVE arm retains frozen V20 direct-dominance semantics while isolating admissible-incumbent preservation.
+
+Package-completeness repair
+---------------------------
+The uploaded bdse archive lacked historical root V64_SAQA_BCC_NEXT_COMMANDS.sh, causing one unrelated packaging regression test to fail. The exact historical script content is unavailable from the supplied archive. A fail-closed compatibility entrypoint is restored: it points to the existing historical review-artifact command file and refuses to synthesize or execute invented legacy semantics.
+
+Scientific run status
+---------------------
+NOT RUN LOCALLY: V31 TRAIN/CAL/A/B scientific evaluation requires the user's nuPlan data/cache/checkpoint/GPU environment.
+NEXT: bash RUN_V64_3_31_EAF_ICER_SCIR_SCREEN_2GPU.sh

@@ -1018,6 +1018,10 @@ def main() -> None:
             icer_replacement_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_replacement_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
             icer_replacement_confirmation_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
             icer_retention_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_retention_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
+            icer_scir_mu = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_predicted_improvement_star", []), dtype=np.float64).reshape(-1)
+            icer_scir_lcb = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_lower_bound_star", []), dtype=np.float64).reshape(-1)
+            icer_scir_features = tour_diag.get("_decisive_frontier_icer_scir_feature_matrix", None)
+            icer_scir_feature_names = list(tour_diag.get("_decisive_frontier_icer_scir_feature_names", []))
             icer_transition_inc = tour_diag.get("_decisive_frontier_icer_transition_vs_incumbent_feature_matrix", None)
             icer_transition_anchor = tour_diag.get("_decisive_frontier_icer_transition_vs_anchor_feature_matrix", None)
             icer_transition_names = list(tour_diag.get("_decisive_frontier_icer_transition_feature_names", []))
@@ -1077,6 +1081,11 @@ def main() -> None:
                         "icer_replacement_regret_risk_logit": float(icer_replacement_risk[challenger]) if icer_replacement_risk.size == edge_valid.size else float("nan"),
                         "icer_replacement_confirmation_regret_risk_logit": float(icer_replacement_confirmation_risk[challenger]) if icer_replacement_confirmation_risk.size == edge_valid.size else float("nan"),
                         "icer_retention_regret_risk_logit": float(icer_retention_risk[challenger]) if icer_retention_risk.size == edge_valid.size else float("nan"),
+                        "icer_scir_predicted_improvement": float(icer_scir_mu[challenger]) if icer_scir_mu.size == edge_valid.size else float("nan"),
+                        "icer_scir_lower_bound": float(icer_scir_lcb[challenger]) if icer_scir_lcb.size == edge_valid.size else float("nan"),
+                        "icer_scir_proposal_action": int(tour_diag.get("decisive_frontier_icer_scir_proposal_action", raw_top)),
+                        "icer_scir_proposal_exists": float(tour_diag.get("decisive_frontier_icer_scir_proposal_exists", 0.0)),
+                        "icer_scir_certificate_accepted": float(tour_diag.get("decisive_frontier_icer_scir_certificate_accepted", 0.0)),
                         "icer_admissible": float(icer_admissible[challenger]) if icer_admissible.size == edge_valid.size else 0.0,
                     }
                     if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):
@@ -1094,6 +1103,10 @@ def main() -> None:
                     if imat is not None and imat.ndim == 2 and imat.shape[0] == edge_valid.size and imat.shape[1] == len(icer_feature_names):
                         for j, name in enumerate(icer_feature_names):
                             row[f"icer_feature_{name}"] = float(imat[challenger, j])
+                    simat = None if icer_scir_features is None else np.asarray(icer_scir_features, dtype=np.float64)
+                    if simat is not None and simat.ndim == 2 and simat.shape[0] == edge_valid.size and simat.shape[1] == len(icer_scir_feature_names):
+                        for j, name in enumerate(icer_scir_feature_names):
+                            row[f"icer_scir_feature_{name}"] = float(simat[challenger, j])
                     timat = None if icer_transition_inc is None else np.asarray(icer_transition_inc, dtype=np.float64)
                     tamat = None if icer_transition_anchor is None else np.asarray(icer_transition_anchor, dtype=np.float64)
                     # V64.3.22 keeps frontier logs auditable without multiplying

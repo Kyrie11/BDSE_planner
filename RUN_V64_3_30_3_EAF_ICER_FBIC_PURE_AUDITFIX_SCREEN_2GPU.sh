@@ -193,9 +193,11 @@ python -m bdse.tools.check_v64_3_30_3_eaf_icer_fbic_pure_screen \
   --output "$SCREEN" | tee "$OUT_ROOT/logs/v64_3_30_3_double_fresh_screen.out"
 stage_end
 
+# Finalize timing before hashing. The uploaded V30.3 launcher hashed the timing
+# file first and appended TOTAL afterwards, creating a packaging-only SHA mismatch.
+printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"
 # Hash every provenance file so any later multi-part upload can be checked for completeness.
 (cd "$OUT_ROOT/provenance" && find . -maxdepth 1 -type f ! -name 'v64_3_30_3_provenance_sha256.txt' -print0 | sort -z | xargs -0 sha256sum > v64_3_30_3_provenance_sha256.txt)
-printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"
 python - "$SCREEN" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1]))

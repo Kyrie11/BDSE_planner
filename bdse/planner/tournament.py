@@ -2390,6 +2390,77 @@ def _icer_quadratic_interaction_features(
     return np.concatenate(parts, axis=1), out_names, base_names
 
 
+
+def _icer_selection_conditioned_intervention_scores(
+    feat: np.ndarray,
+    feature_names: list[str],
+    support_logits: np.ndarray,
+    legacy_action: int,
+    scir_cfg: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """V64.3.31 same-scene incumbent-contrastive intervention utility.
+
+    The V30.3 capacity closure shows that exposing more decisive evidence does
+    not stabilize the historical independent dominance head.  SCIR therefore
+    removes common-mode scene variation explicitly: the runtime representation
+    is the difference between each candidate and the *same-scene incumbent* in
+    the frozen 18-D evidence view, plus the difference of the frozen anchor-
+    support logit.  A low-capacity TRAIN-only linear ridge readout predicts the
+    continuous teacher improvement used only during fitting; runtime consumes
+    no teacher/future value and makes no additional evidence query.
+    """
+    xx = np.asarray(feat, dtype=np.float64)
+    sup = np.asarray(support_logits, dtype=np.float64).reshape(-1)
+    legacy = int(legacy_action)
+    if xx.ndim != 2 or sup.shape[0] != xx.shape[0] or not (0 <= legacy < xx.shape[0]):
+        return np.zeros((xx.shape[0] if xx.ndim == 2 else 0,), dtype=np.float64), np.zeros((0, 0), dtype=np.float64), []
+    base_names = list(scir_cfg.get("base_feature_names", _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES))
+    if base_names != list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES):
+        raise ValueError("EAF-ICER SCIR base feature schema must equal the frozen 18-D evidence view")
+    pos = {str(n): i for i, n in enumerate(feature_names)}
+    missing = [n for n in base_names if n not in pos]
+    if missing:
+        raise ValueError(f"EAF-ICER SCIR base features missing from runtime schema: {missing}")
+    base = xx[:, [pos[n] for n in base_names]]
+    delta = base - base[legacy : legacy + 1]
+    support_delta = (sup - float(sup[legacy]))[:, None]
+    x = np.concatenate([delta, support_delta], axis=1)
+    runtime_names = [f"delta::{n}" for n in base_names] + ["delta::support_logit"]
+    stored_names = list(scir_cfg.get("feature_names", []))
+    mean = np.asarray(scir_cfg.get("feature_mean", []), dtype=np.float64).reshape(-1)
+    std = np.asarray(scir_cfg.get("feature_std", []), dtype=np.float64).reshape(-1)
+    weights = np.asarray(scir_cfg.get("weights", []), dtype=np.float64).reshape(-1)
+    if stored_names != runtime_names or len(runtime_names) != len(mean) or len(runtime_names) != len(std) or len(runtime_names) != len(weights):
+        raise ValueError("EAF-ICER SCIR feature schema/mean/std/weights are inconsistent")
+    z = (x - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
+    mu = np.clip(z @ weights + float(scir_cfg.get("bias", 0.0)), -40.0, 40.0)
+    return mu, x, runtime_names
+
+
+def _icer_select_scir_candidate(
+    candidate_indices: np.ndarray | list[int],
+    predicted_improvement: np.ndarray,
+    support_logits: np.ndarray,
+    margin_star: np.ndarray,
+    utility_prior: np.ndarray,
+) -> int | None:
+    """Deterministic extremal proposal for V64.3.31 SCIR."""
+    cand = np.asarray(candidate_indices, dtype=np.int64).reshape(-1)
+    if cand.size == 0:
+        return None
+    best = sorted(
+        cand.tolist(),
+        key=lambda b: (
+            -float(predicted_improvement[b]),
+            -float(support_logits[b]),
+            -float(margin_star[b]),
+            -int(utility_prior[b]),
+            int(b),
+        ),
+    )[0]
+    return int(best)
+
+
 def _apply_decisive_frontier_icer(
     legacy_action: int,
     anchor_action: int,
@@ -2475,6 +2546,16 @@ def _apply_decisive_frontier_icer(
     replacement_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     replacement_confirmation_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     retention_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
+    scir_predicted_improvement = np.zeros((len(valid),), dtype=np.float64)
+    scir_lower_bound = np.zeros((len(valid),), dtype=np.float64)
+    scir_feature_matrix = np.zeros((len(valid), 0), dtype=np.float64)
+    scir_feature_names: list[str] = []
+    scir_proposal_action = int(legacy)
+    scir_proposal_exists = False
+    scir_certificate_accepted = False
+    scir_cfg = icer_cfg.get("selection_conditioned_intervention_recovery", {}) or {}
+    scir_enabled = bool(scir_cfg.get("enabled", False))
+    scir_mode = str(scir_cfg.get("mode", "rank_only")).strip().lower()
     selected = legacy
     baseline = legacy
     flags = np.asarray(runtime_safety_flags, dtype=bool).reshape(-1)
@@ -2584,6 +2665,17 @@ def _apply_decisive_frontier_icer(
             )
         else:
             raise ValueError(f"unknown EAF-ICER dominance_policy={dominance_policy}")
+
+        if scir_enabled:
+            if scir_mode not in {"rank_only", "conformal_veto"}:
+                raise ValueError(f"unknown EAF-ICER SCIR mode={scir_mode}")
+            scir_predicted_improvement, scir_feature_matrix, scir_feature_names = _icer_selection_conditioned_intervention_scores(
+                feat, names, support_logits, legacy, scir_cfg
+            )
+            q = float(scir_cfg.get("conformal_overprediction_quantile", 0.0)) if scir_mode == "conformal_veto" else 0.0
+            if not np.isfinite(q) or q < 0.0:
+                raise ValueError("EAF-ICER SCIR conformal quantile must be finite and non-negative")
+            scir_lower_bound = scir_predicted_improvement - q
 
         # V64.3.21 selection-conditioned incumbent retention.  The historical
         # all-edge support head is still the absolute support gate for *new*
@@ -2732,30 +2824,54 @@ def _apply_decisive_frontier_icer(
             replacement_positive = np.ones((len(valid),), dtype=bool)
             if regret_risk_enabled and replacement_regret_risk_enabled:
                 replacement_positive = np.isfinite(replacement_regret_risk_logits) & (replacement_regret_risk_logits > 0.0)
-            cand = np.flatnonzero(alternative & dominance_positive & replacement_positive).astype(np.int64)
-            confirmation_logits = None
-            if (
-                regret_risk_enabled
-                and replacement_regret_risk_enabled
-                and risk_model_type in {"local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}
-            ):
-                confirmation_logits = replacement_confirmation_regret_risk_logits
-            # V64.3.27 monotone candidate confirmation: the aggregate-DRC
-            # proposal is the only alternative the semantic view may inspect.
-            # A failed confirmation preserves the incumbent; it never falls
-            # through to a lower-ranked alternative.  Hence the selected
-            # replacement path is a structural subset of the V25 aggregate
-            # control and a new representation cannot resurrect a candidate.
-            best = _icer_select_extremal_candidate_with_optional_confirmation(
-                cand,
-                dominance_logits,
-                replacement_regret_risk_logits if (regret_risk_enabled and replacement_regret_risk_enabled) else np.zeros_like(dominance_logits),
-                support_logits,
-                margin_star,
-                utility_prior,
-                confirmation_logits=confirmation_logits,
-            )
-            selected = int(baseline if best is None else best)
+            if scir_enabled:
+                # V64.3.31: the direct intervention score itself is the semantic
+                # candidate-vs-incumbent utility.  The old binary dominance head
+                # remains instrumented as a causal diagnostic but no longer gates
+                # or ranks the SCIR arm.  Anchor support and deployment admissibility
+                # remain frozen prerequisites.
+                scir_positive = np.isfinite(scir_predicted_improvement) & (scir_predicted_improvement > 0.0)
+                cand = np.flatnonzero(alternative & scir_positive).astype(np.int64)
+                best = _icer_select_scir_candidate(
+                    cand, scir_predicted_improvement, support_logits, margin_star, utility_prior
+                )
+                scir_proposal_exists = bool(best is not None)
+                scir_proposal_action = int(legacy if best is None else best)
+                if best is None:
+                    scir_certificate_accepted = False
+                    selected = int(baseline)
+                elif scir_mode == "conformal_veto":
+                    # The conformal stage sees *only* the already-selected proposal.
+                    # Failure returns to the incumbent/default and never re-ranks or
+                    # falls through to another candidate, preserving monotone containment.
+                    scir_certificate_accepted = bool(np.isfinite(scir_lower_bound[best]) and scir_lower_bound[best] > 0.0)
+                    selected = int(best if scir_certificate_accepted else baseline)
+                else:
+                    scir_certificate_accepted = True
+                    selected = int(best)
+            else:
+                cand = np.flatnonzero(alternative & dominance_positive & replacement_positive).astype(np.int64)
+                confirmation_logits = None
+                if (
+                    regret_risk_enabled
+                    and replacement_regret_risk_enabled
+                    and risk_model_type in {"local_multiscale_downside_regret_with_type_confirmation", "local_multiscale_downside_regret_with_global_type_tail_confirmation"}
+                ):
+                    confirmation_logits = replacement_confirmation_regret_risk_logits
+                # V64.3.27 monotone candidate confirmation: the aggregate-DRC
+                # proposal is the only alternative the semantic view may inspect.
+                # A failed confirmation preserves the incumbent; it never falls
+                # through to a lower-ranked alternative.
+                best = _icer_select_extremal_candidate_with_optional_confirmation(
+                    cand,
+                    dominance_logits,
+                    replacement_regret_risk_logits if (regret_risk_enabled and replacement_regret_risk_enabled) else np.zeros_like(dominance_logits),
+                    support_logits,
+                    margin_star,
+                    utility_prior,
+                    confirmation_logits=confirmation_logits,
+                )
+                selected = int(baseline if best is None else best)
         else:
             # If raw top is not deployment-admissible, the actual deployment
             # incumbent is the anchor.  The learned recovery is therefore
@@ -2784,6 +2900,17 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_anchor_fallback": float(int(selected) == int(a)),
         "decisive_frontier_icer_selected_support_logit": support_selected,
         "decisive_frontier_icer_selected_dominance_logit": dominance_selected,
+        "decisive_frontier_icer_scir_enabled": float(scir_enabled),
+        "decisive_frontier_icer_scir_rank_only": float(scir_enabled and scir_mode == "rank_only"),
+        "decisive_frontier_icer_scir_conformal_veto": float(scir_enabled and scir_mode == "conformal_veto"),
+        "decisive_frontier_icer_scir_proposal_exists": float(bool(scir_proposal_exists)),
+        "decisive_frontier_icer_scir_proposal_action": float(scir_proposal_action),
+        "decisive_frontier_icer_scir_certificate_accepted": float(bool(scir_certificate_accepted)),
+        "decisive_frontier_icer_scir_selected_predicted_improvement": float(scir_predicted_improvement[selected]) if scir_enabled and 0 <= selected < len(valid) and selected != legacy else 0.0,
+        "decisive_frontier_icer_scir_proposal_predicted_improvement": float(scir_predicted_improvement[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
+        "decisive_frontier_icer_scir_proposal_lower_bound": float(scir_lower_bound[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
+        "decisive_frontier_icer_scir_conformal_alpha": float(scir_cfg.get("conformal_alpha", 0.0)) if scir_enabled else 0.0,
+        "decisive_frontier_icer_scir_conformal_overprediction_quantile": float(scir_cfg.get("conformal_overprediction_quantile", 0.0)) if scir_enabled and scir_mode == "conformal_veto" else 0.0,
         "decisive_frontier_icer_legacy_support_logit": float(support_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_legacy_retention_margin": float(incumbent_retention_margin[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
@@ -2832,6 +2959,10 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_replacement_regret_risk_logit_star": np.asarray(replacement_regret_risk_logits, dtype=np.float32),
         "_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star": np.asarray(replacement_confirmation_regret_risk_logits, dtype=np.float32),
         "_decisive_frontier_icer_retention_regret_risk_logit_star": np.asarray(retention_regret_risk_logits, dtype=np.float32),
+        "_decisive_frontier_icer_scir_predicted_improvement_star": np.asarray(scir_predicted_improvement, dtype=np.float32),
+        "_decisive_frontier_icer_scir_lower_bound_star": np.asarray(scir_lower_bound, dtype=np.float32),
+        "_decisive_frontier_icer_scir_feature_matrix": np.asarray(scir_feature_matrix, dtype=np.float32),
+        "_decisive_frontier_icer_scir_feature_names": list(scir_feature_names),
         "_decisive_frontier_icer_transition_vs_incumbent_feature_matrix": np.asarray(transition_vs_incumbent, dtype=np.float32),
         "_decisive_frontier_icer_transition_vs_anchor_feature_matrix": np.asarray(transition_vs_anchor, dtype=np.float32),
         "_decisive_frontier_icer_transition_feature_names": list(transition_names),
