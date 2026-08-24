@@ -10194,3 +10194,115 @@ The CCF-A-oriented contribution stack is now:
 `bounded auditable interface -> exact EAF action-local attribution -> incumbent-augmented regret-structured extremal intervention -> selected-policy reliability calibration -> monotone incumbent/no-fallback containment -> independent double-fresh/full-validation/closed-loop evidence`.
 
 Do not headline ridge, LBFGS, hinge loss, or conformal prediction individually. The novelty claim is the alignment of bounded decision sufficiency, explicit null-action structured selection, selected-action regret upper-bounding surrogate, policy-output calibration, and deterministic monotone containment.
+
+# V64.3.34 uploaded execution audit → V64.3.35 EAF-ICER-FBCSR
+
+## 1. V34 is engineering-valid for TRAIN-level attribution
+
+V34 completed the exact nested TRAIN mechanism and stopped at the preregistered scientific gate. Targeted regression was 154/154, no runtime/schema/objective-scale error was found, and CAL500/A500/B500 remained unspent. Do not create a V34.1 engineering hotfix.
+
+## 2. V34 RSMR result
+
+Paired 782-scene TRAIN aggregates:
+
+- corrected MEAN: `476 selected / 260 positive / capture 45.30% / sum -18.0304 / 47 catastrophes / 110 no-opportunity false interventions`;
+- V33 PAIR: `98 / 47 / 8.19% / -4.6676 / 18 / 15`;
+- V34 RSMR-RANK: `502 / 221 / 38.50% / +43.2941 / 28 / 107`;
+- V34 RSMR-MAIN: `5 / 1 / sum -1.7466 / 4 catastrophes`.
+
+All five RSMR-RANK outer-fold selected sums are positive. Opportunity-domain selected sum is `+71.3994`, above MEAN `+42.1216`. The selected-action regret-aligned structured objective is therefore a useful direction.
+
+However no-opportunity false interventions return to `107/208`, nearly MEAN's `110/208`. Eighteen of the 28 RSMR catastrophes are no-opportunity scenes. V34 solves aggregate regret direction much better than intervention existence.
+
+RSMR score itself is not a tail-risk score: positive AUC `0.5928`, noncatastrophe AUC `0.4816`, Pearson score/outcome `-0.0144`. Do not rescue V34 by score thresholding.
+
+## 3. Calibration interpretation
+
+Nested selected-policy conformal MAIN keeps only five proposals and four are catastrophic. This is not an implementation error and does not contradict marginal conformal coverage: harmful accepted events are 4 out of roughly 502 proposal-emitting test scenes, below 5%. The mismatch is between a **marginal lower-bound guarantee** and the planner's **hard zero-catastrophe selected-path contract**.
+
+Do not lower alpha or misstate marginal coverage as conditional accepted-policy safety.
+
+## 4. New ambiguity after V34
+
+The frozen 19-D contrast representation now exhibits a reproducible trade-off:
+
+- V33 PAIR: strong no-intervention suppression, severe opportunity collapse;
+- V34 RSMR: opportunity/aggregate-regret recovery, no-intervention suppression lost.
+
+This leaves two first-order explanations:
+
+1. the structured surrogate still does not explicitly factor intervention existence from challenger ordering;
+2. pure candidate-minus-incumbent contrast removes absolute incumbent base-point information needed for the null-action boundary.
+
+## 5. New forbidden directions
+
+Retain all historical prohibitions. Additionally, do **not**:
+
+- tune an RSMR score threshold, conformal alpha, catastrophe cutoff, or selected-policy q to rescue V34;
+- interpret V34 positive selected sum as tail reliability; 28 catastrophes remain;
+- restore V33 PAIR as a runtime rescue branch; it remains an ablation;
+- add candidate count, top-K, or a heuristic no-op prior as a runtime gate;
+- naively concatenate arbitrary absolute/context features into challenger ordering;
+- add another intervention-existence classifier; the deployment object remains one incumbent-augmented structured choice;
+- claim selected-policy split conformal gives conditional safety among accepted interventions;
+- add nonlinear context capacity before the constrained base-point-context causal test below.
+
+# V64.3.35 EAF-ICER-FBCSR
+
+Full name: **Evidence-Attributed Factorized Basepoint-Conditioned Structured Recovery**.
+
+V35 freezes B16/M24, acquisition, EAF, support/admissibility, the 19-D candidate contrast, structural delegation, incumbent default and no fallback.
+
+## 1. FDSR factorized delta-only ablation
+
+Positive-opportunity scenes contribute two explicit regret constraints:
+
+- teacher-best challenger vs incumbent (`should intervene?`);
+- teacher-best challenger vs worst challenger rival (`which intervention?`).
+
+No-opportunity scenes contribute one incumbent-vs-most-dangerous-challenger constraint. Objective is squared positive violations plus fixed `lambda=1`; no candidate-count averaging, pair weight, top-K, or runtime threshold.
+
+This tests whether V34's single max mixed the two tasks.
+
+## 2. FBCSR base-point context
+
+Use the already-computed absolute incumbent 18-D evidence view plus incumbent support as context. Candidate score is
+
+`score_b = f_delta(delta_b) + h_context(c_incumbent)`.
+
+The context term is common to every challenger in the scene. It can shift the intervention/no-intervention boundary but **cannot change challenger ordering**. The incumbent remains exact score zero. This is structurally different from naive feature concatenation.
+
+## 3. Nested causal gate
+
+Same V32/V33/V34 fold hash. Compare exact V34 RSMR, FDSR, FBCSR-RANK and FBCSR-MAIN.
+
+Context mediation requires, before any fresh data:
+
+- >=20% reduction in no-opportunity false interventions vs FDSR;
+- FBCSR positive capture no worse than FDSR by more than 3 pp;
+- nonnegative aggregate/cross-fold direction;
+- fewer catastrophes and no worse NegRMS than V34 RSMR;
+- at least 64 selected / 32 positive;
+- nested selected-policy calibration support >=32 proposals per fold.
+
+Complete MAIN still requires every fold selected sum nonnegative and zero catastrophes, aggregate selected >=64 and positive >=32. No alpha/lambda/feature/runtime-threshold rescue.
+
+## 4. Fresh protocol if TRAIN passes
+
+V34 spent no fresh data. Keep the permanent 10700-token exclusion and use new label-free seed
+
+`v64.3.35-eaf-icer-fbcsr-cal500-double-fresh-v1`.
+
+Select independent `CAL500 + A500 + B500`. A/B evaluate
+
+`RAW / V20 / PRESERVE / MEAN / V34-RSMR / FDSR / FBCSR-RANK / FBCSR-MAIN`.
+
+A/B are judged independently; no pooling.
+
+## 5. Paper line
+
+Candidate CCF-A mechanism line becomes
+
+`bounded auditable interface -> exact EAF attribution -> factorized incumbent/null-action structured intervention -> basepoint-conditioned existence + contrastive challenger ordering -> monotone selected-policy calibration -> independent double-fresh/full-validation/closed-loop`.
+
+Only if the constrained context arm wins independently should base-point-conditioned intervention sufficiency become a paper claim. If it fails, stop richer-context iteration and reopen the bottleneck diagnosis instead of increasing context/head capacity.

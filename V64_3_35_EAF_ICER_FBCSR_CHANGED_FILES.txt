@@ -1,0 +1,16 @@
+ALGORITHM_CHANGELOG.md
+RUN_V64_3_35_EAF_ICER_FBCSR_SCREEN_2GPU.sh
+bdse/planner/tournament.py
+bdse/tools/fit_v64_3_35_eaf_icer_fbcsr.py
+bdse/tools/calibrate_v64_3_35_eaf_icer_fbcsr.py
+bdse/tools/check_v64_3_35_eaf_icer_fbcsr_contract.py
+bdse/tools/check_v64_3_35_eaf_icer_fbcsr_split.py
+bdse/tools/check_v64_3_35_eaf_icer_fbcsr_screen.py
+bdse/tests/test_v64_3_35_eaf_icer_fbcsr.py
+V64_3_34_RESULT_POSTMORTEM_AND_V64_3_35_FBCSR_DESIGN.md
+V64_3_34_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_35.json
+V64_3_34_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_35.csv
+V64_3_34_UPLOADED_FIT_REPORT_FOR_V64_3_35.json
+V64_3_35_ENGINEERING_VALIDATION.txt
+NEXT_COMMANDS_V64_3_35_EAF_ICER_FBCSR.txt
+V64_3_35_EAF_ICER_FBCSR.patch

@@ -2434,7 +2434,33 @@ def _icer_selection_conditioned_intervention_scores(
     if stored_names != runtime_names or len(runtime_names) != len(mean) or len(runtime_names) != len(std) or len(runtime_names) != len(weights):
         raise ValueError("EAF-ICER SCIR feature schema/mean/std/weights are inconsistent")
     z = (x - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
-    mu = np.clip(z @ weights + float(scir_cfg.get("bias", 0.0)), -40.0, 40.0)
+    mu = z @ weights + float(scir_cfg.get("bias", 0.0))
+
+    # V64.3.35 optional base-point context shift.  The context is the frozen
+    # absolute incumbent evidence view plus incumbent support.  Its contribution
+    # is identical for every challenger in the scene, so it can change only the
+    # challenger-vs-incumbent intervention boundary; it cannot re-rank two
+    # challengers.  Historical configs omit these fields and are bit-compatible.
+    context_names = list(scir_cfg.get("incumbent_context_feature_names", []))
+    if context_names:
+        expected_context_names = [f"incumbent::{n}" for n in base_names] + ["incumbent::support_logit"]
+        cmean = np.asarray(scir_cfg.get("incumbent_context_feature_mean", []), dtype=np.float64).reshape(-1)
+        cstd = np.asarray(scir_cfg.get("incumbent_context_feature_std", []), dtype=np.float64).reshape(-1)
+        cw = np.asarray(scir_cfg.get("incumbent_context_weights", []), dtype=np.float64).reshape(-1)
+        if (
+            context_names != expected_context_names
+            or len(context_names) != len(cmean)
+            or len(context_names) != len(cstd)
+            or len(context_names) != len(cw)
+        ):
+            raise ValueError("EAF-ICER SCIR incumbent-context schema/mean/std/weights are inconsistent")
+        c = np.concatenate([base[legacy], np.asarray([float(sup[legacy])], dtype=np.float64)])
+        cz = (c - cmean) / np.maximum(cstd, 1.0e-6)
+        shift = float(cz @ cw + float(scir_cfg.get("incumbent_context_bias", 0.0)))
+        mu = mu + shift
+        # Incumbent remains the exact zero-score pseudo-action.
+        mu[legacy] = 0.0
+    mu = np.clip(mu, -40.0, 40.0)
 
     # V64.3.32 selection-stable scale.  This is intentionally *not* claimed as
     # a probabilistic variance.  It is a frozen TRAIN-only ridge-leverage scale
