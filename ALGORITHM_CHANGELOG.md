@@ -9615,3 +9615,155 @@ A new label-free 1500-scene manifest is split deterministically into `CAL500 / A
 The uploaded archive was missing the historical root file `V64_SAQA_BCC_NEXT_COMMANDS.sh`, causing one repository packaging test to fail despite unrelated V31 code. Because the exact legacy script bytes are not recoverable from the supplied archive, V31 restores a fail-closed compatibility entrypoint that points to the preserved historical review-artifact instructions and refuses to silently invent legacy experiment semantics.
 
 No nuPlan GPU/cache/checkpoint run is fabricated locally. The next scientific evidence must come from the server execution of the V31 launcher.
+
+# V64.3.31 uploaded execution: ENGINEERING-VALID TRAIN gate failure; SCIR mean argmax is not selection-stable
+
+The uploaded `outputs_v64_3_31_eaf_icer_scir_screen_2gpu_v1` is valid for development-level attribution of the V31 mean-ranking proposal component. It is **not** an incomplete runtime crash. The frozen launcher correctly stopped before CAL/fresh selection because the preregistered 5-fold TRAIN selected-path gate failed.
+
+Engineering re-audit of the uploaded V31 code/result:
+
+- Python compile: PASS;
+- V31 focused tests: **5/5 PASS**;
+- repository full regression: **462/462 PASS**;
+- warnings: **36**, all pre-existing PyTorch Transformer warnings;
+- launcher shell syntax: PASS;
+- no fit/runtime feature-schema mismatch, teacher leakage, query-budget change, or SCIR fitter/runtime target mismatch was found.
+
+V31 frozen direct population:
+
+- TRAIN scenes: **3000**;
+- direct admissible/support-positive edges: **9,394**;
+- scenes containing such edges: **782**;
+- edge positive fraction: **34.3198%**;
+- edge teacher-improvement sum: **-2624.1702**.
+
+V31 5-fold mean-argmax selected path:
+
+- fold 0: `150 selected / 83 positive / 55.33% precision / 63.85% capture / sum -5.9277 / worst -2.6145 / NegRMS 0.4333`;
+- fold 1: `96 / 48 / 50.00% / 49.48% / -9.2158 / -3.8279 / 0.7088`;
+- fold 2: `128 / 71 / 55.47% / 58.20% / -3.1009 / -4.0413 / 0.4590`;
+- fold 3: `111 / 70 / 63.06% / 59.32% / -0.9357 / -2.0207 / 0.2165`;
+- fold 4: `127 / 70 / 55.12% / 65.42% / -2.8931 / -2.0199 / 0.4191`.
+
+Aggregate: **612 selected / 342 positive / 55.88% precision / 342 of 574 positive-opportunity scenes captured = 59.58% / teacher-improvement sum -22.0733 / worst -4.0413 / 0-of-5 fold-safe**.
+
+Interpretation:
+
+- the same-scene continuous target is not signal-free: selected precision rises well above the broad edge-positive prevalence and positive-opportunity capture is high;
+- nevertheless, every fold is selected-path harmful and every fold admits a replacement below the historical `-0.5` catastrophic threshold;
+- the falsified sub-hypothesis is **“same-scene continuous conditional-mean argmax is already a selection-stable proposal; only a final post-selection certificate remains.”**;
+- V31 CAL500/post-selection conformal did **not** run and therefore must not be reported as experimentally failed;
+- the V31 common conformal offset is structurally unable to change within-scene candidate ordering because subtracting one shared `q` preserves the mean argmax. It can only abstain to the incumbent after the winner is chosen.
+
+The V31 result archive does not include token-level cross-fit proposal rows. This does not invalidate the 0/5 fold result, but it prevents exact failure-token forensic replay from the uploaded archive alone. Future TRAIN gates must serialize token-level selected-path audits before any scientific STOP.
+
+## Dominant-bottleneck tightening after V31
+
+Previous wording:
+
+> selection-conditioned incumbent-contrastive ordering reliability at the direct replacement boundary, together with post-selection calibration.
+
+Tightened wording:
+
+> **selection-stable counterfactual lower-bound ordering at the direct incumbent-replacement boundary: candidate-specific lower-tail reliability must enter the extremal ordering before the winner is chosen, rather than being treated only as a common post-selection veto.**
+
+This is consistent with the earlier evidence chain: acquisition, representation richness, local/classifier confirmation, global frontier fidelity and capacity-only transmission have already been falsified as first-order solutions. V31 now shows that semantically aligned same-scene conditional means are also insufficient when consumed by a raw extremal argmax.
+
+## New no-repeat constraints after V31
+
+Retain all previous constraints. Additionally, do **not**:
+
+- relax the failed V31 5-fold TRAIN gate and then spend CAL/fresh data;
+- sweep ridge lambda, positive-mean threshold, conformal alpha, support boundary, or a scale multiplier to rescue V31;
+- interpret 59.6% positive-opportunity capture as success while all five selected-path sums are negative;
+- claim V31 conformal failed, because it was never executed;
+- use a candidate-independent common post-selection offset as if it corrected within-scene winner ordering;
+- replace the failed mean argmax with another generic edge/listwise scorer that does not explicitly address selected-path risk;
+- revive acquisition/B/M/FCR/DRC/PTMC/KNN/classifier/feature-concatenation/threshold routes already closed by earlier versions;
+- use endpoint improvements from other runtime domains to rescue a harmful direct replacement path.
+
+# V64.3.32 EAF-ICER-SSIR
+
+Full name: **Evidence-Attributed Incumbent-Contrastive Selection-Stable Intervention Recovery.**
+
+V32 retains the V31 same-scene continuous intervention mean as a frozen low-capacity signal but changes the extremal operator. Reliability enters candidate ordering through a scene-simultaneous conformal lower bound **before** the final winner is selected.
+
+## 1. Frozen mean and candidate-specific normalization
+
+For each deployment-admissible, support-positive challenger `b` relative to same-scene incumbent `i`, retain V31's 19-D candidate-minus-incumbent feature and fixed scene-equal ridge predictor `mu_b` of continuous teacher improvement.
+
+From TRAIN-only standardized feature `z_b`, compute fixed ridge leverage
+
+`h_b = z_b^T G^{-1} z_b`, `scale_b = sqrt(1+h_b)`.
+
+The leverage scale is an auditable deterministic normalization only. It is not claimed to be a calibrated predictive variance. Conformal calibration supplies coverage validity; the normalization only changes efficiency and permits candidate-specific risk-aware ordering.
+
+## 2. Direct-domain scene-simultaneous calibration
+
+For one calibration scene in the actual direct intervention domain (admissible incumbent plus at least one admissible/support-positive alternative), define one exchangeable score:
+
+`R(scene) = max_b (mu_b - Delta_T(b;i)) / scale_b`.
+
+The maximum is over **all** direct candidates the runtime operator could choose, not only the mean winner. A fixed `alpha=0.05` finite-sample conformal order statistic gives `q`.
+
+Candidate lower bounds are
+
+`LCB_b = mu_b - q * scale_b`.
+
+The main runtime action is the deterministic extremal candidate with the largest positive `LCB_b`; if no positive LCB exists, return the admissible incumbent. No second-best fall-through exists because the bound itself defines the ordering.
+
+Under exchangeability of calibration and future direct-eligible scenes with model/scale/candidate rule/alpha frozen before calibration, the scene-max score gives marginal simultaneous candidate coverage. On the coverage event, every candidate satisfies `Delta_T >= LCB`, so **any** data-dependent extremal selection among positive LCB candidates is beneficial. Harmful accepted interventions are therefore contained in the scene-level simultaneous miscoverage event. This is not a per-scene deterministic, distribution-shift, or closed-loop safety theorem.
+
+## 3. V32 fixes the V31 experimental-gate mismatch
+
+V31 gated the intermediate uncalibrated mean ranker and therefore never tested the intended complete rank+certificate mechanism. V32 gates the **complete SSIR operator** with nested TRAIN separation before any fresh data:
+
+- 5 outer folds;
+- for each outer fold: 3 folds fit mean/scale, 1 separate fold calibrates the simultaneous quantile, 1 outer fold tests positive-LCB extremal selection;
+- all 5 outer test folds must have selected-path teacher-improvement sum >=0;
+- aggregate SSIR selected count >=64 and positive selected count >=32;
+- no alpha/ridge/feature/threshold sweep.
+
+The fit tool always writes `v64_3_32_ssir_train_scene_audit.csv` before a scientific STOP. It also replays the original V31 **mean-winner + common post-selection conformal veto** on the same nested splits as a diagnostic. This tests whether simple abstention could have repaired the V31 path versus whether candidate-specific pre-selection ordering is necessary; the diagnostic cannot become a rescue branch.
+
+## 4. Independent calibration and fresh protocol
+
+V31 stopped before CAL/fresh token selection, so no new validation population was spent. V32 retains the permanent **10700-token** design exclusion from V30.3/V31 with SHA256
+
+`041ec824756777576391756ef3721617459bb0c0a45f7f43226b52254d951473`.
+
+V32 uses new label-free hash seed
+
+`v64.3.32-eaf-icer-ssir-cal500-double-fresh-v1`.
+
+Only after the complete nested TRAIN gate passes, select 1500 new scenes and freeze `CAL500 / A500 / B500`.
+
+CAL500 contributes one score per **direct-eligible scene**; unrelated/no-direct-candidate scenes are not zero-filled into the risk population. At least 64 direct-eligible CAL scenes are required. CAL fixes exactly one alpha=0.05 quantile.
+
+A/B each evaluate:
+
+1. RAW;
+2. frozen V20;
+3. PRESERVE admissible-incumbent-default causal control;
+4. MEAN (exact V31 same-scene mean-ordering control);
+5. SSIR main (candidate-specific simultaneous lower-bound ordering).
+
+Each block is judged independently. Per-block promotion requires exact engineering/query/structural contracts, SSIR direct capture >= PRESERVE +3 pp, selected count >=8, selected teacher-improvement sum >=0, worst >-0.5, NegRMS <= PRESERVE, precision >= PRESERVE, SSIR tail non-worse than MEAN with at least one strict tail/precision improvement, and endpoint non-inferiority to both PRESERVE and V20. No pooled rescue and no alpha/scale/ridge/threshold tuning are allowed.
+
+Empirical simultaneous coverage is a theorem diagnostic rather than a brittle literal 95%-frequency gate; the hard safety conditions are imposed on the actually selected intervention path.
+
+## 5. V32 local engineering validation
+
+- Python compile: PASS;
+- V32 focused tests: **6/6 PASS**;
+- V13–V32 targeted regression: **138/138 PASS**;
+- repository full regression: **468/468 PASS**;
+- warnings: **36**, all pre-existing PyTorch Transformer warnings;
+- V32 launcher `bash -n`: PASS;
+- V31 artifacts without leverage matrix remain backward-compatible with exact unit scale;
+- malformed leverage schema fails closed;
+- synthetic test verifies candidate-specific risk can change winner identity before extremal selection;
+- synthetic test verifies no positive LCB returns incumbent with no fallback;
+- structural all-flagged delegation remains exact.
+
+No nuPlan result is fabricated locally. If the nested TRAIN SSIR gate fails, the launcher must stop before CAL/fresh and the token-level TRAIN audit is the next source of mechanism evidence.

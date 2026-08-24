@@ -1,0 +1,138 @@
+{
+  "audit": "v64_3_31_uploaded_result_causal_audit_for_v64_3_32",
+  "crossfit": {
+    "all_folds_selected_path_nonharmful": false,
+    "fold_pass_count": 0,
+    "folds": [
+      {
+        "fold": 0,
+        "holdout_scenes": 166,
+        "negative_rms": 0.43331526110708934,
+        "path_nonharmful": false,
+        "positive_capture_count": 83,
+        "positive_capture_rate": 0.6384615384615384,
+        "positive_opportunity_scenes": 130,
+        "selected_count": 150,
+        "selected_positive_count": 83,
+        "selected_precision": 0.5533333333333333,
+        "teacher_improvement_sum": -5.9277336595311265,
+        "teacher_improvement_worst": -2.6145104679828512,
+        "train_scenes": 616
+      },
+      {
+        "fold": 1,
+        "holdout_scenes": 141,
+        "negative_rms": 0.7087981401513092,
+        "path_nonharmful": false,
+        "positive_capture_count": 48,
+        "positive_capture_rate": 0.4948453608247423,
+        "positive_opportunity_scenes": 97,
+        "selected_count": 96,
+        "selected_positive_count": 48,
+        "selected_precision": 0.5,
+        "teacher_improvement_sum": -9.215843940326513,
+        "teacher_improvement_worst": -3.8279332883546893,
+        "train_scenes": 641
+      },
+      {
+        "fold": 2,
+        "holdout_scenes": 166,
+        "negative_rms": 0.4589890004604875,
+        "path_nonharmful": false,
+        "positive_capture_count": 71,
+        "positive_capture_rate": 0.5819672131147541,
+        "positive_opportunity_scenes": 122,
+        "selected_count": 128,
+        "selected_positive_count": 71,
+        "selected_precision": 0.5546875,
+        "teacher_improvement_sum": -3.1008894242460063,
+        "teacher_improvement_worst": -4.041263536178889,
+        "train_scenes": 616
+      },
+      {
+        "fold": 3,
+        "holdout_scenes": 158,
+        "negative_rms": 0.21647052875439837,
+        "path_nonharmful": false,
+        "positive_capture_count": 70,
+        "positive_capture_rate": 0.5932203389830508,
+        "positive_opportunity_scenes": 118,
+        "selected_count": 111,
+        "selected_positive_count": 70,
+        "selected_precision": 0.6306306306306306,
+        "teacher_improvement_sum": -0.9356690943686676,
+        "teacher_improvement_worst": -2.0207331793509424,
+        "train_scenes": 624
+      },
+      {
+        "fold": 4,
+        "holdout_scenes": 151,
+        "negative_rms": 0.4190659965724622,
+        "path_nonharmful": false,
+        "positive_capture_count": 70,
+        "positive_capture_rate": 0.6542056074766355,
+        "positive_opportunity_scenes": 107,
+        "selected_count": 127,
+        "selected_positive_count": 70,
+        "selected_precision": 0.5511811023622047,
+        "teacher_improvement_sum": -2.8931158510797927,
+        "teacher_improvement_worst": -2.019908196639083,
+        "train_scenes": 631
+      }
+    ],
+    "positive_capture_count": 342,
+    "positive_capture_rate": 0.5958188153310104,
+    "positive_opportunity_scenes": 574,
+    "selected_count": 612,
+    "selected_positive_count": 342,
+    "teacher_improvement_sum": -22.073251969552103,
+    "teacher_improvement_worst": -4.041263536178889,
+    "train_gate_pass": false
+  },
+  "derived": {
+    "aggregate_selected_harmful_or_nonpositive_count": 270,
+    "aggregate_selected_precision": 0.5588235294117647,
+    "all_folds_catastrophic_worst_below_minus_0_5": true,
+    "all_folds_negative_sum": true,
+    "selected_scene_fraction_of_direct_support_positive_scenes": 0.782608695652174
+  },
+  "engineering_status": {
+    "launcher_bash_n_pass": true,
+    "local_repository_regression": "462/462 PASS",
+    "local_repository_warning_count": 36,
+    "local_uploaded_code_compile_pass": true,
+    "local_v31_focused_tests": "5/5 PASS",
+    "new_warning_class": false,
+    "result_complete_under_frozen_protocol": true,
+    "runtime_or_engineering_crash": false,
+    "stop_reason": "preregistered TRAIN selected-path scientific gate failed before calibration/fresh selection"
+  },
+  "mechanism_conclusion": {
+    "falsified_subhypothesis": "same-scene continuous mean-improvement argmax is by itself a selection-stable direct replacement proposal and only needs a post-selection certificate",
+    "key_localization": "mean incumbent-contrastive signal raises positive opportunity capture but extremal mean argmax remains tail-unsafe across every TRAIN fold; candidate-specific risk must enter ordering before winner selection or an equally selection-stable operator must replace mean argmax",
+    "not_falsified": "post-selection conformal itself was not executed; the complete V31 SCIR main arm therefore was not independently tested"
+  },
+  "output_archive_fit_sha256": "4c83f0db89bdc20398fa05294cd26af1e6d00afc6c8ccf4eac82af7011dac22b",
+  "scene_level_reviewability": {
+    "exact_token_level_selected_failure_rows_available_in_uploaded_v31_output": false,
+    "impact": "does not invalidate 0/5 gate attribution, but prevents exact failure-token forensic replay from this archive alone",
+    "reason": "V31 fitter serialized only fold aggregates and launcher stopped before evaluator; the external frozen TRAIN edge artifact is referenced from V30.2 output but was not bundled into the uploaded V31 result",
+    "v32_fix": "V32 fitter always writes a per-scene nested TRAIN audit CSV before any scientific STOP"
+  },
+  "scientific_scope": {
+    "not_available_for": [
+      "independent CAL500 post-selection conformal behavior",
+      "fresh A/B SCIR-MAIN behavior",
+      "paper-level SCIR promotion"
+    ],
+    "reliable_for": "development-level attribution of V31 SCIR mean-ranking proposal component",
+    "why": "launcher correctly stopped before CAL/fresh because all five frozen TRAIN folds violated selected-path non-harm gate"
+  },
+  "train_population": {
+    "direct_support_positive_edges": 9394,
+    "direct_support_positive_scenes": 782,
+    "edge_positive_fraction": 0.3431977858207366,
+    "edge_teacher_improvement_sum": -2624.1702011331627,
+    "frozen_scenes": 3000
+  }
+}

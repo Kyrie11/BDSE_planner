@@ -2397,7 +2397,7 @@ def _icer_selection_conditioned_intervention_scores(
     support_logits: np.ndarray,
     legacy_action: int,
     scir_cfg: dict[str, Any],
-) -> tuple[np.ndarray, np.ndarray, list[str]]:
+) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
     """V64.3.31 same-scene incumbent-contrastive intervention utility.
 
     The V30.3 capacity closure shows that exposing more decisive evidence does
@@ -2413,7 +2413,8 @@ def _icer_selection_conditioned_intervention_scores(
     sup = np.asarray(support_logits, dtype=np.float64).reshape(-1)
     legacy = int(legacy_action)
     if xx.ndim != 2 or sup.shape[0] != xx.shape[0] or not (0 <= legacy < xx.shape[0]):
-        return np.zeros((xx.shape[0] if xx.ndim == 2 else 0,), dtype=np.float64), np.zeros((0, 0), dtype=np.float64), []
+        n = xx.shape[0] if xx.ndim == 2 else 0
+        return np.zeros((n,), dtype=np.float64), np.zeros((0, 0), dtype=np.float64), [], np.ones((n,), dtype=np.float64)
     base_names = list(scir_cfg.get("base_feature_names", _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES))
     if base_names != list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES):
         raise ValueError("EAF-ICER SCIR base feature schema must equal the frozen 18-D evidence view")
@@ -2434,7 +2435,24 @@ def _icer_selection_conditioned_intervention_scores(
         raise ValueError("EAF-ICER SCIR feature schema/mean/std/weights are inconsistent")
     z = (x - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
     mu = np.clip(z @ weights + float(scir_cfg.get("bias", 0.0)), -40.0, 40.0)
-    return mu, x, runtime_names
+
+    # V64.3.32 selection-stable scale.  This is intentionally *not* claimed as
+    # a probabilistic variance.  It is a frozen TRAIN-only ridge-leverage scale
+    # used to normalize one-sided conformal nonconformity.  If a historical V31
+    # artifact omits the matrix, the scale is exactly one and legacy behavior is
+    # bit-compatible.
+    leverage_inverse = np.asarray(scir_cfg.get("leverage_inverse", []), dtype=np.float64)
+    if leverage_inverse.size == 0:
+        scale = np.ones((x.shape[0],), dtype=np.float64)
+    else:
+        if leverage_inverse.shape != (len(runtime_names), len(runtime_names)):
+            raise ValueError("EAF-ICER SCIR leverage_inverse shape is inconsistent with feature schema")
+        h = np.einsum("bi,ij,bj->b", z, leverage_inverse, z)
+        h = np.maximum(np.where(np.isfinite(h), h, 0.0), 0.0)
+        scale = np.sqrt(1.0 + h)
+        floor = max(float(scir_cfg.get("selection_scale_floor", 1.0)), 1.0e-6)
+        scale = np.maximum(scale, floor)
+    return mu, x, runtime_names, scale
 
 
 def _icer_select_scir_candidate(
@@ -2547,6 +2565,7 @@ def _apply_decisive_frontier_icer(
     replacement_confirmation_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     retention_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     scir_predicted_improvement = np.zeros((len(valid),), dtype=np.float64)
+    scir_selection_scale = np.ones((len(valid),), dtype=np.float64)
     scir_lower_bound = np.zeros((len(valid),), dtype=np.float64)
     scir_feature_matrix = np.zeros((len(valid), 0), dtype=np.float64)
     scir_feature_names: list[str] = []
@@ -2667,15 +2686,22 @@ def _apply_decisive_frontier_icer(
             raise ValueError(f"unknown EAF-ICER dominance_policy={dominance_policy}")
 
         if scir_enabled:
-            if scir_mode not in {"rank_only", "conformal_veto"}:
+            if scir_mode not in {"rank_only", "mean_rank", "conformal_veto", "simultaneous_lcb"}:
                 raise ValueError(f"unknown EAF-ICER SCIR mode={scir_mode}")
-            scir_predicted_improvement, scir_feature_matrix, scir_feature_names = _icer_selection_conditioned_intervention_scores(
+            scir_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_selection_scale = _icer_selection_conditioned_intervention_scores(
                 feat, names, support_logits, legacy, scir_cfg
             )
-            q = float(scir_cfg.get("conformal_overprediction_quantile", 0.0)) if scir_mode == "conformal_veto" else 0.0
+            if scir_mode == "conformal_veto":
+                q = float(scir_cfg.get("conformal_overprediction_quantile", 0.0))
+                scir_lower_bound = scir_predicted_improvement - q
+            elif scir_mode == "simultaneous_lcb":
+                q = float(scir_cfg.get("simultaneous_conformal_quantile", 0.0))
+                scir_lower_bound = scir_predicted_improvement - q * scir_selection_scale
+            else:
+                q = 0.0
+                scir_lower_bound = scir_predicted_improvement.copy()
             if not np.isfinite(q) or q < 0.0:
                 raise ValueError("EAF-ICER SCIR conformal quantile must be finite and non-negative")
-            scir_lower_bound = scir_predicted_improvement - q
 
         # V64.3.21 selection-conditioned incumbent retention.  The historical
         # all-edge support head is still the absolute support gate for *new*
@@ -2830,10 +2856,19 @@ def _apply_decisive_frontier_icer(
                 # remains instrumented as a causal diagnostic but no longer gates
                 # or ranks the SCIR arm.  Anchor support and deployment admissibility
                 # remain frozen prerequisites.
-                scir_positive = np.isfinite(scir_predicted_improvement) & (scir_predicted_improvement > 0.0)
+                if scir_mode == "simultaneous_lcb":
+                    # V64.3.32: risk enters the *ordering* itself.  The calibration
+                    # score is a per-scene maximum over all eligible alternatives, so
+                    # all candidate lower bounds are calibrated simultaneously before
+                    # the extremal winner is chosen.
+                    scir_positive = np.isfinite(scir_lower_bound) & (scir_lower_bound > 0.0)
+                    ordering_score = scir_lower_bound
+                else:
+                    scir_positive = np.isfinite(scir_predicted_improvement) & (scir_predicted_improvement > 0.0)
+                    ordering_score = scir_predicted_improvement
                 cand = np.flatnonzero(alternative & scir_positive).astype(np.int64)
                 best = _icer_select_scir_candidate(
-                    cand, scir_predicted_improvement, support_logits, margin_star, utility_prior
+                    cand, ordering_score, support_logits, margin_star, utility_prior
                 )
                 scir_proposal_exists = bool(best is not None)
                 scir_proposal_action = int(legacy if best is None else best)
@@ -2841,12 +2876,12 @@ def _apply_decisive_frontier_icer(
                     scir_certificate_accepted = False
                     selected = int(baseline)
                 elif scir_mode == "conformal_veto":
-                    # The conformal stage sees *only* the already-selected proposal.
-                    # Failure returns to the incumbent/default and never re-ranks or
-                    # falls through to another candidate, preserving monotone containment.
+                    # Historical V31 proposal-only calibration.
                     scir_certificate_accepted = bool(np.isfinite(scir_lower_bound[best]) and scir_lower_bound[best] > 0.0)
                     selected = int(best if scir_certificate_accepted else baseline)
                 else:
+                    # mean_rank/rank_only and V32 simultaneous_lcb already use their
+                    # respective positive decision boundary when constructing cand.
                     scir_certificate_accepted = True
                     selected = int(best)
             else:
@@ -2901,8 +2936,10 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_selected_support_logit": support_selected,
         "decisive_frontier_icer_selected_dominance_logit": dominance_selected,
         "decisive_frontier_icer_scir_enabled": float(scir_enabled),
-        "decisive_frontier_icer_scir_rank_only": float(scir_enabled and scir_mode == "rank_only"),
+        "decisive_frontier_icer_scir_rank_only": float(scir_enabled and scir_mode in {"rank_only", "mean_rank"}),
+        "decisive_frontier_icer_scir_mean_rank": float(scir_enabled and scir_mode in {"rank_only", "mean_rank"}),
         "decisive_frontier_icer_scir_conformal_veto": float(scir_enabled and scir_mode == "conformal_veto"),
+        "decisive_frontier_icer_scir_simultaneous_lcb": float(scir_enabled and scir_mode == "simultaneous_lcb"),
         "decisive_frontier_icer_scir_proposal_exists": float(bool(scir_proposal_exists)),
         "decisive_frontier_icer_scir_proposal_action": float(scir_proposal_action),
         "decisive_frontier_icer_scir_certificate_accepted": float(bool(scir_certificate_accepted)),
@@ -2911,6 +2948,8 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_scir_proposal_lower_bound": float(scir_lower_bound[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
         "decisive_frontier_icer_scir_conformal_alpha": float(scir_cfg.get("conformal_alpha", 0.0)) if scir_enabled else 0.0,
         "decisive_frontier_icer_scir_conformal_overprediction_quantile": float(scir_cfg.get("conformal_overprediction_quantile", 0.0)) if scir_enabled and scir_mode == "conformal_veto" else 0.0,
+        "decisive_frontier_icer_scir_simultaneous_conformal_quantile": float(scir_cfg.get("simultaneous_conformal_quantile", 0.0)) if scir_enabled and scir_mode == "simultaneous_lcb" else 0.0,
+        "decisive_frontier_icer_scir_selected_scale": float(scir_selection_scale[selected]) if scir_enabled and 0 <= selected < len(valid) and selected != legacy else 1.0,
         "decisive_frontier_icer_legacy_support_logit": float(support_logits[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_legacy_retention_margin": float(incumbent_retention_margin[legacy]) if 0 <= legacy < len(valid) and legacy != a else 0.0,
         "decisive_frontier_icer_legacy_admissible": float(bool(0 <= legacy < len(valid) and admissible[legacy])),
@@ -2960,6 +2999,7 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star": np.asarray(replacement_confirmation_regret_risk_logits, dtype=np.float32),
         "_decisive_frontier_icer_retention_regret_risk_logit_star": np.asarray(retention_regret_risk_logits, dtype=np.float32),
         "_decisive_frontier_icer_scir_predicted_improvement_star": np.asarray(scir_predicted_improvement, dtype=np.float32),
+        "_decisive_frontier_icer_scir_selection_scale_star": np.asarray(scir_selection_scale, dtype=np.float32),
         "_decisive_frontier_icer_scir_lower_bound_star": np.asarray(scir_lower_bound, dtype=np.float32),
         "_decisive_frontier_icer_scir_feature_matrix": np.asarray(scir_feature_matrix, dtype=np.float32),
         "_decisive_frontier_icer_scir_feature_names": list(scir_feature_names),
