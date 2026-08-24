@@ -1,0 +1,106 @@
+{
+  "attribution_status": "ENGINEERING_INVALID_FOR_INTENDED_SSIR_ALGORITHM_ATTRIBUTION",
+  "audit": "v64_3_32_uploaded_result_engineering_audit_for_v64_3_32_1",
+  "direct_support_positive_training_edges": 9394,
+  "direct_support_positive_training_scenes": 782,
+  "engineering_root_cause": {
+    "also_affects": "V31 SCIR ridge fitter and V32 ridge-leverage normalization",
+    "effective_lambda_inflation_by_outer_fold": [
+      483,
+      500,
+      461,
+      450,
+      452
+    ],
+    "frozen_design_contract": "each direct scene has total squared-loss weight 1 with ridge lambda=1",
+    "implemented_v31_v32_behavior": "assign 1/n_scene per edge, then divide all weights by global sum before ridge solve and leverage Gram construction while keeping lambda=1",
+    "mathematical_effect": "implemented average-scene loss + lambda L2 is equivalent after rescaling to intended summed-scene loss + (N_fit_scenes*lambda) L2"
+  },
+  "execution_status": "fit_completed_and_fail_closed_before_CAL_or_fresh",
+  "fresh_data_spent": false,
+  "frozen_train_scenes": 3000,
+  "hotfix_scope": {
+    "algorithmic_changes": false,
+    "change_only": "use normalized scene-equal weights for feature moments but unnormalized per-scene-total-1 weights for ridge loss and leverage Gram",
+    "fresh_seed_policy": "reuse V32 frozen hash seed only because uploaded V32 stopped before token selection; launcher hard-stops if V32 fresh token files exist",
+    "keep_fixed": [
+      "19D same-scene feature",
+      "teacher-improvement target",
+      "ridge lambda=1",
+      "alpha=0.05",
+      "candidate eligibility",
+      "simultaneous scene-max score",
+      "positive-LCB selection",
+      "no fallback",
+      "TRAIN gate",
+      "CAL500/A500/B500 protocol"
+    ]
+  },
+  "hotfix_validation": {
+    "compile_pass": true,
+    "focused_passed": 13,
+    "historical_warning_count": 36,
+    "launcher_bash_n_pass": true,
+    "new_warning_class_count": 0,
+    "repository_passed": 470,
+    "repository_total": 470,
+    "targeted_passed": 140
+  },
+  "observed_v32_signature": {
+    "fit_scene_count_by_fold": [
+      483,
+      500,
+      461,
+      450,
+      452
+    ],
+    "fold_pass_count": 0,
+    "mean_rank_aggregate": {
+      "positive_capture_count": 319,
+      "positive_capture_rate": 0.5557491289198606,
+      "positive_opportunity_scenes": 574,
+      "selected_count": 572,
+      "selected_positive_count": 319,
+      "selected_precision": 0.5576923076923077,
+      "teacher_improvement_sum": -23.842886184829602,
+      "teacher_improvement_worst": -4.041263536178889,
+      "teacher_negative_rms": 0.48280577105580785
+    },
+    "mean_selected_prediction_max": 0.3286623844174224,
+    "mean_selected_prediction_mean": 0.04845287929986355,
+    "mean_selected_scale_max": 6.867601243615019,
+    "mean_selected_scale_mean": 1.5678276760684517,
+    "scene_q_by_fold": [
+      1.5803442963712666,
+      1.7583386124157252,
+      1.5937735956558066,
+      1.7442346919643312,
+      2.1202110718289506
+    ],
+    "simultaneous_lcb_aggregate": {
+      "positive_capture_count": 0,
+      "positive_capture_rate": 0.0,
+      "positive_opportunity_scenes": 574,
+      "selected_count": 0,
+      "selected_positive_count": 0,
+      "selected_precision": null,
+      "teacher_improvement_sum": 0.0,
+      "teacher_improvement_worst": null,
+      "teacher_negative_rms": 0.0
+    },
+    "train_gate_pass": false,
+    "v31_common_veto_aggregate": {
+      "positive_capture_count": 0,
+      "positive_capture_rate": 0.0,
+      "positive_opportunity_scenes": 574,
+      "selected_count": 0,
+      "selected_positive_count": 0,
+      "selected_precision": null,
+      "teacher_improvement_sum": 0.0,
+      "teacher_improvement_worst": null,
+      "teacher_negative_rms": 0.0
+    }
+  },
+  "scientific_rule": "do not interpret zero SSIR selections or V31 common-veto zero selections as mechanism falsification until weight-corrected rerun",
+  "uploaded_v32_targeted_regression_passed": 138
+}

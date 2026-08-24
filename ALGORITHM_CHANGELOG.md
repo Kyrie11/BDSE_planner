@@ -9767,3 +9767,104 @@ Empirical simultaneous coverage is a theorem diagnostic rather than a brittle li
 - structural all-flagged delegation remains exact.
 
 No nuPlan result is fabricated locally. If the nested TRAIN SSIR gate fails, the launcher must stop before CAL/fresh and the token-level TRAIN audit is the next source of mechanism evidence.
+
+# V64.3.32 uploaded execution audit → V64.3.32.1 EAF-ICER-SSIR-WEIGHTFIX
+
+## 1. Status of the uploaded V64.3.32 run
+
+The uploaded V64.3.32 run is **engineering-invalid for attribution of the intended SSIR mechanism**. This is not a CUDA/runtime crash: the nested TRAIN pipeline executed, wrote the scene-level audit, and failed closed before CAL/fresh selection. The invalidity is a statistical-objective implementation mismatch in the SCIR/SSIR ridge fitter.
+
+Observed uploaded V64.3.32 signature:
+
+- frozen TRAIN scenes: 3000;
+- direct-eligible/support-positive scenes: 782;
+- complete nested SSIR gate: 0/5 outer folds;
+- SSIR selected interventions: 0 in every fold;
+- V31 common-veto diagnostic selected interventions: 0 in every fold;
+- mean-ranker diagnostic: 572 selected, 319 positive, precision 0.557692, positive-opportunity capture 0.555749, selected teacher-improvement sum -23.842886, worst -4.041264;
+- per-fold simultaneous conformal q approximately 1.58, 1.76, 1.59, 1.74, 2.12;
+- no CAL500/A500/B500 token population was selected or consumed.
+
+Therefore **do not** interpret zero SSIR selection as evidence that simultaneous lower-bound ordering is intrinsically too conservative, and do not tighten the paper bottleneck or design V33 from this run.
+
+## 2. Root cause: global re-normalization changed the frozen ridge objective
+
+The V31/V32 design contract states scene-equal training: each scene contributes total squared-loss weight 1 across its eligible challenger edges, with fixed ridge `lambda=1` and no lambda sweep.
+
+The implementation correctly assigned each edge initial weight `1 / (# eligible edges in its scene)`, but then divided the complete weight vector by its global sum before solving the ridge objective. With `N_fit` scenes this changed
+
+`sum_scene mean_edge (y - f)^2 + lambda ||w||^2`
+
+into
+
+`(1/N_fit) * sum_scene mean_edge (y - f)^2 + lambda ||w||^2`,
+
+which is equivalent, up to multiplication by `N_fit`, to the intended loss with effective regularization
+
+`lambda_eff = N_fit * lambda`.
+
+For the five V32 outer fits, `N_fit` is 483 / 500 / 461 / 450 / 452, so the intended fixed `lambda=1` was effectively replaced by roughly 450–500 without an explicit algorithm decision. The same globally normalized weights were also used to construct the V32 ridge Gram matrix for leverage normalization, so both the conditional mean and candidate-specific scale were inconsistent with the frozen objective.
+
+This is an **engineering/logic error**, not a legitimate negative SSIR result and not a request to tune lambda. Feature standardization may use normalized moment weights because multiplying all moment weights by a constant does not change weighted mean/variance; the ridge loss and leverage Gram may not silently change their global scale while lambda remains fixed.
+
+The same objective-scale bug exists in the historical V31 fitter. Consequently, the recorded V31 execution remains a factual result for that implementation, but the stronger intended-mechanism claim that a correctly implemented scene-total-weight-1, `lambda=1` mean ranker was falsified is reopened and must be revalidated by the corrected lineage. The independent V30.3 capacity closure is unaffected.
+
+## 3. V64.3.32.1 fix scope: engineering hotfix only
+
+V64.3.32.1 does **not** introduce a new recovery algorithm. It preserves all V32 scientific choices:
+
+- same 19-D incumbent-contrastive feature definition and teacher-improvement target;
+- fixed ridge `lambda=1`;
+- same admissibility/support candidate set;
+- same ridge-leverage scale definition `sqrt(1 + h)`;
+- fixed conformal `alpha=0.05`;
+- one scene-max simultaneous nonconformity score per direct-eligible calibration scene;
+- same candidate-specific `LCB = mu - q * scale` ordering;
+- same positive-LCB-only intervention, incumbent default, no fallback, and structural delegation;
+- same nested 3-fit / 1-cal / 1-test TRAIN gate and no pooled rescue;
+- same CAL500+A500+B500 fresh protocol and promotion thresholds.
+
+The only scientific-objective correction is:
+
+- **ridge squared-loss weight:** every fit scene now has total weight exactly 1, with no global renormalization;
+- **leverage Gram weight:** uses the same unnormalized scene-total-1 loss weights;
+- **feature moments:** still use normalized copies of those weights solely for weighted mean/variance.
+
+The fit report logs `fit_loss_weight_sum` and the legacy-equivalent effective lambda so this scale contract cannot silently regress.
+
+## 4. Fresh-population handling
+
+The uploaded V64.3.32 run stopped before CAL/fresh token selection, so the V32 seed and 10700-token exclusion remain untouched. V64.3.32.1 intentionally reuses
+
+`v64.3.32-eaf-icer-ssir-cal500-double-fresh-v1`
+
+**only after** the launcher proves the historical V32 result has no non-empty CAL/A/B token manifests. If any such manifest exists, the hotfix launcher stops rather than reusing a potentially spent population.
+
+The launcher also requires the exact uploaded V32 failure signature before executing the corrected fitter, preventing accidental comparison against a different historical run.
+
+## 5. New no-repeat / forbidden directions from this audit
+
+Until V64.3.32.1 is executed, keep all previously frozen directions frozen. In addition:
+
+- do not claim V32 falsified SSIR or simultaneous conformal ordering;
+- do not explain V32 zero selection as an algorithmic conservatism result;
+- do not sweep ridge lambda, alpha, leverage multiplier, mean threshold, support/scalar thresholds, B/M, or candidate-set rules to rescue the run;
+- do not design V33 from the engineering-invalid V32 outcome;
+- do not treat the historical V31 objective-scale result as final evidence about the intended scene-total-weight-1 `lambda=1` mean mechanism;
+- do not consume a new fresh seed merely because this TRAIN-only engineering-invalid run occurred.
+
+The next experiment is the single-variable **V64.3.32.1 weight-semantics hotfix rerun**.
+
+## 6. Engineering validation
+
+Local validation of V64.3.32.1:
+
+- Python compile: PASS;
+- V31/V32/V32.1 focused tests: **13/13 PASS**;
+- V13–V32.1 targeted regression: **140/140 PASS**;
+- repository regression: **470/470 PASS**, executed as deterministic 235+235 halves because a monolithic run exceeded the outer execution window;
+- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first` warning class; no new warning class;
+- launcher `bash -n`: PASS;
+- dedicated regression test reproduces the exact intended scene-total-weight-1 ridge solution and verifies it differs from the historical globally normalized objective.
+
+No nuPlan outcome is fabricated locally. V64.3.32.1 must be run before any further algorithm-level attribution.

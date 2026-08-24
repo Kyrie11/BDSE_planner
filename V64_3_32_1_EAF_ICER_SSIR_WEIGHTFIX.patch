@@ -1,0 +1,1862 @@
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/ALGORITHM_CHANGELOG.md /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/ALGORITHM_CHANGELOG.md
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/ALGORITHM_CHANGELOG.md	2026-08-24 09:56:45.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/ALGORITHM_CHANGELOG.md	2026-08-24 12:10:50.209392333 +0000
+@@ -9767,3 +9767,104 @@
+ - structural all-flagged delegation remains exact.
+ 
+ No nuPlan result is fabricated locally. If the nested TRAIN SSIR gate fails, the launcher must stop before CAL/fresh and the token-level TRAIN audit is the next source of mechanism evidence.
++
++# V64.3.32 uploaded execution audit → V64.3.32.1 EAF-ICER-SSIR-WEIGHTFIX
++
++## 1. Status of the uploaded V64.3.32 run
++
++The uploaded V64.3.32 run is **engineering-invalid for attribution of the intended SSIR mechanism**. This is not a CUDA/runtime crash: the nested TRAIN pipeline executed, wrote the scene-level audit, and failed closed before CAL/fresh selection. The invalidity is a statistical-objective implementation mismatch in the SCIR/SSIR ridge fitter.
++
++Observed uploaded V64.3.32 signature:
++
++- frozen TRAIN scenes: 3000;
++- direct-eligible/support-positive scenes: 782;
++- complete nested SSIR gate: 0/5 outer folds;
++- SSIR selected interventions: 0 in every fold;
++- V31 common-veto diagnostic selected interventions: 0 in every fold;
++- mean-ranker diagnostic: 572 selected, 319 positive, precision 0.557692, positive-opportunity capture 0.555749, selected teacher-improvement sum -23.842886, worst -4.041264;
++- per-fold simultaneous conformal q approximately 1.58, 1.76, 1.59, 1.74, 2.12;
++- no CAL500/A500/B500 token population was selected or consumed.
++
++Therefore **do not** interpret zero SSIR selection as evidence that simultaneous lower-bound ordering is intrinsically too conservative, and do not tighten the paper bottleneck or design V33 from this run.
++
++## 2. Root cause: global re-normalization changed the frozen ridge objective
++
++The V31/V32 design contract states scene-equal training: each scene contributes total squared-loss weight 1 across its eligible challenger edges, with fixed ridge `lambda=1` and no lambda sweep.
++
++The implementation correctly assigned each edge initial weight `1 / (# eligible edges in its scene)`, but then divided the complete weight vector by its global sum before solving the ridge objective. With `N_fit` scenes this changed
++
++`sum_scene mean_edge (y - f)^2 + lambda ||w||^2`
++
++into
++
++`(1/N_fit) * sum_scene mean_edge (y - f)^2 + lambda ||w||^2`,
++
++which is equivalent, up to multiplication by `N_fit`, to the intended loss with effective regularization
++
++`lambda_eff = N_fit * lambda`.
++
++For the five V32 outer fits, `N_fit` is 483 / 500 / 461 / 450 / 452, so the intended fixed `lambda=1` was effectively replaced by roughly 450–500 without an explicit algorithm decision. The same globally normalized weights were also used to construct the V32 ridge Gram matrix for leverage normalization, so both the conditional mean and candidate-specific scale were inconsistent with the frozen objective.
++
++This is an **engineering/logic error**, not a legitimate negative SSIR result and not a request to tune lambda. Feature standardization may use normalized moment weights because multiplying all moment weights by a constant does not change weighted mean/variance; the ridge loss and leverage Gram may not silently change their global scale while lambda remains fixed.
++
++The same objective-scale bug exists in the historical V31 fitter. Consequently, the recorded V31 execution remains a factual result for that implementation, but the stronger intended-mechanism claim that a correctly implemented scene-total-weight-1, `lambda=1` mean ranker was falsified is reopened and must be revalidated by the corrected lineage. The independent V30.3 capacity closure is unaffected.
++
++## 3. V64.3.32.1 fix scope: engineering hotfix only
++
++V64.3.32.1 does **not** introduce a new recovery algorithm. It preserves all V32 scientific choices:
++
++- same 19-D incumbent-contrastive feature definition and teacher-improvement target;
++- fixed ridge `lambda=1`;
++- same admissibility/support candidate set;
++- same ridge-leverage scale definition `sqrt(1 + h)`;
++- fixed conformal `alpha=0.05`;
++- one scene-max simultaneous nonconformity score per direct-eligible calibration scene;
++- same candidate-specific `LCB = mu - q * scale` ordering;
++- same positive-LCB-only intervention, incumbent default, no fallback, and structural delegation;
++- same nested 3-fit / 1-cal / 1-test TRAIN gate and no pooled rescue;
++- same CAL500+A500+B500 fresh protocol and promotion thresholds.
++
++The only scientific-objective correction is:
++
++- **ridge squared-loss weight:** every fit scene now has total weight exactly 1, with no global renormalization;
++- **leverage Gram weight:** uses the same unnormalized scene-total-1 loss weights;
++- **feature moments:** still use normalized copies of those weights solely for weighted mean/variance.
++
++The fit report logs `fit_loss_weight_sum` and the legacy-equivalent effective lambda so this scale contract cannot silently regress.
++
++## 4. Fresh-population handling
++
++The uploaded V64.3.32 run stopped before CAL/fresh token selection, so the V32 seed and 10700-token exclusion remain untouched. V64.3.32.1 intentionally reuses
++
++`v64.3.32-eaf-icer-ssir-cal500-double-fresh-v1`
++
++**only after** the launcher proves the historical V32 result has no non-empty CAL/A/B token manifests. If any such manifest exists, the hotfix launcher stops rather than reusing a potentially spent population.
++
++The launcher also requires the exact uploaded V32 failure signature before executing the corrected fitter, preventing accidental comparison against a different historical run.
++
++## 5. New no-repeat / forbidden directions from this audit
++
++Until V64.3.32.1 is executed, keep all previously frozen directions frozen. In addition:
++
++- do not claim V32 falsified SSIR or simultaneous conformal ordering;
++- do not explain V32 zero selection as an algorithmic conservatism result;
++- do not sweep ridge lambda, alpha, leverage multiplier, mean threshold, support/scalar thresholds, B/M, or candidate-set rules to rescue the run;
++- do not design V33 from the engineering-invalid V32 outcome;
++- do not treat the historical V31 objective-scale result as final evidence about the intended scene-total-weight-1 `lambda=1` mean mechanism;
++- do not consume a new fresh seed merely because this TRAIN-only engineering-invalid run occurred.
++
++The next experiment is the single-variable **V64.3.32.1 weight-semantics hotfix rerun**.
++
++## 6. Engineering validation
++
++Local validation of V64.3.32.1:
++
++- Python compile: PASS;
++- V31/V32/V32.1 focused tests: **13/13 PASS**;
++- V13–V32.1 targeted regression: **140/140 PASS**;
++- repository regression: **470/470 PASS**, executed as deterministic 235+235 halves because a monolithic run exceeded the outer execution window;
++- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first` warning class; no new warning class;
++- launcher `bash -n`: PASS;
++- dedicated regression test reproduces the exact intended scene-total-weight-1 ridge solution and verifies it differs from the historical globally normalized objective.
++
++No nuPlan outcome is fabricated locally. V64.3.32.1 must be run before any further algorithm-level attribution.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/NEXT_COMMANDS_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.txt /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/NEXT_COMMANDS_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.txt
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/NEXT_COMMANDS_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/NEXT_COMMANDS_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.txt	2026-08-24 12:09:07.453709730 +0000
+@@ -0,0 +1,14 @@
++# Preferred when historical output roots are visible from the new code directory:
++cd bdse_v64_3_32_1_eaf_icer_ssir_weightfix
++bash RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh
++
++# If historical outputs live elsewhere, point the launcher at them explicitly:
++cd bdse_v64_3_32_1_eaf_icer_ssir_weightfix
++V30_2_ROOT=/path/to/outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1 \
++V30_3_ROOT=/path/to/outputs_v64_3_30_3_eaf_icer_fbic_pure_auditfix_screen_2gpu_v1 \
++V31_ROOT=/path/to/outputs_v64_3_31_eaf_icer_scir_screen_2gpu_v1 \
++V32_ROOT=/path/to/outputs_v64_3_32_eaf_icer_ssir_screen_2gpu_v1 \
++bash RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh
++
++# Do not change FRESH_HASH_SEED. Original V32 stopped before fresh selection.
++# The launcher will STOP if it detects any nonempty V32 CAL/A/B token manifest.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh	2026-08-24 12:04:28.029695142 +0000
+@@ -0,0 +1,254 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export V30_2_ROOT="${V30_2_ROOT:-outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1}"
++export V30_3_ROOT="${V30_3_ROOT:-outputs_v64_3_30_3_eaf_icer_fbic_pure_auditfix_screen_2gpu_v1}"
++export V31_ROOT="${V31_ROOT:-outputs_v64_3_31_eaf_icer_scir_screen_2gpu_v1}"
++export V32_ROOT="${V32_ROOT:-outputs_v64_3_32_eaf_icer_ssir_screen_2gpu_v1}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_32_1_eaf_icer_ssir_weightfix_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_32_design_exclude_v64_3_30_3_screen_tokens.txt}"
++export FROZEN_TRAIN_TOKENS="${FROZEN_TRAIN_TOKENS:-bdse/configs/v64_3_29_frozen_v28_train_3000_tokens.txt}"
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.32-eaf-icer-ssir-cal500-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"
++V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++TRAIN_EDGES="$V30_2_ROOT/provenance/train_b16_v20_edges.jsonl"
++V30_3_SCREEN="$V30_3_ROOT/provenance/v64_3_30_3_eaf_icer_fbic_pure_auditfix_double_fresh_screen.json"
++V31_FIT="$V31_ROOT/provenance/v64_3_31_scir_fit.json"
++V32_FIT="$V32_ROOT/provenance/v64_3_32_ssir_fit.json"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++TIMING="$OUT_ROOT/provenance/v64_3_32_1_stage_timing.tsv"; : > "$TIMING"
++ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
++stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >> "$TIMING"; }
++
++[[ -d "$BDSE_VAL_CACHE" ]] || { echo 'STOP: missing val cache' >&2; exit 2; }
++for f in "$RAW_CONFIG" "$V20_CONFIG" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$TRAIN_EDGES" "$V30_3_SCREEN" "$V31_FIT" "$V32_FIT"; do
++  [[ -s "$f" ]] || { echo "STOP: missing $f" >&2; exit 2; }
++done
++
++stage_start prior_causal_closure_v31_failure_and_v32_weightbug_reproduction
++python - "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$V30_3_SCREEN" "$V31_FIT" "$V32_FIT" "$V32_ROOT" <<'PY'
++import hashlib,json,math,sys
++ex=[x.strip() for x in open(sys.argv[1]) if x.strip()]
++tr=[x.strip() for x in open(sys.argv[2]) if x.strip()]
++v30=json.load(open(sys.argv[3])); v31=json.load(open(sys.argv[4]))
++if len(ex)!=10700 or len(set(ex))!=10700: raise SystemExit(f'STOP DATA: V32 design exclusion !=10700 unique rows={len(ex)} unique={len(set(ex))}')
++sha=hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()
++if sha!='041ec824756777576391756ef3721617459bb0c0a45f7f43226b52254d951473': raise SystemExit('STOP DATA: V32 design exclusion SHA changed: '+sha)
++if len(tr)!=3000 or len(set(tr))!=3000: raise SystemExit('STOP DATA: frozen TRAIN !=3000 unique')
++trsha=hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()
++if trsha!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4': raise SystemExit('STOP DATA: frozen TRAIN SHA changed: '+trsha)
++want='retained_capacity_is_not_the_reproducible_first_order_missing_mediator_under_current_frozen_consumer'
++if not v30.get('engineering_valid',False) or v30.get('scientific_conclusion')!=want: raise SystemExit('STOP V32: V30.3 capacity closure prerequisite changed')
++cf=v31.get('crossfit',{})
++checks=[
++    v31.get('frozen_train_scenes')==3000,
++    v31.get('direct_support_positive_training_edges')==9394,
++    v31.get('direct_support_positive_training_scenes')==782,
++    v31.get('train_gate_pass') is False,
++    cf.get('fold_pass_count')==0,
++    cf.get('selected_count')==612,
++    cf.get('selected_positive_count')==342,
++    abs(float(cf.get('teacher_improvement_sum',999))-(-22.073251969552103))<1e-9,
++    abs(float(cf.get('teacher_improvement_worst',999))-(-4.041263536178889))<1e-9,
++    abs(float(cf.get('positive_capture_rate',999))-0.5958188153310104)<1e-12,
++]
++if not all(checks): raise SystemExit('STOP V32.1: V31 uploaded TRAIN failure does not reproduce exact audited result')
++v32=json.load(open(sys.argv[5])); n=v32.get('nested_crossfit',{}); ma=n.get('mean_rank_aggregate',{}); la=n.get('simultaneous_lcb_aggregate',{}); va=n.get('v31_post_selection_common_offset_veto_aggregate',{})
++checks32=[
++    v32.get('frozen_train_scenes')==3000,
++    v32.get('direct_support_positive_training_edges')==9394,
++    v32.get('direct_support_positive_training_scenes')==782,
++    v32.get('train_gate_pass') is False,
++    n.get('fold_pass_count')==0,
++    la.get('selected_count')==0 and la.get('selected_positive_count')==0,
++    va.get('selected_count')==0 and va.get('selected_positive_count')==0,
++    ma.get('selected_count')==572 and ma.get('selected_positive_count')==319,
++    abs(float(ma.get('teacher_improvement_sum',999))-(-23.842886184829602))<1e-9,
++]
++if not all(checks32): raise SystemExit('STOP V32.1: uploaded V32 weight-normalization failure signature changed')
++from pathlib import Path
++v32root=Path(sys.argv[6])
++spent=[v32root/'provenance/val_screen_cal500_fresh1500_tokens.txt',v32root/'provenance/val_screen_calibration_500_tokens.txt',v32root/'provenance/val_screen_fresh_A_tokens.txt',v32root/'provenance/val_screen_fresh_B_tokens.txt']
++if any(p.exists() and p.stat().st_size>0 for p in spent): raise SystemExit('STOP V32.1: original V32 appears to have spent CAL/fresh tokens; do not reuse frozen seed')
++print('PASS V32.1 prerequisites: V30.3 closure and V31 failure reproduced; exact V32 zero-selection weight-bug run reproduced; original V32 did not spend CAL/fresh')
++PY
++stage_end
++
++stage_start prerequisites_and_regression
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen \
++  --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_32_1_SSIR_WEIGHTFIX \
++  --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_32_1.json" \
++  > "$OUT_ROOT/logs/v64_3_13_eaf_dmvr_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_32_1.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False): raise SystemExit('STOP prerequisites')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"; fi
++export EAF_CKPT
++[[ -s "$EAF_CKPT" ]] || { echo "STOP: missing EAF checkpoint $EAF_CKPT" >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py \
++  bdse/tests/test_v64_3_32_eaf_icer_ssir.py \
++  bdse/tests/test_v64_3_31_eaf_icer_scir.py \
++  bdse/tests/test_v64_3_30_3_eaf_icer_fbic_pure_auditfix.py \
++  bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py \
++  bdse/tests/test_v64_3_30_eaf_icer_fbic.py \
++  bdse/tests/test_v64_3_29_eaf_icer_fcr.py \
++  bdse/tests/test_v64_3_28_eaf_icer_ptmc.py \
++  bdse/tests/test_v64_3_27_eaf_icer_trcc.py \
++  bdse/tests/test_v64_3_26_eaf_icer_sarc.py \
++  bdse/tests/test_v64_3_25_eaf_icer_drc.py \
++  bdse/tests/test_v64_3_24_eaf_icer_arc.py \
++  bdse/tests/test_v64_3_23_eaf_icer_rcr.py \
++  bdse/tests/test_v64_3_22_eaf_icer_tcr.py \
++  bdse/tests/test_v64_3_21_eaf_icer_mcr.py \
++  bdse/tests/test_v64_3_20_eaf_icer_dc.py \
++  bdse/tests/test_v64_3_19_eaf_icer.py \
++  bdse/tests/test_v64_3_18_eaf_dacer.py \
++  bdse/tests/test_v64_3_17_eaf_daler.py \
++  bdse/tests/test_v64_3_16_eaf_raer.py \
++  bdse/tests/test_v64_3_15_eaf_eair.py \
++  bdse/tests/test_v64_3_14_eaf_ocfi.py \
++  bdse/tests/test_v64_3_13_eaf_dmvr.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++stage_end
++
++stage_start train_nested_full_ssir_gate
++PRESERVE_CONFIG="$OUT_ROOT/provenance/v64_3_32_1_preserve_control.yaml"
++MEAN_CONFIG="$OUT_ROOT/provenance/v64_3_32_1_ssir_mean_weightfix.yaml"
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_32_1_ssir_weightfix_fit.json"
++TRAIN_SCENE_AUDIT="$OUT_ROOT/provenance/v64_3_32_1_ssir_weightfix_train_scene_audit.csv"
++python -m bdse.tools.fit_v64_3_32_1_eaf_icer_ssir_weightfix \
++  --train-frontier-edges "$TRAIN_EDGES" --base-config "$V20_CONFIG" \
++  --output-preserve-config "$PRESERVE_CONFIG" --output-mean-config "$MEAN_CONFIG" \
++  --output-report "$FIT_REPORT" --output-scene-audit "$TRAIN_SCENE_AUDIT" \
++  2>&1 | tee "$OUT_ROOT/logs/v64_3_32_1_ssir_weightfix_fit.out"
++stage_end
++
++stage_start calibration_and_fresh_selection
++TOK1500="$OUT_ROOT/provenance/val_screen_cal500_fresh1500_tokens.txt"
++TOKCAL="$OUT_ROOT/provenance/val_screen_calibration_500_tokens.txt"
++TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"
++TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"
++SELECT_EXCLUDE="$OUT_ROOT/provenance/v64_3_32_1_selection_exclude_design_plus_train.txt"
++cat "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" | awk 'NF && !seen[$0]++' > "$SELECT_EXCLUDE"
++python -m bdse.tools.select_fresh_preprocessed_tokens \
++  --preprocessed-dir "$BDSE_VAL_CACHE" --split val --exclude-tokens "$SELECT_EXCLUDE" --count 1500 \
++  --hash-seed "$FRESH_HASH_SEED" --output "$TOK1500" \
++  --audit-output "$OUT_ROOT/provenance/v64_3_32_1_cal500_fresh1500_selection_audit.json" \
++  > "$OUT_ROOT/logs/fresh_token_selection.out"
++head -n 500 "$TOK1500" > "$TOKCAL"
++sed -n '501,1000p' "$TOK1500" > "$TOKA"
++tail -n 500 "$TOK1500" > "$TOKB"
++python - "$TOK1500" "$TOKCAL" "$TOKA" "$TOKB" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import sys
++allv=[x.strip() for x in open(sys.argv[1]) if x.strip()]; cal=[x.strip() for x in open(sys.argv[2]) if x.strip()]; A=[x.strip() for x in open(sys.argv[3]) if x.strip()]; B=[x.strip() for x in open(sys.argv[4]) if x.strip()]
++ex={x.strip() for x in open(sys.argv[5]) if x.strip()}; tr={x.strip() for x in open(sys.argv[6]) if x.strip()}
++if len(allv)!=1500 or len(set(allv))!=1500 or any(len(x)!=500 or len(set(x))!=500 for x in [cal,A,B]): raise SystemExit('STOP DATA: V32.1 CAL/A/B cardinality or uniqueness failure')
++if set(cal)&set(A) or set(cal)&set(B) or set(A)&set(B): raise SystemExit('STOP DATA: V32.1 CAL/A/B overlap')
++if set(allv)!=(set(cal)|set(A)|set(B)): raise SystemExit('STOP DATA: V32 partition mismatch')
++if set(allv)&ex or set(allv)&tr: raise SystemExit('STOP DATA: V32 selected data overlaps spent design/TRAIN')
++print('PASS V32.1 label-free 1500 selection: CAL500 + untouched A500 + untouched B500, all disjoint from 10700 design + TRAIN')
++PY
++stage_end
++
++run_eval_tok(){
++  local gpu="$1" cfg="$2" tok="$3" maxn="$4" tag="$5"
++  CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop \
++    --config "$cfg" --checkpoint "$EAF_CKPT" --split val \
++    --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios "$maxn" \
++    --scenario-token-file "$tok" --require-all-scenario-tokens \
++    --output "$OUT_ROOT/provenance/${tag}_metrics.json" \
++    --per-sample-output "$OUT_ROOT/provenance/${tag}_rows.jsonl" \
++    --frontier-edge-output "$OUT_ROOT/provenance/${tag}_edges.jsonl" \
++    --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${tag}.out" 2>&1
++}
++
++stage_start independent_calibration_mean_replay
++run_eval_tok "$GPU0" "$MEAN_CONFIG" "$TOKCAL" 500 cal_mean
++stage_end
++
++stage_start independent_direct_domain_simultaneous_calibration
++MAIN_CONFIG="$OUT_ROOT/provenance/v64_3_32_1_ssir_weightfix_main.yaml"
++CAL_REPORT="$OUT_ROOT/provenance/v64_3_32_1_ssir_weightfix_calibration.json"
++python -m bdse.tools.calibrate_v64_3_32_1_eaf_icer_ssir_weightfix \
++  --calibration-rows "$OUT_ROOT/provenance/cal_mean_rows.jsonl" \
++  --calibration-edges "$OUT_ROOT/provenance/cal_mean_edges.jsonl" --mean-config "$MEAN_CONFIG" \
++  --output-main-config "$MAIN_CONFIG" --output-report "$CAL_REPORT" --alpha 0.05 \
++  2>&1 | tee "$OUT_ROOT/logs/v64_3_32_1_ssir_weightfix_calibration.out"
++python -m bdse.tools.check_v64_3_32_1_eaf_icer_ssir_weightfix_contract \
++  --v20-config "$V20_CONFIG" --preserve-config "$PRESERVE_CONFIG" --mean-config "$MEAN_CONFIG" --main-config "$MAIN_CONFIG" \
++  --calibration-report "$CAL_REPORT" --output "$OUT_ROOT/provenance/v64_3_32_1_ssir_weightfix_contract.json" \
++  2>&1 | tee "$OUT_ROOT/logs/v64_3_32_1_ssir_weightfix_contract.out"
++stage_end
++
++for sp in A B; do
++  tok="$TOKA"; [[ "$sp" == B ]] && tok="$TOKB"
++  stage_start "fresh_${sp}_wave1"
++  run_eval_tok "$GPU0" "$RAW_CONFIG" "$tok" 500 "${sp}_raw" & p0=$!
++  run_eval_tok "$GPU1" "$V20_CONFIG" "$tok" 500 "${sp}_v20" & p1=$!
++  s=0; wait "$p0" || s=1; wait "$p1" || s=1; [[ $s -eq 0 ]] || exit 2
++  stage_end
++  stage_start "fresh_${sp}_wave2"
++  run_eval_tok "$GPU0" "$PRESERVE_CONFIG" "$tok" 500 "${sp}_preserve" & p0=$!
++  run_eval_tok "$GPU1" "$MEAN_CONFIG" "$tok" 500 "${sp}_mean" & p1=$!
++  s=0; wait "$p0" || s=1; wait "$p1" || s=1; [[ $s -eq 0 ]] || exit 2
++  stage_end
++  stage_start "fresh_${sp}_wave3"
++  run_eval_tok "$GPU0" "$MAIN_CONFIG" "$tok" 500 "${sp}_main"
++  stage_end
++done
++
++stage_start paired_identity
++python - "$OUT_ROOT/provenance" "$TOKA" "$TOKB" <<'PY'
++import json,sys,pathlib
++root=pathlib.Path(sys.argv[1]); tags=['raw','v20','preserve','mean','main']
++for sp,tf in [('A',sys.argv[2]),('B',sys.argv[3])]:
++    want=[x.strip() for x in open(tf) if x.strip()]; orders=[]
++    if len(want)!=500 or len(set(want))!=500: raise SystemExit(f'STOP DATA: {sp} manifest !=500 unique')
++    for tag in tags:
++        rs=[json.loads(x) for x in open(root/f'{sp}_{tag}_rows.jsonl') if x.strip()]; got=[str(r['scenario_token']) for r in rs]
++        if len(got)!=500 or len(set(got))!=500 or set(got)!=set(want): raise SystemExit(f'STOP DATA: {sp}/{tag} identity mismatch')
++        orders.append(got); m=json.load(open(root/f'{sp}_{tag}_metrics.json'))
++        if not m.get('scenario_token_prefilter_active',False): raise SystemExit(f'STOP DATA/SPEED: {sp}/{tag} token prefilter inactive')
++    if any(x!=orders[0] for x in orders[1:]): raise SystemExit(f'STOP DATA: {sp} row order differs across five arms')
++print('PASS V32.1 paired identity across all 10 untouched A/B arms')
++PY
++stage_end
++
++stage_start screen
++for sp in A B; do
++  python -m bdse.tools.check_v64_3_32_1_eaf_icer_ssir_weightfix_split --split-name "$sp" \
++    --raw-metrics "$OUT_ROOT/provenance/${sp}_raw_metrics.json" --raw-rows "$OUT_ROOT/provenance/${sp}_raw_rows.jsonl" \
++    --v20-metrics "$OUT_ROOT/provenance/${sp}_v20_metrics.json" --v20-rows "$OUT_ROOT/provenance/${sp}_v20_rows.jsonl" --v20-edges "$OUT_ROOT/provenance/${sp}_v20_edges.jsonl" \
++    --preserve-metrics "$OUT_ROOT/provenance/${sp}_preserve_metrics.json" --preserve-rows "$OUT_ROOT/provenance/${sp}_preserve_rows.jsonl" --preserve-edges "$OUT_ROOT/provenance/${sp}_preserve_edges.jsonl" \
++    --mean-metrics "$OUT_ROOT/provenance/${sp}_mean_metrics.json" --mean-rows "$OUT_ROOT/provenance/${sp}_mean_rows.jsonl" --mean-edges "$OUT_ROOT/provenance/${sp}_mean_edges.jsonl" \
++    --main-metrics "$OUT_ROOT/provenance/${sp}_main_metrics.json" --main-rows "$OUT_ROOT/provenance/${sp}_main_rows.jsonl" --main-edges "$OUT_ROOT/provenance/${sp}_main_edges.jsonl" \
++    --output "$OUT_ROOT/provenance/v64_3_32_1_split_${sp}_screen.json" | tee "$OUT_ROOT/logs/v64_3_32_1_split_${sp}_screen.out"
++done
++SCREEN="$OUT_ROOT/provenance/v64_3_32_1_eaf_icer_ssir_weightfix_double_fresh_screen.json"
++python -m bdse.tools.check_v64_3_32_1_eaf_icer_ssir_weightfix_screen \
++  --split-a "$OUT_ROOT/provenance/v64_3_32_1_split_A_screen.json" --split-b "$OUT_ROOT/provenance/v64_3_32_1_split_B_screen.json" \
++  --calibration-report "$CAL_REPORT" --fit-report "$FIT_REPORT" --output "$SCREEN" | tee "$OUT_ROOT/logs/v64_3_32_1_double_fresh_screen.out"
++stage_end
++
++# Finalize timing before hashing so provenance is self-consistent.
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"
++(cd "$OUT_ROOT/provenance" && find . -maxdepth 1 -type f ! -name 'v64_3_32_1_provenance_sha256.txt' -print0 | sort -z | xargs -0 sha256sum > v64_3_32_1_provenance_sha256.txt)
++python - "$SCREEN" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++for k in ['engineering_valid_both','train_nested_full_mechanism_gate_pass','independent_calibration_valid','double_fresh_promotion_pass','scientific_conclusion','next_action']:
++    print(k,'=',r.get(k))
++print('V32.1 protocol: exact V31 failure prerequisite -> nested TRAIN full SSIR gate -> independent CAL500 direct-domain scene-simultaneous calibration -> untouched A500/B500 judged separately. No pooled rescue and no alpha/scale/ridge/threshold sweep.')
++PY
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/V64_3_32_1_ENGINEERING_VALIDATION.txt /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/V64_3_32_1_ENGINEERING_VALIDATION.txt
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/V64_3_32_1_ENGINEERING_VALIDATION.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/V64_3_32_1_ENGINEERING_VALIDATION.txt	2026-08-24 12:09:07.453005801 +0000
+@@ -0,0 +1,28 @@
++V64.3.32.1 EAF-ICER-SSIR-WEIGHTFIX engineering validation
++
++Root cause fixed:
++- frozen design: each direct scene has total squared-loss weight 1;
++- historical V31/V32 fitter: globally normalized those scene weights to total 1 while keeping ridge lambda=1;
++- effect: effective lambda inflated by N_fit_scenes (450-500 in V32 outer fits) and leverage Gram used the same wrong scale;
++- hotfix: normalized weights only for feature moments; unnormalized scene-total-1 weights for ridge loss and leverage Gram.
++
++Algorithmic knobs unchanged:
++- 19-D feature, teacher target, lambda=1, alpha=0.05;
++- direct candidate prerequisites;
++- scene-max simultaneous conformal score;
++- positive-LCB selection, no fallback, structural delegation;
++- nested TRAIN gate and CAL500/A500/B500 protocol.
++
++Validation:
++- python compile: PASS
++- V32.1 focused + V32 + V31: 13/13 PASS
++- V13-V32.1 targeted: 140/140 PASS
++- full repository collected: 470 tests
++- repository half 1: 235/235 PASS, 12 warnings
++- repository half 2: 235/235 PASS, 24 warnings
++- total: 470/470 PASS, 36 historical warnings, 0 new warning class
++- launcher bash -n: PASS
++- new objective-scale unit test: PASS
++- independent calibrator compatibility test: PASS
++
++No nuPlan result is fabricated locally.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/V64_3_32_UPLOADED_RESULT_ENGINEERING_AUDIT_FOR_V64_3_32_1.json /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/V64_3_32_UPLOADED_RESULT_ENGINEERING_AUDIT_FOR_V64_3_32_1.json
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/V64_3_32_UPLOADED_RESULT_ENGINEERING_AUDIT_FOR_V64_3_32_1.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/V64_3_32_UPLOADED_RESULT_ENGINEERING_AUDIT_FOR_V64_3_32_1.json	2026-08-24 12:11:40.256418161 +0000
+@@ -0,0 +1,106 @@
++{
++  "attribution_status": "ENGINEERING_INVALID_FOR_INTENDED_SSIR_ALGORITHM_ATTRIBUTION",
++  "audit": "v64_3_32_uploaded_result_engineering_audit_for_v64_3_32_1",
++  "direct_support_positive_training_edges": 9394,
++  "direct_support_positive_training_scenes": 782,
++  "engineering_root_cause": {
++    "also_affects": "V31 SCIR ridge fitter and V32 ridge-leverage normalization",
++    "effective_lambda_inflation_by_outer_fold": [
++      483,
++      500,
++      461,
++      450,
++      452
++    ],
++    "frozen_design_contract": "each direct scene has total squared-loss weight 1 with ridge lambda=1",
++    "implemented_v31_v32_behavior": "assign 1/n_scene per edge, then divide all weights by global sum before ridge solve and leverage Gram construction while keeping lambda=1",
++    "mathematical_effect": "implemented average-scene loss + lambda L2 is equivalent after rescaling to intended summed-scene loss + (N_fit_scenes*lambda) L2"
++  },
++  "execution_status": "fit_completed_and_fail_closed_before_CAL_or_fresh",
++  "fresh_data_spent": false,
++  "frozen_train_scenes": 3000,
++  "hotfix_scope": {
++    "algorithmic_changes": false,
++    "change_only": "use normalized scene-equal weights for feature moments but unnormalized per-scene-total-1 weights for ridge loss and leverage Gram",
++    "fresh_seed_policy": "reuse V32 frozen hash seed only because uploaded V32 stopped before token selection; launcher hard-stops if V32 fresh token files exist",
++    "keep_fixed": [
++      "19D same-scene feature",
++      "teacher-improvement target",
++      "ridge lambda=1",
++      "alpha=0.05",
++      "candidate eligibility",
++      "simultaneous scene-max score",
++      "positive-LCB selection",
++      "no fallback",
++      "TRAIN gate",
++      "CAL500/A500/B500 protocol"
++    ]
++  },
++  "hotfix_validation": {
++    "compile_pass": true,
++    "focused_passed": 13,
++    "historical_warning_count": 36,
++    "launcher_bash_n_pass": true,
++    "new_warning_class_count": 0,
++    "repository_passed": 470,
++    "repository_total": 470,
++    "targeted_passed": 140
++  },
++  "observed_v32_signature": {
++    "fit_scene_count_by_fold": [
++      483,
++      500,
++      461,
++      450,
++      452
++    ],
++    "fold_pass_count": 0,
++    "mean_rank_aggregate": {
++      "positive_capture_count": 319,
++      "positive_capture_rate": 0.5557491289198606,
++      "positive_opportunity_scenes": 574,
++      "selected_count": 572,
++      "selected_positive_count": 319,
++      "selected_precision": 0.5576923076923077,
++      "teacher_improvement_sum": -23.842886184829602,
++      "teacher_improvement_worst": -4.041263536178889,
++      "teacher_negative_rms": 0.48280577105580785
++    },
++    "mean_selected_prediction_max": 0.3286623844174224,
++    "mean_selected_prediction_mean": 0.04845287929986355,
++    "mean_selected_scale_max": 6.867601243615019,
++    "mean_selected_scale_mean": 1.5678276760684517,
++    "scene_q_by_fold": [
++      1.5803442963712666,
++      1.7583386124157252,
++      1.5937735956558066,
++      1.7442346919643312,
++      2.1202110718289506
++    ],
++    "simultaneous_lcb_aggregate": {
++      "positive_capture_count": 0,
++      "positive_capture_rate": 0.0,
++      "positive_opportunity_scenes": 574,
++      "selected_count": 0,
++      "selected_positive_count": 0,
++      "selected_precision": null,
++      "teacher_improvement_sum": 0.0,
++      "teacher_improvement_worst": null,
++      "teacher_negative_rms": 0.0
++    },
++    "train_gate_pass": false,
++    "v31_common_veto_aggregate": {
++      "positive_capture_count": 0,
++      "positive_capture_rate": 0.0,
++      "positive_opportunity_scenes": 574,
++      "selected_count": 0,
++      "selected_positive_count": 0,
++      "selected_precision": null,
++      "teacher_improvement_sum": 0.0,
++      "teacher_improvement_worst": null,
++      "teacher_negative_rms": 0.0
++    }
++  },
++  "scientific_rule": "do not interpret zero SSIR selections or V31 common-veto zero selections as mechanism falsification until weight-corrected rerun",
++  "uploaded_v32_targeted_regression_passed": 138
++}
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/V64_3_32_UPLOADED_RESULT_ENGINEERING_POSTMORTEM_AND_V64_3_32_1_WEIGHTFIX.md /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/V64_3_32_UPLOADED_RESULT_ENGINEERING_POSTMORTEM_AND_V64_3_32_1_WEIGHTFIX.md
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/V64_3_32_UPLOADED_RESULT_ENGINEERING_POSTMORTEM_AND_V64_3_32_1_WEIGHTFIX.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/V64_3_32_UPLOADED_RESULT_ENGINEERING_POSTMORTEM_AND_V64_3_32_1_WEIGHTFIX.md	2026-08-24 12:09:07.452330748 +0000
+@@ -0,0 +1,134 @@
++# V64.3.32 uploaded result: engineering-invalid for intended SSIR attribution -> V64.3.32.1 WEIGHTFIX
++
++## 1. Decision
++
++The uploaded V64.3.32 run must **not** be used to claim that SSIR, scene-simultaneous conformal ordering, or post-selection conformal has failed. The run is execution-complete only through the nested TRAIN fitter and it correctly stops before CAL/fresh, but the fitted SCIR/SSIR ridge objective does not match the frozen design contract inherited from V31.
++
++This is an engineering/logic error, not a negative algorithm result. Therefore V64.3.32.1 makes no new algorithmic mechanism change.
++
++## 2. What executed correctly
++
++The uploaded run reproduces the frozen V30.3/V31 prerequisites, passes the targeted regression (`138 passed`), reads the frozen 3000-scene / 75,133-row TRAIN frontier, builds the 9,394 direct admissible/support-positive edges over 782 direct scenes, and executes all five nested fit/calibrate/test folds. The launcher stops at the intended TRAIN gate before selecting any CAL500/A500/B500 tokens.
++
++Observed V32 signature:
++
++- nested SSIR fold pass count: `0/5`;
++- mean-rank aggregate: `572 selected / 319 positive / sum -23.842886184829602 / worst -4.041263536178889`;
++- V31 common-veto diagnostic: `0 selected`;
++- SSIR simultaneous-LCB: `0 selected`;
++- fold scene-max conformal q: `1.5803, 1.7583, 1.5938, 1.7442, 2.1202`;
++- mean-selected predicted improvement: mean `0.04845`, max `0.32866`;
++- mean-selected leverage scale: mean `1.5678`, max `6.8676`.
++
++These values are internally consistent with the implementation, but the implementation is not the frozen objective stated by the V31/V32 design.
++
++## 3. Root cause: scene-equal weights were globally renormalized before a fixed-lambda ridge solve
++
++The V31 design states:
++
++> Every scene receives total training weight 1.
++
++The intended fixed ridge objective is therefore, up to an irrelevant constant convention only if lambda is rescaled consistently,
++
++`sum_scene mean_candidate (y - f(x))^2 + lambda ||w||^2`, with frozen `lambda=1`.
++
++The V31 and V32 fitters first correctly assign each edge weight `1 / n_candidates(scene)`, but then execute a second normalization:
++
++```python
++w = w / w.sum()
++```
++
++before solving the ridge system while leaving `lambda=1` unchanged.
++
++The implemented objective is consequently
++
++`(1 / N_fit_scenes) * sum_scene mean_candidate loss + lambda ||w||^2`.
++
++Multiplying through by `N_fit_scenes`, this is equivalent to the intended loss with an effective ridge coefficient
++
++`lambda_eff = N_fit_scenes * lambda`.
++
++For the five V32 outer fits, `N_fit_scenes = 483, 500, 461, 450, 452`. Thus the code used an effective regularization roughly **450--500 times larger** than the frozen per-scene-total-mass contract.
++
++This is not a harmless weight normalization: ridge is not invariant to global sample-weight scaling when lambda is held fixed.
++
++## 4. The same scale error also contaminates V32 leverage normalization
++
++V32 constructs
++
++`G = Z^T W Z + lambda I`, `h = z^T G^{-1} z`, `scale = sqrt(1+h)`.
++
++The same globally normalized weights were used in `G`. Under the frozen contract, the Gram matrix should use the unnormalized scene-mass loss weights, while only feature mean/variance estimation should use a normalized probability copy.
++
++Therefore both pieces that determine the V32 lower bound were affected:
++
++1. the conditional-mean predictor `mu` was over-regularized relative to the intended objective;
++2. the candidate-specific leverage normalization was computed on the wrong loss scale.
++
++The observed `mu << q*scale` and universal abstention are therefore not admissible evidence for falsifying SSIR.
++
++## 5. Scope of the scientific damage
++
++The valid evidence chain through V30.3 remains unchanged. In particular, the independent capacity closure is not affected by this fitter bug.
++
++However, the V31 SCIR fitter contains the same global normalization. Therefore the *implemented* V31 0/5 result remains a factual result for that historical code, but the stronger intended-mechanism statement -- that a correctly implemented `lambda=1`, per-scene-total-weight-1 same-scene mean ridge is insufficient -- must be treated as unresolved until the repaired objective is rerun.
++
++Accordingly, do not use the uploaded V32 zero-selection result to further tighten the dominant bottleneck or to design V33.
++
++## 6. V64.3.32.1 hotfix
++
++V32.1 changes only the objective scaling:
++
++```python
++loss_w = 1 / n_candidates(scene)      # each scene sums to 1
++moment_w = loss_w / loss_w.sum()      # moments only
++
++mean, std <- moment_w
++ridge solve <- loss_w
++leverage Gram <- loss_w
++```
++
++Frozen unchanged items:
++
++- B16 / M24 and all upstream evidence/query semantics;
++- 19-D same-scene candidate-minus-incumbent representation;
++- continuous teacher-improvement target;
++- ridge `lambda=1`;
++- candidate admissibility/support prerequisites;
++- `alpha=0.05`;
++- scene-max simultaneous nonconformity definition;
++- positive-LCB extremal selection and incumbent default;
++- no-fallback / structural delegation;
++- nested 3-fit / 1-cal / 1-test TRAIN gate;
++- CAL500 + A500 + B500 protocol and all independent promotion criteria.
++
++This is therefore an engineering hotfix, not an algorithmic rescue sweep.
++
++## 7. Fresh-data policy
++
++The uploaded V32 run stopped inside the TRAIN fitter, before the launcher entered `calibration_and_fresh_selection`. The result archive contains no CAL/fresh token manifests.
++
++V32.1 therefore reuses the already frozen hash seed:
++
++`v64.3.32-eaf-icer-ssir-cal500-double-fresh-v1`.
++
++The V32.1 launcher hard-checks the original V32 result signature and refuses to reuse the seed if any original V32 CAL/A/B token manifest exists and is nonempty.
++
++## 8. Validation of the hotfix package
++
++Local code validation:
++
++- Python compile: PASS;
++- V32.1 focused + V32 + V31: `13/13 PASS`;
++- V13--V32.1 targeted regression: `140/140 PASS`;
++- repository regression split into two deterministic halves: `235/235 PASS` + `235/235 PASS` = **470/470 PASS**;
++- warnings: `36`, all pre-existing Transformer nested-tensor warnings, no new warning class;
++- launcher `bash -n`: PASS.
++
++A new unit test explicitly solves the frozen per-scene-total-weight-1 ridge objective and verifies that the hotfix matches it while differing from the historical globally normalized objective.
++
++## 9. Next action
++
++Run only V64.3.32.1. Do not tune ridge lambda, conformal alpha, scale multipliers, support thresholds, candidate-set definitions, or any downstream algorithm before this repaired run closes.
++
++If the repaired nested TRAIN gate fails, that repaired failure can be used for algorithm attribution. If it passes, the same launcher proceeds to the still-untouched CAL500/A500/B500 protocol.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py	2026-08-24 12:04:50.635575328 +0000
+@@ -0,0 +1,108 @@
++from __future__ import annotations
++
++import json
++import subprocess
++import sys
++
++import numpy as np
++import pytest
++import yaml
++
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES
++from bdse.tools.fit_v64_3_32_1_eaf_icer_ssir_weightfix import (
++    RIDGE_LAMBDA,
++    _fit_ridge,
++)
++
++
++def _sample(token: str, x0: float, y: float) -> dict:
++    x = np.zeros((19,), dtype=np.float64)
++    x[0] = x0
++    return {"token": token, "x": x, "y": y}
++
++
++def test_weightfix_matches_frozen_each_scene_total_loss_weight_one_objective():
++    # Scene A has two alternatives; scene B has one.  The frozen design says
++    # each scene contributes total loss mass 1, hence edge weights 1/2,1/2,1.
++    samples = [
++        _sample("A", 0.0, 0.0),
++        _sample("A", 2.0, 2.0),
++        _sample("B", 10.0, 10.0),
++    ]
++    w, b, mean, std, ginv = _fit_ridge(samples)
++
++    X = np.stack([s["x"] for s in samples])
++    y = np.asarray([s["y"] for s in samples], dtype=np.float64)
++    loss_w = np.asarray([0.5, 0.5, 1.0], dtype=np.float64)
++    moment_w = loss_w / loss_w.sum()
++    exp_mean = np.sum(X * moment_w[:, None], axis=0)
++    exp_var = np.sum((X - exp_mean[None, :]) ** 2 * moment_w[:, None], axis=0)
++    exp_std = np.maximum(np.sqrt(exp_var), 1.0e-6)
++    Z = (X - exp_mean[None, :]) / exp_std[None, :]
++    A = np.concatenate([np.ones((len(Z), 1)), Z], axis=1)
++    root = np.sqrt(loss_w)[:, None]
++    reg = np.eye(A.shape[1]) * RIDGE_LAMBDA
++    reg[0, 0] = 0.0
++    coef = np.linalg.solve((A * root).T @ (A * root) + reg, (A * root).T @ (y * root[:, 0]))
++    G = (Z * root).T @ (Z * root) + np.eye(Z.shape[1]) * RIDGE_LAMBDA
++
++    assert np.allclose(mean, exp_mean)
++    assert np.allclose(std, exp_std)
++    assert b == pytest.approx(float(coef[0]))
++    assert np.allclose(w, coef[1:])
++    assert np.allclose(ginv, np.linalg.inv(G))
++
++    # Historical V31/V32 normalized the loss weights to sum 1 but left lambda=1.
++    # That is a different ridge objective; the hotfix must not silently regress.
++    legacy_w = loss_w / loss_w.sum()
++    legacy_root = np.sqrt(legacy_w)[:, None]
++    legacy_coef = np.linalg.solve(
++        (A * legacy_root).T @ (A * legacy_root) + reg,
++        (A * legacy_root).T @ (y * legacy_root[:, 0]),
++    )
++    assert not np.allclose(coef[1:], legacy_coef[1:])
++
++
++def test_weightfix_independent_calibrator_keeps_same_scene_simultaneous_contract(tmp_path):
++    rows = tmp_path / "rows.jsonl"
++    edges = tmp_path / "edges.jsonl"
++    cfgp = tmp_path / "mean.yaml"
++    outcfg = tmp_path / "main.yaml"
++    report = tmp_path / "report.json"
++    with rows.open("w", encoding="utf-8") as f:
++        for i in range(500):
++            f.write(json.dumps({"scenario_token": f"t{i:03d}"}) + "\n")
++    with edges.open("w", encoding="utf-8") as f:
++        for i in range(100):
++            tok = f"t{i:03d}"
++            f.write(json.dumps({"scenario_token": tok, "raw_top_action": 0, "challenger_action": 0, "icer_admissible": 1.0, "icer_support_logit": 1.0, "teacher_margin": 0.0, "icer_scir_predicted_improvement": 0.0, "icer_scir_selection_scale": 1.0}) + "\n")
++            f.write(json.dumps({"scenario_token": tok, "raw_top_action": 0, "challenger_action": 1, "icer_admissible": 1.0, "icer_support_logit": 1.0, "teacher_margin": 1.0, "icer_scir_predicted_improvement": 1.5, "icer_scir_selection_scale": 1.0}) + "\n")
++    names = [f"delta::{n}" for n in _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES] + ["delta::support_logit"]
++    cfg = {
++        "runtime": {"decisive_frontier_value": {"incumbent_contrastive_extremal_recovery": {"selection_conditioned_intervention_recovery": {
++            "enabled": True,
++            "mode": "mean_rank",
++            "feature_names": names,
++            "leverage_inverse": np.eye(len(names)).tolist(),
++            "conformal_alpha": 0.05,
++        }}}},
++        "metadata": {},
++        "provenance": {},
++        "experiment": {},
++    }
++    cfgp.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
++    cp = subprocess.run([
++        sys.executable, "-m", "bdse.tools.calibrate_v64_3_32_1_eaf_icer_ssir_weightfix",
++        "--calibration-rows", str(rows),
++        "--calibration-edges", str(edges),
++        "--mean-config", str(cfgp),
++        "--output-main-config", str(outcfg),
++        "--output-report", str(report),
++        "--alpha", "0.05",
++    ], check=True, text=True, capture_output=True)
++    assert '"pass": true' in cp.stdout.lower()
++    rep = json.loads(report.read_text(encoding="utf-8"))
++    assert rep["direct_eligible_scene_count"] == 100
++    assert rep["scene_simultaneous_quantile"] == pytest.approx(0.5)
++    main = yaml.safe_load(outcfg.read_text(encoding="utf-8"))
++    assert main["metadata"]["algorithm_version"] == "V64.3.32.1-EAF-ICER-SSIR-WEIGHTFIX"
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/calibrate_v64_3_32_1_eaf_icer_ssir_weightfix.py /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/calibrate_v64_3_32_1_eaf_icer_ssir_weightfix.py
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/calibrate_v64_3_32_1_eaf_icer_ssir_weightfix.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/calibrate_v64_3_32_1_eaf_icer_ssir_weightfix.py	2026-08-24 12:03:41.720597743 +0000
+@@ -0,0 +1,178 @@
++from __future__ import annotations
++
++import argparse
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++ALPHA = 0.05
++EXPECTED_SCENES = 500
++MIN_DIRECT_ELIGIBLE_SCENES = 64
++
++
++def _f(r: dict[str, Any], k: str, d: float = float("nan")) -> float:
++    try:
++        v = float(r.get(k, d))
++    except (TypeError, ValueError):
++        return d
++    return v if math.isfinite(v) else d
++
++
++def _q(scores: list[float], alpha: float) -> tuple[float, int]:
++    arr = np.asarray([float(x) for x in scores if math.isfinite(float(x))], dtype=np.float64)
++    if arr.size == 0:
++        raise SystemExit("V64.3.32.1 independent calibration has no finite direct-eligible scene scores")
++    arr.sort()
++    k = int(math.ceil((arr.size + 1) * (1.0 - alpha)))
++    k = min(max(k, 1), int(arr.size))
++    # Non-negative clipping can only make the lower bound more conservative when
++    # the finite-sample quantile happens to be negative.
++    return max(0.0, float(arr[k - 1])), k
++
++
++def _row_tokens(path: Path) -> list[str]:
++    toks: list[str] = []
++    with path.open("r", encoding="utf-8") as f:
++        for line in f:
++            if line.strip():
++                toks.append(str(json.loads(line).get("scenario_token", "")))
++    return toks
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="Calibrate V64.3.32.1 SSIR scene-simultaneous candidate-specific lower bounds on independent CAL500.")
++    ap.add_argument("--calibration-rows", required=True)
++    ap.add_argument("--calibration-edges", required=True)
++    ap.add_argument("--mean-config", required=True)
++    ap.add_argument("--output-main-config", required=True)
++    ap.add_argument("--output-report", required=True)
++    ap.add_argument("--alpha", type=float, default=ALPHA)
++    args = ap.parse_args()
++    if abs(float(args.alpha) - ALPHA) > 1.0e-12:
++        raise SystemExit("V64.3.32.1 conformal alpha is frozen at 0.05; no sweep permitted")
++
++    row_tokens = _row_tokens(Path(args.calibration_rows))
++    if len(row_tokens) != EXPECTED_SCENES or len(set(row_tokens)) != EXPECTED_SCENES:
++        raise SystemExit(f"V64.3.32.1 CAL rows must contain exactly {EXPECTED_SCENES} unique scenes")
++    row_set = set(row_tokens)
++
++    groups: dict[str, list[dict[str, Any]]] = {t: [] for t in row_tokens}
++    with Path(args.calibration_edges).open("r", encoding="utf-8") as f:
++        for line in f:
++            if not line.strip():
++                continue
++            r = json.loads(line)
++            tok = str(r.get("scenario_token", ""))
++            if tok not in row_set:
++                raise SystemExit(f"V64.3.32.1 CAL edge contains token outside CAL500 rows: {tok}")
++            groups[tok].append(r)
++
++    # Calibration population is the deployment-relevant direct domain: the raw
++    # incumbent is deployment-admissible and there is at least one admissible,
++    # support-positive alternative.  Exactly one max score is contributed by
++    # each such scene, so candidate multiplicity cannot overweight a scene.
++    scores: list[float] = []
++    eligible_counts: list[int] = []
++    unscaled_scores: list[float] = []
++    eligible_tokens: list[str] = []
++    for tok in row_tokens:
++        rs = groups[tok]
++        if not rs:
++            continue
++        inc = int(rs[0].get("raw_top_action", -1))
++        by = {int(r.get("challenger_action", -2)): r for r in rs}
++        ir = by.get(inc)
++        if ir is None or _f(ir, "icer_admissible", 0.0) < 0.5:
++            continue
++        inc_tm = _f(ir, "teacher_margin")
++        if not math.isfinite(inc_tm):
++            raise SystemExit(f"non-finite incumbent teacher margin in CAL scene {tok}")
++        vals: list[float] = []
++        vals_raw: list[float] = []
++        for r in rs:
++            act = int(r.get("challenger_action", -2))
++            if act == inc or _f(r, "icer_admissible", 0.0) < 0.5 or _f(r, "icer_support_logit", -math.inf) <= 0.0:
++                continue
++            y = _f(r, "teacher_margin") - inc_tm
++            mu = _f(r, "icer_scir_predicted_improvement")
++            scale = _f(r, "icer_scir_selection_scale", 1.0)
++            if not (math.isfinite(y) and math.isfinite(mu) and math.isfinite(scale) and scale > 0.0):
++                raise SystemExit(f"non-finite SSIR calibration edge in scene {tok}")
++            vals.append((mu - y) / scale)
++            vals_raw.append(mu - y)
++        if not vals:
++            continue
++        eligible_tokens.append(tok)
++        scores.append(float(max(vals)))
++        unscaled_scores.append(float(max(vals_raw)))
++        eligible_counts.append(len(vals))
++
++    n = len(scores)
++    if n < MIN_DIRECT_ELIGIBLE_SCENES:
++        raise SystemExit(
++            f"V64.3.32.1 independent CAL500 has too few direct-eligible scenes: {n} < {MIN_DIRECT_ELIGIBLE_SCENES}"
++        )
++    q, k = _q(scores, ALPHA)
++    q_unscaled, _ = _q(unscaled_scores, ALPHA)
++
++    cfg = yaml.safe_load(Path(args.mean_config).read_text(encoding="utf-8"))
++    ic = cfg.get("runtime", {}).get("decisive_frontier_value", {}).get("incumbent_contrastive_extremal_recovery", {}) or {}
++    scir = ic.get("selection_conditioned_intervention_recovery", {}) or {}
++    if not bool(scir.get("enabled", False)) or str(scir.get("mode", "")) not in {"mean_rank", "rank_only"}:
++        raise SystemExit("mean config is not a V64.3.32.1 SSIR mean-control artifact")
++    if abs(float(scir.get("conformal_alpha", ALPHA)) - ALPHA) > 1.0e-12:
++        raise SystemExit("mean config alpha mismatch")
++    names = list(scir.get("feature_names", []))
++    lev = np.asarray(scir.get("leverage_inverse", []), dtype=np.float64)
++    if lev.shape != (len(names), len(names)) or not np.all(np.isfinite(lev)):
++        raise SystemExit("mean config missing valid finite leverage matrix")
++
++    scir["mode"] = "simultaneous_lcb"
++    scir["simultaneous_conformal_quantile"] = float(q)
++    scir["simultaneous_calibration_status"] = "independent_cal500_direct_eligible_scene_uniform_all_candidates_frozen_before_double_fresh"
++    scir["simultaneous_calibration_total_scene_count"] = EXPECTED_SCENES
++    scir["simultaneous_calibration_direct_eligible_scene_count"] = n
++    scir["simultaneous_conformal_order_index_1based"] = int(k)
++    scir["proposal_operator"] = "argmax_positive_scene_simultaneous_candidate_specific_lower_bound"
++    ic["selection_conditioned_intervention_recovery"] = scir
++    cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"] = ic
++    cfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.32.1-EAF-ICER-SSIR-WEIGHTFIX"
++    cfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.32.1-EAF-ICER-SSIR-WEIGHTFIX"
++    exp = cfg.setdefault("experiment", {})
++    exp["name"] = "v64_3_32_1_eaf_icer_ssir_weightfix"
++    exp["algorithm"] = "V64.3.32.1 EAF-ICER-SSIR: Selection-Stable Intervention Recovery with direct-domain scene-simultaneous conformal lower bounds"
++    exp["mechanism_chain"] = "bounded B16 interface -> exact EAF attribution -> deployment-admissible same-scene incumbent contrast -> continuous mean improvement + frozen ridge-leverage normalization -> one scene-level simultaneous conformal score over all direct candidates -> extremal selection by positive candidate-specific lower bound -> incumbent default -> unchanged final/structural guards"
++    Path(args.output_main_config).write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
++
++    arr = np.asarray(scores, dtype=np.float64)
++    report = {
++        "audit": "v64_3_32_1_eaf_icer_ssir_independent_calibration",
++        "alpha": ALPHA,
++        "calibration_total_scene_count": EXPECTED_SCENES,
++        "direct_eligible_scene_count": n,
++        "direct_eligible_scene_fraction": float(n / EXPECTED_SCENES),
++        "direct_eligible_scene_count_min": MIN_DIRECT_ELIGIBLE_SCENES,
++        "scene_score_definition": "for each direct-eligible scene: max_over_all_direct_admissible_support_positive_candidates_of_(predicted_improvement-teacher_improvement)/ridge_leverage_scale",
++        "scene_simultaneous_quantile": float(q),
++        "unscaled_scene_max_quantile_diagnostic": float(q_unscaled),
++        "conformal_order_index_1based": int(k),
++        "eligible_candidate_count_mean": float(np.mean(eligible_counts)),
++        "eligible_candidate_count_max": int(max(eligible_counts) if eligible_counts else 0),
++        "scene_score_mean": float(arr.mean()),
++        "scene_score_max": float(arr.max()),
++        "fit_uses_calibration_labels": False,
++        "calibration_uses_promotion_labels": False,
++        "calibration_tokens_sha256": __import__("hashlib").sha256(("\n".join(row_tokens) + "\n").encode()).hexdigest(),
++        "direct_eligible_tokens_sha256": __import__("hashlib").sha256(("\n".join(eligible_tokens) + "\n").encode()).hexdigest(),
++        "theorem_scope": "With the mean model, leverage normalization, direct-domain candidate-set rule and alpha frozen before CAL, exchangeability of CAL and future direct-eligible scenes gives marginal simultaneous coverage over that direct intervention population: with probability at least 1-alpha, every admissible support-positive candidate in a future direct-eligible scene satisfies Delta >= mu-q*scale. Therefore any extremal selection made after observing those lower bounds, restricted to LCB>0, is non-harmful except on the scene-level simultaneous miscoverage event. This is not conditional per-scene, distribution-shift, or closed-loop absolute safety.",
++    }
++    Path(args.output_report).write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
++    print(json.dumps({"pass": True, "scene_simultaneous_quantile": q, "direct_eligible_calibration_scenes": n, "output_main_config": args.output_main_config}, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_contract.py /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_contract.py
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_contract.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_contract.py	2026-08-24 12:03:41.720692163 +0000
+@@ -0,0 +1,38 @@
++from __future__ import annotations
++import argparse, json, math
++from pathlib import Path
++import yaml
++
++
++def _ic(cfg):
++    return cfg.get('runtime',{}).get('decisive_frontier_value',{}).get('incumbent_contrastive_extremal_recovery',{}) or {}
++
++def _same(a,b,k):
++    return a.get(k)==b.get(k)
++
++def main():
++    ap=argparse.ArgumentParser()
++    for x in ['v20-config','preserve-config','mean-config','main-config','calibration-report','output']:
++        ap.add_argument('--'+x,required=True)
++    a=ap.parse_args()
++    V=yaml.safe_load(Path(a.v20_config).read_text()); P=yaml.safe_load(Path(a.preserve_config).read_text()); M=yaml.safe_load(Path(a.mean_config).read_text()); S=yaml.safe_load(Path(a.main_config).read_text()); C=json.load(open(a.calibration_report))
++    vi,pi,mi,si=map(_ic,[V,P,M,S]); ms=mi.get('selection_conditioned_intervention_recovery',{}) or {}; ss=si.get('selection_conditioned_intervention_recovery',{}) or {}
++    keys=['feature_names','base_feature_names','feature_mean','feature_std','weights','bias','ridge_lambda','leverage_inverse','selection_scale_floor','conformal_alpha']
++    checks={}
++    checks['preserve_only_changes_incumbent_default']=pi.get('incumbent_retention_policy')=='preserve_admissible_incumbent' and not bool((pi.get('selection_conditioned_intervention_recovery',{}) or {}).get('enabled',False))
++    checks['mean_and_main_preserve_incumbent']=mi.get('incumbent_retention_policy')=='preserve_admissible_incumbent' and si.get('incumbent_retention_policy')=='preserve_admissible_incumbent'
++    checks['mean_control_mode']=bool(ms.get('enabled')) and ms.get('mode') in {'mean_rank','rank_only'}
++    checks['main_simultaneous_lcb_mode']=bool(ss.get('enabled')) and ss.get('mode')=='simultaneous_lcb' and bool(ss.get('no_fallback'))
++    checks['model_and_scale_frozen_across_calibration']=all(_same(ms,ss,k) for k in keys)
++    q=float(ss.get('simultaneous_conformal_quantile',float('nan'))); cq=float(C.get('scene_simultaneous_quantile',float('nan')))
++    checks['calibration_quantile_exact']=math.isfinite(q) and q>=0 and math.isfinite(cq) and abs(q-cq)<=1e-12
++    checks['calibration_protocol']=C.get('calibration_total_scene_count')==500 and int(C.get('direct_eligible_scene_count',0))>=64 and abs(float(C.get('alpha',0.0))-0.05)<=1e-12 and C.get('calibration_uses_promotion_labels') is False
++    checks['risk_modules_disabled']=all(not bool(x.get('regret_risk_enabled',False)) and not bool(x.get('retention_regret_risk_enabled',False)) and not bool(x.get('replacement_regret_risk_enabled',False)) for x in [pi,mi,si])
++    checks['same_upstream_budget']=V.get('evidence',{}).get('budget')==P.get('evidence',{}).get('budget')==M.get('evidence',{}).get('budget')==S.get('evidence',{}).get('budget')
++    checks['all_flagged_delegation']=all(x.get('all_flagged_policy')=='preserve_legacy_for_structural_guard' for x in [pi,mi,si])
++    ok=all(checks.values())
++    rep={'audit':'v64_3_32_1_eaf_icer_ssir_contract','pass':ok,'checks':checks,'interpretation':'SSIR preserves the V31 same-scene continuous mean model but adds a frozen candidate-specific ridge-leverage normalization and one independent CAL500 direct-domain scene-simultaneous conformal quantile. Unlike V31 post-selection common-offset veto, the lower bound participates in extremal ordering before selection; no second-best fallback is introduced.'}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True))
++    print(json.dumps(rep,indent=2,sort_keys=True))
++    if not ok: raise SystemExit('V64.3.32.1 SSIR contract failed')
++if __name__=='__main__': main()
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_screen.py /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_screen.py
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_screen.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_screen.py	2026-08-24 12:03:41.720863378 +0000
+@@ -0,0 +1,51 @@
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="V64.3.32.1 SSIR double-fresh promotion screen.")
++    ap.add_argument("--split-a", required=True)
++    ap.add_argument("--split-b", required=True)
++    ap.add_argument("--calibration-report", required=True)
++    ap.add_argument("--fit-report", required=True)
++    ap.add_argument("--output", required=True)
++    a = ap.parse_args()
++    A = json.load(open(a.split_a, encoding="utf-8"))
++    B = json.load(open(a.split_b, encoding="utf-8"))
++    C = json.load(open(a.calibration_report, encoding="utf-8"))
++    F = json.load(open(a.fit_report, encoding="utf-8"))
++    engineering = bool(A.get("engineering_valid") and B.get("engineering_valid"))
++    train = bool(F.get("train_gate_pass") and F.get("nested_crossfit", {}).get("fold_pass_count") == 5)
++    cal = bool(C.get("calibration_total_scene_count") == 500 and int(C.get("direct_eligible_scene_count", 0)) >= 64 and abs(float(C.get("alpha", 0.0)) - 0.05) <= 1e-12)
++    both = bool(engineering and train and cal and A.get("full_split_pass") and B.get("full_split_pass"))
++    if not engineering:
++        conclusion = "engineering_invalid_stop"
++    elif both:
++        conclusion = "SSIR_scene_simultaneous_candidate_specific_lower_bound_ordering_reproduces_selection_stable_direct_recovery_on_double_fresh"
++    else:
++        conclusion = "SSIR_not_promoted_current_frozen_selection_stable_mechanism_fails_at_least_one_independent_gate_or_block"
++    nxt = "freeze_and_run_one_independent_full_validation_reproduction_no_more_tuning" if both else "STOP_do_not_pool_AB_or_sweep_alpha_scale_ridge_thresholds_use_failed_gate_to_choose_next_mechanism"
++    r = {
++        "audit": "v64_3_32_1_eaf_icer_ssir_double_fresh_screen",
++        "engineering_valid_both": engineering,
++        "train_nested_full_mechanism_gate_pass": train,
++        "independent_calibration_valid": cal,
++        "double_fresh_promotion_pass": both,
++        "scientific_conclusion": conclusion,
++        "next_action": nxt,
++        "train_fit": F,
++        "independent_calibration": C,
++        "split_A": A,
++        "split_B": B,
++        "protocol": "Frozen TRAIN nested 3-fit/1-cal/1-test gate evaluates the complete SSIR bound-selection mechanism; only then is an independent CAL500 used once to calibrate the frozen direct-domain scene-simultaneous score; A500/B500 are untouched promotion blocks judged separately with no pooled rescue.",
++    }
++    p = Path(a.output); p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(json.dumps(r, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    print(json.dumps({"pass": both, "engineering": engineering, "train": train, "calibration": cal, "conclusion": conclusion, "next_action": nxt}, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_split.py /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_split.py
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_split.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/check_v64_3_32_1_eaf_icer_ssir_weightfix_split.py	2026-08-24 12:03:41.720781716 +0000
+@@ -0,0 +1,349 @@
++from __future__ import annotations
++
++import argparse
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from bdse.tools.check_v64_3_19_eaf_icer_screen import _auc, _f, _icer_edge_diag, _metric_pack
++from bdse.tools.check_v64_3_21_eaf_icer_mcr_split import _identity_rate, _load_rows
++from bdse.tools.check_v64_3_25_eaf_icer_drc_split import _replacement_tail_diag
++from bdse.tools.check_v64_3_30_eaf_icer_fbic_split import _query_diag
++
++CAT = -0.5
++MAIN_CAPTURE_GAIN_MIN = 0.03
++EPS = 1.0e-12
++
++
++def _edge_groups(path: str, allowed: set[str]) -> dict[str, list[dict[str, Any]]]:
++    out: dict[str, list[dict[str, Any]]] = {}
++    with Path(path).open("r", encoding="utf-8") as f:
++        for line in f:
++            if not line.strip():
++                continue
++            r = json.loads(line)
++            t = str(r.get("scenario_token", ""))
++            if t in allowed:
++                out.setdefault(t, []).append(r)
++    return out
++
++
++def _structural(rows: dict[str, dict[str, Any]], raw: dict[str, dict[str, Any]], flagged: set[str]) -> dict[str, Any]:
++    return {
++        "all_flagged_scene_count": len(flagged),
++        "final_identity_vs_raw": _identity_rate(rows, raw, flagged),
++        "icer_structural_delegation_rate": float(np.mean([_f(rows[t], "decisive_frontier_icer_structural_domain_delegated", 0.0) for t in flagged])) if flagged else 1.0,
++    }
++
++
++def _direct_candidate_view(edge_path: str, allowed: set[str]) -> dict[str, Any]:
++    groups = _edge_groups(edge_path, allowed)
++    labels: list[int] = []
++    mu_scores: list[float] = []
++    lcb_scores: list[float] = []
++    continuous_y: list[float] = []
++    continuous_mu: list[float] = []
++    continuous_lcb: list[float] = []
++    scales: list[float] = []
++    direct_eligible_scenes = 0
++    simultaneous_covered = 0
++    scene_miscoverage: list[str] = []
++    eligible_candidates = 0
++    selected_y: list[float] = []
++    selected_tokens: list[str] = []
++    harmful_selected: list[str] = []
++
++    for tok, rs in groups.items():
++        if not rs:
++            continue
++        inc = int(rs[0].get("raw_top_action", -1))
++        by = {int(r.get("challenger_action", -2)): r for r in rs}
++        ir = by.get(inc)
++        if ir is None or _f(ir, "icer_admissible", 0.0) < 0.5:
++            continue
++        inc_tm = _f(ir, "teacher_margin")
++        if not math.isfinite(inc_tm):
++            continue
++        alts: list[tuple[int, float, float, float, float]] = []
++        for r in rs:
++            act = int(r.get("challenger_action", -2))
++            if act == inc or _f(r, "icer_admissible", 0.0) < 0.5 or _f(r, "icer_support_logit", -math.inf) <= 0.0:
++                continue
++            y = _f(r, "teacher_margin") - inc_tm
++            mu = _f(r, "icer_scir_predicted_improvement")
++            lcb = _f(r, "icer_scir_lower_bound")
++            scale = _f(r, "icer_scir_selection_scale", 1.0)
++            if not (math.isfinite(y) and math.isfinite(mu) and math.isfinite(lcb) and math.isfinite(scale) and scale > 0.0):
++                continue
++            alts.append((act, y, mu, lcb, scale))
++            labels.append(int(y > 0.0)); mu_scores.append(mu); lcb_scores.append(lcb)
++            continuous_y.append(y); continuous_mu.append(mu); continuous_lcb.append(lcb); scales.append(scale)
++        if not alts:
++            continue
++        direct_eligible_scenes += 1
++        eligible_candidates += len(alts)
++        ok = all(y >= lcb - 1.0e-9 for _, y, _, lcb, _ in alts)
++        simultaneous_covered += int(ok)
++        if not ok:
++            scene_miscoverage.append(tok)
++        prop_exists = _f(rs[0], "icer_scir_proposal_exists", 0.0) >= 0.5
++        prop = int(rs[0].get("icer_scir_proposal_action", inc))
++        amap = {act: y for act, y, _, _, _ in alts}
++        if prop_exists and prop in amap:
++            y = float(amap[prop]); selected_y.append(y); selected_tokens.append(tok)
++            if y <= 0.0:
++                harmful_selected.append(tok)
++
++    yarr = np.asarray(selected_y, dtype=np.float64)
++    neg = np.minimum(yarr, 0.0) if yarr.size else yarr
++    cy = np.asarray(continuous_y, dtype=np.float64)
++    cm = np.asarray(continuous_mu, dtype=np.float64)
++    cl = np.asarray(continuous_lcb, dtype=np.float64)
++    corr_mu = float(np.corrcoef(cy, cm)[0, 1]) if cy.size >= 2 and np.std(cy) > 0 and np.std(cm) > 0 else float("nan")
++    corr_lcb = float(np.corrcoef(cy, cl)[0, 1]) if cy.size >= 2 and np.std(cy) > 0 and np.std(cl) > 0 else float("nan")
++    return {
++        "direct_eligible_scene_count": direct_eligible_scenes,
++        "eligible_candidate_count": eligible_candidates,
++        "eligible_candidates_per_direct_scene_mean": float(eligible_candidates / max(direct_eligible_scenes, 1)),
++        "mean_improvement_sign_auc": _auc(labels, mu_scores),
++        "lcb_sign_auc": _auc(labels, lcb_scores),
++        "mean_vs_teacher_pearson": corr_mu,
++        "lcb_vs_teacher_pearson": corr_lcb,
++        "selection_scale_mean": float(np.mean(scales)) if scales else float("nan"),
++        "selection_scale_max": float(np.max(scales)) if scales else float("nan"),
++        "empirical_scene_simultaneous_coverage": float(simultaneous_covered / max(direct_eligible_scenes, 1)),
++        "scene_simultaneous_miscoverage_count": len(scene_miscoverage),
++        "selected_count": int(yarr.size),
++        "selected_positive_count": int((yarr > 0.0).sum()) if yarr.size else 0,
++        "selected_precision": float((yarr > 0.0).mean()) if yarr.size else float("nan"),
++        "selected_teacher_improvement_sum": float(yarr.sum()) if yarr.size else 0.0,
++        "selected_teacher_improvement_worst": float(yarr.min()) if yarr.size else float("nan"),
++        "selected_negative_rms": float(np.sqrt(np.mean(neg * neg))) if yarr.size else 0.0,
++        "selected_harmful_count": len(harmful_selected),
++        "selected_harmful_is_subset_of_miscoverage": set(harmful_selected).issubset(set(scene_miscoverage)),
++        "example_scene_miscoverage": scene_miscoverage[:10],
++        "example_selected_harmful": harmful_selected[:10],
++    }
++
++
++def _ssir_runtime_contract(main_rows: dict[str, dict[str, Any]], main_edges: str, allowed: set[str]) -> dict[str, Any]:
++    groups = _edge_groups(main_edges, allowed)
++    wrong_winner: list[str] = []
++    wrong_no_proposal: list[str] = []
++    fallback: list[str] = []
++    checked = 0
++    inferred_q: list[float] = []
++    for tok in sorted(allowed):
++        rs = groups.get(tok, [])
++        if not rs:
++            continue
++        inc = int(rs[0].get("raw_top_action", -1))
++        by = {int(r.get("challenger_action", -2)): r for r in rs}
++        ir = by.get(inc)
++        if ir is None or _f(ir, "icer_admissible", 0.0) < 0.5:
++            continue
++        cands: list[tuple[int, float, float, float, int]] = []
++        for r in rs:
++            act = int(r.get("challenger_action", -2))
++            if act == inc or _f(r, "icer_admissible", 0.0) < 0.5 or _f(r, "icer_support_logit", -math.inf) <= 0.0:
++                continue
++            lcb = _f(r, "icer_scir_lower_bound")
++            mu = _f(r, "icer_scir_predicted_improvement")
++            scale = _f(r, "icer_scir_selection_scale", 1.0)
++            if math.isfinite(mu) and math.isfinite(lcb) and math.isfinite(scale) and scale > 0:
++                inferred_q.append((mu - lcb) / scale)
++            if math.isfinite(lcb) and lcb > 0.0:
++                cands.append((act, lcb, _f(r, "icer_support_logit", -math.inf), _f(r, "raw_margin", -math.inf), int(_f(r, "dacer_utility_prior", 0.0) >= 0.5)))
++        checked += 1
++        expected = None
++        if cands:
++            expected = sorted(cands, key=lambda x: (-x[1], -x[2], -x[3], -x[4], x[0]))[0][0]
++        prop_exists = _f(rs[0], "icer_scir_proposal_exists", 0.0) >= 0.5
++        prop = int(rs[0].get("icer_scir_proposal_action", inc))
++        baseline = int(round(_f(main_rows[tok], "decisive_frontier_icer_baseline_action", inc)))
++        selected = int(round(_f(main_rows[tok], "decisive_frontier_icer_selected_action", baseline)))
++        accepted = _f(main_rows[tok], "decisive_frontier_icer_scir_certificate_accepted", 0.0) >= 0.5
++        if expected is None:
++            if prop_exists or selected != baseline or accepted:
++                wrong_no_proposal.append(tok)
++        else:
++            if not prop_exists or prop != expected or selected != expected or not accepted:
++                wrong_winner.append(tok)
++        # There is no two-stage fallback in SSIR: a positive-LCB winner is the
++        # selected intervention, otherwise incumbent-default baseline is returned.
++        if expected is None and selected not in {baseline}:
++            fallback.append(tok)
++    qarr = np.asarray([x for x in inferred_q if math.isfinite(x)], dtype=np.float64)
++    return {
++        "direct_domain_scenes_checked": checked,
++        "positive_lcb_winner_contract_violation_count": len(wrong_winner),
++        "no_positive_lcb_incumbent_default_violation_count": len(wrong_no_proposal),
++        "fallback_violation_count": len(fallback),
++        "selection_contract_valid": not wrong_winner and not wrong_no_proposal and not fallback,
++        "inferred_quantile_mean": float(qarr.mean()) if qarr.size else float("nan"),
++        "inferred_quantile_range": float(qarr.max() - qarr.min()) if qarr.size else float("nan"),
++        "example_winner_violations": wrong_winner[:10],
++        "example_no_proposal_violations": wrong_no_proposal[:10],
++    }
++
++
++def _mean_main_reordering(mean_edges: str, main_edges: str, allowed: set[str]) -> dict[str, Any]:
++    mg = _edge_groups(mean_edges, allowed); sg = _edge_groups(main_edges, allowed)
++    compared = changed = mean_prop = main_prop = 0
++    for t in sorted(allowed):
++        a = mg.get(t, []); b = sg.get(t, [])
++        if not a or not b:
++            continue
++        ma = _f(a[0], "icer_scir_proposal_exists", 0.0) >= 0.5
++        mb = _f(b[0], "icer_scir_proposal_exists", 0.0) >= 0.5
++        pa = int(a[0].get("icer_scir_proposal_action", -1)); pb = int(b[0].get("icer_scir_proposal_action", -1))
++        mean_prop += int(ma); main_prop += int(mb); compared += 1
++        changed += int((ma, pa) != (mb, pb))
++    return {
++        "scene_count_compared": compared,
++        "mean_proposal_count": mean_prop,
++        "ssir_proposal_count": main_prop,
++        "proposal_identity_changed_scene_count": changed,
++        "proposal_identity_changed_scene_rate": float(changed / max(compared, 1)),
++        "interpretation": "A nonzero change rate is intended in V32: candidate-specific lower bounds enter ordering before extremal selection, unlike V31 common-offset post-selection veto.",
++    }
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="Audit one untouched V64.3.32.1 SSIR block: raw/V20/PRESERVE/MEAN/SSIR.")
++    ap.add_argument("--split-name", required=True)
++    for tag in ["raw", "v20", "preserve", "mean", "main"]:
++        ap.add_argument(f"--{tag}-metrics", required=True)
++        ap.add_argument(f"--{tag}-rows", required=True)
++        if tag != "raw":
++            ap.add_argument(f"--{tag}-edges", required=True)
++    ap.add_argument("--output", required=True)
++    a = ap.parse_args()
++
++    tags = ["raw", "v20", "preserve", "mean", "main"]
++    metrics = {t: json.load(open(getattr(a, t + "_metrics"), encoding="utf-8")) for t in tags}
++    rows = {t: _load_rows(getattr(a, t + "_rows")) for t in tags}
++    tokens = set(rows["raw"])
++    if len(tokens) != 500 or any(set(rows[t]) != tokens for t in tags[1:]):
++        raise SystemExit("STOP DATA: V32 all five arms must contain exact paired 500-scene identity")
++    flagged = {t for t in tokens if _f(rows["raw"][t], "all_actions_safety_flagged_rate", 0.0) >= 0.5}
++    safe = tokens - flagged
++
++    query = {t: _query_diag(rows["v20"], rows[t], tokens) for t in ["preserve", "mean", "main"]}
++    query_ok = all(x["all_query_counts_exact_scene_parity"] for x in query.values())
++    structural = {t: _structural(rows[t], rows["raw"], flagged) for t in ["v20", "preserve", "mean", "main"]}
++    structural_ok = all((not flagged) or (structural[t]["final_identity_vs_raw"] == 1.0 and structural[t]["icer_structural_delegation_rate"] == 1.0) for t in ["preserve", "mean", "main"])
++
++    runtime_contract = _ssir_runtime_contract(rows["main"], getattr(a, "main_edges"), safe)
++    edge = {t: _icer_edge_diag(Path(getattr(a, t + "_edges")), safe) for t in ["v20", "preserve", "mean", "main"]}
++    tail = {t: _replacement_tail_diag(rows["raw"], rows[t], getattr(a, t + "_edges"), safe) for t in ["v20", "preserve", "mean", "main"]}
++    candidate = {t: _direct_candidate_view(getattr(a, t + "_edges"), safe) for t in ["mean", "main"]}
++    reorder = _mean_main_reordering(getattr(a, "mean_edges"), getattr(a, "main_edges"), safe)
++    M = {t: _metric_pack(metrics[t]) for t in tags}
++
++    pres_capture = float(edge["preserve"]["direct_incumbent_opportunity_capture_rate"])
++    main_capture = float(edge["main"]["direct_incumbent_opportunity_capture_rate"])
++    meaningful_coverage = bool(math.isfinite(pres_capture) and math.isfinite(main_capture) and main_capture >= pres_capture + MAIN_CAPTURE_GAIN_MIN - EPS)
++    main_tail = bool(
++        tail["main"]["count"] >= 8
++        and tail["main"]["teacher_improvement_sum"] >= -1.0e-9
++        and math.isfinite(tail["main"]["teacher_improvement_worst"])
++        and tail["main"]["teacher_improvement_worst"] > CAT
++        and tail["main"]["teacher_negative_rms"] <= tail["preserve"]["teacher_negative_rms"] + EPS
++        and edge["main"]["direct_incumbent_replacement_precision"] >= edge["preserve"]["direct_incumbent_replacement_precision"] - EPS
++    )
++    # The new bound is supposed to fix the selected path, not merely reproduce
++    # the same mean winner.  It must be non-worse than MEAN on both tail axes and
++    # strictly improve at least one tail/precision diagnostic unless MEAN selects
++    # nothing.  Reordering itself is diagnostic, not a mandatory source of gain.
++    mean_count = int(tail["mean"]["count"])
++    tail_nonworse_mean = bool(
++        tail["main"]["teacher_negative_rms"] <= tail["mean"]["teacher_negative_rms"] + EPS
++        and (
++            not math.isfinite(tail["mean"]["teacher_improvement_worst"])
++            or tail["main"]["teacher_improvement_worst"] >= tail["mean"]["teacher_improvement_worst"] - EPS
++        )
++    )
++    tail_strict_mean = bool(
++        mean_count == 0
++        or tail["main"]["teacher_negative_rms"] < tail["mean"]["teacher_negative_rms"] - 1.0e-9
++        or (math.isfinite(tail["main"]["teacher_improvement_worst"]) and math.isfinite(tail["mean"]["teacher_improvement_worst"]) and tail["main"]["teacher_improvement_worst"] > tail["mean"]["teacher_improvement_worst"] + 1.0e-9)
++        or edge["main"]["direct_incumbent_replacement_precision"] > edge["mean"]["direct_incumbent_replacement_precision"] + 1.0e-9
++    )
++    selected_path_incremental = bool(tail_nonworse_mean and tail_strict_mean)
++
++    endpoint_vs_pres = bool(M["main"]["match"] >= M["preserve"]["match"] - 0.002 and M["main"]["regret"] <= M["preserve"]["regret"] * 1.005)
++    endpoint_vs_v20 = bool(M["main"]["match"] >= M["v20"]["match"] - 0.002 and M["main"]["regret"] <= M["v20"]["regret"] * 1.005)
++    endpoint = bool(endpoint_vs_pres and endpoint_vs_v20)
++
++    theorem_instrumentation = bool(
++        candidate["main"]["direct_eligible_scene_count"] >= 64
++        and candidate["main"]["selected_harmful_is_subset_of_miscoverage"]
++        and runtime_contract["inferred_quantile_range"] <= 1.0e-8
++    )
++    engineering = bool(query_ok and structural_ok and runtime_contract["selection_contract_valid"] and theorem_instrumentation)
++    full = bool(engineering and meaningful_coverage and main_tail and selected_path_incremental and endpoint)
++
++    if not engineering:
++        nxt = "STOP_fix_SSIR_engineering_selection_or_calibration_contract_before_scientific_interpretation"
++    elif not meaningful_coverage:
++        nxt = "SSIR_does_not_add_3pp_direct_capture_over_preservation_control_stop_do_not_sweep_alpha_or_scale"
++    elif not main_tail:
++        nxt = "SSIR_coverage_exists_but_selected_path_tail_or_precision_fails_stop_do_not_threshold_rescue"
++    elif not selected_path_incremental:
++        nxt = "candidate_specific_simultaneous_bound_does_not_improve_mean_selected_tail_stop_revisit_risk_ordering_semantics"
++    elif not endpoint:
++        nxt = "direct_SSIR_mechanism_passes_but_endpoint_does_not_convert_audit_path_composition_before_new_representation"
++    else:
++        nxt = "if_second_fresh_block_also_passes_freeze_SSIR_and_run_exactly_one_independent_full_validation_reproduction"
++
++    report = {
++        "audit": "v64_3_32_1_eaf_icer_ssir_split",
++        "split_name": a.split_name,
++        "full_split_pass": full,
++        "engineering_valid": engineering,
++        "main_direct_capture_gain_over_preservation_control": main_capture - pres_capture if math.isfinite(main_capture) and math.isfinite(pres_capture) else float("nan"),
++        "main_meaningful_direct_coverage_gain": meaningful_coverage,
++        "main_selected_path_tail_safe_vs_preservation": main_tail,
++        "ssir_selected_path_incremental_vs_mean_control": selected_path_incremental,
++        "endpoint_noninferior_to_preservation_and_v20": endpoint,
++        "endpoint_noninferior_vs_preservation_control": endpoint_vs_pres,
++        "endpoint_noninferior_vs_v20": endpoint_vs_v20,
++        "next_action": nxt,
++        "query_parity_vs_v20": query,
++        "structural": structural,
++        "ssir_runtime_selection_contract": runtime_contract,
++        "mean_to_ssir_reordering": reorder,
++        "edge_diagnostics": edge,
++        "candidate_level_diagnostics": candidate,
++        "direct_selected_path_tail": tail,
++        "metrics": M,
++        "frozen_thresholds": {
++            "catastrophic_teacher_improvement_threshold": CAT,
++            "main_capture_gain_over_preservation_control_min": MAIN_CAPTURE_GAIN_MIN,
++            "main_selected_count_min": 8,
++            "main_selected_teacher_improvement_sum_min": 0.0,
++            "main_precision_required_noninferior_to_preservation_control": True,
++            "main_negative_rms_required_nonworse_than_preservation_control": True,
++            "main_worst_required_above_catastrophic_threshold": True,
++            "main_tail_required_nonworse_than_mean_and_strictly_better_on_at_least_one_tail_or_precision_metric": True,
++            "main_match_tolerance_abs": 0.002,
++            "main_regret_tolerance_relative": 0.005,
++            "endpoint_must_pass_vs_both_preservation_control_and_v20": True,
++            "no_pooled_AB_rescue": True,
++            "conformal_alpha_frozen": 0.05,
++            "no_alpha_scale_ridge_or_threshold_sweep": True,
++        },
++        "causal_control_note": "PRESERVE isolates admissible-incumbent default; MEAN is the exact V31 same-scene mean-ordering idea without a bound; SSIR changes the intervention decision by ranking positive candidate-specific simultaneous lower bounds. Thus fresh A/B can distinguish incumbent-default, mean ordering, and selection-stable risk ordering.",
++        "coverage_note": "Empirical simultaneous coverage is a theorem diagnostic, not a hard 95% sample-frequency gate. The hard safety gates remain the actually selected path sum/worst/NegRMS/precision and independent A/B replication.",
++    }
++    out = Path(a.output); out.parent.mkdir(parents=True, exist_ok=True)
++    out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    print(json.dumps(report, indent=2, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX.patch' '--exclude=V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_CHANGED_FILES.txt' /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/fit_v64_3_32_1_eaf_icer_ssir_weightfix.py /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/fit_v64_3_32_1_eaf_icer_ssir_weightfix.py
+--- /mnt/data/work_v6432/bdse_v64_3_32_eaf_icer_ssir/bdse/tools/fit_v64_3_32_1_eaf_icer_ssir_weightfix.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_32_1_eaf_icer_ssir_weightfix/bdse/tools/fit_v64_3_32_1_eaf_icer_ssir_weightfix.py	2026-08-24 12:03:41.720494109 +0000
+@@ -0,0 +1,450 @@
++from __future__ import annotations
++
++import argparse
++import csv
++import hashlib
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES
++
++BASE_FEATURE_NAMES = list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++FEATURE_NAMES = [f"delta::{n}" for n in BASE_FEATURE_NAMES] + ["delta::support_logit"]
++EPS = 1.0e-12
++EXPECTED_FRONTIER_ROWS = 75133
++EXPECTED_SCENES = 3000
++FOLDS = 5
++RIDGE_LAMBDA = 1.0
++ALPHA = 0.05
++
++
++def _finite(r: dict[str, Any], key: str, default: float = float("nan")) -> float:
++    try:
++        v = float(r.get(key, default))
++    except (TypeError, ValueError):
++        return default
++    return v if math.isfinite(v) else default
++
++
++def _fold(token: str) -> int:
++    h = hashlib.sha256(("v64.3.32-ssir-train-fold-v1::" + token).encode()).digest()
++    return int.from_bytes(h[:8], "big") % FOLDS
++
++
++def _read_edges(path: Path) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
++    rows: list[dict[str, Any]] = []
++    groups: dict[str, list[dict[str, Any]]] = {}
++    with path.open("r", encoding="utf-8") as f:
++        for line in f:
++            if not line.strip():
++                continue
++            r = json.loads(line)
++            rows.append(r)
++            groups.setdefault(str(r.get("scenario_token", "")), []).append(r)
++    if len(rows) != EXPECTED_FRONTIER_ROWS:
++        raise SystemExit(f"V64.3.32.1 requires frozen B16 TRAIN frontier rows={len(rows)} expected={EXPECTED_FRONTIER_ROWS}")
++    if len(groups) != EXPECTED_SCENES:
++        raise SystemExit(f"V64.3.32.1 requires frozen B16 TRAIN scenes={len(groups)} expected={EXPECTED_SCENES}")
++    return rows, groups
++
++
++def _scene_samples(group: list[dict[str, Any]]) -> list[dict[str, Any]]:
++    if not group:
++        return []
++    inc = int(group[0].get("raw_top_action", -1))
++    inc_rows = [r for r in group if int(r.get("challenger_action", -2)) == inc]
++    if not inc_rows:
++        return []
++    ir = inc_rows[0]
++    if _finite(ir, "icer_admissible", 0.0) < 0.5:
++        return []
++    inc_tm = _finite(ir, "teacher_margin")
++    inc_sup = _finite(ir, "icer_support_logit")
++    inc_base = np.asarray([_finite(ir, f"icer_feature_{n}") for n in BASE_FEATURE_NAMES], dtype=np.float64)
++    if not math.isfinite(inc_tm) or not math.isfinite(inc_sup) or not np.all(np.isfinite(inc_base)):
++        return []
++    out: list[dict[str, Any]] = []
++    for r in group:
++        act = int(r.get("challenger_action", -1))
++        if act == inc:
++            continue
++        if _finite(r, "icer_admissible", 0.0) < 0.5 or _finite(r, "icer_support_logit", -math.inf) <= 0.0:
++            continue
++        cand_base = np.asarray([_finite(r, f"icer_feature_{n}") for n in BASE_FEATURE_NAMES], dtype=np.float64)
++        sup = _finite(r, "icer_support_logit")
++        tm = _finite(r, "teacher_margin")
++        if not np.all(np.isfinite(cand_base)) or not math.isfinite(sup) or not math.isfinite(tm):
++            continue
++        x = np.concatenate([cand_base - inc_base, np.asarray([sup - inc_sup], dtype=np.float64)])
++        out.append({
++            "token": str(r.get("scenario_token", "")),
++            "action": act,
++            "x": x,
++            "y": float(tm - inc_tm),
++            "support": float(sup),
++            "margin": _finite(r, "raw_margin", -math.inf),
++            "utility_prior": int(_finite(r, "dacer_utility_prior", 0.0) >= 0.5),
++        })
++    return out
++
++
++def _fit_ridge(samples: list[dict[str, Any]]) -> tuple[np.ndarray, float, np.ndarray, np.ndarray, np.ndarray]:
++    if not samples:
++        raise ValueError("SSIR ridge fit has no samples")
++    X = np.stack([a["x"] for a in samples])
++    y = np.asarray([float(a["y"]) for a in samples], dtype=np.float64)
++    # V64.3.32.1 engineering hotfix.  The frozen V31/V32 design contract says
++    # that every direct-eligible scene contributes total squared-loss weight 1.
++    # The historical implementation first assigned 1/n_scene per edge and then
++    # normalized those weights to sum to 1 globally.  Because ridge lambda=1 is
++    # not scale invariant, that changed the intended objective from
++    #   sum_scene mean_edge(loss) + lambda ||w||^2
++    # to
++    #   (1/N_scene) sum_scene mean_edge(loss) + lambda ||w||^2,
++    # i.e. it inflated the effective ridge strength by approximately N_scene.
++    # Standardization still needs probability weights, so moments use a normalized
++    # copy while the ridge loss and leverage Gram matrix use the unnormalized
++    # scene-mass weights.
++    counts: dict[str, int] = {}
++    for a in samples:
++        counts[a["token"]] = counts.get(a["token"], 0) + 1
++    loss_w = np.asarray([1.0 / counts[a["token"]] for a in samples], dtype=np.float64)
++    moment_w = loss_w / max(float(loss_w.sum()), EPS)
++    mean = np.sum(X * moment_w[:, None], axis=0)
++    var = np.sum(((X - mean[None, :]) ** 2) * moment_w[:, None], axis=0)
++    std = np.maximum(np.sqrt(var), 1.0e-6)
++    Z = (X - mean[None, :]) / std[None, :]
++    A = np.concatenate([np.ones((len(Z), 1), dtype=np.float64), Z], axis=1)
++    root = np.sqrt(loss_w)[:, None]
++    Aw = A * root
++    yw = y * root[:, 0]
++    reg = np.eye(A.shape[1], dtype=np.float64) * RIDGE_LAMBDA
++    reg[0, 0] = 0.0
++    coef = np.linalg.solve(Aw.T @ Aw + reg, Aw.T @ yw)
++    # Auditable candidate-specific scale: ridge leverage in the standardized
++    # intervention space.  It is only a normalization function; conformal
++    # calibration, not a Gaussian assumption, supplies coverage.
++    G = (Z * root) .T @ (Z * root) + np.eye(Z.shape[1], dtype=np.float64) * RIDGE_LAMBDA
++    Ginv = np.linalg.inv(G)
++    return coef[1:], float(coef[0]), mean, std, Ginv
++
++
++def _predict(samples: list[dict[str, Any]], model: tuple[np.ndarray, float, np.ndarray, np.ndarray, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
++    if not samples:
++        return np.zeros((0,), dtype=np.float64), np.ones((0,), dtype=np.float64)
++    w, b, mean, std, Ginv = model
++    X = np.stack([a["x"] for a in samples])
++    Z = (X - mean[None, :]) / np.maximum(std[None, :], 1.0e-6)
++    mu = np.clip(Z @ w + b, -40.0, 40.0)
++    h = np.einsum("bi,ij,bj->b", Z, Ginv, Z)
++    h = np.maximum(np.where(np.isfinite(h), h, 0.0), 0.0)
++    scale = np.sqrt(1.0 + h)
++    return mu, np.maximum(scale, 1.0)
++
++
++def _conformal_q(scores: list[float], alpha: float = ALPHA) -> tuple[float, int]:
++    arr = np.asarray([float(x) for x in scores if math.isfinite(float(x))], dtype=np.float64)
++    if arr.size == 0:
++        raise ValueError("SSIR conformal calibration has no finite scene scores")
++    arr.sort()
++    k = int(math.ceil((arr.size + 1) * (1.0 - alpha)))
++    k = min(max(k, 1), int(arr.size))
++    return max(0.0, float(arr[k - 1])), k
++
++
++def _select(ss: list[dict[str, Any]], score: np.ndarray) -> int | None:
++    cand = [j for j, v in enumerate(score.tolist()) if math.isfinite(v) and v > 0.0]
++    if not cand:
++        return None
++    return sorted(cand, key=lambda j: (-float(score[j]), -float(ss[j]["support"]), -float(ss[j]["margin"]), -int(ss[j]["utility_prior"]), int(ss[j]["action"])))[0]
++
++
++def _nested_diagnostics(groups: dict[str, list[dict[str, Any]]], audit_csv: Path) -> dict[str, Any]:
++    ts = {t: _scene_samples(g) for t, g in groups.items()}
++    ts = {t: ss for t, ss in ts.items() if ss}
++    fold_reports: list[dict[str, Any]] = []
++    audit_rows: list[dict[str, Any]] = []
++    all_mean_y: list[float] = []
++    all_v31_veto_y: list[float] = []
++    all_lcb_y: list[float] = []
++    mean_opp = mean_cap = v31_opp = v31_cap = lcb_opp = lcb_cap = 0
++
++    for k in range(FOLDS):
++        test_tokens = [t for t in ts if _fold(t) == k]
++        cal_fold = (k + 1) % FOLDS
++        cal_tokens = [t for t in ts if _fold(t) == cal_fold]
++        fit_tokens = [t for t in ts if _fold(t) not in {k, cal_fold}]
++        fit_samples = [a for t in fit_tokens for a in ts[t]]
++        model = _fit_ridge(fit_samples)
++
++        scene_scores: list[float] = []
++        v31_selected_residuals: list[float] = []
++        for t in cal_tokens:
++            ss = ts[t]
++            mu, scale = _predict(ss, model)
++            y = np.asarray([a["y"] for a in ss], dtype=np.float64)
++            scene_scores.append(float(np.max((mu - y) / np.maximum(scale, 1.0e-6))))
++            mi = _select(ss, mu)
++            if mi is not None:
++                v31_selected_residuals.append(float(mu[mi] - y[mi]))
++        q, q_index = _conformal_q(scene_scores)
++        v31_q, v31_q_index = _conformal_q(v31_selected_residuals)
++
++        mean_y: list[float] = []
++        v31_veto_y: list[float] = []
++        lcb_y: list[float] = []
++        opp = mean_c = v31_c = lcb_c = 0
++        for t in test_tokens:
++            ss = ts[t]
++            mu, scale = _predict(ss, model)
++            y = np.asarray([a["y"] for a in ss], dtype=np.float64)
++            lcb = mu - q * scale
++            has_opp = bool(np.any(y > 0.0)); opp += int(has_opp)
++            mi = _select(ss, mu)
++            # Exact V31 semantic diagnostic: choose the mean winner first, then
++            # apply one common selected-proposal conformal offset.  Because the
++            # offset is candidate-independent it can abstain but cannot repair
++            # a wrong within-scene winner.
++            vi = mi if (mi is not None and float(mu[mi] - v31_q) > 0.0) else None
++            li = _select(ss, lcb)
++            my = float(y[mi]) if mi is not None else float("nan")
++            vy = float(y[vi]) if vi is not None else float("nan")
++            ly = float(y[li]) if li is not None else float("nan")
++            if mi is not None:
++                mean_y.append(my); mean_c += int(has_opp and my > 0.0)
++            if vi is not None:
++                v31_veto_y.append(vy); v31_c += int(has_opp and vy > 0.0)
++            if li is not None:
++                lcb_y.append(ly); lcb_c += int(has_opp and ly > 0.0)
++            audit_rows.append({
++                "scenario_token": t,
++                "outer_test_fold": k,
++                "calibration_fold": cal_fold,
++                "candidate_count": len(ss),
++                "positive_opportunity": int(has_opp),
++                "scene_conformal_q": q,
++                "v31_selected_proposal_conformal_q": v31_q,
++                "mean_selected_action": -1 if mi is None else int(ss[mi]["action"]),
++                "mean_selected_prediction": float("nan") if mi is None else float(mu[mi]),
++                "mean_selected_scale": float("nan") if mi is None else float(scale[mi]),
++                "mean_selected_teacher_improvement": my,
++                "v31_veto_selected_action": -1 if vi is None else int(ss[vi]["action"]),
++                "v31_veto_selected_lower_bound": float("nan") if mi is None else float(mu[mi] - v31_q),
++                "v31_veto_selected_teacher_improvement": vy,
++                "lcb_selected_action": -1 if li is None else int(ss[li]["action"]),
++                "lcb_selected_prediction": float("nan") if li is None else float(mu[li]),
++                "lcb_selected_scale": float("nan") if li is None else float(scale[li]),
++                "lcb_selected_lower_bound": float("nan") if li is None else float(lcb[li]),
++                "lcb_selected_teacher_improvement": ly,
++                "lcb_changes_mean_winner": int(mi != li),
++            })
++
++        def diag(vals: list[float], captured: int) -> dict[str, Any]:
++            arr = np.asarray(vals, dtype=np.float64)
++            neg = np.minimum(arr, 0.0) if arr.size else arr
++            return {
++                "selected_count": int(arr.size),
++                "selected_positive_count": int((arr > 0.0).sum()) if arr.size else 0,
++                "selected_precision": float((arr > 0.0).mean()) if arr.size else float("nan"),
++                "teacher_improvement_sum": float(arr.sum()) if arr.size else 0.0,
++                "teacher_improvement_worst": float(arr.min()) if arr.size else float("nan"),
++                "teacher_negative_rms": float(np.sqrt(np.mean(neg * neg))) if arr.size else 0.0,
++                "positive_opportunity_scenes": int(opp),
++                "positive_capture_count": int(captured),
++                "positive_capture_rate": float(captured / max(opp, 1)),
++                "path_nonharmful": bool(arr.size > 0 and float(arr.sum()) >= -1.0e-9),
++            }
++
++        md = diag(mean_y, mean_c); vd = diag(v31_veto_y, v31_c); ld = diag(lcb_y, lcb_c)
++        fold_reports.append({
++            "fold": k,
++            "fit_scenes": len(fit_tokens),
++            "fit_loss_weight_sum": float(len(fit_tokens)),
++            "fit_effective_legacy_lambda_if_globally_normalized": float(RIDGE_LAMBDA * len(fit_tokens)),
++            "calibration_scenes": len(cal_tokens),
++            "test_scenes": len(test_tokens),
++            "calibration_scene_score_count": len(scene_scores),
++            "conformal_order_index_1based": q_index,
++            "scene_simultaneous_quantile": q,
++            "v31_selected_proposal_calibration_count": len(v31_selected_residuals),
++            "v31_selected_proposal_order_index_1based": v31_q_index,
++            "v31_selected_proposal_quantile": v31_q,
++            "mean_rank": md,
++            "v31_post_selection_common_offset_veto": vd,
++            "simultaneous_lcb": ld,
++        })
++        all_mean_y.extend(mean_y); all_v31_veto_y.extend(v31_veto_y); all_lcb_y.extend(lcb_y)
++        mean_opp += opp; v31_opp += opp; lcb_opp += opp
++        mean_cap += mean_c; v31_cap += v31_c; lcb_cap += lcb_c
++
++    audit_csv.parent.mkdir(parents=True, exist_ok=True)
++    if audit_rows:
++        with audit_csv.open("w", encoding="utf-8", newline="") as f:
++            w = csv.DictWriter(f, fieldnames=list(audit_rows[0]))
++            w.writeheader(); w.writerows(audit_rows)
++
++    def agg(vals: list[float], cap: int, opp: int) -> dict[str, Any]:
++        arr = np.asarray(vals, dtype=np.float64); neg = np.minimum(arr, 0.0) if arr.size else arr
++        return {
++            "selected_count": int(arr.size),
++            "selected_positive_count": int((arr > 0.0).sum()) if arr.size else 0,
++            "selected_precision": float((arr > 0.0).mean()) if arr.size else float("nan"),
++            "teacher_improvement_sum": float(arr.sum()) if arr.size else 0.0,
++            "teacher_improvement_worst": float(arr.min()) if arr.size else float("nan"),
++            "teacher_negative_rms": float(np.sqrt(np.mean(neg * neg))) if arr.size else 0.0,
++            "positive_opportunity_scenes": int(opp),
++            "positive_capture_count": int(cap),
++            "positive_capture_rate": float(cap / max(opp, 1)),
++        }
++    ma = agg(all_mean_y, mean_cap, mean_opp)
++    va = agg(all_v31_veto_y, v31_cap, v31_opp)
++    la = agg(all_lcb_y, lcb_cap, lcb_opp)
++    gate = bool(
++        all(fr["simultaneous_lcb"]["path_nonharmful"] for fr in fold_reports)
++        and la["selected_count"] >= 64
++        and la["selected_positive_count"] >= 32
++    )
++    return {
++        "folds": fold_reports,
++        "mean_rank_aggregate": ma,
++        "v31_post_selection_common_offset_veto_aggregate": va,
++        "simultaneous_lcb_aggregate": la,
++        "all_folds_simultaneous_lcb_nonharmful": all(fr["simultaneous_lcb"]["path_nonharmful"] for fr in fold_reports),
++        "fold_pass_count": sum(int(fr["simultaneous_lcb"]["path_nonharmful"]) for fr in fold_reports),
++        "train_gate_pass": gate,
++        "scene_audit_csv": str(audit_csv),
++    }
++
++
++def _all_samples(groups: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
++    return [a for g in groups.values() for a in _scene_samples(g)]
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="Fit V64.3.32.1 SSIR and run nested TRAIN-only simultaneous-bound gate.")
++    ap.add_argument("--train-frontier-edges", required=True)
++    ap.add_argument("--base-config", required=True)
++    ap.add_argument("--output-preserve-config", required=True)
++    ap.add_argument("--output-mean-config", required=True)
++    ap.add_argument("--output-report", required=True)
++    ap.add_argument("--output-scene-audit", required=True)
++    args = ap.parse_args()
++
++    _, groups = _read_edges(Path(args.train_frontier_edges))
++    nested = _nested_diagnostics(groups, Path(args.output_scene_audit))
++    samples = _all_samples(groups)
++    y = np.asarray([a["y"] for a in samples], dtype=np.float64)
++    report: dict[str, Any] = {
++        "audit": "v64_3_32_1_eaf_icer_ssir_weightfix_fit",
++        "scientific_role": "TRAIN_only_nested_fit_calibrate_test_gate_for_scene_simultaneous_selection_stable_intervention_bounds",
++        "frozen_train_scenes": len(groups),
++        "direct_support_positive_training_edges": len(samples),
++        "direct_support_positive_training_scenes": len({a["token"] for a in samples}),
++        "teacher_improvement_positive_fraction": float((y > 0).mean()) if y.size else float("nan"),
++        "teacher_improvement_sum": float(y.sum()) if y.size else 0.0,
++        "feature_names": FEATURE_NAMES,
++        "base_feature_names": BASE_FEATURE_NAMES,
++        "ridge_lambda": RIDGE_LAMBDA,
++        "conformal_alpha": ALPHA,
++        "selection_scale": "ridge_leverage_sqrt_1_plus_h",
++        "weightfix_contract": {
++            "intended_objective": "sum_over_direct_scenes(mean_squared_error_over_scene_candidates)+lambda_times_l2",
++            "each_scene_total_loss_weight": 1.0,
++            "moment_weights_normalized_only_for_standardization": True,
++            "ridge_and_leverage_use_unnormalized_scene_mass": True,
++            "historical_v31_v32_bug": "global_weight_normalization_to_sum_1_while_lambda_remained_1_inflated_effective_regularization_by_number_of_fit_scenes",
++        },
++        "calibration_nonconformity": "one_score_per_direct_eligible_scene=max_over_all_direct_admissible_support_positive_candidates_of_(mu-y)/scale",
++        "v31_counterfactual_diagnostic": "same_nested_splits_replay_original_selected_mean_winner_then_common_conformal_offset_veto; diagnostic_only_not_a_rescue_path",
++        "nested_crossfit": nested,
++        "train_gate_pass": bool(nested["train_gate_pass"]),
++        "train_gate_contract": {
++            "outer_folds": FOLDS,
++            "within_outer_split": "3_folds_fit_1_fold_calibrate_1_fold_test_rotating",
++            "all_folds_simultaneous_lcb_teacher_improvement_sum_min": 0.0,
++            "aggregate_simultaneous_lcb_selected_count_min": 64,
++            "aggregate_simultaneous_lcb_selected_positive_count_min": 32,
++            "no_alpha_ridge_feature_or_threshold_sweep": True,
++        },
++        "fit_uses_validation": False,
++        "fit_uses_test": False,
++    }
++    rp = Path(args.output_report); rp.parent.mkdir(parents=True, exist_ok=True)
++    rp.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
++    if not report["train_gate_pass"]:
++        print(json.dumps(report, indent=2, sort_keys=True))
++        raise SystemExit("V64.3.32.1 SSIR nested TRAIN simultaneous-bound gate failed; STOP before calibration/fresh selection")
++
++    model = _fit_ridge(samples)
++    w, b, mean, std, Ginv = model
++    cfg = yaml.safe_load(Path(args.base_config).read_text(encoding="utf-8"))
++    ic = cfg.setdefault("runtime", {}).setdefault("decisive_frontier_value", {}).setdefault("incumbent_contrastive_extremal_recovery", {})
++    ic["incumbent_retention_policy"] = "preserve_admissible_incumbent"
++    ic["regret_risk_enabled"] = False
++    ic["retention_regret_risk_enabled"] = False
++    ic["replacement_regret_risk_enabled"] = False
++
++    preserve_cfg = yaml.safe_load(yaml.safe_dump(cfg, sort_keys=False))
++    preserve_ic = preserve_cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    preserve_ic["selection_conditioned_intervention_recovery"] = {"enabled": False}
++    preserve_cfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.32.1-EAF-ICER-PRESERVE-CONTROL"
++    preserve_cfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.32.1-EAF-ICER-PRESERVE-CONTROL"
++    preserve_cfg.setdefault("experiment", {})["name"] = "v64_3_32_1_eaf_icer_preserve_control"
++    preserve_cfg["experiment"]["algorithm"] = "V64.3.32.1 preservation control: frozen V20 direct dominance with admissible-incumbent default"
++    Path(args.output_preserve_config).write_text(yaml.safe_dump(preserve_cfg, sort_keys=False), encoding="utf-8")
++
++    scir = ic.setdefault("selection_conditioned_intervention_recovery", {})
++    scir.update({
++        "enabled": True,
++        "mode": "mean_rank",
++        "model_type": "scene_equal_total_mass1_linear_ridge_same_scene_incumbent_contrastive_improvement_with_leverage_scale_weightfix",
++        "base_feature_names": BASE_FEATURE_NAMES,
++        "feature_names": FEATURE_NAMES,
++        "feature_mean": [float(x) for x in mean],
++        "feature_std": [float(x) for x in std],
++        "weights": [float(x) for x in w],
++        "bias": float(b),
++        "ridge_lambda": RIDGE_LAMBDA,
++        "leverage_inverse": [[float(x) for x in row] for row in Ginv],
++        "selection_scale_floor": 1.0,
++        "training_population": "TRAIN_only_incumbent_deployment_admissible_support_positive_alternatives",
++        "training_weighting": "each_scene_total_squared_loss_weight_1; global normalization used only for feature moments, not ridge/leverage objective",
++        "training_target": "continuous_teacher_candidate_minus_same_scene_incumbent_improvement",
++        "proposal_operator": "mean_control_argmax_predicted_improvement_before_scene_simultaneous_calibration",
++        "require_positive_predicted_improvement": True,
++        "conformal_alpha": ALPHA,
++        "simultaneous_conformal_quantile": 0.0,
++        "simultaneous_calibration_status": "not_yet_calibrated_mean_control",
++        "no_fallback": True,
++    })
++    cfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.32.1-EAF-ICER-SSIR-MEAN"
++    cfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.32.1-EAF-ICER-SSIR-MEAN"
++    exp = cfg.setdefault("experiment", {})
++    exp["name"] = "v64_3_32_1_eaf_icer_ssir_mean_weightfix"
++    exp["algorithm"] = "V64.3.32.1 SSIR mean-ranking causal control before simultaneous conformal bound"
++    exp["mechanism_chain"] = "B16 interface -> exact EAF -> admissible direct intervention -> same-scene mean improvement + ridge leverage scale -> mean argmax control -> incumbent default"
++    Path(args.output_mean_config).write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
++
++    report["model"] = {
++        "weights": [float(x) for x in w], "bias": float(b),
++        "feature_mean": [float(x) for x in mean], "feature_std": [float(x) for x in std],
++        "leverage_inverse": [[float(x) for x in row] for row in Ginv],
++    }
++    rp.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
++    print(json.dumps({
++        "pass": True, "train_gate_pass": True,
++        "fold_pass_count": nested["fold_pass_count"],
++        "simultaneous_lcb_selected_count": nested["simultaneous_lcb_aggregate"]["selected_count"],
++        "output_preserve_config": args.output_preserve_config,
++        "output_mean_config": args.output_mean_config,
++        "scene_audit_csv": args.output_scene_audit,
++    }, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
