@@ -1,0 +1,1276 @@
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -10306,3 +10306,175 @@
+ `bounded auditable interface -> exact EAF attribution -> factorized incumbent/null-action structured intervention -> basepoint-conditioned existence + contrastive challenger ordering -> monotone selected-policy calibration -> independent double-fresh/full-validation/closed-loop`.
+ 
+ Only if the constrained context arm wins independently should base-point-conditioned intervention sufficiency become a paper claim. If it fails, stop richer-context iteration and reopen the bottleneck diagnosis instead of increasing context/head capacity.
++
++# V64.3.35 uploaded execution audit → V64.3.36 EAF-ICER-SGRR
++
++## 1. V35 is engineering-valid for TRAIN-level attribution
++
++The uploaded V35 run completed the intended nested FDSR/FBCSR mechanism and stopped at the preregistered scientific TRAIN gate. Independent audit found no runtime, schema, candidate-population, query-accounting, objective-scale, structural-delegation, or selected-policy-unit engineering blocker. Uploaded V35 focused tests are 7/7 PASS, launcher syntax passes, and the server targeted stack reports 161/161 PASS.
++
++No CAL500/A500/B500 manifest was generated. V35 therefore consumed no fresh validation population. Do **not** create a V35.1 engineering hotfix and do not make fresh-level claims from V35.
++
++## 2. V35 FDSR result: factorization alone fails
++
++Paired 782-scene TRAIN aggregate:
++
++- V34 RSMR: `502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophes / 107 no-opportunity false interventions`;
++- V35 FDSR: `739 / 333 / 58.01% / +23.4937 / 50 / 180`.
++
++Explicit existence+ordering factorization under the frozen delta-only representation removes suppression but becomes highly intervention-permissive. It does not resolve the V34 trade-off and must not be rescued with tuned existence/order weights.
++
++## 3. V35 FBCSR result: weak base-point signal, not a first-order solution
++
++FBCSR-RANK aggregate:
++
++`687 selected / 310 positive / capture 54.01% / sum +29.3138 / 40 catastrophes / 159 no-opportunity false interventions`.
++
++The no-op false-intervention count improves FDSR→FBCSR in all five test folds:
++
++`44→41, 31→30, 41→35, 35→28, 29→25`.
++
++Thus absolute incumbent context contains a real intervention-existence signal. However:
++
++- reduction is only `180→159 = 11.7%`, below the preregistered 20% mediation requirement;
++- capture loses `58.01%→54.01% = -4.01 pp`, worse than the 3 pp tolerance;
++- catastrophes remain 40, worse than V34 RSMR's 28;
++- two outer-fold selected sums remain negative.
++
++Do not claim that 19-D contrast missing base-point information is the first-order dominant mediator or that FBCSR solves it.
++
++## 4. V35 causal-identifiability limitation
++
++Within a fixed FBCSR model the incumbent context is common to all challengers and cannot alter pairwise challenger ordering. But FDSR and FBCSR jointly refit different delta weights. Across common-selected scenes, 59 challenger winners change between the two arms.
++
++Therefore V35 only supports “base-point context has weak consistent signal.” It does **not** isolate a pure boundary-shift effect. The next experiment must freeze challenger ordering before testing base-point mediation.
++
++## 5. Selected-policy conformal remains misaligned with the hard-tail objective
++
++FBCSR-MAIN selects only `13`, with `6` positive, sum `-4.8982`, and `4` catastrophes. Do not tune alpha/q/score thresholds. Historical selected-policy marginal coverage does not imply conditional safety among accepted interventions and is no longer the main route for the hard zero-catastrophe objective.
++
++## 6. Updated dominant bottleneck
++
++Freeze the useful V34 RSMR contrastive regret ordering. The unresolved layer is now:
++
++**scene/set-level intervention reservation under extremal selection-induced overestimation at the incumbent boundary.**
++
++The evidence no longer supports repeatedly redesigning challenger ordering or repeatedly expanding context. The core question is whether the frozen extremal winner's score should be discounted as a function of the scene's selection geometry before leaving the incumbent.
++
++## 7. New no-repeat constraints after V35
++
++Retain every previous prohibition. Additionally, do **not**:
++
++- tune FDSR existence-vs-ordering loss weights;
++- add richer/nonlinear incumbent context before a clean frozen-order causal test;
++- interpret the 180→159 context result as established base-point sufficiency;
++- refit challenger ordering while claiming to test only the incumbent boundary;
++- use candidate count/top-K as a hard no-op gate;
++- add a standalone binary intervene/not-intervene classifier that creates another unconstrained action path;
++- continue selected-policy marginal conformal as the primary hard-tail certificate;
++- tune reservation/score thresholds on TRAIN or observed fresh outcomes.
++
++# V64.3.36 EAF-ICER-SGRR
++
++Full name: **Evidence-Attributed Incumbent-Contrastive Selection-Geometry Reservation Recovery**.
++
++V36 freezes B16/M24, acquisition, EAF, support/admissibility, structural delegation, incumbent default/no fallback, and the V34 RSMR challenger-ordering mechanism.
++
++## 1. Freeze challenger ordering before intervention-boundary learning
++
++Fit exact V34 RSMR scores `u_b` from the 19-D candidate-minus-incumbent contrast. The raw proposal is the exact positive-score RSMR winner.
++
++V36 reservation learning is forbidden from modifying these weights or winner identity.
++
++## 2. Non-negative scene-common reservation
++
++Learn `rho(scene) >= 0`. Execute the exact frozen RSMR winner iff
++
++`u_bhat - rho(scene) > 0`,
++
++otherwise return the incumbent.
++
++The reservation is common to all challengers and the proposal identity is frozen **before** subtraction. Therefore:
++
++- `I_V36 subseteq I_RSMR` deterministically;
++- any accepted V36 challenger is the exact RSMR winner;
++- no new proposal, re-ranking, or second-best fallback is possible.
++
++## 3. Selected-policy overprediction target
++
++On an independent calibration fold, for each frozen RSMR proposal fit the non-negative target
++
++`r = max(0, u_bhat - Delta_T(bhat;i))`.
++
++This target measures extremal selected-policy overprediction / winner's-curse correction rather than binary catastrophe class membership.
++
++If a reservation upper-bounds this realized overprediction, then `u_bhat-rho <= Delta_T`; hence a positive adjusted margin implies positive teacher improvement on that event. V36 tests whether a low-capacity reservation model can reproduce this relation across folds/fresh populations; it does not claim a per-scene deterministic statistical guarantee.
++
++## 4. Clean BPR diagnostic
++
++`BPR` uses only the already-observed absolute incumbent 18-D evidence plus incumbent support to predict the reservation while keeping RSMR weights fixed.
++
++This is the clean causal test missing in V35. BPR is diagnostic only and cannot rescue an SGRR failure.
++
++## 5. SGRR main: selection-geometry reservation
++
++`SGRR` predicts the reservation from a permutation-invariant geometry of the frozen eligible challenger score set:
++
++- top RSMR score;
++- top gap to runner-up or incumbent zero;
++- score RMS;
++- positive-score fraction;
++- log effective competitor mass.
++
++These summarize extremal-selection geometry without any additional evidence/model query and without a hard candidate-count gate.
++
++The mechanistic branch is preregistered:
++
++- clean BPR succeeds, SGRR does not → incumbent base-point is the stronger boundary mediator;
++- SGRR succeeds, BPR does not → selection-induced overestimation/set geometry is the stronger mediator;
++- both fail → stop basepoint/selection-geometry reservation expansion and reopen the intervention-existence representation/target diagnosis;
++- both succeed → use SGRR as the main mechanism only if it also passes the frozen hard-tail and fresh promotion contracts; BPR remains an ablation.
++
++## 6. Nested TRAIN protocol
++
++Same historical TRAIN fold hash. Each outer fold uses:
++
++`3 folds RSMR fit + 1 independent reservation-calibration fold + 1 test fold`.
++
++Minimum selected-policy reservation calibration population is 64 proposals per fold.
++
++Before any fresh data, SGRR must satisfy:
++
++- exact monotone containment and frozen winner identity;
++- >=20% no-opportunity false-intervention reduction vs RSMR;
++- capture no worse than RSMR by >3 pp;
++- >=25% catastrophe reduction vs RSMR;
++- NegRMS no worse than RSMR;
++- aggregate and all five test-fold selected sums nonnegative;
++- >=64 selected and >=32 positive.
++
++No lambda/reservation threshold/feature/alpha sweep is permitted.
++
++## 7. Fresh protocol if TRAIN passes
++
++V35 spent no fresh population. Keep the permanent 10700-token exclusion and use new label-free seed
++
++`v64.3.36-eaf-icer-sgrr-cal500-double-fresh-v1`.
++
++Only after nested TRAIN pass select independent `CAL500 + A500 + B500`.
++
++CAL500 fits final BPR and SGRR reservation heads on frozen full-TRAIN RSMR policy outputs. A/B independently evaluate
++
++`RAW / V20 / PRESERVE / RSMR / BPR / SGRR`.
++
++No A/B pooling. SGRR fresh promotion requires engineering/containment validity, meaningful no-op reduction without >3 pp capture loss, hard-tail pass with zero catastrophes and worst > -0.5, useful recovery gain over PRESERVE, and endpoint non-inferiority to PRESERVE and V20.
++
++## 8. Paper-line implication
++
++Candidate high-level contribution stack:
++
++`bounded auditable interface -> exact EAF action-local attribution -> contrastive regret-aligned challenger ordering -> selected-policy scene reservation at the incumbent boundary -> deterministic monotone containment -> independent double-fresh/full-validation/closed-loop evidence`.
++
++The intended conceptual novelty is **invariance-factorized decision sufficiency**: challenger identity is a relative/contrastive ordering problem, while leaving the incumbent is a scene-level reservation problem after data-dependent extremal selection. The reservation may only shrink the frozen intervention set; it cannot create or re-rank paths.
++
++Do not headline the five geometry statistics or ridge regression. They are low-capacity instruments for testing the selection-geometry hypothesis, not the paper contribution themselves.
+--- a/bdse/planner/tournament.py
++++ b/bdse/planner/tournament.py
+@@ -5,6 +5,7 @@
+ from pathlib import Path
+ from typing import Any
+ import hashlib
++import math
+ 
+ import numpy as np
+ 
+@@ -2481,6 +2482,93 @@
+     return mu, x, runtime_names, scale
+ 
+ 
++
++def _icer_scene_reservation_value(
++    predicted_improvement: np.ndarray,
++    candidate_indices: np.ndarray | list[int],
++    feat: np.ndarray,
++    feature_names: list[str],
++    support_logits: np.ndarray,
++    legacy_action: int,
++    scir_cfg: dict[str, Any],
++) -> tuple[float, np.ndarray, list[str]]:
++    """V64.3.36 monotone scene reservation for the frozen challenger ordering.
++
++    V35 shows that a common incumbent-context shift has weak existence signal but
++    its joint refit with the delta head does not isolate whether the gain comes
++    from the boundary or from a changed challenger ordering.  V36 freezes the
++    RSMR ordering and learns a *non-negative* reservation from an independent
++    selected-policy calibration population.  The reservation is subtracted from
++    every eligible challenger score, so it can only shrink the frozen proposal
++    set and can never re-rank challengers or create a new intervention path.
++
++    Supported views:
++      - incumbent_basepoint: absolute frozen 18-D incumbent evidence + support;
++      - selection_geometry: permutation-invariant geometry of the frozen RSMR
++        score set (top score, top-vs-runner-up/incumbent gap, RMS, positive
++        fraction, and log effective competitor mass).
++    """
++    cand = np.asarray(candidate_indices, dtype=np.int64).reshape(-1)
++    mode = str(scir_cfg.get("scene_reservation_feature_mode", "")).strip().lower()
++    if cand.size == 0 or not mode:
++        return 0.0, np.zeros((0,), dtype=np.float64), []
++    mu = np.asarray(predicted_improvement, dtype=np.float64).reshape(-1)
++    if np.any(cand < 0) or np.any(cand >= mu.size):
++        raise ValueError("EAF-ICER V36 reservation candidate indices are invalid")
++
++    if mode == "selection_geometry":
++        sv = np.asarray(mu[cand], dtype=np.float64)
++        if sv.size == 0 or not np.all(np.isfinite(sv)):
++            raise ValueError("EAF-ICER V36 selection-geometry reservation requires finite frozen scores")
++        order = np.sort(sv)[::-1]
++        top = float(order[0])
++        second = float(order[1]) if order.size >= 2 else float("-inf")
++        runner = max(0.0, second) if math.isfinite(second) else 0.0
++        gap = top - runner
++        rms = float(np.sqrt(np.mean(sv * sv)))
++        pos_frac = float(np.mean(sv > 0.0))
++        # Stable log sum exp of score excesses.  This is a smooth effective
++        # multiplicity statistic, not a hard candidate-count gate.
++        log_mass = float(np.log(np.exp(np.clip(sv - top, -60.0, 0.0)).sum()))
++        x = np.asarray([top, gap, rms, pos_frac, log_mass], dtype=np.float64)
++        runtime_names = [
++            "reservation::top_score",
++            "reservation::top_gap_to_runnerup_or_incumbent",
++            "reservation::score_rms",
++            "reservation::positive_score_fraction",
++            "reservation::log_effective_competitor_mass",
++        ]
++    elif mode == "incumbent_basepoint":
++        xx = np.asarray(feat, dtype=np.float64)
++        sup = np.asarray(support_logits, dtype=np.float64).reshape(-1)
++        legacy = int(legacy_action)
++        base_names = list(scir_cfg.get("base_feature_names", _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES))
++        if base_names != list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES):
++            raise ValueError("EAF-ICER V36 basepoint reservation requires frozen 18-D evidence schema")
++        pos = {str(n): i for i, n in enumerate(feature_names)}
++        missing = [n for n in base_names if n not in pos]
++        if missing or not (0 <= legacy < xx.shape[0]) or sup.shape[0] != xx.shape[0]:
++            raise ValueError("EAF-ICER V36 basepoint reservation runtime schema is incomplete")
++        base = xx[:, [pos[n] for n in base_names]]
++        x = np.concatenate([base[legacy], np.asarray([float(sup[legacy])], dtype=np.float64)])
++        runtime_names = [f"reservation_incumbent::{n}" for n in base_names] + ["reservation_incumbent::support_logit"]
++    else:
++        raise ValueError(f"unknown EAF-ICER V36 scene_reservation_feature_mode={mode}")
++
++    stored_names = list(scir_cfg.get("scene_reservation_feature_names", []))
++    mean = np.asarray(scir_cfg.get("scene_reservation_feature_mean", []), dtype=np.float64).reshape(-1)
++    std = np.asarray(scir_cfg.get("scene_reservation_feature_std", []), dtype=np.float64).reshape(-1)
++    weights = np.asarray(scir_cfg.get("scene_reservation_weights", []), dtype=np.float64).reshape(-1)
++    if stored_names != runtime_names or len(runtime_names) != len(mean) or len(runtime_names) != len(std) or len(runtime_names) != len(weights):
++        raise ValueError("EAF-ICER V36 reservation feature schema/mean/std/weights are inconsistent")
++    z = (x - mean) / np.maximum(std, 1.0e-6)
++    raw = float(z @ weights + float(scir_cfg.get("scene_reservation_bias", 0.0)))
++    reservation = max(0.0, raw)
++    max_res = max(float(scir_cfg.get("scene_reservation_max", 40.0)), 0.0)
++    reservation = min(reservation, max_res)
++    return float(reservation), x, runtime_names
++
++
+ def _icer_select_scir_candidate(
+     candidate_indices: np.ndarray | list[int],
+     predicted_improvement: np.ndarray,
+@@ -2591,6 +2679,10 @@
+     replacement_confirmation_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
+     retention_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
+     scir_predicted_improvement = np.zeros((len(valid),), dtype=np.float64)
++    scir_raw_predicted_improvement = np.zeros((len(valid),), dtype=np.float64)
++    scir_scene_reservation = 0.0
++    scir_scene_reservation_feature = np.zeros((0,), dtype=np.float64)
++    scir_scene_reservation_feature_names: list[str] = []
+     scir_selection_scale = np.ones((len(valid),), dtype=np.float64)
+     scir_lower_bound = np.zeros((len(valid),), dtype=np.float64)
+     scir_feature_matrix = np.zeros((len(valid), 0), dtype=np.float64)
+@@ -2717,6 +2809,7 @@
+             scir_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_selection_scale = _icer_selection_conditioned_intervention_scores(
+                 feat, names, support_logits, legacy, scir_cfg
+             )
++            scir_raw_predicted_improvement = scir_predicted_improvement.copy()
+             if scir_mode == "conformal_veto":
+                 q = float(scir_cfg.get("conformal_overprediction_quantile", 0.0))
+                 scir_lower_bound = scir_predicted_improvement - q
+@@ -2877,39 +2970,65 @@
+             if regret_risk_enabled and replacement_regret_risk_enabled:
+                 replacement_positive = np.isfinite(replacement_regret_risk_logits) & (replacement_regret_risk_logits > 0.0)
+             if scir_enabled:
+-                # V64.3.31: the direct intervention score itself is the semantic
+-                # candidate-vs-incumbent utility.  The old binary dominance head
+-                # remains instrumented as a causal diagnostic but no longer gates
+-                # or ranks the SCIR arm.  Anchor support and deployment admissibility
+-                # remain frozen prerequisites.
+-                if scir_mode == "simultaneous_lcb":
+-                    # V64.3.32: risk enters the *ordering* itself.  The calibration
+-                    # score is a per-scene maximum over all eligible alternatives, so
+-                    # all candidate lower bounds are calibrated simultaneously before
+-                    # the extremal winner is chosen.
+-                    scir_positive = np.isfinite(scir_lower_bound) & (scir_lower_bound > 0.0)
+-                    ordering_score = scir_lower_bound
++                reservation_enabled = bool(scir_cfg.get("scene_reservation_enabled", False))
++                if reservation_enabled:
++                    # V64.3.36: proposal identity is frozen *before* reservation.
++                    # The reservation is a non-negative, scene-common subtraction
++                    # and can only accept that exact RSMR proposal or return the
++                    # incumbent.  It never re-ranks or falls through.
++                    reservation_candidates = np.flatnonzero(alternative).astype(np.int64)
++                    raw_positive = np.isfinite(scir_raw_predicted_improvement) & (scir_raw_predicted_improvement > 0.0)
++                    raw_cand = np.flatnonzero(alternative & raw_positive).astype(np.int64)
++                    best = _icer_select_scir_candidate(
++                        raw_cand, scir_raw_predicted_improvement, support_logits, margin_star, utility_prior
++                    )
++                    scir_proposal_exists = bool(best is not None)
++                    scir_proposal_action = int(legacy if best is None else best)
++                    scir_scene_reservation, scir_scene_reservation_feature, scir_scene_reservation_feature_names = _icer_scene_reservation_value(
++                        scir_raw_predicted_improvement, reservation_candidates, feat, names, support_logits, legacy, scir_cfg
++                    )
++                    scir_predicted_improvement = scir_raw_predicted_improvement.copy()
++                    if reservation_candidates.size:
++                        scir_predicted_improvement[reservation_candidates] = (
++                            scir_raw_predicted_improvement[reservation_candidates] - scir_scene_reservation
++                        )
++                    if 0 <= legacy < len(scir_predicted_improvement):
++                        scir_predicted_improvement[legacy] = 0.0
++                    scir_lower_bound = scir_predicted_improvement.copy()
++                    if best is None:
++                        scir_certificate_accepted = False
++                        selected = int(baseline)
++                    else:
++                        scir_certificate_accepted = bool(
++                            np.isfinite(scir_predicted_improvement[best]) and scir_predicted_improvement[best] > 0.0
++                        )
++                        selected = int(best if scir_certificate_accepted else baseline)
+                 else:
+-                    scir_positive = np.isfinite(scir_predicted_improvement) & (scir_predicted_improvement > 0.0)
+-                    ordering_score = scir_predicted_improvement
+-                cand = np.flatnonzero(alternative & scir_positive).astype(np.int64)
+-                best = _icer_select_scir_candidate(
+-                    cand, ordering_score, support_logits, margin_star, utility_prior
+-                )
+-                scir_proposal_exists = bool(best is not None)
+-                scir_proposal_action = int(legacy if best is None else best)
+-                if best is None:
+-                    scir_certificate_accepted = False
+-                    selected = int(baseline)
+-                elif scir_mode == "conformal_veto":
+-                    # Historical V31 proposal-only calibration.
+-                    scir_certificate_accepted = bool(np.isfinite(scir_lower_bound[best]) and scir_lower_bound[best] > 0.0)
+-                    selected = int(best if scir_certificate_accepted else baseline)
+-                else:
+-                    # mean_rank/rank_only and V32 simultaneous_lcb already use their
+-                    # respective positive decision boundary when constructing cand.
+-                    scir_certificate_accepted = True
+-                    selected = int(best)
++                    # V64.3.31: the direct intervention score itself is the semantic
++                    # candidate-vs-incumbent utility.  The old binary dominance head
++                    # remains instrumented as a causal diagnostic but no longer gates
++                    # or ranks the SCIR arm.
++                    if scir_mode == "simultaneous_lcb":
++                        scir_positive = np.isfinite(scir_lower_bound) & (scir_lower_bound > 0.0)
++                        ordering_score = scir_lower_bound
++                    else:
++                        scir_positive = np.isfinite(scir_predicted_improvement) & (scir_predicted_improvement > 0.0)
++                        ordering_score = scir_predicted_improvement
++                    cand = np.flatnonzero(alternative & scir_positive).astype(np.int64)
++                    best = _icer_select_scir_candidate(
++                        cand, ordering_score, support_logits, margin_star, utility_prior
++                    )
++                    scir_proposal_exists = bool(best is not None)
++                    scir_proposal_action = int(legacy if best is None else best)
++                    if best is None:
++                        scir_certificate_accepted = False
++                        selected = int(baseline)
++                    elif scir_mode == "conformal_veto":
++                        scir_certificate_accepted = bool(np.isfinite(scir_lower_bound[best]) and scir_lower_bound[best] > 0.0)
++                        selected = int(best if scir_certificate_accepted else baseline)
++                    else:
++                        scir_certificate_accepted = True
++                        selected = int(best)
+             else:
+                 cand = np.flatnonzero(alternative & dominance_positive & replacement_positive).astype(np.int64)
+                 confirmation_logits = None
+@@ -2970,6 +3089,8 @@
+         "decisive_frontier_icer_scir_proposal_action": float(scir_proposal_action),
+         "decisive_frontier_icer_scir_certificate_accepted": float(bool(scir_certificate_accepted)),
+         "decisive_frontier_icer_scir_selected_predicted_improvement": float(scir_predicted_improvement[selected]) if scir_enabled and 0 <= selected < len(valid) and selected != legacy else 0.0,
++        "decisive_frontier_icer_scir_scene_reservation_enabled": float(bool(scir_enabled and scir_cfg.get("scene_reservation_enabled", False))),
++        "decisive_frontier_icer_scir_scene_reservation_value": float(scir_scene_reservation) if scir_enabled else 0.0,
+         "decisive_frontier_icer_scir_proposal_predicted_improvement": float(scir_predicted_improvement[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
+         "decisive_frontier_icer_scir_proposal_lower_bound": float(scir_lower_bound[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
+         "decisive_frontier_icer_scir_conformal_alpha": float(scir_cfg.get("conformal_alpha", 0.0)) if scir_enabled else 0.0,
+@@ -3025,6 +3146,9 @@
+         "_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star": np.asarray(replacement_confirmation_regret_risk_logits, dtype=np.float32),
+         "_decisive_frontier_icer_retention_regret_risk_logit_star": np.asarray(retention_regret_risk_logits, dtype=np.float32),
+         "_decisive_frontier_icer_scir_predicted_improvement_star": np.asarray(scir_predicted_improvement, dtype=np.float32),
++        "_decisive_frontier_icer_scir_raw_predicted_improvement_star": np.asarray(scir_raw_predicted_improvement, dtype=np.float32),
++        "_decisive_frontier_icer_scir_scene_reservation_feature": np.asarray(scir_scene_reservation_feature, dtype=np.float32),
++        "_decisive_frontier_icer_scir_scene_reservation_feature_names": list(scir_scene_reservation_feature_names),
+         "_decisive_frontier_icer_scir_selection_scale_star": np.asarray(scir_selection_scale, dtype=np.float32),
+         "_decisive_frontier_icer_scir_lower_bound_star": np.asarray(scir_lower_bound, dtype=np.float32),
+         "_decisive_frontier_icer_scir_feature_matrix": np.asarray(scir_feature_matrix, dtype=np.float32),
+--- a/bdse/experiments/evaluate_open_loop.py
++++ b/bdse/experiments/evaluate_open_loop.py
+@@ -1019,6 +1019,8 @@
+             icer_replacement_confirmation_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
+             icer_retention_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_retention_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
+             icer_scir_mu = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_predicted_improvement_star", []), dtype=np.float64).reshape(-1)
++            icer_scir_raw_mu = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_raw_predicted_improvement_star", []), dtype=np.float64).reshape(-1)
++            icer_scir_reservation = float(tour_diag.get("decisive_frontier_icer_scir_scene_reservation_value", 0.0))
+             icer_scir_scale = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_selection_scale_star", []), dtype=np.float64).reshape(-1)
+             icer_scir_lcb = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_lower_bound_star", []), dtype=np.float64).reshape(-1)
+             icer_scir_features = tour_diag.get("_decisive_frontier_icer_scir_feature_matrix", None)
+@@ -1083,6 +1085,8 @@
+                         "icer_replacement_confirmation_regret_risk_logit": float(icer_replacement_confirmation_risk[challenger]) if icer_replacement_confirmation_risk.size == edge_valid.size else float("nan"),
+                         "icer_retention_regret_risk_logit": float(icer_retention_risk[challenger]) if icer_retention_risk.size == edge_valid.size else float("nan"),
+                         "icer_scir_predicted_improvement": float(icer_scir_mu[challenger]) if icer_scir_mu.size == edge_valid.size else float("nan"),
++                        "icer_scir_raw_predicted_improvement": float(icer_scir_raw_mu[challenger]) if icer_scir_raw_mu.size == edge_valid.size else float("nan"),
++                        "icer_scir_scene_reservation": float(icer_scir_reservation),
+                         "icer_scir_selection_scale": float(icer_scir_scale[challenger]) if icer_scir_scale.size == edge_valid.size else 1.0,
+                         "icer_scir_lower_bound": float(icer_scir_lcb[challenger]) if icer_scir_lcb.size == edge_valid.size else float("nan"),
+                         "icer_scir_proposal_action": int(tour_diag.get("decisive_frontier_icer_scir_proposal_action", raw_top)),
+--- a/bdse/tools/fit_v64_3_36_eaf_icer_sgrr.py
++++ b/bdse/tools/fit_v64_3_36_eaf_icer_sgrr.py
+@@ -0,0 +1,332 @@
++from __future__ import annotations
++
++import argparse
++import csv
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import (
++    BASE_FEATURE_NAMES, CAT, FEATURE_NAMES, FOLDS, RIDGE_LAMBDA,
++    _diag, _finite, _fold, _read_edges, _scene_samples, _select,
++)
++from bdse.tools.fit_v64_3_34_eaf_icer_rsmr import (
++    _extended_diag, _fit_regret_structured_margin, _structured_scores,
++)
++
++EPS = 1.0e-12
++MIN_RESERVATION_CAL_PROPOSALS = 64
++NOOP_REDUCTION_MIN = 0.20
++CAPTURE_TOL = 0.03
++CATASTROPHE_REDUCTION_MIN = 0.25
++GEOMETRY_NAMES = [
++    "reservation::top_score",
++    "reservation::top_gap_to_runnerup_or_incumbent",
++    "reservation::score_rms",
++    "reservation::positive_score_fraction",
++    "reservation::log_effective_competitor_mass",
++]
++BASEPOINT_NAMES = [f"reservation_incumbent::{n}" for n in BASE_FEATURE_NAMES] + ["reservation_incumbent::support_logit"]
++
++
++def _scene_context(group: list[dict[str, Any]]) -> np.ndarray | None:
++    if not group:
++        return None
++    inc = int(group[0].get("raw_top_action", -1))
++    ir = next((r for r in group if int(r.get("challenger_action", -2)) == inc), None)
++    if ir is None or _finite(ir, "icer_admissible", 0.0) < 0.5:
++        return None
++    base = np.asarray([_finite(ir, f"icer_feature_{n}") for n in BASE_FEATURE_NAMES], dtype=np.float64)
++    sup = _finite(ir, "icer_support_logit")
++    if not np.all(np.isfinite(base)) or not math.isfinite(sup):
++        return None
++    return np.concatenate([base, np.asarray([sup], dtype=np.float64)])
++
++
++def _build(groups: dict[str, list[dict[str, Any]]]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, np.ndarray]]:
++    scene: dict[str, list[dict[str, Any]]] = {}
++    context: dict[str, np.ndarray] = {}
++    for t, g in groups.items():
++        ss = _scene_samples(g)
++        cc = _scene_context(g)
++        if ss and cc is not None:
++            scene[t] = ss
++            context[t] = cc
++    return scene, context
++
++
++def _geometry(scores: np.ndarray) -> np.ndarray:
++    s = np.asarray(scores, dtype=np.float64).reshape(-1)
++    if s.size == 0 or not np.all(np.isfinite(s)):
++        raise ValueError("V36 selection geometry requires finite challenger scores")
++    order = np.sort(s)[::-1]
++    top = float(order[0])
++    second = float(order[1]) if order.size >= 2 else float("-inf")
++    runner = max(0.0, second) if math.isfinite(second) else 0.0
++    gap = top - runner
++    rms = float(np.sqrt(np.mean(s * s)))
++    pos_frac = float(np.mean(s > 0.0))
++    log_mass = float(np.log(np.exp(np.clip(s - top, -60.0, 0.0)).sum()))
++    return np.asarray([top, gap, rms, pos_frac, log_mass], dtype=np.float64)
++
++
++def _fit_reservation(X: np.ndarray, target: np.ndarray, *, mode: str) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
++    xx = np.asarray(X, dtype=np.float64)
++    yy = np.asarray(target, dtype=np.float64).reshape(-1)
++    if xx.ndim != 2 or xx.shape[0] != yy.size or yy.size < MIN_RESERVATION_CAL_PROPOSALS:
++        raise ValueError("V36 reservation calibration population is malformed or too small")
++    if np.any(~np.isfinite(xx)) or np.any(~np.isfinite(yy)) or np.any(yy < -EPS):
++        raise ValueError("V36 reservation features/targets must be finite with nonnegative overprediction targets")
++    scale = np.maximum(np.sqrt(np.mean(xx * xx, axis=0)), 1.0e-6)
++    z = xx / scale[None, :]
++    gram = z.T @ z + RIDGE_LAMBDA * np.eye(z.shape[1], dtype=np.float64)
++    rhs = z.T @ yy
++    w = np.linalg.solve(gram, rhs)
++    pred = np.maximum(z @ w, 0.0)
++    return w, scale, {
++        "mode": mode,
++        "ridge_lambda": RIDGE_LAMBDA,
++        "sample_count": int(yy.size),
++        "target_mean": float(yy.mean()),
++        "target_rms": float(np.sqrt(np.mean(yy * yy))),
++        "predicted_reservation_mean": float(pred.mean()),
++        "fit_mse": float(np.mean((pred - yy) ** 2)),
++        "weight_l2": float(np.linalg.norm(w)),
++        "target_definition": "max(0, frozen_rsmr_selected_score - selected_teacher_improvement)",
++    }
++
++
++def _reservation_value(x: np.ndarray, model: tuple[np.ndarray, np.ndarray, dict[str, Any]]) -> float:
++    w, scale, _ = model
++    z = np.asarray(x, dtype=np.float64) / np.maximum(np.asarray(scale, dtype=np.float64), 1.0e-6)
++    return float(min(max(float(z @ w), 0.0), 40.0))
++
++
++def _cal_samples(
++    scene: dict[str, list[dict[str, Any]]], context: dict[str, np.ndarray], tokens: list[str], rsm_model,
++) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
++    geo: list[np.ndarray] = []
++    bp: list[np.ndarray] = []
++    target: list[float] = []
++    used: list[str] = []
++    for t in tokens:
++        ss = scene.get(t, [])
++        if not ss:
++            continue
++        score = _structured_scores(ss, rsm_model)
++        idx = _select(ss, score)
++        if idx is None:
++            continue
++        y = float(ss[idx]["y"])
++        geo.append(_geometry(score))
++        bp.append(np.asarray(context[t], dtype=np.float64))
++        target.append(max(0.0, float(score[idx]) - y))
++        used.append(t)
++    if not target:
++        return np.zeros((0, len(GEOMETRY_NAMES))), np.zeros((0, len(BASEPOINT_NAMES))), np.zeros((0,)), []
++    return np.stack(geo), np.stack(bp), np.asarray(target, dtype=np.float64), used
++
++
++def _evaluate_policy(
++    ss: list[dict[str, Any]], rsm_model, reservation_model: tuple[np.ndarray, np.ndarray, dict[str, Any]] | None,
++    reservation_feature: np.ndarray | None,
++) -> tuple[int | None, float, float, float]:
++    score = _structured_scores(ss, rsm_model)
++    idx = _select(ss, score)
++    if idx is None:
++        return None, 0.0, 0.0, float("nan")
++    raw = float(score[idx])
++    reservation = 0.0 if reservation_model is None else _reservation_value(np.asarray(reservation_feature), reservation_model)
++    adjusted = raw - reservation
++    chosen = idx if adjusted > 0.0 else None
++    return chosen, raw, reservation, adjusted
++
++
++def _metrics_from_lists(vals: list[float], captured: int, opp: int, noop_sel: int, opp_sel: int, noop_scenes: int) -> dict[str, Any]:
++    return _extended_diag(vals, captured, opp, noop_sel, opp_sel, noop_scenes)
++
++
++def _nested(groups: dict[str, list[dict[str, Any]]], audit_csv: Path) -> dict[str, Any]:
++    scene, context = _build(groups)
++    names = ["rsm", "basepoint", "geometry"]
++    agg = {n: [] for n in names}
++    caps = {n: 0 for n in names}
++    noops = {n: 0 for n in names}
++    oppsels = {n: 0 for n in names}
++    folds: list[dict[str, Any]] = []
++    audits: list[dict[str, Any]] = []
++    total_opp = 0
++    total_noop = 0
++
++    for k in range(FOLDS):
++        test = [t for t in scene if _fold(t) == k]
++        cal_fold = (k + 1) % FOLDS
++        cal = [t for t in scene if _fold(t) == cal_fold]
++        fit = [t for t in scene if _fold(t) not in {k, cal_fold}]
++        rsm = _fit_regret_structured_margin(scene, fit)
++        gx, bx, target, used = _cal_samples(scene, context, cal, rsm)
++        if len(used) < MIN_RESERVATION_CAL_PROPOSALS:
++            raise SystemExit(f"V64.3.36 nested reservation calibration fold {k} has {len(used)} proposals < {MIN_RESERVATION_CAL_PROPOSALS}")
++        gmodel = _fit_reservation(gx, target, mode="selection_geometry")
++        bmodel = _fit_reservation(bx, target, mode="incumbent_basepoint")
++
++        fv = {n: [] for n in names}; fc = {n: 0 for n in names}; fn = {n: 0 for n in names}; fo = {n: 0 for n in names}
++        opp = 0; noop_scenes = 0
++        subset_ok = True; winner_identity_ok = True
++        for t in test:
++            ss = scene[t]
++            y = np.asarray([float(a["y"]) for a in ss], dtype=np.float64)
++            has_opp = bool(np.any(y > 0.0)); opp += int(has_opp); noop_scenes += int(not has_opp)
++            rscore = _structured_scores(ss, rsm); ri = _select(ss, rscore)
++            gi, raw_g, rg, adj_g = _evaluate_policy(ss, rsm, gmodel, _geometry(rscore))
++            bi, raw_b, rb, adj_b = _evaluate_policy(ss, rsm, bmodel, context[t])
++            subset_ok = subset_ok and (gi is None or ri is not None) and (bi is None or ri is not None)
++            winner_identity_ok = winner_identity_ok and (gi is None or gi == ri) and (bi is None or bi == ri)
++            chosen = {"rsm": ri, "basepoint": bi, "geometry": gi}
++            for name, idx in chosen.items():
++                if idx is None: continue
++                yy = float(y[idx]); fv[name].append(yy); fc[name] += int(has_opp and yy > 0.0); fn[name] += int(not has_opp); fo[name] += int(has_opp)
++            audits.append({
++                "scenario_token": t, "outer_test_fold": k, "calibration_fold": cal_fold, "candidate_count": len(ss),
++                "positive_opportunity": int(has_opp),
++                "rsm_selected_action": -1 if ri is None else int(ss[ri]["action"]),
++                "rsm_selected_score": float("nan") if ri is None else float(rscore[ri]),
++                "rsm_selected_teacher_improvement": float("nan") if ri is None else float(y[ri]),
++                "basepoint_selected_action": -1 if bi is None else int(ss[bi]["action"]),
++                "basepoint_reservation": rb, "basepoint_adjusted_margin": adj_b,
++                "basepoint_selected_teacher_improvement": float("nan") if bi is None else float(y[bi]),
++                "geometry_selected_action": -1 if gi is None else int(ss[gi]["action"]),
++                "geometry_reservation": rg, "geometry_adjusted_margin": adj_g,
++                "geometry_selected_teacher_improvement": float("nan") if gi is None else float(y[gi]),
++            })
++        total_opp += opp; total_noop += noop_scenes
++        fd = {}
++        for n in names:
++            fd[n] = _metrics_from_lists(fv[n], fc[n], opp, fn[n], fo[n], noop_scenes)
++            agg[n].extend(fv[n]); caps[n] += fc[n]; noops[n] += fn[n]; oppsels[n] += fo[n]
++        folds.append({
++            "fold": k, "fit_scenes": len(fit), "calibration_scenes": len(cal), "test_scenes": len(test),
++            "reservation_calibration_proposal_count": len(used),
++            "selection_geometry_reservation_fit": gmodel[2], "basepoint_reservation_fit": bmodel[2],
++            "rsmr_rank": fd["rsm"], "basepoint_frozen_order_reservation": fd["basepoint"], "selection_geometry_reservation": fd["geometry"],
++            "monotone_subset_valid": subset_ok, "frozen_winner_identity_valid": winner_identity_ok,
++        })
++
++    audit_csv.parent.mkdir(parents=True, exist_ok=True)
++    fields = list(audits[0]) if audits else []
++    with audit_csv.open("w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(audits)
++    A = {n: _metrics_from_lists(agg[n], caps[n], total_opp, noops[n], oppsels[n], total_noop) for n in names}
++    r = A["rsm"]; b = A["basepoint"]; g = A["geometry"]
++    noop_target = (1.0 - NOOP_REDUCTION_MIN) * float(r["no_positive_opportunity_false_intervention_count"])
++    cat_target = (1.0 - CATASTROPHE_REDUCTION_MIN) * float(r["catastrophic_count"])
++    basepoint_signal = bool(
++        b["no_positive_opportunity_false_intervention_count"] <= noop_target + EPS
++        and b["positive_capture_rate"] >= r["positive_capture_rate"] - CAPTURE_TOL - EPS
++    )
++    geometry_existence = bool(
++        g["no_positive_opportunity_false_intervention_count"] <= noop_target + EPS
++        and g["positive_capture_rate"] >= r["positive_capture_rate"] - CAPTURE_TOL - EPS
++    )
++    geometry_tail = bool(
++        g["catastrophic_count"] <= cat_target + EPS
++        and g["teacher_negative_rms"] <= r["teacher_negative_rms"] + EPS
++        and g["teacher_improvement_sum"] >= -EPS
++    )
++    fold_direction = all(f["selection_geometry_reservation"]["teacher_improvement_sum"] >= -EPS for f in folds)
++    contracts = all(f["monotone_subset_valid"] and f["frozen_winner_identity_valid"] and f["reservation_calibration_proposal_count"] >= MIN_RESERVATION_CAL_PROPOSALS for f in folds)
++    train_pass = bool(geometry_existence and geometry_tail and fold_direction and contracts and g["selected_count"] >= 64 and g["selected_positive_count"] >= 32)
++    if not geometry_existence:
++        diagnosis = "selection_geometry_reservation_does_not_resolve_intervention_existence_without_destroying_v34_capture"
++    elif not geometry_tail or not fold_direction:
++        diagnosis = "selection_geometry_reservation_improves_existence_but_selected_tail_or_crossfold_direction_remains_unstable"
++    elif not contracts:
++        diagnosis = "reservation_contract_or_calibration_population_invalid"
++    else:
++        diagnosis = "full_nested_train_pass" if train_pass else "reservation_coverage_population_too_small"
++    return {
++        "folds": folds, "scene_audit_csv": str(audit_csv),
++        "rsmr_rank_aggregate": r, "basepoint_frozen_order_reservation_aggregate": b, "selection_geometry_reservation_aggregate": g,
++        "basepoint_clean_signal": basepoint_signal, "selection_geometry_existence_gain": geometry_existence,
++        "selection_geometry_tail_gain": geometry_tail, "all_folds_selection_geometry_sum_nonnegative": fold_direction,
++        "monotone_frozen_order_contract_valid": contracts, "train_gate_pass": train_pass, "failure_diagnosis": diagnosis,
++        "noop_reduction_fraction_min": NOOP_REDUCTION_MIN, "capture_tolerance": CAPTURE_TOL,
++        "catastrophe_reduction_fraction_min": CATASTROPHE_REDUCTION_MIN,
++    }
++
++
++def _base_cfg(path: str) -> dict[str, Any]:
++    cfg = yaml.safe_load(Path(path).read_text())
++    ic = cfg.setdefault("runtime", {}).setdefault("decisive_frontier_value", {}).setdefault("incumbent_contrastive_extremal_recovery", {})
++    ic["incumbent_retention_policy"] = "preserve_admissible_incumbent"
++    ic["regret_risk_enabled"] = False; ic["retention_regret_risk_enabled"] = False; ic["replacement_regret_risk_enabled"] = False
++    return cfg
++
++
++def _write_rsmr(base: dict[str, Any], path: str, model) -> None:
++    w, scale, _ = model
++    cfg = yaml.safe_load(yaml.safe_dump(base, sort_keys=False))
++    ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    sc = ic.setdefault("selection_conditioned_intervention_recovery", {})
++    sc.update({
++        "enabled": True, "mode": "rank_only", "model_type": "v36_frozen_v34_rsmr_ordering",
++        "base_feature_names": BASE_FEATURE_NAMES, "feature_names": FEATURE_NAMES,
++        "feature_mean": [0.0] * len(FEATURE_NAMES), "feature_std": [float(x) for x in scale],
++        "weights": [float(x) for x in w], "bias": 0.0, "ridge_lambda": RIDGE_LAMBDA,
++        "leverage_inverse": [], "selection_scale_floor": 1.0, "require_positive_predicted_improvement": True,
++        "no_fallback": True, "scene_reservation_enabled": False,
++        "training_population": "TRAIN_only_incumbent_deployment_admissible_support_positive_direct_scenes",
++        "training_target": "V34_teacher_best_vs_worst_cost_augmented_rival_structured_regret_margin",
++        "proposal_operator": "frozen_RSMR_argmax_positive_score_with_incumbent_zero_pseudoitem",
++    })
++    cfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.36-RSMR-FROZEN"
++    cfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.36-RSMR-FROZEN"
++    cfg.setdefault("experiment", {})["name"] = "v64_3_36_rsmr_frozen_order"
++    cfg["experiment"]["algorithm"] = "V64.3.36 frozen V34 RSMR ordering for reservation calibration"
++    Path(path).write_text(yaml.safe_dump(cfg, sort_keys=False))
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="V64.3.36 nested frozen-order scene-reservation diagnostic")
++    ap.add_argument("--train-frontier-edges", required=True); ap.add_argument("--base-config", required=True)
++    ap.add_argument("--output-preserve-config", required=True); ap.add_argument("--output-rsmr-config", required=True); ap.add_argument("--output-report", required=True); ap.add_argument("--output-scene-audit", required=True)
++    a = ap.parse_args()
++    _, groups = _read_edges(Path(a.train_frontier_edges))
++    nested = _nested(groups, Path(a.output_scene_audit))
++    report = {
++        "audit": "v64_3_36_eaf_icer_sgrr_fit",
++        "scientific_role": "TRAIN_only_frozen_RSMR_ordering_plus_clean_basepoint_vs_selection_geometry_reservation_disambiguation",
++        "frozen_train_scenes": len(groups), "direct_support_positive_training_scenes": len(_build(groups)[0]),
++        "ridge_lambda": RIDGE_LAMBDA, "geometry_feature_names": GEOMETRY_NAMES, "basepoint_feature_names": BASEPOINT_NAMES,
++        "reservation_target": "selected_policy_overprediction=max(0, frozen_RSMR_winner_score-selected_teacher_improvement)",
++        "mechanism_hypothesis": "V34 ordering contains useful regret signal; V35 basepoint context is weak and jointly confounded. Freeze winner identity and learn only a nonnegative scene-common reservation. If selection geometry succeeds where clean basepoint does not, the dominant existence error is selection-induced overestimation/set context rather than missing absolute incumbent state.",
++        "nested_crossfit": nested, "train_gate_pass": nested["train_gate_pass"],
++        "train_gate_contract": {
++            "reservation_monotone_subset_of_RSMR": True, "winner_identity_must_equal_RSMR_when_accepted": True,
++            "noop_false_intervention_reduction_fraction_min": NOOP_REDUCTION_MIN, "capture_tolerance": CAPTURE_TOL,
++            "catastrophe_reduction_fraction_min": CATASTROPHE_REDUCTION_MIN, "all_test_folds_selected_sum_nonnegative": True,
++            "selected_min": 64, "positive_min": 32, "no_runtime_threshold_or_lambda_sweep": True,
++        },
++    }
++    rp = Path(a.output_report); rp.parent.mkdir(parents=True, exist_ok=True); rp.write_text(json.dumps(report, indent=2, sort_keys=True))
++    if not report["train_gate_pass"]:
++        print(json.dumps(report, indent=2, sort_keys=True))
++        raise SystemExit(f"V64.3.36 SGRR nested TRAIN gate failed ({nested['failure_diagnosis']}); STOP before CAL/fresh selection")
++    scene, _ = _build(groups)
++    base = _base_cfg(a.base_config)
++    pcfg = yaml.safe_load(yaml.safe_dump(base, sort_keys=False))
++    pcfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"] = {"enabled": False}
++    pcfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.36-PRESERVE-CONTROL"
++    pcfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.36-PRESERVE-CONTROL"
++    Path(a.output_preserve_config).write_text(yaml.safe_dump(pcfg, sort_keys=False))
++    full_rsm = _fit_regret_structured_margin(scene, list(scene))
++    _write_rsmr(base, a.output_rsmr_config, full_rsm)
++    print(json.dumps({"pass": True, "output_rsmr_config": a.output_rsmr_config}, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
+--- a/bdse/tools/calibrate_v64_3_36_eaf_icer_sgrr.py
++++ b/bdse/tools/calibrate_v64_3_36_eaf_icer_sgrr.py
+@@ -0,0 +1,127 @@
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import BASE_FEATURE_NAMES, RIDGE_LAMBDA
++from bdse.tools.fit_v64_3_36_eaf_icer_sgrr import (
++    BASEPOINT_NAMES, GEOMETRY_NAMES, MIN_RESERVATION_CAL_PROPOSALS,
++    _fit_reservation, _geometry,
++)
++
++EXPECTED_SCENES = 500
++
++
++def _f(r: dict[str, Any], k: str, d: float = float("nan")) -> float:
++    try: v = float(r.get(k, d))
++    except (TypeError, ValueError): return d
++    return v if math.isfinite(v) else d
++
++
++def _tokens(path: Path) -> list[str]:
++    return [str(json.loads(x).get("scenario_token", "")) for x in path.read_text().splitlines() if x.strip()]
++
++
++def _context(rs: list[dict[str, Any]], inc: int) -> np.ndarray:
++    ir = next((r for r in rs if int(r.get("challenger_action", -2)) == inc), None)
++    if ir is None:
++        raise ValueError("V36 CAL scene lacks incumbent edge")
++    vals = [_f(ir, f"icer_feature_{n}") for n in BASE_FEATURE_NAMES] + [_f(ir, "icer_support_logit")]
++    a = np.asarray(vals, dtype=np.float64)
++    if not np.all(np.isfinite(a)): raise ValueError("V36 CAL incumbent context is nonfinite")
++    return a
++
++
++def _decorate(cfg: dict[str, Any], model, mode: str, names: list[str], version: str, expname: str) -> dict[str, Any]:
++    w, scale, info = model
++    out = yaml.safe_load(yaml.safe_dump(cfg, sort_keys=False))
++    sc = out["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"]
++    if not bool(sc.get("enabled")) or bool(sc.get("scene_reservation_enabled", False)):
++        raise SystemExit("V36 rank config must be frozen RSMR without a pre-existing reservation")
++    sc.update({
++        "scene_reservation_enabled": True,
++        "scene_reservation_feature_mode": mode,
++        "scene_reservation_feature_names": names,
++        "scene_reservation_feature_mean": [0.0] * len(names),
++        "scene_reservation_feature_std": [float(x) for x in scale],
++        "scene_reservation_weights": [float(x) for x in w],
++        "scene_reservation_bias": 0.0,
++        "scene_reservation_max": 40.0,
++        "scene_reservation_target": "selected_policy_overprediction_positive_part",
++        "scene_reservation_training": "independent_CAL500_frozen_RSMR_policy_outputs_only",
++        "scene_reservation_operator": "nonnegative_common_subtraction_monotone_subset_no_rerank_no_fallback",
++    })
++    out.setdefault("metadata", {})["algorithm_version"] = version
++    out.setdefault("provenance", {})["algorithm_version"] = version
++    out.setdefault("experiment", {})["name"] = expname
++    out["experiment"]["algorithm"] = f"V64.3.36 frozen-RSMR {mode} scene-reservation recovery"
++    return out
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="Fit V64.3.36 clean basepoint and selection-geometry reservations on independent CAL500")
++    ap.add_argument("--calibration-rows", required=True); ap.add_argument("--calibration-edges", required=True); ap.add_argument("--rsmr-config", required=True)
++    ap.add_argument("--output-basepoint-config", required=True); ap.add_argument("--output-geometry-config", required=True); ap.add_argument("--output-report", required=True)
++    a = ap.parse_args()
++    rt = _tokens(Path(a.calibration_rows))
++    if len(rt) != EXPECTED_SCENES or len(set(rt)) != EXPECTED_SCENES:
++        raise SystemExit("V36 CAL rows must contain exactly 500 unique scenes")
++    allowed = set(rt); groups = {t: [] for t in rt}
++    for line in Path(a.calibration_edges).read_text().splitlines():
++        if not line.strip(): continue
++        r = json.loads(line); t = str(r.get("scenario_token", ""))
++        if t not in allowed: raise SystemExit(f"V36 CAL edge token outside rows: {t}")
++        groups[t].append(r)
++
++    GX=[]; BX=[]; target=[]; ys=[]; used=[]
++    for t in rt:
++        rs=groups[t]
++        if not rs: continue
++        inc=int(rs[0].get("raw_top_action",-1)); ir=next((r for r in rs if int(r.get("challenger_action",-2))==inc),None)
++        if ir is None or _f(ir,"icer_admissible",0.0)<0.5: continue
++        itm=_f(ir,"teacher_margin")
++        if not math.isfinite(itm): continue
++        alts=[]
++        for r in rs:
++            act=int(r.get("challenger_action",-2))
++            if act==inc or _f(r,"icer_admissible",0.0)<0.5 or _f(r,"icer_support_logit",-math.inf)<=0.0: continue
++            s=_f(r,"icer_scir_predicted_improvement"); y=_f(r,"teacher_margin")-itm
++            if math.isfinite(s) and math.isfinite(y):
++                alts.append((act,s,y,_f(r,"icer_support_logit",-math.inf),_f(r,"raw_margin",-math.inf),int(_f(r,"dacer_utility_prior",0.0)>=0.5)))
++        if not alts: continue
++        scores=np.asarray([x[1] for x in alts],dtype=np.float64)
++        positive=[j for j,x in enumerate(alts) if x[1]>0.0]
++        if not positive: continue
++        j=sorted(positive,key=lambda j:(-alts[j][1],-alts[j][3],-alts[j][4],-alts[j][5],alts[j][0]))[0]
++        s=float(alts[j][1]); y=float(alts[j][2])
++        GX.append(_geometry(scores)); BX.append(_context(rs,inc)); target.append(max(0.0,s-y)); ys.append(y); used.append(t)
++    if len(used)<MIN_RESERVATION_CAL_PROPOSALS:
++        raise SystemExit(f"V36 CAL500 frozen RSMR produced too few selected-policy proposals: {len(used)} < {MIN_RESERVATION_CAL_PROPOSALS}")
++    gm=_fit_reservation(np.stack(GX),np.asarray(target),mode="selection_geometry")
++    bm=_fit_reservation(np.stack(BX),np.asarray(target),mode="incumbent_basepoint")
++    cfg=yaml.safe_load(Path(a.rsmr_config).read_text())
++    bcfg=_decorate(cfg,bm,"incumbent_basepoint",BASEPOINT_NAMES,"V64.3.36-EAF-ICER-BPR","v64_3_36_basepoint_reservation")
++    gcfg=_decorate(cfg,gm,"selection_geometry",GEOMETRY_NAMES,"V64.3.36-EAF-ICER-SGRR","v64_3_36_eaf_icer_sgrr")
++    Path(a.output_basepoint_config).write_text(yaml.safe_dump(bcfg,sort_keys=False)); Path(a.output_geometry_config).write_text(yaml.safe_dump(gcfg,sort_keys=False))
++    arr=np.asarray(ys,dtype=np.float64)
++    report={
++        "audit":"v64_3_36_eaf_icer_sgrr_independent_CAL500_reservation_fit",
++        "calibration_total_scene_count":EXPECTED_SCENES,"selected_policy_proposal_count":len(used),"selected_policy_proposal_count_min":MIN_RESERVATION_CAL_PROPOSALS,
++        "calibration_tokens_sha256":hashlib.sha256(("\n".join(rt)+"\n").encode()).hexdigest(),
++        "selected_policy_tokens_sha256":hashlib.sha256(("\n".join(used)+"\n").encode()).hexdigest(),
++        "proposal_teacher_improvement_sum_before_reservation":float(arr.sum()),"proposal_precision_before_reservation":float((arr>0).mean()),"proposal_worst_before_reservation":float(arr.min()),
++        "basepoint_reservation_fit":bm[2],"selection_geometry_reservation_fit":gm[2],
++        "causal_contract":"RSMR candidate weights and winner ordering are frozen before CAL. Each reservation is nonnegative and common to all challengers, so it can only veto the exact frozen winner to incumbent; it cannot re-rank, create a new proposal, or fall through to second best.",
++    }
++    Path(a.output_report).write_text(json.dumps(report,indent=2,sort_keys=True))
++    print(json.dumps({"pass":True,"selected_policy_proposals":len(used),"basepoint_config":a.output_basepoint_config,"geometry_config":a.output_geometry_config},sort_keys=True))
++
++
++if __name__ == "__main__": main()
+--- a/bdse/tools/check_v64_3_36_eaf_icer_sgrr_split.py
++++ b/bdse/tools/check_v64_3_36_eaf_icer_sgrr_split.py
+@@ -0,0 +1,49 @@
++from __future__ import annotations
++import argparse,json,math
++from pathlib import Path
++import numpy as np
++from bdse.tools.check_v64_3_19_eaf_icer_screen import _f,_icer_edge_diag,_metric_pack
++from bdse.tools.check_v64_3_21_eaf_icer_mcr_split import _identity_rate,_load_rows
++from bdse.tools.check_v64_3_25_eaf_icer_drc_split import _replacement_tail_diag
++from bdse.tools.check_v64_3_30_eaf_icer_fbic_split import _query_diag
++from bdse.tools.check_v64_3_33_eaf_icer_spcr_split import _containment,_policy_diag
++CAT=-0.5; NOOP_REDUCTION_MIN=.20; CAPTURE_TOL=.03; EPS=1e-12
++
++def _structural(rows,raw,flagged):
++    return {'all_flagged_scene_count':len(flagged),'final_identity_vs_raw':_identity_rate(rows,raw,flagged),'icer_structural_delegation_rate':float(np.mean([_f(rows[t],'decisive_frontier_icer_structural_domain_delegated',0.0) for t in flagged])) if flagged else 1.0}
++
++def main():
++    ap=argparse.ArgumentParser(description='Audit one V64.3.36 SGRR fresh block.')
++    tags=['raw','v20','preserve','rsmr','basepoint','geometry']
++    ap.add_argument('--split-name',required=True)
++    for tag in tags:
++        ap.add_argument(f'--{tag}-metrics',required=True); ap.add_argument(f'--{tag}-rows',required=True)
++        if tag!='raw': ap.add_argument(f'--{tag}-edges',required=True)
++    ap.add_argument('--output',required=True); a=ap.parse_args()
++    metrics={t:json.load(open(getattr(a,t+'_metrics'))) for t in tags}; rows={t:_load_rows(getattr(a,t+'_rows')) for t in tags}; toks=set(rows['raw'])
++    if len(toks)!=500 or any(set(rows[t])!=toks for t in tags[1:]): raise SystemExit('STOP DATA: V36 six arms must contain exact paired 500 scenes')
++    flagged={t for t in toks if _f(rows['raw'][t],'all_actions_safety_flagged_rate',0)>=.5}; safe=toks-flagged
++    q={t:_query_diag(rows['v20'],rows[t],toks) for t in ['preserve','rsmr','basepoint','geometry']}; query_ok=all(v['all_query_counts_exact_scene_parity'] for v in q.values())
++    structural={t:_structural(rows[t],rows['raw'],flagged) for t in ['v20','preserve','rsmr','basepoint','geometry']}; struct_ok=all((not flagged) or (structural[t]['final_identity_vs_raw']==1.0 and structural[t]['icer_structural_delegation_rate']==1.0) for t in ['preserve','rsmr','basepoint','geometry'])
++    cb=_containment(rows['rsmr'],rows['basepoint'],safe); cg=_containment(rows['rsmr'],rows['geometry'],safe)
++    edge={t:_icer_edge_diag(Path(getattr(a,t+'_edges')),safe) for t in tags if t!='raw'}
++    tail={t:_replacement_tail_diag(rows['raw'],rows[t],getattr(a,t+'_edges'),safe) for t in tags if t!='raw'}
++    policy={t:_policy_diag(getattr(a,t+'_edges'),safe) for t in ['rsmr','basepoint','geometry']}; M={t:_metric_pack(metrics[t]) for t in tags}
++    r=policy['rsmr']; b=policy['basepoint']; g=policy['geometry']
++    basepoint_signal=bool(b['no_positive_opportunity_false_intervention_count'] <= (1-NOOP_REDUCTION_MIN)*r['no_positive_opportunity_false_intervention_count']+EPS and b['positive_capture_rate']>=r['positive_capture_rate']-CAPTURE_TOL-EPS)
++    existence=bool(g['no_positive_opportunity_false_intervention_count'] <= (1-NOOP_REDUCTION_MIN)*r['no_positive_opportunity_false_intervention_count']+EPS and g['positive_capture_rate']>=r['positive_capture_rate']-CAPTURE_TOL-EPS)
++    hard_tail=bool(g['proposal_count']>=8 and g['proposal_teacher_improvement_sum']>=-EPS and g['proposal_catastrophic_count']==0 and math.isfinite(g['proposal_worst']) and g['proposal_worst']>CAT and tail['geometry']['teacher_negative_rms']<=tail['rsmr']['teacher_negative_rms']+EPS)
++    preserve_cap=float(edge['preserve']['direct_incumbent_opportunity_capture_rate']); geom_cap=float(edge['geometry']['direct_incumbent_opportunity_capture_rate'])
++    coverage=bool(math.isfinite(geom_cap) and math.isfinite(preserve_cap) and geom_cap>=preserve_cap+0.03-EPS)
++    endp=bool(M['geometry']['match']>=M['preserve']['match']-.002 and M['geometry']['regret']<=M['preserve']['regret']*1.005 and M['geometry']['match']>=M['v20']['match']-.002 and M['geometry']['regret']<=M['v20']['regret']*1.005)
++    eng=bool(query_ok and struct_ok and cb['monotone_selected_policy_containment_valid'] and cg['monotone_selected_policy_containment_valid'])
++    full=bool(eng and existence and hard_tail and coverage and endp)
++    if not eng: nxt='STOP_fix_V36_engineering_or_frozen_order_containment_before_scientific_interpretation'
++    elif not existence: nxt='selection_geometry_reservation_does_not_reproduce_intervention_existence_gain_without_capture_loss_stop_do_not_add_more_thresholds'
++    elif not hard_tail: nxt='reservation_improves_existence_but_hard_selected_tail_still_fails_revisit_reservation_target_not_ordering_features'
++    elif not coverage: nxt='reservation_tail_is_safe_but_useful_recovery_coverage_is_insufficient'
++    elif not endp: nxt='direct_reservation_mechanism_passes_but_endpoint_does_not_convert_audit_runtime_path_composition'
++    else: nxt='if_second_fresh_block_also_passes_freeze_SGRR_and_run_one_independent_full_validation_reproduction'
++    rep={'audit':'v64_3_36_eaf_icer_sgrr_split','split_name':a.split_name,'full_split_pass':full,'engineering_valid':eng,'basepoint_clean_signal':basepoint_signal,'selection_geometry_existence_gain':existence,'geometry_hard_tail_pass':hard_tail,'geometry_capture_gain_over_preserve':geom_cap-preserve_cap if math.isfinite(geom_cap) and math.isfinite(preserve_cap) else float('nan'),'geometry_meaningful_coverage':coverage,'endpoint_noninferior':endp,'next_action':nxt,'query_parity':q,'structural':structural,'basepoint_containment':cb,'selection_geometry_containment':cg,'edge_diagnostics':edge,'policy_diagnostics':policy,'direct_selected_path_tail':tail,'metrics':M,'frozen_contract':{'catastrophic_threshold':CAT,'noop_reduction_fraction_min':NOOP_REDUCTION_MIN,'capture_tolerance':CAPTURE_TOL,'promotion_capture_gain_over_preserve_min':.03,'no_AB_pooling':True,'ordering_weights_frozen_across_reservation_arms':True,'reservation_nonnegative_common_subtraction':True,'no_runtime_threshold_or_lambda_sweep':True}}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n'); print(json.dumps(rep,indent=2,sort_keys=True))
++if __name__=='__main__': main()
+--- a/bdse/tools/check_v64_3_36_eaf_icer_sgrr_screen.py
++++ b/bdse/tools/check_v64_3_36_eaf_icer_sgrr_screen.py
+@@ -0,0 +1,11 @@
++from __future__ import annotations
++import argparse,json
++from pathlib import Path
++
++def main():
++    ap=argparse.ArgumentParser(); ap.add_argument('--split-a',required=True); ap.add_argument('--split-b',required=True); ap.add_argument('--reservation-report',required=True); ap.add_argument('--fit-report',required=True); ap.add_argument('--output',required=True); a=ap.parse_args()
++    A=json.load(open(a.split_a)); B=json.load(open(a.split_b)); C=json.load(open(a.reservation_report)); F=json.load(open(a.fit_report))
++    eng=bool(A.get('engineering_valid') and B.get('engineering_valid')); train=bool(F.get('train_gate_pass')); cal=bool(C.get('calibration_total_scene_count')==500 and int(C.get('selected_policy_proposal_count',0))>=64); both=bool(eng and train and cal and A.get('full_split_pass') and B.get('full_split_pass'))
++    rep={'audit':'v64_3_36_eaf_icer_sgrr_double_fresh_screen','engineering_valid_both':eng,'train_nested_reservation_gate_pass':train,'independent_CAL500_reservation_fit_valid':cal,'double_fresh_promotion_pass':both,'scientific_conclusion':'SGRR_reproduces_on_double_fresh' if both else ('engineering_invalid_stop' if not eng else 'SGRR_not_promoted_current_frozen_mechanism_fails_at_least_one_independent_gate_or_block'),'next_action':'freeze_and_run_one_independent_full_validation_reproduction' if both else 'STOP_do_not_pool_AB_or_sweep_thresholds_use_clean_basepoint_vs_selection_geometry_reservation_failure_slice_for_next_mechanism','train_fit':F,'independent_reservation_fit':C,'split_A':A,'split_B':B,'protocol':'Exact V35 failure prerequisite -> nested TRAIN frozen V34 RSMR ordering -> independent-fold basepoint reservation diagnostic + selection-geometry reservation main, both monotone common-subtraction vetoes -> if TRAIN passes, independent CAL500 fits the two reservation heads on frozen RSMR selected-policy overprediction -> untouched A500/B500. No reservation arm can re-rank challengers or create a new proposal.'}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n'); print(json.dumps({'pass':both,'engineering':eng,'train':train,'calibration':cal,'conclusion':rep['scientific_conclusion']},sort_keys=True))
++if __name__=='__main__': main()
+--- a/bdse/tests/test_v64_3_36_eaf_icer_sgrr.py
++++ b/bdse/tests/test_v64_3_36_eaf_icer_sgrr.py
+@@ -0,0 +1,105 @@
++from __future__ import annotations
++
++import numpy as np
++import pytest
++
++from bdse.planner.tournament import (
++    _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES,
++    _icer_scene_reservation_value,
++)
++from bdse.tools.fit_v64_3_36_eaf_icer_sgrr import (
++    BASEPOINT_NAMES, GEOMETRY_NAMES, _fit_reservation, _geometry, _reservation_value,
++)
++
++
++def test_selection_geometry_is_permutation_invariant_and_contains_extremal_geometry():
++    a=np.array([0.2,-0.1,0.5,0.3]); b=a[[2,0,3,1]]
++    ga=_geometry(a); gb=_geometry(b)
++    assert np.allclose(ga,gb)
++    assert ga[0]==pytest.approx(0.5)
++    assert ga[1]==pytest.approx(0.2)
++    assert ga[3]==pytest.approx(0.75)
++
++
++def test_reservation_fit_is_nonnegative_at_runtime_and_fixed_lambda():
++    X=np.array([[1.,1.,.5,.5,.2],[2.,.5,1.,.7,.4],[.5,.2,.2,.1,.1],[3.,1.,2.,.8,.6]]*20)
++    y=np.array([.5,1.2,0.,2.0]*20)
++    m=_fit_reservation(X,y,mode='selection_geometry')
++    assert m[2]['ridge_lambda']==1.0
++    assert m[2]['sample_count']==80
++    assert _reservation_value(X[0],m)>=0.0
++
++
++def test_runtime_selection_geometry_reservation_common_subtraction_cannot_rerank():
++    mu=np.array([0.,0.4,0.2,-0.1])
++    cand=np.array([1,2,3])
++    feat=np.zeros((4,len(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)))
++    sup=np.ones(4)
++    cfg={
++        'scene_reservation_feature_mode':'selection_geometry',
++        'scene_reservation_feature_names':GEOMETRY_NAMES,
++        'scene_reservation_feature_mean':[0.]*len(GEOMETRY_NAMES),
++        'scene_reservation_feature_std':[1.]*len(GEOMETRY_NAMES),
++        'scene_reservation_weights':[.2,0,0,0,0],
++        'scene_reservation_bias':0.,'scene_reservation_max':40.,
++    }
++    r,_,_=_icer_scene_reservation_value(mu,cand,feat,list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES),sup,0,cfg)
++    adj=mu.copy(); adj[cand]-=r
++    assert r>=0.0
++    assert int(cand[np.argmax(mu[cand])])==int(cand[np.argmax(adj[cand])])
++    assert np.allclose((mu[cand,None]-mu[cand][None,:]),(adj[cand,None]-adj[cand][None,:]))
++
++
++def test_runtime_basepoint_reservation_uses_only_incumbent_context_and_is_nonnegative():
++    names=list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    feat=np.zeros((3,len(names))); feat[0,0]=2.0; feat[1,0]=100.; feat[2,0]=-100.
++    sup=np.array([1.,5.,6.]); mu=np.array([0.,.5,.4]); cand=np.array([1,2])
++    cfg={
++        'base_feature_names':names,
++        'scene_reservation_feature_mode':'incumbent_basepoint',
++        'scene_reservation_feature_names':BASEPOINT_NAMES,
++        'scene_reservation_feature_mean':[0.]*len(BASEPOINT_NAMES),
++        'scene_reservation_feature_std':[1.]*len(BASEPOINT_NAMES),
++        'scene_reservation_weights':[.5]+[0.]*(len(BASEPOINT_NAMES)-1),
++        'scene_reservation_bias':0.,'scene_reservation_max':40.,
++    }
++    r,_,runtime_names=_icer_scene_reservation_value(mu,cand,feat,names,sup,0,cfg)
++    assert runtime_names==BASEPOINT_NAMES
++    assert r==pytest.approx(1.0)
++
++
++def test_runtime_reservation_schema_fails_closed():
++    names=list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    with pytest.raises(ValueError):
++        _icer_scene_reservation_value(
++            np.array([0.,1.]),np.array([1]),np.zeros((2,len(names))),names,np.ones(2),0,
++            {'scene_reservation_feature_mode':'selection_geometry','scene_reservation_feature_names':['bad'],'scene_reservation_feature_mean':[0.],'scene_reservation_feature_std':[1.],'scene_reservation_weights':[1.]}
++        )
++
++
++def test_calibrator_preserves_frozen_ordering_and_writes_two_reservation_views(tmp_path):
++    import json, subprocess, sys, yaml
++    names=list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    rows=tmp_path/'rows.jsonl'; edges=tmp_path/'edges.jsonl'; rank=tmp_path/'rank.yaml'; bcfg=tmp_path/'b.yaml'; gcfg=tmp_path/'g.yaml'; rep=tmp_path/'rep.json'
++    with rows.open('w') as f:
++        for i in range(500): f.write(json.dumps({'scenario_token':f't{i:03d}'})+'\n')
++    with edges.open('w') as f:
++        for i in range(100):
++            t=f't{i:03d}'
++            inc={'scenario_token':t,'raw_top_action':0,'challenger_action':0,'icer_admissible':1.0,'icer_support_logit':1.0,'teacher_margin':0.0,'icer_scir_predicted_improvement':0.0}
++            alt={'scenario_token':t,'raw_top_action':0,'challenger_action':1,'icer_admissible':1.0,'icer_support_logit':1.0,'teacher_margin':0.5 if i%2 else -0.5,'icer_scir_predicted_improvement':1.0,'raw_margin':0.1,'dacer_utility_prior':0.0}
++            alt2={'scenario_token':t,'raw_top_action':0,'challenger_action':2,'icer_admissible':1.0,'icer_support_logit':1.0,'teacher_margin':0.1,'icer_scir_predicted_improvement':0.2,'raw_margin':0.05,'dacer_utility_prior':0.0}
++            for k,n in enumerate(names): inc[f'icer_feature_{n}']=float(k+1)/10.; alt[f'icer_feature_{n}']=0.; alt2[f'icer_feature_{n}']=0.
++            for r in [inc,alt,alt2]: f.write(json.dumps(r)+'\n')
++    fn=[f'delta::{x}' for x in names]+['delta::support_logit']
++    w=[0.1]*len(fn)
++    cfg={'runtime':{'decisive_frontier_value':{'incumbent_contrastive_extremal_recovery':{'selection_conditioned_intervention_recovery':{'enabled':True,'mode':'rank_only','base_feature_names':names,'feature_names':fn,'feature_mean':[0.]*len(fn),'feature_std':[1.]*len(fn),'weights':w,'bias':0.0,'scene_reservation_enabled':False}}}},'metadata':{},'provenance':{},'experiment':{}}
++    rank.write_text(yaml.safe_dump(cfg,sort_keys=False))
++    subprocess.run([sys.executable,'-m','bdse.tools.calibrate_v64_3_36_eaf_icer_sgrr','--calibration-rows',str(rows),'--calibration-edges',str(edges),'--rsmr-config',str(rank),'--output-basepoint-config',str(bcfg),'--output-geometry-config',str(gcfg),'--output-report',str(rep)],check=True,capture_output=True,text=True)
++    b=yaml.safe_load(bcfg.read_text())['runtime']['decisive_frontier_value']['incumbent_contrastive_extremal_recovery']['selection_conditioned_intervention_recovery']
++    g=yaml.safe_load(gcfg.read_text())['runtime']['decisive_frontier_value']['incumbent_contrastive_extremal_recovery']['selection_conditioned_intervention_recovery']
++    assert b['weights']==w and g['weights']==w
++    assert b['scene_reservation_feature_mode']=='incumbent_basepoint'
++    assert g['scene_reservation_feature_mode']=='selection_geometry'
++    assert b['scene_reservation_operator']==g['scene_reservation_operator']=='nonnegative_common_subtraction_monotone_subset_no_rerank_no_fallback'
++    rr=json.loads(rep.read_text()); assert rr['selected_policy_proposal_count']==100
+--- a/RUN_V64_3_36_EAF_ICER_SGRR_SCREEN_2GPU.sh
++++ b/RUN_V64_3_36_EAF_ICER_SGRR_SCREEN_2GPU.sh
+@@ -0,0 +1,168 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export V30_2_ROOT="${V30_2_ROOT:-outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1}"
++export V35_ROOT="${V35_ROOT:-outputs_v64_3_35_eaf_icer_fbcsr_screen_2gpu_v1}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_36_eaf_icer_sgrr_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_32_design_exclude_v64_3_30_3_screen_tokens.txt}"
++export FROZEN_TRAIN_TOKENS="${FROZEN_TRAIN_TOKENS:-bdse/configs/v64_3_29_frozen_v28_train_3000_tokens.txt}"
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.36-eaf-icer-sgrr-cal500-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"
++V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++TRAIN_EDGES="$V30_2_ROOT/provenance/train_b16_v20_edges.jsonl"
++V35_FIT="$V35_ROOT/provenance/v64_3_35_fbcsr_fit.json"
++V35_AUDIT="$V35_ROOT/provenance/v64_3_35_fbcsr_train_scene_audit.csv"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++TIMING="$OUT_ROOT/provenance/v64_3_36_stage_timing.tsv"; : > "$TIMING"
++ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
++stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >> "$TIMING"; }
++
++[[ -d "$BDSE_VAL_CACHE" ]] || { echo 'STOP: missing val cache' >&2; exit 2; }
++for f in "$RAW_CONFIG" "$V20_CONFIG" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$TRAIN_EDGES" "$V35_FIT" "$V35_AUDIT"; do [[ -s "$f" ]] || { echo "STOP: missing $f" >&2; exit 2; }; done
++
++stage_start exact_v35_failure_reproduction_and_fresh_unspent_guard
++python - "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$V35_FIT" "$V35_AUDIT" "$V35_ROOT" <<'PY'
++import csv,hashlib,json,sys
++from pathlib import Path
++ex=[x.strip() for x in open(sys.argv[1]) if x.strip()]; tr=[x.strip() for x in open(sys.argv[2]) if x.strip()]
++if len(ex)!=10700 or len(set(ex))!=10700 or hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()!='041ec824756777576391756ef3721617459bb0c0a45f7f43226b52254d951473': raise SystemExit('STOP DATA: V36 design exclusion changed')
++if len(tr)!=3000 or len(set(tr))!=3000 or hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4': raise SystemExit('STOP DATA: V36 frozen TRAIN changed')
++r=json.load(open(sys.argv[3])); n=r.get('nested_crossfit',{}); f=n.get('factorized_delta_rank_aggregate',{}); c=n.get('basepoint_context_rank_aggregate',{}); m=n.get('basepoint_context_policy_conformal_aggregate',{})
++checks=[r.get('frozen_train_scenes')==3000,r.get('direct_support_positive_training_scenes')==782,r.get('train_gate_pass') is False,n.get('failure_diagnosis')=='factorized_existence_ordering_loss_does_not_resolve_v34_tradeoff_under_delta_only_representation',
++ f.get('selected_count')==739,f.get('selected_positive_count')==333,f.get('no_positive_opportunity_false_intervention_count')==180,f.get('catastrophic_count')==50,abs(float(f.get('teacher_improvement_sum',999))-23.49367950062943)<1e-9,
++ c.get('selected_count')==687,c.get('selected_positive_count')==310,c.get('no_positive_opportunity_false_intervention_count')==159,c.get('catastrophic_count')==40,abs(float(c.get('teacher_improvement_sum',999))-29.313834958480648)<1e-9,
++ m.get('selected_count')==13,m.get('selected_positive_count')==6,m.get('catastrophic_count')==4,abs(float(m.get('teacher_improvement_sum',999))-(-4.898211920469759))<1e-9]
++if not all(checks): raise SystemExit('STOP V36: exact V35 TRAIN failure signature changed')
++if len(list(csv.DictReader(open(sys.argv[4],newline=''))))!=782: raise SystemExit('STOP V36: V35 scene audit cardinality changed')
++root=Path(sys.argv[5]); spent=[root/'provenance/val_screen_cal500_fresh1500_tokens.txt',root/'provenance/val_screen_calibration_500_tokens.txt',root/'provenance/val_screen_fresh_A_tokens.txt',root/'provenance/val_screen_fresh_B_tokens.txt']
++if any(p.exists() and p.stat().st_size>0 for p in spent): raise SystemExit('STOP V36: V35 appears to have spent CAL/fresh')
++print('PASS V36 prerequisite: exact V35 failure reproduced; CAL/fresh remains unspent.')
++PY
++stage_end
++
++stage_start prerequisites_and_regression
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_36_SGRR --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_36.json" > "$OUT_ROOT/logs/v64_3_13_eaf_dmvr_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_36.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]));
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False): raise SystemExit('STOP prerequisites')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"; fi
++export EAF_CKPT; [[ -s "$EAF_CKPT" ]] || { echo "STOP: missing EAF checkpoint $EAF_CKPT" >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_36_eaf_icer_sgrr.py \
++  bdse/tests/test_v64_3_35_eaf_icer_fbcsr.py \
++  bdse/tests/test_v64_3_34_eaf_icer_rsmr.py \
++  bdse/tests/test_v64_3_33_eaf_icer_spcr.py \
++  bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py \
++  bdse/tests/test_v64_3_32_eaf_icer_ssir.py \
++  bdse/tests/test_v64_3_31_eaf_icer_scir.py \
++  bdse/tests/test_v64_3_30_3_eaf_icer_fbic_pure_auditfix.py \
++  bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py \
++  bdse/tests/test_v64_3_30_eaf_icer_fbic.py \
++  bdse/tests/test_v64_3_29_eaf_icer_fcr.py \
++  bdse/tests/test_v64_3_28_eaf_icer_ptmc.py \
++  bdse/tests/test_v64_3_27_eaf_icer_trcc.py \
++  bdse/tests/test_v64_3_26_eaf_icer_sarc.py \
++  bdse/tests/test_v64_3_25_eaf_icer_drc.py \
++  bdse/tests/test_v64_3_24_eaf_icer_arc.py \
++  bdse/tests/test_v64_3_23_eaf_icer_rcr.py \
++  bdse/tests/test_v64_3_22_eaf_icer_tcr.py \
++  bdse/tests/test_v64_3_21_eaf_icer_mcr.py \
++  bdse/tests/test_v64_3_20_eaf_icer_dc.py \
++  bdse/tests/test_v64_3_19_eaf_icer.py \
++  bdse/tests/test_v64_3_18_eaf_dacer.py \
++  bdse/tests/test_v64_3_17_eaf_daler.py \
++  bdse/tests/test_v64_3_16_eaf_raer.py \
++  bdse/tests/test_v64_3_15_eaf_eair.py \
++  bdse/tests/test_v64_3_14_eaf_ocfi.py \
++  bdse/tests/test_v64_3_13_eaf_dmvr.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++stage_end
++
++stage_start train_nested_sgrr_gate
++PRESERVE_CONFIG="$OUT_ROOT/provenance/v64_3_36_preserve_control.yaml"
++RSMR_CONFIG="$OUT_ROOT/provenance/v64_3_36_rsmr_frozen_order.yaml"
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_36_sgrr_fit.json"
++TRAIN_SCENE_AUDIT="$OUT_ROOT/provenance/v64_3_36_sgrr_train_scene_audit.csv"
++set +e
++python -m bdse.tools.fit_v64_3_36_eaf_icer_sgrr --train-frontier-edges "$TRAIN_EDGES" --base-config "$V20_CONFIG" \
++  --output-preserve-config "$PRESERVE_CONFIG" --output-rsmr-config "$RSMR_CONFIG" --output-report "$FIT_REPORT" --output-scene-audit "$TRAIN_SCENE_AUDIT" 2>&1 | tee "$OUT_ROOT/logs/v64_3_36_sgrr_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}; set -e; stage_end; [[ $FIT_STATUS -eq 0 ]] || exit "$FIT_STATUS"
++
++stage_start calibration_and_fresh_selection
++TOK1500="$OUT_ROOT/provenance/val_screen_cal500_fresh1500_tokens.txt"; TOKCAL="$OUT_ROOT/provenance/val_screen_calibration_500_tokens.txt"; TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"; TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"
++SELECT_EXCLUDE="$OUT_ROOT/provenance/v64_3_36_selection_exclude_design_plus_train.txt"; cat "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" | awk 'NF && !seen[$0]++' > "$SELECT_EXCLUDE"
++python -m bdse.tools.select_fresh_preprocessed_tokens --preprocessed-dir "$BDSE_VAL_CACHE" --split val --exclude-tokens "$SELECT_EXCLUDE" --count 1500 --hash-seed "$FRESH_HASH_SEED" --output "$TOK1500" --audit-output "$OUT_ROOT/provenance/v64_3_36_cal500_fresh1500_selection_audit.json" > "$OUT_ROOT/logs/fresh_token_selection.out"
++head -n 500 "$TOK1500" > "$TOKCAL"; sed -n '501,1000p' "$TOK1500" > "$TOKA"; tail -n 500 "$TOK1500" > "$TOKB"
++python - "$TOK1500" "$TOKCAL" "$TOKA" "$TOKB" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import sys
++allv=[x.strip() for x in open(sys.argv[1]) if x.strip()]; cal=[x.strip() for x in open(sys.argv[2]) if x.strip()]; A=[x.strip() for x in open(sys.argv[3]) if x.strip()]; B=[x.strip() for x in open(sys.argv[4]) if x.strip()]; ex={x.strip() for x in open(sys.argv[5]) if x.strip()}; tr={x.strip() for x in open(sys.argv[6]) if x.strip()}
++if len(allv)!=1500 or len(set(allv))!=1500 or any(len(x)!=500 or len(set(x))!=500 for x in [cal,A,B]): raise SystemExit('STOP DATA: V36 CAL/A/B cardinality')
++if set(cal)&set(A) or set(cal)&set(B) or set(A)&set(B) or set(allv)&ex or set(allv)&tr: raise SystemExit('STOP DATA: V36 independence failure')
++print('PASS V36 label-free independent CAL500+A500+B500 selection')
++PY
++stage_end
++
++run_eval_tok(){ local gpu="$1" cfg="$2" tok="$3" maxn="$4" tag="$5"; CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop --config "$cfg" --checkpoint "$EAF_CKPT" --split val --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios "$maxn" --scenario-token-file "$tok" --require-all-scenario-tokens --output "$OUT_ROOT/provenance/${tag}_metrics.json" --per-sample-output "$OUT_ROOT/provenance/${tag}_rows.jsonl" --frontier-edge-output "$OUT_ROOT/provenance/${tag}_edges.jsonl" --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${tag}.out" 2>&1; }
++
++stage_start independent_CAL500_rsmr_replay
++run_eval_tok "$GPU0" "$RSMR_CONFIG" "$TOKCAL" 500 cal_rsmr
++stage_end
++stage_start independent_CAL500_reservation_fit
++BASEPOINT_CONFIG="$OUT_ROOT/provenance/v64_3_36_basepoint_reservation.yaml"; GEOMETRY_CONFIG="$OUT_ROOT/provenance/v64_3_36_sgrr.yaml"; RES_REPORT="$OUT_ROOT/provenance/v64_3_36_reservation_fit.json"
++python -m bdse.tools.calibrate_v64_3_36_eaf_icer_sgrr --calibration-rows "$OUT_ROOT/provenance/cal_rsmr_rows.jsonl" --calibration-edges "$OUT_ROOT/provenance/cal_rsmr_edges.jsonl" --rsmr-config "$RSMR_CONFIG" --output-basepoint-config "$BASEPOINT_CONFIG" --output-geometry-config "$GEOMETRY_CONFIG" --output-report "$RES_REPORT" 2>&1 | tee "$OUT_ROOT/logs/v64_3_36_reservation_fit.out"
++stage_end
++
++for sp in A B; do
++  tok="$TOKA"; [[ "$sp" == B ]] && tok="$TOKB"
++  stage_start "fresh_${sp}_wave1"; run_eval_tok "$GPU0" "$RAW_CONFIG" "$tok" 500 "${sp}_raw" & p0=$!; run_eval_tok "$GPU1" "$V20_CONFIG" "$tok" 500 "${sp}_v20" & p1=$!; s=0; wait "$p0"||s=1; wait "$p1"||s=1; [[ $s -eq 0 ]]||exit 2; stage_end
++  stage_start "fresh_${sp}_wave2"; run_eval_tok "$GPU0" "$PRESERVE_CONFIG" "$tok" 500 "${sp}_preserve" & p0=$!; run_eval_tok "$GPU1" "$RSMR_CONFIG" "$tok" 500 "${sp}_rsmr" & p1=$!; s=0; wait "$p0"||s=1; wait "$p1"||s=1; [[ $s -eq 0 ]]||exit 2; stage_end
++  stage_start "fresh_${sp}_wave3"; run_eval_tok "$GPU0" "$BASEPOINT_CONFIG" "$tok" 500 "${sp}_basepoint" & p0=$!; run_eval_tok "$GPU1" "$GEOMETRY_CONFIG" "$tok" 500 "${sp}_geometry" & p1=$!; s=0; wait "$p0"||s=1; wait "$p1"||s=1; [[ $s -eq 0 ]]||exit 2; stage_end
++done
++
++stage_start paired_identity
++python - "$OUT_ROOT/provenance" "$TOKA" "$TOKB" <<'PY'
++import json,sys,pathlib
++root=pathlib.Path(sys.argv[1]); tags=['raw','v20','preserve','rsmr','basepoint','geometry']
++for sp,tf in [('A',sys.argv[2]),('B',sys.argv[3])]:
++ want=[x.strip() for x in open(tf) if x.strip()]; orders=[]
++ for tag in tags:
++  rs=[json.loads(x) for x in open(root/f'{sp}_{tag}_rows.jsonl') if x.strip()]; got=[str(r['scenario_token']) for r in rs]
++  if len(got)!=500 or len(set(got))!=500 or set(got)!=set(want): raise SystemExit(f'STOP DATA: {sp}/{tag} identity mismatch')
++  orders.append(got)
++ if any(x!=orders[0] for x in orders[1:]): raise SystemExit(f'STOP DATA: {sp} row order differs across arms')
++print('PASS V36 paired identity across all 12 untouched A/B arms')
++PY
++stage_end
++
++stage_start screen
++for sp in A B; do
++  python -m bdse.tools.check_v64_3_36_eaf_icer_sgrr_split --split-name "$sp" \
++   --raw-metrics "$OUT_ROOT/provenance/${sp}_raw_metrics.json" --raw-rows "$OUT_ROOT/provenance/${sp}_raw_rows.jsonl" \
++   --v20-metrics "$OUT_ROOT/provenance/${sp}_v20_metrics.json" --v20-rows "$OUT_ROOT/provenance/${sp}_v20_rows.jsonl" --v20-edges "$OUT_ROOT/provenance/${sp}_v20_edges.jsonl" \
++   --preserve-metrics "$OUT_ROOT/provenance/${sp}_preserve_metrics.json" --preserve-rows "$OUT_ROOT/provenance/${sp}_preserve_rows.jsonl" --preserve-edges "$OUT_ROOT/provenance/${sp}_preserve_edges.jsonl" \
++   --rsmr-metrics "$OUT_ROOT/provenance/${sp}_rsmr_metrics.json" --rsmr-rows "$OUT_ROOT/provenance/${sp}_rsmr_rows.jsonl" --rsmr-edges "$OUT_ROOT/provenance/${sp}_rsmr_edges.jsonl" \
++   --basepoint-metrics "$OUT_ROOT/provenance/${sp}_basepoint_metrics.json" --basepoint-rows "$OUT_ROOT/provenance/${sp}_basepoint_rows.jsonl" --basepoint-edges "$OUT_ROOT/provenance/${sp}_basepoint_edges.jsonl" \
++   --geometry-metrics "$OUT_ROOT/provenance/${sp}_geometry_metrics.json" --geometry-rows "$OUT_ROOT/provenance/${sp}_geometry_rows.jsonl" --geometry-edges "$OUT_ROOT/provenance/${sp}_geometry_edges.jsonl" \
++   --output "$OUT_ROOT/provenance/v64_3_36_split_${sp}_screen.json" | tee "$OUT_ROOT/logs/v64_3_36_split_${sp}_screen.out"
++done
++SCREEN="$OUT_ROOT/provenance/v64_3_36_eaf_icer_sgrr_double_fresh_screen.json"
++python -m bdse.tools.check_v64_3_36_eaf_icer_sgrr_screen --split-a "$OUT_ROOT/provenance/v64_3_36_split_A_screen.json" --split-b "$OUT_ROOT/provenance/v64_3_36_split_B_screen.json" --reservation-report "$RES_REPORT" --fit-report "$FIT_REPORT" --output "$SCREEN" | tee "$OUT_ROOT/logs/v64_3_36_double_fresh_screen.out"
++stage_end
++
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"
++(cd "$OUT_ROOT/provenance" && find . -maxdepth 1 -type f ! -name 'v64_3_36_provenance_sha256.txt' -print0 | sort -z | xargs -0 sha256sum > v64_3_36_provenance_sha256.txt)
++python - "$SCREEN" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1])); [print(k,'=',r.get(k)) for k in ['engineering_valid_both','train_nested_reservation_gate_pass','independent_CAL500_reservation_fit_valid','double_fresh_promotion_pass','scientific_conclusion','next_action']]
++PY
+--- a/NEXT_COMMANDS_V64_3_36_EAF_ICER_SGRR.txt
++++ b/NEXT_COMMANDS_V64_3_36_EAF_ICER_SGRR.txt
+@@ -0,0 +1,25 @@
++# V64.3.36 EAF-ICER-SGRR next server command
++
++cd bdse_v64_3_36_eaf_icer_sgrr
++bash RUN_V64_3_36_EAF_ICER_SGRR_SCREEN_2GPU.sh
++
++# If historical output roots are not the defaults:
++# V30_2_ROOT is required for the frozen TRAIN B16/V20 frontier-edge population.
++# V35_ROOT is required to reproduce the exact uploaded V35 scientific failure and verify fresh remained unspent.
++
++cd bdse_v64_3_36_eaf_icer_sgrr
++V30_2_ROOT=/your/path/outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1 \
++V35_ROOT=/your/path/outputs_v64_3_35_eaf_icer_fbcsr_screen_2gpu_v1 \
++bash RUN_V64_3_36_EAF_ICER_SGRR_SCREEN_2GPU.sh
++
++# Do not modify before this run:
++# - B=16 / M=24 and upstream acquisition;
++# - frozen 10700-token design exclusion;
++# - frozen 3000 TRAIN tokens / historical fold hash;
++# - V34 RSMR ordering objective and lambda=1;
++# - V36 reservation target max(0, frozen_RSMR_score - selected_teacher_improvement);
++# - five selection-geometry features or BPR basepoint schema;
++# - reservation calibration minimum 64 proposals/fold;
++# - >=20% no-op reduction, <=3 pp capture loss, >=25% catastrophe reduction TRAIN gates;
++# - fresh seed v64.3.36-eaf-icer-sgrr-cal500-double-fresh-v1;
++# - no re-ranking / no second-best fallback / incumbent-default contract.

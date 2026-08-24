@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 import hashlib
+import math
 
 import numpy as np
 
@@ -2481,6 +2482,93 @@ def _icer_selection_conditioned_intervention_scores(
     return mu, x, runtime_names, scale
 
 
+
+def _icer_scene_reservation_value(
+    predicted_improvement: np.ndarray,
+    candidate_indices: np.ndarray | list[int],
+    feat: np.ndarray,
+    feature_names: list[str],
+    support_logits: np.ndarray,
+    legacy_action: int,
+    scir_cfg: dict[str, Any],
+) -> tuple[float, np.ndarray, list[str]]:
+    """V64.3.36 monotone scene reservation for the frozen challenger ordering.
+
+    V35 shows that a common incumbent-context shift has weak existence signal but
+    its joint refit with the delta head does not isolate whether the gain comes
+    from the boundary or from a changed challenger ordering.  V36 freezes the
+    RSMR ordering and learns a *non-negative* reservation from an independent
+    selected-policy calibration population.  The reservation is subtracted from
+    every eligible challenger score, so it can only shrink the frozen proposal
+    set and can never re-rank challengers or create a new intervention path.
+
+    Supported views:
+      - incumbent_basepoint: absolute frozen 18-D incumbent evidence + support;
+      - selection_geometry: permutation-invariant geometry of the frozen RSMR
+        score set (top score, top-vs-runner-up/incumbent gap, RMS, positive
+        fraction, and log effective competitor mass).
+    """
+    cand = np.asarray(candidate_indices, dtype=np.int64).reshape(-1)
+    mode = str(scir_cfg.get("scene_reservation_feature_mode", "")).strip().lower()
+    if cand.size == 0 or not mode:
+        return 0.0, np.zeros((0,), dtype=np.float64), []
+    mu = np.asarray(predicted_improvement, dtype=np.float64).reshape(-1)
+    if np.any(cand < 0) or np.any(cand >= mu.size):
+        raise ValueError("EAF-ICER V36 reservation candidate indices are invalid")
+
+    if mode == "selection_geometry":
+        sv = np.asarray(mu[cand], dtype=np.float64)
+        if sv.size == 0 or not np.all(np.isfinite(sv)):
+            raise ValueError("EAF-ICER V36 selection-geometry reservation requires finite frozen scores")
+        order = np.sort(sv)[::-1]
+        top = float(order[0])
+        second = float(order[1]) if order.size >= 2 else float("-inf")
+        runner = max(0.0, second) if math.isfinite(second) else 0.0
+        gap = top - runner
+        rms = float(np.sqrt(np.mean(sv * sv)))
+        pos_frac = float(np.mean(sv > 0.0))
+        # Stable log sum exp of score excesses.  This is a smooth effective
+        # multiplicity statistic, not a hard candidate-count gate.
+        log_mass = float(np.log(np.exp(np.clip(sv - top, -60.0, 0.0)).sum()))
+        x = np.asarray([top, gap, rms, pos_frac, log_mass], dtype=np.float64)
+        runtime_names = [
+            "reservation::top_score",
+            "reservation::top_gap_to_runnerup_or_incumbent",
+            "reservation::score_rms",
+            "reservation::positive_score_fraction",
+            "reservation::log_effective_competitor_mass",
+        ]
+    elif mode == "incumbent_basepoint":
+        xx = np.asarray(feat, dtype=np.float64)
+        sup = np.asarray(support_logits, dtype=np.float64).reshape(-1)
+        legacy = int(legacy_action)
+        base_names = list(scir_cfg.get("base_feature_names", _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES))
+        if base_names != list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES):
+            raise ValueError("EAF-ICER V36 basepoint reservation requires frozen 18-D evidence schema")
+        pos = {str(n): i for i, n in enumerate(feature_names)}
+        missing = [n for n in base_names if n not in pos]
+        if missing or not (0 <= legacy < xx.shape[0]) or sup.shape[0] != xx.shape[0]:
+            raise ValueError("EAF-ICER V36 basepoint reservation runtime schema is incomplete")
+        base = xx[:, [pos[n] for n in base_names]]
+        x = np.concatenate([base[legacy], np.asarray([float(sup[legacy])], dtype=np.float64)])
+        runtime_names = [f"reservation_incumbent::{n}" for n in base_names] + ["reservation_incumbent::support_logit"]
+    else:
+        raise ValueError(f"unknown EAF-ICER V36 scene_reservation_feature_mode={mode}")
+
+    stored_names = list(scir_cfg.get("scene_reservation_feature_names", []))
+    mean = np.asarray(scir_cfg.get("scene_reservation_feature_mean", []), dtype=np.float64).reshape(-1)
+    std = np.asarray(scir_cfg.get("scene_reservation_feature_std", []), dtype=np.float64).reshape(-1)
+    weights = np.asarray(scir_cfg.get("scene_reservation_weights", []), dtype=np.float64).reshape(-1)
+    if stored_names != runtime_names or len(runtime_names) != len(mean) or len(runtime_names) != len(std) or len(runtime_names) != len(weights):
+        raise ValueError("EAF-ICER V36 reservation feature schema/mean/std/weights are inconsistent")
+    z = (x - mean) / np.maximum(std, 1.0e-6)
+    raw = float(z @ weights + float(scir_cfg.get("scene_reservation_bias", 0.0)))
+    reservation = max(0.0, raw)
+    max_res = max(float(scir_cfg.get("scene_reservation_max", 40.0)), 0.0)
+    reservation = min(reservation, max_res)
+    return float(reservation), x, runtime_names
+
+
 def _icer_select_scir_candidate(
     candidate_indices: np.ndarray | list[int],
     predicted_improvement: np.ndarray,
@@ -2591,6 +2679,10 @@ def _apply_decisive_frontier_icer(
     replacement_confirmation_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     retention_regret_risk_logits = np.zeros((len(valid),), dtype=np.float64)
     scir_predicted_improvement = np.zeros((len(valid),), dtype=np.float64)
+    scir_raw_predicted_improvement = np.zeros((len(valid),), dtype=np.float64)
+    scir_scene_reservation = 0.0
+    scir_scene_reservation_feature = np.zeros((0,), dtype=np.float64)
+    scir_scene_reservation_feature_names: list[str] = []
     scir_selection_scale = np.ones((len(valid),), dtype=np.float64)
     scir_lower_bound = np.zeros((len(valid),), dtype=np.float64)
     scir_feature_matrix = np.zeros((len(valid), 0), dtype=np.float64)
@@ -2717,6 +2809,7 @@ def _apply_decisive_frontier_icer(
             scir_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_selection_scale = _icer_selection_conditioned_intervention_scores(
                 feat, names, support_logits, legacy, scir_cfg
             )
+            scir_raw_predicted_improvement = scir_predicted_improvement.copy()
             if scir_mode == "conformal_veto":
                 q = float(scir_cfg.get("conformal_overprediction_quantile", 0.0))
                 scir_lower_bound = scir_predicted_improvement - q
@@ -2877,39 +2970,65 @@ def _apply_decisive_frontier_icer(
             if regret_risk_enabled and replacement_regret_risk_enabled:
                 replacement_positive = np.isfinite(replacement_regret_risk_logits) & (replacement_regret_risk_logits > 0.0)
             if scir_enabled:
-                # V64.3.31: the direct intervention score itself is the semantic
-                # candidate-vs-incumbent utility.  The old binary dominance head
-                # remains instrumented as a causal diagnostic but no longer gates
-                # or ranks the SCIR arm.  Anchor support and deployment admissibility
-                # remain frozen prerequisites.
-                if scir_mode == "simultaneous_lcb":
-                    # V64.3.32: risk enters the *ordering* itself.  The calibration
-                    # score is a per-scene maximum over all eligible alternatives, so
-                    # all candidate lower bounds are calibrated simultaneously before
-                    # the extremal winner is chosen.
-                    scir_positive = np.isfinite(scir_lower_bound) & (scir_lower_bound > 0.0)
-                    ordering_score = scir_lower_bound
+                reservation_enabled = bool(scir_cfg.get("scene_reservation_enabled", False))
+                if reservation_enabled:
+                    # V64.3.36: proposal identity is frozen *before* reservation.
+                    # The reservation is a non-negative, scene-common subtraction
+                    # and can only accept that exact RSMR proposal or return the
+                    # incumbent.  It never re-ranks or falls through.
+                    reservation_candidates = np.flatnonzero(alternative).astype(np.int64)
+                    raw_positive = np.isfinite(scir_raw_predicted_improvement) & (scir_raw_predicted_improvement > 0.0)
+                    raw_cand = np.flatnonzero(alternative & raw_positive).astype(np.int64)
+                    best = _icer_select_scir_candidate(
+                        raw_cand, scir_raw_predicted_improvement, support_logits, margin_star, utility_prior
+                    )
+                    scir_proposal_exists = bool(best is not None)
+                    scir_proposal_action = int(legacy if best is None else best)
+                    scir_scene_reservation, scir_scene_reservation_feature, scir_scene_reservation_feature_names = _icer_scene_reservation_value(
+                        scir_raw_predicted_improvement, reservation_candidates, feat, names, support_logits, legacy, scir_cfg
+                    )
+                    scir_predicted_improvement = scir_raw_predicted_improvement.copy()
+                    if reservation_candidates.size:
+                        scir_predicted_improvement[reservation_candidates] = (
+                            scir_raw_predicted_improvement[reservation_candidates] - scir_scene_reservation
+                        )
+                    if 0 <= legacy < len(scir_predicted_improvement):
+                        scir_predicted_improvement[legacy] = 0.0
+                    scir_lower_bound = scir_predicted_improvement.copy()
+                    if best is None:
+                        scir_certificate_accepted = False
+                        selected = int(baseline)
+                    else:
+                        scir_certificate_accepted = bool(
+                            np.isfinite(scir_predicted_improvement[best]) and scir_predicted_improvement[best] > 0.0
+                        )
+                        selected = int(best if scir_certificate_accepted else baseline)
                 else:
-                    scir_positive = np.isfinite(scir_predicted_improvement) & (scir_predicted_improvement > 0.0)
-                    ordering_score = scir_predicted_improvement
-                cand = np.flatnonzero(alternative & scir_positive).astype(np.int64)
-                best = _icer_select_scir_candidate(
-                    cand, ordering_score, support_logits, margin_star, utility_prior
-                )
-                scir_proposal_exists = bool(best is not None)
-                scir_proposal_action = int(legacy if best is None else best)
-                if best is None:
-                    scir_certificate_accepted = False
-                    selected = int(baseline)
-                elif scir_mode == "conformal_veto":
-                    # Historical V31 proposal-only calibration.
-                    scir_certificate_accepted = bool(np.isfinite(scir_lower_bound[best]) and scir_lower_bound[best] > 0.0)
-                    selected = int(best if scir_certificate_accepted else baseline)
-                else:
-                    # mean_rank/rank_only and V32 simultaneous_lcb already use their
-                    # respective positive decision boundary when constructing cand.
-                    scir_certificate_accepted = True
-                    selected = int(best)
+                    # V64.3.31: the direct intervention score itself is the semantic
+                    # candidate-vs-incumbent utility.  The old binary dominance head
+                    # remains instrumented as a causal diagnostic but no longer gates
+                    # or ranks the SCIR arm.
+                    if scir_mode == "simultaneous_lcb":
+                        scir_positive = np.isfinite(scir_lower_bound) & (scir_lower_bound > 0.0)
+                        ordering_score = scir_lower_bound
+                    else:
+                        scir_positive = np.isfinite(scir_predicted_improvement) & (scir_predicted_improvement > 0.0)
+                        ordering_score = scir_predicted_improvement
+                    cand = np.flatnonzero(alternative & scir_positive).astype(np.int64)
+                    best = _icer_select_scir_candidate(
+                        cand, ordering_score, support_logits, margin_star, utility_prior
+                    )
+                    scir_proposal_exists = bool(best is not None)
+                    scir_proposal_action = int(legacy if best is None else best)
+                    if best is None:
+                        scir_certificate_accepted = False
+                        selected = int(baseline)
+                    elif scir_mode == "conformal_veto":
+                        scir_certificate_accepted = bool(np.isfinite(scir_lower_bound[best]) and scir_lower_bound[best] > 0.0)
+                        selected = int(best if scir_certificate_accepted else baseline)
+                    else:
+                        scir_certificate_accepted = True
+                        selected = int(best)
             else:
                 cand = np.flatnonzero(alternative & dominance_positive & replacement_positive).astype(np.int64)
                 confirmation_logits = None
@@ -2970,6 +3089,8 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_scir_proposal_action": float(scir_proposal_action),
         "decisive_frontier_icer_scir_certificate_accepted": float(bool(scir_certificate_accepted)),
         "decisive_frontier_icer_scir_selected_predicted_improvement": float(scir_predicted_improvement[selected]) if scir_enabled and 0 <= selected < len(valid) and selected != legacy else 0.0,
+        "decisive_frontier_icer_scir_scene_reservation_enabled": float(bool(scir_enabled and scir_cfg.get("scene_reservation_enabled", False))),
+        "decisive_frontier_icer_scir_scene_reservation_value": float(scir_scene_reservation) if scir_enabled else 0.0,
         "decisive_frontier_icer_scir_proposal_predicted_improvement": float(scir_predicted_improvement[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
         "decisive_frontier_icer_scir_proposal_lower_bound": float(scir_lower_bound[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
         "decisive_frontier_icer_scir_conformal_alpha": float(scir_cfg.get("conformal_alpha", 0.0)) if scir_enabled else 0.0,
@@ -3025,6 +3146,9 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star": np.asarray(replacement_confirmation_regret_risk_logits, dtype=np.float32),
         "_decisive_frontier_icer_retention_regret_risk_logit_star": np.asarray(retention_regret_risk_logits, dtype=np.float32),
         "_decisive_frontier_icer_scir_predicted_improvement_star": np.asarray(scir_predicted_improvement, dtype=np.float32),
+        "_decisive_frontier_icer_scir_raw_predicted_improvement_star": np.asarray(scir_raw_predicted_improvement, dtype=np.float32),
+        "_decisive_frontier_icer_scir_scene_reservation_feature": np.asarray(scir_scene_reservation_feature, dtype=np.float32),
+        "_decisive_frontier_icer_scir_scene_reservation_feature_names": list(scir_scene_reservation_feature_names),
         "_decisive_frontier_icer_scir_selection_scale_star": np.asarray(scir_selection_scale, dtype=np.float32),
         "_decisive_frontier_icer_scir_lower_bound_star": np.asarray(scir_lower_bound, dtype=np.float32),
         "_decisive_frontier_icer_scir_feature_matrix": np.asarray(scir_feature_matrix, dtype=np.float32),

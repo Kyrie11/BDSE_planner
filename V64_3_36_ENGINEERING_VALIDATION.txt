@@ -1,0 +1,44 @@
+V64.3.36 EAF-ICER-SGRR engineering validation
+================================================
+
+Uploaded V35 result attribution validity
+----------------------------------------
+- Uploaded V35 Python compile: PASS
+- Uploaded V35 focused tests: 7/7 PASS
+- Uploaded V35 launcher bash -n: PASS
+- Uploaded server targeted regression log: 161/161 PASS
+- V35 nested FDSR/FBCSR mechanism completed: PASS
+- Runtime/feature/candidate/query/structural/calibration-unit blocker found: NO
+- V35 CAL500/A500/B500 token manifests generated: NO
+- Attribution scope: TRAIN-level nested cross-fit only
+- Exact scientific stop: factorized_existence_ordering_loss_does_not_resolve_v34_tradeoff_under_delta_only_representation
+
+V64.3.36 implementation validation
+-----------------------------------
+- Python compileall (bdse + tools): PASS
+- Launcher bash -n: PASS
+- V36 focused tests: 6/6 PASS
+- V13-V36 targeted regression: 167/167 PASS, 2 historical warnings
+- Full repository collection: 497 tests
+- Full repository deterministic batches:
+  * batch 0: 166/166 PASS, 9 warnings
+  * batch 1: 156/156 PASS, 7 warnings
+  * batch 2: 175/175 PASS, 20 warnings
+  * TOTAL: 497/497 PASS
+- Total warnings: 36 historical PyTorch Transformer warnings
+- New warning class: 0
+
+V36 contract-specific tests
+---------------------------
+- selection-geometry feature is permutation invariant: PASS
+- reservation ridge lambda=1 and non-negative runtime reservation: PASS
+- common reservation cannot re-rank challengers: PASS
+- basepoint reservation reads incumbent-only absolute context: PASS
+- malformed reservation schema fails closed: PASS
+- independent CAL configurator preserves identical frozen RSMR ordering weights in BPR/SGRR: PASS
+- runtime proposal identity frozen before reservation: PASS (code audit + containment tests)
+- no second-best fallback: PASS
+
+Scientific isolation
+--------------------
+V36 freezes the V34 RSMR challenger ordering. BPR and SGRR can only subtract a non-negative scene-common reservation from the frozen proposal margin. They cannot change challenger ordering, create a proposal, or fall through to second best. BPR isolates absolute incumbent basepoint; SGRR isolates frozen-score-set selection geometry. No fresh population is selected unless nested TRAIN passes.

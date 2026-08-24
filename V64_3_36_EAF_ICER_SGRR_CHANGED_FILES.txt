@@ -1,0 +1,26 @@
+V64.3.36 EAF-ICER-SGRR changed/new files vs uploaded V64.3.35
+
+Core runtime / instrumentation
+- bdse/planner/tournament.py
+- bdse/experiments/evaluate_open_loop.py
+
+V36 fitting / calibration / screening
+- bdse/tools/fit_v64_3_36_eaf_icer_sgrr.py
+- bdse/tools/calibrate_v64_3_36_eaf_icer_sgrr.py
+- bdse/tools/check_v64_3_36_eaf_icer_sgrr_split.py
+- bdse/tools/check_v64_3_36_eaf_icer_sgrr_screen.py
+
+Tests
+- bdse/tests/test_v64_3_36_eaf_icer_sgrr.py
+
+Launcher / commands
+- RUN_V64_3_36_EAF_ICER_SGRR_SCREEN_2GPU.sh
+- NEXT_COMMANDS_V64_3_36_EAF_ICER_SGRR.txt
+
+Research record / provenance generated from uploaded V35
+- ALGORITHM_CHANGELOG.md
+- V64_3_35_RESULT_POSTMORTEM_AND_V64_3_36_SGRR_DESIGN.md
+- V64_3_35_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_36.json
+- V64_3_35_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_36.csv
+- V64_3_35_SCENE_LEVEL_CAUSAL_AUDIT_SUMMARY_FOR_V64_3_36.json
+- V64_3_36_ENGINEERING_VALIDATION.txt

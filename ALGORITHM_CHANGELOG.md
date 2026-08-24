@@ -10306,3 +10306,175 @@ Candidate CCF-A mechanism line becomes
 `bounded auditable interface -> exact EAF attribution -> factorized incumbent/null-action structured intervention -> basepoint-conditioned existence + contrastive challenger ordering -> monotone selected-policy calibration -> independent double-fresh/full-validation/closed-loop`.
 
 Only if the constrained context arm wins independently should base-point-conditioned intervention sufficiency become a paper claim. If it fails, stop richer-context iteration and reopen the bottleneck diagnosis instead of increasing context/head capacity.
+
+# V64.3.35 uploaded execution audit → V64.3.36 EAF-ICER-SGRR
+
+## 1. V35 is engineering-valid for TRAIN-level attribution
+
+The uploaded V35 run completed the intended nested FDSR/FBCSR mechanism and stopped at the preregistered scientific TRAIN gate. Independent audit found no runtime, schema, candidate-population, query-accounting, objective-scale, structural-delegation, or selected-policy-unit engineering blocker. Uploaded V35 focused tests are 7/7 PASS, launcher syntax passes, and the server targeted stack reports 161/161 PASS.
+
+No CAL500/A500/B500 manifest was generated. V35 therefore consumed no fresh validation population. Do **not** create a V35.1 engineering hotfix and do not make fresh-level claims from V35.
+
+## 2. V35 FDSR result: factorization alone fails
+
+Paired 782-scene TRAIN aggregate:
+
+- V34 RSMR: `502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophes / 107 no-opportunity false interventions`;
+- V35 FDSR: `739 / 333 / 58.01% / +23.4937 / 50 / 180`.
+
+Explicit existence+ordering factorization under the frozen delta-only representation removes suppression but becomes highly intervention-permissive. It does not resolve the V34 trade-off and must not be rescued with tuned existence/order weights.
+
+## 3. V35 FBCSR result: weak base-point signal, not a first-order solution
+
+FBCSR-RANK aggregate:
+
+`687 selected / 310 positive / capture 54.01% / sum +29.3138 / 40 catastrophes / 159 no-opportunity false interventions`.
+
+The no-op false-intervention count improves FDSR→FBCSR in all five test folds:
+
+`44→41, 31→30, 41→35, 35→28, 29→25`.
+
+Thus absolute incumbent context contains a real intervention-existence signal. However:
+
+- reduction is only `180→159 = 11.7%`, below the preregistered 20% mediation requirement;
+- capture loses `58.01%→54.01% = -4.01 pp`, worse than the 3 pp tolerance;
+- catastrophes remain 40, worse than V34 RSMR's 28;
+- two outer-fold selected sums remain negative.
+
+Do not claim that 19-D contrast missing base-point information is the first-order dominant mediator or that FBCSR solves it.
+
+## 4. V35 causal-identifiability limitation
+
+Within a fixed FBCSR model the incumbent context is common to all challengers and cannot alter pairwise challenger ordering. But FDSR and FBCSR jointly refit different delta weights. Across common-selected scenes, 59 challenger winners change between the two arms.
+
+Therefore V35 only supports “base-point context has weak consistent signal.” It does **not** isolate a pure boundary-shift effect. The next experiment must freeze challenger ordering before testing base-point mediation.
+
+## 5. Selected-policy conformal remains misaligned with the hard-tail objective
+
+FBCSR-MAIN selects only `13`, with `6` positive, sum `-4.8982`, and `4` catastrophes. Do not tune alpha/q/score thresholds. Historical selected-policy marginal coverage does not imply conditional safety among accepted interventions and is no longer the main route for the hard zero-catastrophe objective.
+
+## 6. Updated dominant bottleneck
+
+Freeze the useful V34 RSMR contrastive regret ordering. The unresolved layer is now:
+
+**scene/set-level intervention reservation under extremal selection-induced overestimation at the incumbent boundary.**
+
+The evidence no longer supports repeatedly redesigning challenger ordering or repeatedly expanding context. The core question is whether the frozen extremal winner's score should be discounted as a function of the scene's selection geometry before leaving the incumbent.
+
+## 7. New no-repeat constraints after V35
+
+Retain every previous prohibition. Additionally, do **not**:
+
+- tune FDSR existence-vs-ordering loss weights;
+- add richer/nonlinear incumbent context before a clean frozen-order causal test;
+- interpret the 180→159 context result as established base-point sufficiency;
+- refit challenger ordering while claiming to test only the incumbent boundary;
+- use candidate count/top-K as a hard no-op gate;
+- add a standalone binary intervene/not-intervene classifier that creates another unconstrained action path;
+- continue selected-policy marginal conformal as the primary hard-tail certificate;
+- tune reservation/score thresholds on TRAIN or observed fresh outcomes.
+
+# V64.3.36 EAF-ICER-SGRR
+
+Full name: **Evidence-Attributed Incumbent-Contrastive Selection-Geometry Reservation Recovery**.
+
+V36 freezes B16/M24, acquisition, EAF, support/admissibility, structural delegation, incumbent default/no fallback, and the V34 RSMR challenger-ordering mechanism.
+
+## 1. Freeze challenger ordering before intervention-boundary learning
+
+Fit exact V34 RSMR scores `u_b` from the 19-D candidate-minus-incumbent contrast. The raw proposal is the exact positive-score RSMR winner.
+
+V36 reservation learning is forbidden from modifying these weights or winner identity.
+
+## 2. Non-negative scene-common reservation
+
+Learn `rho(scene) >= 0`. Execute the exact frozen RSMR winner iff
+
+`u_bhat - rho(scene) > 0`,
+
+otherwise return the incumbent.
+
+The reservation is common to all challengers and the proposal identity is frozen **before** subtraction. Therefore:
+
+- `I_V36 subseteq I_RSMR` deterministically;
+- any accepted V36 challenger is the exact RSMR winner;
+- no new proposal, re-ranking, or second-best fallback is possible.
+
+## 3. Selected-policy overprediction target
+
+On an independent calibration fold, for each frozen RSMR proposal fit the non-negative target
+
+`r = max(0, u_bhat - Delta_T(bhat;i))`.
+
+This target measures extremal selected-policy overprediction / winner's-curse correction rather than binary catastrophe class membership.
+
+If a reservation upper-bounds this realized overprediction, then `u_bhat-rho <= Delta_T`; hence a positive adjusted margin implies positive teacher improvement on that event. V36 tests whether a low-capacity reservation model can reproduce this relation across folds/fresh populations; it does not claim a per-scene deterministic statistical guarantee.
+
+## 4. Clean BPR diagnostic
+
+`BPR` uses only the already-observed absolute incumbent 18-D evidence plus incumbent support to predict the reservation while keeping RSMR weights fixed.
+
+This is the clean causal test missing in V35. BPR is diagnostic only and cannot rescue an SGRR failure.
+
+## 5. SGRR main: selection-geometry reservation
+
+`SGRR` predicts the reservation from a permutation-invariant geometry of the frozen eligible challenger score set:
+
+- top RSMR score;
+- top gap to runner-up or incumbent zero;
+- score RMS;
+- positive-score fraction;
+- log effective competitor mass.
+
+These summarize extremal-selection geometry without any additional evidence/model query and without a hard candidate-count gate.
+
+The mechanistic branch is preregistered:
+
+- clean BPR succeeds, SGRR does not → incumbent base-point is the stronger boundary mediator;
+- SGRR succeeds, BPR does not → selection-induced overestimation/set geometry is the stronger mediator;
+- both fail → stop basepoint/selection-geometry reservation expansion and reopen the intervention-existence representation/target diagnosis;
+- both succeed → use SGRR as the main mechanism only if it also passes the frozen hard-tail and fresh promotion contracts; BPR remains an ablation.
+
+## 6. Nested TRAIN protocol
+
+Same historical TRAIN fold hash. Each outer fold uses:
+
+`3 folds RSMR fit + 1 independent reservation-calibration fold + 1 test fold`.
+
+Minimum selected-policy reservation calibration population is 64 proposals per fold.
+
+Before any fresh data, SGRR must satisfy:
+
+- exact monotone containment and frozen winner identity;
+- >=20% no-opportunity false-intervention reduction vs RSMR;
+- capture no worse than RSMR by >3 pp;
+- >=25% catastrophe reduction vs RSMR;
+- NegRMS no worse than RSMR;
+- aggregate and all five test-fold selected sums nonnegative;
+- >=64 selected and >=32 positive.
+
+No lambda/reservation threshold/feature/alpha sweep is permitted.
+
+## 7. Fresh protocol if TRAIN passes
+
+V35 spent no fresh population. Keep the permanent 10700-token exclusion and use new label-free seed
+
+`v64.3.36-eaf-icer-sgrr-cal500-double-fresh-v1`.
+
+Only after nested TRAIN pass select independent `CAL500 + A500 + B500`.
+
+CAL500 fits final BPR and SGRR reservation heads on frozen full-TRAIN RSMR policy outputs. A/B independently evaluate
+
+`RAW / V20 / PRESERVE / RSMR / BPR / SGRR`.
+
+No A/B pooling. SGRR fresh promotion requires engineering/containment validity, meaningful no-op reduction without >3 pp capture loss, hard-tail pass with zero catastrophes and worst > -0.5, useful recovery gain over PRESERVE, and endpoint non-inferiority to PRESERVE and V20.
+
+## 8. Paper-line implication
+
+Candidate high-level contribution stack:
+
+`bounded auditable interface -> exact EAF action-local attribution -> contrastive regret-aligned challenger ordering -> selected-policy scene reservation at the incumbent boundary -> deterministic monotone containment -> independent double-fresh/full-validation/closed-loop evidence`.
+
+The intended conceptual novelty is **invariance-factorized decision sufficiency**: challenger identity is a relative/contrastive ordering problem, while leaving the incumbent is a scene-level reservation problem after data-dependent extremal selection. The reservation may only shrink the frozen intervention set; it cannot create or re-rank paths.
+
+Do not headline the five geometry statistics or ridge regression. They are low-capacity instruments for testing the selection-geometry hypothesis, not the paper contribution themselves.

@@ -1,0 +1,303 @@
+{
+  "scene_audit": "/mnt/data/bdse_v64_3_36_eaf_icer_sgrr/V64_3_35_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_36.csv",
+  "transition_counts": {
+    "same_winner": 618,
+    "winner_changed": 59,
+    "FDSR_to_abstain": 62,
+    "abstain_to_FBCSR": 10,
+    "both_abstain": 33
+  },
+  "effect_counts": {
+    "equal": 655,
+    "FBCSR_worse": 60,
+    "FBCSR_better": 67
+  },
+  "subsets": {
+    "all": {
+      "scene_count": 782,
+      "FDSR_selected": 739,
+      "FBCSR_selected": 687,
+      "transition_counts": {
+        "same_winner": 618,
+        "winner_changed": 59,
+        "FDSR_to_abstain": 62,
+        "abstain_to_FBCSR": 10,
+        "both_abstain": 33
+      },
+      "FBCSR_minus_FDSR_teacher_sum": 5.820155457851223,
+      "FBCSR_better_count": 67,
+      "FBCSR_worse_count": 60
+    },
+    "noop": {
+      "scene_count": 208,
+      "FDSR_selected": 180,
+      "FBCSR_selected": 159,
+      "transition_counts": {
+        "same_winner": 146,
+        "winner_changed": 9,
+        "FDSR_to_abstain": 25,
+        "abstain_to_FBCSR": 4,
+        "both_abstain": 24
+      },
+      "FBCSR_minus_FDSR_teacher_sum": 3.311614109148691,
+      "FBCSR_better_count": 30,
+      "FBCSR_worse_count": 8
+    },
+    "opportunity": {
+      "scene_count": 574,
+      "FDSR_selected": 559,
+      "FBCSR_selected": 528,
+      "transition_counts": {
+        "same_winner": 472,
+        "winner_changed": 50,
+        "FDSR_to_abstain": 37,
+        "abstain_to_FBCSR": 6,
+        "both_abstain": 9
+      },
+      "FBCSR_minus_FDSR_teacher_sum": 2.508541348702532,
+      "FBCSR_better_count": 37,
+      "FBCSR_worse_count": 52
+    },
+    "common_selected_winner_change": {
+      "count": 59,
+      "teacher_effect_sum": 10.40361438557855,
+      "better": 33,
+      "worse": 23,
+      "equal": 3
+    }
+  },
+  "candidate_bins": [
+    {
+      "bin": "1-4",
+      "scenes": 154,
+      "noop_scenes": 79,
+      "FDSR_noop_false": 54,
+      "FBCSR_noop_false": 43,
+      "RSMR_noop_false": 37
+    },
+    {
+      "bin": "5-8",
+      "scenes": 95,
+      "noop_scenes": 28,
+      "FDSR_noop_false": 25,
+      "FBCSR_noop_false": 22,
+      "RSMR_noop_false": 18
+    },
+    {
+      "bin": "9-12",
+      "scenes": 142,
+      "noop_scenes": 30,
+      "FDSR_noop_false": 30,
+      "FBCSR_noop_false": 24,
+      "RSMR_noop_false": 14
+    },
+    {
+      "bin": "13-16",
+      "scenes": 149,
+      "noop_scenes": 31,
+      "FDSR_noop_false": 31,
+      "FBCSR_noop_false": 30,
+      "RSMR_noop_false": 10
+    },
+    {
+      "bin": "17-20",
+      "scenes": 178,
+      "noop_scenes": 35,
+      "FDSR_noop_false": 35,
+      "FBCSR_noop_false": 35,
+      "RSMR_noop_false": 23
+    },
+    {
+      "bin": "21-+",
+      "scenes": 64,
+      "noop_scenes": 5,
+      "FDSR_noop_false": 5,
+      "FBCSR_noop_false": 5,
+      "RSMR_noop_false": 5
+    }
+  ],
+  "top_help": [
+    {
+      "token": "b16054ccc4bd54f9",
+      "opportunity": 1,
+      "FDSR_action": "4",
+      "FBCSR_action": "1",
+      "FDSR_y": "-3.992495210120268",
+      "FBCSR_y": "1.8926528397743594",
+      "effect": 5.885148049894628
+    },
+    {
+      "token": "275e9cfb52fd59de",
+      "opportunity": 1,
+      "FDSR_action": "8",
+      "FBCSR_action": "0",
+      "FDSR_y": "0.12727462194093242",
+      "FBCSR_y": "3.495505400518321",
+      "effect": 3.3682307785773884
+    },
+    {
+      "token": "00bf712a8e9e59bf",
+      "opportunity": 0,
+      "FDSR_action": "2",
+      "FBCSR_action": "-1",
+      "FDSR_y": "-2.6145104679828512",
+      "FBCSR_y": "nan",
+      "effect": 2.6145104679828512
+    },
+    {
+      "token": "7ca96f8e844f56ca",
+      "opportunity": 1,
+      "FDSR_action": "18",
+      "FBCSR_action": "19",
+      "FDSR_y": "1.2200150502609088",
+      "FBCSR_y": "3.252210966228601",
+      "effect": 2.032195915967692
+    },
+    {
+      "token": "1088d47284565808",
+      "opportunity": 0,
+      "FDSR_action": "6",
+      "FBCSR_action": "-1",
+      "FDSR_y": "-2.0189832586631473",
+      "FBCSR_y": "nan",
+      "effect": 2.0189832586631473
+    },
+    {
+      "token": "de432d7c6c6e57a6",
+      "opportunity": 0,
+      "FDSR_action": "2",
+      "FBCSR_action": "-1",
+      "FDSR_y": "-1.8366447165645658",
+      "FBCSR_y": "nan",
+      "effect": 1.8366447165645658
+    },
+    {
+      "token": "8c1a6d183a275d96",
+      "opportunity": 0,
+      "FDSR_action": "7",
+      "FBCSR_action": "-1",
+      "FDSR_y": "-1.8140174333626282",
+      "FBCSR_y": "nan",
+      "effect": 1.8140174333626282
+    },
+    {
+      "token": "e19f348970f556d2",
+      "opportunity": 0,
+      "FDSR_action": "8",
+      "FBCSR_action": "-1",
+      "FDSR_y": "-1.5535100609214045",
+      "FBCSR_y": "nan",
+      "effect": 1.5535100609214045
+    },
+    {
+      "token": "8c7421c1a39954dc",
+      "opportunity": 1,
+      "FDSR_action": "-1",
+      "FBCSR_action": "10",
+      "FDSR_y": "nan",
+      "FBCSR_y": "1.2982800296727104",
+      "effect": 1.2982800296727104
+    },
+    {
+      "token": "2e91c253ccb958d1",
+      "opportunity": 1,
+      "FDSR_action": "10",
+      "FBCSR_action": "3",
+      "FDSR_y": "-1.2323904158297927",
+      "FBCSR_y": "-6.759409550577411e-05",
+      "effect": 1.232322821734287
+    }
+  ],
+  "top_harm": [
+    {
+      "token": "75fd8a14d25350e5",
+      "opportunity": 1,
+      "FDSR_action": "14",
+      "FBCSR_action": "-1",
+      "FDSR_y": "6.06032689663456",
+      "FBCSR_y": "nan",
+      "effect": -6.06032689663456
+    },
+    {
+      "token": "49f109b9cca4567a",
+      "opportunity": 1,
+      "FDSR_action": "9",
+      "FBCSR_action": "-1",
+      "FDSR_y": "4.0404683656364675",
+      "FBCSR_y": "nan",
+      "effect": -4.0404683656364675
+    },
+    {
+      "token": "2d4f708394ef542e",
+      "opportunity": 0,
+      "FDSR_action": "-1",
+      "FBCSR_action": "5",
+      "FDSR_y": "nan",
+      "FBCSR_y": "-3.896098972048237",
+      "effect": -3.896098972048237
+    },
+    {
+      "token": "2f19f98982615f60",
+      "opportunity": 0,
+      "FDSR_action": "4",
+      "FBCSR_action": "7",
+      "FDSR_y": "-0.01429730122606232",
+      "FBCSR_y": "-3.8279332883546893",
+      "effect": -3.813635987128627
+    },
+    {
+      "token": "91dfe4ebf3c25298",
+      "opportunity": 0,
+      "FDSR_action": "-1",
+      "FBCSR_action": "7",
+      "FDSR_y": "nan",
+      "FBCSR_y": "-1.7913190205828053",
+      "effect": -1.7913190205828053
+    },
+    {
+      "token": "a657d16d34c3519a",
+      "opportunity": 1,
+      "FDSR_action": "20",
+      "FBCSR_action": "-1",
+      "FDSR_y": "1.784201655457297",
+      "FBCSR_y": "nan",
+      "effect": -1.784201655457297
+    },
+    {
+      "token": "9d1adc78bda259ce",
+      "opportunity": 1,
+      "FDSR_action": "3",
+      "FBCSR_action": "-1",
+      "FDSR_y": "0.9899896442480383",
+      "FBCSR_y": "nan",
+      "effect": -0.9899896442480383
+    },
+    {
+      "token": "452d348a65ac59f3",
+      "opportunity": 1,
+      "FDSR_action": "3",
+      "FBCSR_action": "-1",
+      "FDSR_y": "0.989846841174364",
+      "FBCSR_y": "nan",
+      "effect": -0.989846841174364
+    },
+    {
+      "token": "7d363b1db0fc5975",
+      "opportunity": 1,
+      "FDSR_action": "1",
+      "FBCSR_action": "5",
+      "FDSR_y": "0.012868133672885751",
+      "FBCSR_y": "-0.9769596037015144",
+      "effect": -0.9898277373744001
+    },
+    {
+      "token": "0f6992119fc759c4",
+      "opportunity": 1,
+      "FDSR_action": "9",
+      "FBCSR_action": "-1",
+      "FDSR_y": "0.9896811794601963",
+      "FBCSR_y": "nan",
+      "effect": -0.9896811794601963
+    }
+  ]
+}

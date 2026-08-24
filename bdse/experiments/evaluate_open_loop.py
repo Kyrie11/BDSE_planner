@@ -1019,6 +1019,8 @@ def main() -> None:
             icer_replacement_confirmation_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_replacement_confirmation_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
             icer_retention_risk = np.asarray(tour_diag.get("_decisive_frontier_icer_retention_regret_risk_logit_star", []), dtype=np.float64).reshape(-1)
             icer_scir_mu = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_predicted_improvement_star", []), dtype=np.float64).reshape(-1)
+            icer_scir_raw_mu = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_raw_predicted_improvement_star", []), dtype=np.float64).reshape(-1)
+            icer_scir_reservation = float(tour_diag.get("decisive_frontier_icer_scir_scene_reservation_value", 0.0))
             icer_scir_scale = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_selection_scale_star", []), dtype=np.float64).reshape(-1)
             icer_scir_lcb = np.asarray(tour_diag.get("_decisive_frontier_icer_scir_lower_bound_star", []), dtype=np.float64).reshape(-1)
             icer_scir_features = tour_diag.get("_decisive_frontier_icer_scir_feature_matrix", None)
@@ -1083,6 +1085,8 @@ def main() -> None:
                         "icer_replacement_confirmation_regret_risk_logit": float(icer_replacement_confirmation_risk[challenger]) if icer_replacement_confirmation_risk.size == edge_valid.size else float("nan"),
                         "icer_retention_regret_risk_logit": float(icer_retention_risk[challenger]) if icer_retention_risk.size == edge_valid.size else float("nan"),
                         "icer_scir_predicted_improvement": float(icer_scir_mu[challenger]) if icer_scir_mu.size == edge_valid.size else float("nan"),
+                        "icer_scir_raw_predicted_improvement": float(icer_scir_raw_mu[challenger]) if icer_scir_raw_mu.size == edge_valid.size else float("nan"),
+                        "icer_scir_scene_reservation": float(icer_scir_reservation),
                         "icer_scir_selection_scale": float(icer_scir_scale[challenger]) if icer_scir_scale.size == edge_valid.size else 1.0,
                         "icer_scir_lower_bound": float(icer_scir_lcb[challenger]) if icer_scir_lcb.size == edge_valid.size else float("nan"),
                         "icer_scir_proposal_action": int(tour_diag.get("decisive_frontier_icer_scir_proposal_action", raw_top)),
