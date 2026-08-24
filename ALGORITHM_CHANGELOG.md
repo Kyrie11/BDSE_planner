@@ -10036,3 +10036,161 @@ The current CCF-A-oriented mainline should no longer be PTMC/FCR/SSIR-module-cen
 `bounded auditable evidence interface -> exact EAF action-local attribution -> incumbent-augmented structured intervention sufficiency -> selected-policy reliability calibration -> monotone incumbent/no-fallback containment -> independent double-fresh/full-validation/closed-loop evidence`.
 
 The conceptual novelty is the alignment of **decision sufficiency, structured null-action extremal selection, and policy-level reliability** under a fixed auditable interface. Pairwise ridge or conformal prediction alone are not claimed as novel.
+
+# V64.3.33 uploaded execution audit → V64.3.34 EAF-ICER-RSMR
+
+## 1. V64.3.33 is engineering-valid for TRAIN-level attribution
+
+The uploaded V33 execution reaches the preregistered nested TRAIN complete-mechanism gate without runtime/engineering failure. No CAL500/A500/B500 token manifests were spent. The result is valid for development-level attribution of the V33 structured selector and its calibration-support failure, but not for fresh generalization claims.
+
+Exact uploaded aggregates:
+
+- corrected V32.1 MEAN: `476 selected / 260 positive / 54.62% precision / 45.30% capture / sum -18.0303795 / worst -6.7353768 / 47 catastrophes / 110 no-opportunity false interventions`;
+- V33 PAIR: `98 / 47 / 47.96% / 8.19% / sum -4.6676395 / worst -3.9924952 / 18 catastrophes / 15 no-opportunity false interventions`;
+- V33 selected-policy MAIN: `0 selected` because nested calibration proposal counts are `15 / 12 / 8 / 28 / 20`, all below the frozen minimum 32 and therefore fail-closed to `q=inf`.
+
+Interpretation:
+
+- **structured selector intervention-existence gain is real**: 110 -> 15 no-opportunity false interventions, with 96/110 corrected by abstention;
+- **which-intervention gain is negative**: on the 96 scenes where both MEAN and PAIR propose, PAIR has higher teacher improvement on only 9 and lower improvement on 34; 203 MEAN-positive scenes are lost by PAIR abstention and 13 MEAN-good proposals are changed to PAIR-nonpositive proposals, while only 2 bad->good winner corrections occur;
+- **calibration gain is not identified**: the frozen V33 selector is too sparse to populate the preregistered nested selected-policy calibration protocol. Do not claim selected-policy conformal itself failed.
+
+No-opportunity / opportunity slices:
+
+- MEAN no-opportunity: `110/208 selected`, sum `-60.15197`, 31 catastrophes, NegRMS `1.1975`;
+- PAIR no-opportunity: `15/208`, sum `-14.50352`, 8 catastrophes, NegRMS `1.4581`;
+- MEAN opportunity: `366/574 selected`, 260 positive, precision `71.04%`, sum `+42.12159`, 16 catastrophes;
+- PAIR opportunity: `83/574 selected`, 47 positive, precision `56.63%`, sum `+9.83588`, 10 catastrophes.
+
+Thus V33 improves intervention *frequency* mainly by abstaining but does not make the retained false interventions or challenger ordering reliable.
+
+## 2. Root cause: all-rivals averaging dilutes the intervention boundary asymmetrically
+
+V33 gives each scene total pair-loss mass one, but in a positive-opportunity scene with `m` challengers only one of the `m` teacher-best-vs-rival pairs is teacher-best-vs-incumbent. Therefore the critical intervention-existence boundary receives only `1/m` scene mass.
+
+On frozen TRAIN:
+
+- positive-opportunity scenes: 574, mean candidate count `13.19`, mean incumbent-boundary pair mass **0.13390**;
+- no-opportunity scenes: 208, incumbent is teacher-best and **100%** scene pair loss is incumbent-vs-challenger;
+- the no-opportunity/intervention-boundary training-mass ratio is therefore about **7.47x**.
+
+This is a structural surrogate mismatch, not a threshold/alpha/lambda problem. It explains the V33 pattern: strong suppression of intervention, severe opportunity-recovery collapse.
+
+## 3. Dominant-bottleneck tightening after V33
+
+Previous wording:
+
+> scene-structured intervention-existence plus selected-policy ordering reliability at the direct incumbent-replacement boundary.
+
+New wording:
+
+> **regret-aligned scene-level argmax reliability over incumbent/no-intervention and challengers, without candidate-count dilution, followed by policy-output calibration.**
+
+The evidence representation and same-scene contrast contain useful signal; the weak layer is the surrogate used to train the final structured argmax.
+
+## 4. New no-repeat constraints after V33
+
+Retain every prior frozen prohibition. Additionally, do **not**:
+
+- rescue V33 by reweighting the incumbent pair with a tuned constant, top-K rival count, pair threshold, score threshold, or candidate-count correction;
+- lower the nested calibration minimum, alpha, or confidence level to make V33 MAIN nonempty;
+- interpret V33's improved selected sum as improved challenger ordering; the gain is dominated by abstention and winner changes are net harmful;
+- add a separate intervention-existence classifier followed by another ranker; the deployment object remains one structured argmax including the incumbent;
+- revive all-candidate simultaneous SSIR with a smaller candidate set selected post hoc;
+- use PAIR as a rescue branch in fresh evaluation; it is retained only as a frozen causal ablation;
+- tune the numerical optimizer used by the next convex structured objective on TRAIN/fresh outcomes.
+
+# V64.3.34 EAF-ICER-RSMR
+
+Full name: **Evidence-Attributed Incumbent-Contrastive Regret-Structured Margin Recovery**.
+
+V34 preserves B16/M24, upstream acquisition, EAF, the repaired 19-D candidate-minus-incumbent representation, admissibility/support prerequisites, incumbent-default semantics, structural delegation, and no-fallback containment.
+
+## 1. Incumbent-augmented regret-structured margin
+
+Add the incumbent pseudo-item exactly as in V33:
+
+- `x_i=0`;
+- `Delta_i=0`;
+- runtime `score_i=0`.
+
+For teacher-best item `t` over `{incumbent} U challengers` and each rival `r`, define
+
+`d_tr=(x_t-x_r)/scale`,
+
+`g_tr=Delta_t-Delta_r >= 0`.
+
+Fit fixed `lambda=1` with the scene-level objective
+
+`sum_scene [max_r(g_tr - w^T d_tr)]_+^2 + lambda ||w||^2`.
+
+The feature scale is zero-preserving RMS with one total **candidate moment** mass per direct scene; it is not label-weighted and does not inherit V33's pair-count asymmetry.
+
+Each scene therefore contributes one worst cost-augmented decision violation, regardless of candidate count. No pair reweighting coefficient, top-K, margin sweep, or score threshold is introduced.
+
+## 2. Decision-regret alignment
+
+For runtime argmax `a_hat`, `s_a_hat >= s_t`. Hence
+
+`max_r [Delta_t-Delta_r-(s_t-s_r)]_+ >= Delta_t-Delta_a_hat`.
+
+The structured hinge root directly upper-bounds the teacher regret gap of the selected action. This is the intended paper-level mechanism change: training is aligned with final extremal decision regret rather than average edge/pair fidelity.
+
+The numerical solver is deterministic CPU float64 LBFGS with frozen numerical tolerances. It is an engineering solver for a convex objective, not a validation-tuned algorithmic hyperparameter.
+
+## 3. Causal decomposition
+
+Nested TRAIN and any later fresh evaluation contain:
+
+- `MEAN`: corrected V32.1 edge-mean control;
+- `PAIR`: exact V33 all-rivals pair-gap selector control;
+- `RSMR-RANK`: new regret-structured margin selector;
+- `RSMR-MAIN`: same exact RANK proposal plus selected-policy conformal veto.
+
+RANK diagnostics separately test:
+
+- no-opportunity false-intervention reduction vs MEAN (`should we intervene?`);
+- positive capture increase vs V33 PAIR (avoid V33 over-abstention);
+- selected-sum improvement vs PAIR and catastrophe reduction vs MEAN (`which intervention?` / tail direction).
+
+The report serializes an explicit failure branch if any factor fails.
+
+## 4. Selected-policy calibration
+
+After RSMR-RANK is frozen, calibration still records at most one residual per proposal-emitting scene:
+
+`R = score(b_hat) - Delta_T(b_hat;i)`.
+
+Fixed `alpha=0.05`; MAIN executes exactly the same proposal iff `score-q>0`, otherwise returns the incumbent. No re-ranking or second-best fallback.
+
+Nested calibration retains minimum 32 proposals per fold; independent CAL500 retains minimum 64. These are not relaxed after V33.
+
+## 5. TRAIN and fresh protocol
+
+Reuse exact V32/V33 TRAIN fold hash. Each outer fold is `3 fit + 1 calibration + 1 test`.
+
+Before any fresh data:
+
+- RSMR-RANK must reduce no-opportunity false interventions vs MEAN;
+- positive capture must exceed V33 PAIR;
+- selected sum must exceed V33 PAIR and catastrophes be below MEAN;
+- all five RSMR-MAIN test folds must have nonnegative selected sum and zero catastrophes;
+- aggregate MAIN selected >=64 and positive >=32.
+
+V33 spent no fresh data. V34 retains the 10700-token permanent design exclusion and uses label-free seed
+
+`v64.3.34-eaf-icer-rsmr-cal500-double-fresh-v1`.
+
+Only after TRAIN pass select `CAL500 + A500 + B500`. A/B each evaluate
+
+`RAW / V20 / PRESERVE / MEAN / V33-PAIR / RSMR-RANK / RSMR-MAIN`.
+
+A/B are judged independently with no pooled rescue.
+
+## 6. Paper-line implication
+
+The CCF-A-oriented contribution stack is now:
+
+`bounded auditable interface -> exact EAF action-local attribution -> incumbent-augmented regret-structured extremal intervention -> selected-policy reliability calibration -> monotone incumbent/no-fallback containment -> independent double-fresh/full-validation/closed-loop evidence`.
+
+Do not headline ridge, LBFGS, hinge loss, or conformal prediction individually. The novelty claim is the alignment of bounded decision sufficiency, explicit null-action structured selection, selected-action regret upper-bounding surrogate, policy-output calibration, and deterministic monotone containment.

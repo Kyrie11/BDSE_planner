@@ -1,0 +1,19 @@
+# Default paths
+cd bdse_v64_3_34_eaf_icer_rsmr
+bash RUN_V64_3_34_EAF_ICER_RSMR_SCREEN_2GPU.sh
+
+# If historical outputs are elsewhere
+cd bdse_v64_3_34_eaf_icer_rsmr
+V30_2_ROOT=/your/outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1 \
+V33_ROOT=/your/outputs_v64_3_33_eaf_icer_spcr_screen_2gpu_v1 \
+bash RUN_V64_3_34_EAF_ICER_RSMR_SCREEN_2GPU.sh
+
+# Do not change before this run completes:
+# - lambda=1
+# - alpha=0.05
+# - B/M, feature schema, support/admissibility population
+# - RSMR positive-score incumbent boundary
+# - nested calibration minimum proposal counts
+# - fresh hash seed
+# - optimizer numerical settings
+# - TRAIN/fresh gates

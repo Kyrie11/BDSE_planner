@@ -1,0 +1,262 @@
+{
+  "attribution_scope": "TRAIN_only_nested_crossfit_complete_SPCR_mechanism_until_preregistered_gate",
+  "audit": "v64_3_33_uploaded_result_causal_audit_for_v64_3_34",
+  "calibration_proposals_per_fold": [
+    15,
+    12,
+    8,
+    28,
+    20
+  ],
+  "calibration_q_per_fold": [
+    Infinity,
+    Infinity,
+    Infinity,
+    Infinity,
+    Infinity
+  ],
+  "conclusions": {
+    "calibration_gain": "not_identified_because_all_nested_calibration_folds_below_frozen_minimum_32_proposals_and_main_fail_closed_to_zero",
+    "dominant_bottleneck": "scene_level_regret_aligned_joint_null_action_and_challenger_argmax_reliability_without_candidate_count_dilution_followed_by_policy_output_calibration",
+    "structured_selector_intervention_existence_gain": "strong_but_mostly_via_abstention",
+    "structured_selector_which_intervention_gain": "negative_on_current_train_crossfit"
+  },
+  "engineering_valid_for_train_level_attribution": true,
+  "fresh_consumed": false,
+  "mean_aggregate": {
+    "catastrophic_count": 47,
+    "no_positive_opportunity_false_intervention_count": 110,
+    "path_nonharmful": false,
+    "positive_capture_count": 260,
+    "positive_capture_rate": 0.4529616724738676,
+    "positive_opportunity_scenes": 574,
+    "selected_count": 476,
+    "selected_positive_count": 260,
+    "selected_precision": 0.5462184873949579,
+    "teacher_improvement_sum": -18.0303795243242,
+    "teacher_improvement_worst": -6.735376818865747,
+    "teacher_negative_rms": 0.6269896147069376
+  },
+  "representative_harmful_pair_scenes": [
+    {
+      "fold": 4,
+      "mean_action": 7,
+      "mean_teacher_improvement": -0.07566335793621848,
+      "pair_action": 4,
+      "pair_score": 0.07223803262487061,
+      "pair_teacher_improvement": -3.992495210120268,
+      "positive_opportunity": 1,
+      "scenario_token": "b16054ccc4bd54f9"
+    },
+    {
+      "fold": 4,
+      "mean_action": 14,
+      "mean_teacher_improvement": -0.00025054427977888594,
+      "pair_action": 10,
+      "pair_score": 0.07587527966668511,
+      "pair_teacher_improvement": -3.5155634811481113,
+      "positive_opportunity": 0,
+      "scenario_token": "44ae005ad8b25d52"
+    },
+    {
+      "fold": 4,
+      "mean_action": 15,
+      "mean_teacher_improvement": -0.024184055066108545,
+      "pair_action": 4,
+      "pair_score": 0.4791421548411537,
+      "pair_teacher_improvement": -3.3332536464355886,
+      "positive_opportunity": 1,
+      "scenario_token": "7a1756cf8f7a566e"
+    },
+    {
+      "fold": 4,
+      "mean_action": 9,
+      "mean_teacher_improvement": -2.8394162281440574,
+      "pair_action": 9,
+      "pair_score": 0.7197364929389529,
+      "pair_teacher_improvement": -2.8394162281440574,
+      "positive_opportunity": 0,
+      "scenario_token": "5693aed0af7e548c"
+    },
+    {
+      "fold": 0,
+      "mean_action": 7,
+      "mean_teacher_improvement": -1.98244095368525,
+      "pair_action": 7,
+      "pair_score": 0.8313715904837852,
+      "pair_teacher_improvement": -1.98244095368525,
+      "positive_opportunity": 0,
+      "scenario_token": "ee17abab9d83514f"
+    },
+    {
+      "fold": 1,
+      "mean_action": 6,
+      "mean_teacher_improvement": -1.9806460030913353,
+      "pair_action": 6,
+      "pair_score": 0.02154825739282709,
+      "pair_teacher_improvement": -1.9806460030913353,
+      "positive_opportunity": 1,
+      "scenario_token": "0bd45dc9e3a759c2"
+    },
+    {
+      "fold": 4,
+      "mean_action": 6,
+      "mean_teacher_improvement": -0.003460942675417758,
+      "pair_action": 10,
+      "pair_score": 0.09132326969207324,
+      "pair_teacher_improvement": -1.233043325316906,
+      "positive_opportunity": 1,
+      "scenario_token": "11579a9c240a5c77"
+    },
+    {
+      "fold": 4,
+      "mean_action": 13,
+      "mean_teacher_improvement": -1.233023564266786,
+      "pair_action": 13,
+      "pair_score": 2.9477943322626636,
+      "pair_teacher_improvement": -1.233023564266786,
+      "positive_opportunity": 0,
+      "scenario_token": "c70954fab4a650c7"
+    },
+    {
+      "fold": 4,
+      "mean_action": 7,
+      "mean_teacher_improvement": -1.2322430411372798,
+      "pair_action": 7,
+      "pair_score": 0.7276471266037203,
+      "pair_teacher_improvement": -1.2322430411372798,
+      "positive_opportunity": 1,
+      "scenario_token": "6b416b289a3b5858"
+    },
+    {
+      "fold": 0,
+      "mean_action": 16,
+      "mean_teacher_improvement": -1.2318749638779087,
+      "pair_action": 16,
+      "pair_score": 0.029727738327172126,
+      "pair_teacher_improvement": -1.2318749638779087,
+      "positive_opportunity": 0,
+      "scenario_token": "a8e99095a8235549"
+    },
+    {
+      "fold": 0,
+      "mean_action": 20,
+      "mean_teacher_improvement": -1.2317919820233691,
+      "pair_action": 20,
+      "pair_score": 0.5088428557901651,
+      "pair_teacher_improvement": -1.2317919820233691,
+      "positive_opportunity": 0,
+      "scenario_token": "95a810911ba359ec"
+    },
+    {
+      "fold": 3,
+      "mean_action": 8,
+      "mean_teacher_improvement": 0.0009856917359167827,
+      "pair_action": 4,
+      "pair_score": 0.34170283699026893,
+      "pair_teacher_improvement": -1.230240422105021,
+      "positive_opportunity": 1,
+      "scenario_token": "6ed7b0d3fc715d28"
+    }
+  ],
+  "selector_transition_counts": {
+    "both_selected": 96,
+    "different_winner_when_both": 46,
+    "mean_bad_changed_to_pair_good": 2,
+    "mean_good_changed_to_pair_bad": 13,
+    "mean_only": 380,
+    "mean_positive_lost_to_pair_abstention": 203,
+    "neither": 304,
+    "noopp_fixed_by_pair_abstention": 96,
+    "noopp_mean_selected": 110,
+    "noopp_pair_selected": 15,
+    "pair_better_teacher_improvement_when_both": 9,
+    "pair_equal_teacher_improvement_when_both": 53,
+    "pair_only": 2,
+    "pair_worse_teacher_improvement_when_both": 34,
+    "same_winner_when_both": 50
+  },
+  "slices": {
+    "mean_no_opportunity": {
+      "catastrophic_count": 31,
+      "negative_rms": 1.1974956941354313,
+      "positive_count": 0,
+      "precision": 0.0,
+      "proposal_rate": 0.5288461538461539,
+      "scene_count": 208,
+      "selected_count": 110,
+      "teacher_improvement_sum": -60.15196527898154,
+      "worst": -6.735376818865747
+    },
+    "mean_positive_opportunity": {
+      "catastrophic_count": 16,
+      "negative_rms": 0.2833429052048368,
+      "positive_count": 260,
+      "precision": 0.7103825136612022,
+      "proposal_rate": 0.6376306620209059,
+      "scene_count": 574,
+      "selected_count": 366,
+      "teacher_improvement_sum": 42.12158575465733,
+      "worst": -2.0204578191693194
+    },
+    "pair_no_opportunity": {
+      "catastrophic_count": 8,
+      "negative_rms": 1.4581273483169799,
+      "positive_count": 0,
+      "precision": 0.0,
+      "proposal_rate": 0.07211538461538461,
+      "scene_count": 208,
+      "selected_count": 15,
+      "teacher_improvement_sum": -14.503516777183293,
+      "worst": -3.5155634811481113
+    },
+    "pair_positive_opportunity": {
+      "catastrophic_count": 10,
+      "negative_rms": 0.70037729203076,
+      "positive_count": 47,
+      "precision": 0.5662650602409639,
+      "proposal_rate": 0.1445993031358885,
+      "scene_count": 574,
+      "selected_count": 83,
+      "teacher_improvement_sum": 9.83587724719852,
+      "worst": -3.992495210120268
+    }
+  },
+  "v33_main_aggregate": {
+    "catastrophic_count": 0,
+    "no_positive_opportunity_false_intervention_count": 0,
+    "path_nonharmful": false,
+    "positive_capture_count": 0,
+    "positive_capture_rate": 0.0,
+    "positive_opportunity_scenes": 574,
+    "selected_count": 0,
+    "selected_positive_count": 0,
+    "selected_precision": NaN,
+    "teacher_improvement_sum": 0.0,
+    "teacher_improvement_worst": NaN,
+    "teacher_negative_rms": 0.0
+  },
+  "v33_pair_objective_mass_diagnosis": {
+    "incumbent_boundary_loss_mass_per_no_opportunity_scene": 1.0,
+    "incumbent_boundary_loss_mass_per_positive_opportunity_scene_mean": 0.13389689688627937,
+    "no_opportunity_candidate_count_mean": 8.764423076923077,
+    "no_opportunity_scene_count": 208,
+    "noopp_to_opportunity_boundary_mass_ratio": 7.4684329753311225,
+    "positive_opportunity_candidate_count_mean": 13.189895470383275,
+    "positive_opportunity_scene_count": 574
+  },
+  "v33_pair_rank_aggregate": {
+    "catastrophic_count": 18,
+    "no_positive_opportunity_false_intervention_count": 15,
+    "path_nonharmful": false,
+    "positive_capture_count": 47,
+    "positive_capture_rate": 0.08188153310104529,
+    "positive_opportunity_scenes": 574,
+    "selected_count": 98,
+    "selected_positive_count": 47,
+    "selected_precision": 0.47959183673469385,
+    "teacher_improvement_sum": -4.667639529984774,
+    "teacher_improvement_worst": -3.992495210120268,
+    "teacher_negative_rms": 0.8607417518297741
+  }
+}

@@ -1,0 +1,39 @@
+V64.3.34 EAF-ICER-RSMR local engineering validation
+
+Scope
+- New TRAIN-only fitter: incumbent-augmented cost-sensitive scene-max teacher-regret structured margin.
+- New independent selected-policy calibrator.
+- New contract checker, fresh split checker, double-fresh screen checker.
+- New 2GPU launcher with exact V33 failure reproduction and fresh-unspent guard.
+- No runtime planner topology change: rank_only/conformal_veto/no-fallback path reuses the already-tested SCIR/SPCR runtime implementation.
+
+Validation
+- Python compileall: PASS
+- Launcher bash -n: PASS
+- V34 focused tests: 8/8 PASS
+- V13-V34 targeted regression: 154/154 PASS; 2 warnings
+- Full repository regression: 484/484 PASS, executed as deterministic 170 + 314 test-file halves to remain within the outer execution window
+- Full-regression warnings: 36 total (9 + 27), all existing PyTorch Transformer nested_tensor/norm_first warning class; no new warning class
+
+Dedicated mechanism tests
+- incumbent/no-opportunity and positive-opportunity structured choice: PASS
+- duplicate easy rival does not change scene-max structured loss: PASS
+- structured hinge root upper-bounds selected-action teacher regret gap: PASS
+- zero-preserving scene-equal candidate RMS scale: PASS
+- deterministic convex optimizer and objective decrease: PASS
+- rank/main same-proposal and no-fallback runtime containment: PASS
+- selected-policy calibrator uses one frozen proposal per scene: PASS
+- contract checker requires exact V33 PAIR ablation and exact RSMR rank/main selector identity: PASS
+
+Frozen algorithm settings
+- 19-D candidate-minus-incumbent evidence representation unchanged
+- ridge/L2 lambda = 1.0
+- conformal alpha = 0.05
+- incumbent score = 0 exactly
+- no mean centering / no intercept for RSMR
+- selected-policy nested minimum calibration proposals = 32/fold
+- independent CAL500 minimum selected-policy proposals = 64
+- no lambda/alpha/feature/threshold/optimizer/candidate-set sweep
+
+No nuPlan outcome is fabricated locally. V64.3.34 must be run on the server. If nested TRAIN fails, the launcher stops before CAL/fresh selection and the serialized failure_diagnosis should be used for the next scientific decision.
+- failure-provenance improvement: TRAIN scientific-gate exit code is captured so stage_timing records the TRAIN stage before fail-closed exit; scientific gate semantics are unchanged
