@@ -1,0 +1,13 @@
+MODIFIED	ALGORITHM_CHANGELOG.md
+ADDED	NEXT_COMMANDS_V64_3_38_EAF_ICER_DAVR.txt
+ADDED	RUN_V64_3_38_EAF_ICER_DAVR_SCREEN_2GPU.sh
+ADDED	V64_3_37_RESULT_POSTMORTEM_AND_V64_3_38_DAVR_DESIGN.md
+ADDED	V64_3_37_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_38.csv
+ADDED	V64_3_37_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_38.json
+ADDED	V64_3_38_ENGINEERING_VALIDATION.txt
+MODIFIED	bdse/planner/tournament.py
+ADDED	bdse/tests/test_v64_3_38_eaf_icer_davr.py
+ADDED	bdse/tools/calibrate_v64_3_38_eaf_icer_davr.py
+ADDED	bdse/tools/check_v64_3_38_eaf_icer_davr_screen.py
+ADDED	bdse/tools/check_v64_3_38_eaf_icer_davr_split.py
+ADDED	bdse/tools/fit_v64_3_38_eaf_icer_davr.py

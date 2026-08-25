@@ -2577,80 +2577,105 @@ def _icer_post_selection_value(
     scir_feature_names: list[str],
     scir_cfg: dict[str, Any],
 ) -> tuple[float, np.ndarray, list[str]]:
-    """V64.3.37 absolute value readout for an already frozen RSMR proposal.
+    """Absolute value readout for an already frozen RSMR proposal.
 
-    Ranking and post-selection value are deliberately separate estimands.  The
-    RSMR argmax is frozen before this function is called.  This head may only
-    accept that exact proposal or veto it to the incumbent; it cannot score a
-    second-best alternative or create a new proposal.
+    V37 modes remain supported:
+      score_affine, orthogonal_proposal_value.
 
-    Modes:
-      score_affine:
-        affine calibration of the scalar frozen RSMR score;
-      orthogonal_proposal_value:
-        the same affine term plus a residual readout from the selected 19-D
-        standardized evidence projected orthogonal to the frozen RSMR score
-        direction.  This prevents the residual head from learning another copy
-        of the ranking scalar while retaining proposal-specific evidence that
-        scalarization discarded.
+    V38 adds rank/value factorization modes:
+      dense_edge_value:
+        a corrected V32.1 scene-equal absolute teacher-improvement ridge is
+        trained on *all fit candidate edges* but evaluated only after RSMR has
+        frozen one proposal;
+      dense_edge_affine:
+        the same dense value followed by a one-dimensional selected-policy
+        affine recalibration fitted on an independent calibration population.
+
+    Every mode can only accept the exact frozen RSMR proposal or veto it to the
+    incumbent.  None can score a second-best action after proposal freezing.
     """
     if not bool(scir_cfg.get("post_selection_value_enabled", False)):
         return 0.0, np.zeros((0,), dtype=np.float64), []
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
-        raise ValueError("EAF-ICER V37 post-selection value is mutually exclusive with V36 scene reservation")
+        raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    if mode not in {"score_affine", "orthogonal_proposal_value"}:
-        raise ValueError(f"unknown EAF-ICER V37 post_selection_value_mode={mode}")
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine"}
+    if mode not in allowed:
+        raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
     mu = np.asarray(raw_predicted_improvement, dtype=np.float64).reshape(-1)
     X = np.asarray(scir_feature_matrix, dtype=np.float64)
     if X.ndim != 2 or not (0 <= b < X.shape[0]) or mu.size != X.shape[0]:
-        raise ValueError("EAF-ICER V37 proposal/value runtime shapes are inconsistent")
+        raise ValueError("EAF-ICER proposal/value runtime shapes are inconsistent")
     stored_names = list(scir_cfg.get("feature_names", []))
     if list(scir_feature_names) != stored_names or len(stored_names) != X.shape[1]:
-        raise ValueError("EAF-ICER V37 selected-proposal feature schema does not match frozen RSMR")
+        raise ValueError("EAF-ICER selected-proposal feature schema does not match frozen RSMR")
     mean = np.asarray(scir_cfg.get("feature_mean", []), dtype=np.float64).reshape(-1)
     std = np.asarray(scir_cfg.get("feature_std", []), dtype=np.float64).reshape(-1)
     rank_w = np.asarray(scir_cfg.get("weights", []), dtype=np.float64).reshape(-1)
     if len(mean) != X.shape[1] or len(std) != X.shape[1] or len(rank_w) != X.shape[1]:
-        raise ValueError("EAF-ICER V37 frozen RSMR parameter schema is inconsistent")
+        raise ValueError("EAF-ICER frozen RSMR parameter schema is inconsistent")
     rank_bias = float(scir_cfg.get("bias", 0.0))
     if abs(rank_bias) > 1.0e-12:
-        raise ValueError("EAF-ICER V37 requires zero-bias frozen RSMR so incumbent remains exact score zero")
+        raise ValueError("EAF-ICER post-selection value requires zero-bias frozen RSMR")
     z = (X[b] - mean) / np.maximum(std, 1.0e-6)
     u_linear = float(z @ rank_w)
     u = float(np.clip(u_linear + rank_bias, -40.0, 40.0))
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
-        raise ValueError("EAF-ICER V37 frozen RSMR score does not replay from selected-proposal evidence")
+        raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    score_mean = float(scir_cfg.get("post_selection_score_mean", float("nan")))
-    score_std = float(scir_cfg.get("post_selection_score_std", float("nan")))
-    intercept = float(scir_cfg.get("post_selection_affine_intercept", float("nan")))
-    score_weight = float(scir_cfg.get("post_selection_affine_score_weight", float("nan")))
-    if not all(math.isfinite(v) for v in [score_mean, score_std, intercept, score_weight]) or score_std <= 0.0:
-        raise ValueError("EAF-ICER V37 affine post-selection value parameters are invalid")
-    value = intercept + score_weight * ((u - score_mean) / max(score_std, 1.0e-6))
-    value_feature = np.asarray([u], dtype=np.float64)
-    value_names = ["post_value::frozen_rsmr_score"]
+    if mode in {"dense_edge_value", "dense_edge_affine"}:
+        dmean = np.asarray(scir_cfg.get("post_selection_dense_feature_mean", []), dtype=np.float64).reshape(-1)
+        dstd = np.asarray(scir_cfg.get("post_selection_dense_feature_std", []), dtype=np.float64).reshape(-1)
+        dw = np.asarray(scir_cfg.get("post_selection_dense_weights", []), dtype=np.float64).reshape(-1)
+        db = float(scir_cfg.get("post_selection_dense_bias", float("nan")))
+        if len(dmean) != X.shape[1] or len(dstd) != X.shape[1] or len(dw) != X.shape[1] or not math.isfinite(db):
+            raise ValueError("EAF-ICER V38 dense value parameter schema is inconsistent")
+        dz = (X[b] - dmean) / np.maximum(dstd, 1.0e-6)
+        dense_value = float(np.clip(dz @ dw + db, -40.0, 40.0))
+        if mode == "dense_edge_value":
+            value = dense_value
+            value_feature = np.asarray([dense_value], dtype=np.float64)
+            value_names = ["post_value::dense_all_edge_absolute_value"]
+        else:
+            cm = float(scir_cfg.get("post_selection_dense_cal_mean", float("nan")))
+            cs = float(scir_cfg.get("post_selection_dense_cal_std", float("nan")))
+            ci = float(scir_cfg.get("post_selection_dense_cal_intercept", float("nan")))
+            cw = float(scir_cfg.get("post_selection_dense_cal_weight", float("nan")))
+            if not all(math.isfinite(v) for v in [cm, cs, ci, cw]) or cs <= 0.0:
+                raise ValueError("EAF-ICER V38 dense selected-policy affine parameters are invalid")
+            value = ci + cw * ((dense_value - cm) / max(cs, 1.0e-6))
+            value_feature = np.asarray([dense_value, u], dtype=np.float64)
+            value_names = ["post_value::dense_all_edge_absolute_value", "post_value::frozen_rsmr_score_diagnostic"]
+    else:
+        score_mean = float(scir_cfg.get("post_selection_score_mean", float("nan")))
+        score_std = float(scir_cfg.get("post_selection_score_std", float("nan")))
+        intercept = float(scir_cfg.get("post_selection_affine_intercept", float("nan")))
+        score_weight = float(scir_cfg.get("post_selection_affine_score_weight", float("nan")))
+        if not all(math.isfinite(v) for v in [score_mean, score_std, intercept, score_weight]) or score_std <= 0.0:
+            raise ValueError("EAF-ICER V37 affine post-selection value parameters are invalid")
+        value = intercept + score_weight * ((u - score_mean) / max(score_std, 1.0e-6))
+        value_feature = np.asarray([u], dtype=np.float64)
+        value_names = ["post_value::frozen_rsmr_score"]
 
-    if mode == "orthogonal_proposal_value":
-        ww = float(rank_w @ rank_w)
-        if ww <= 1.0e-12:
-            raise ValueError("EAF-ICER V37 frozen RSMR score direction has zero norm")
-        zperp = z - rank_w * (u_linear / ww)
-        if abs(float(zperp @ rank_w)) > 1.0e-8 * max(1.0, float(np.linalg.norm(zperp)), float(np.linalg.norm(rank_w))):
-            raise ValueError("EAF-ICER V37 orthogonal proposal feature lost score orthogonality")
-        rmean = np.asarray(scir_cfg.get("post_selection_residual_feature_mean", []), dtype=np.float64).reshape(-1)
-        rstd = np.asarray(scir_cfg.get("post_selection_residual_feature_std", []), dtype=np.float64).reshape(-1)
-        rw = np.asarray(scir_cfg.get("post_selection_residual_weights", []), dtype=np.float64).reshape(-1)
-        if len(rmean) != X.shape[1] or len(rstd) != X.shape[1] or len(rw) != X.shape[1]:
-            raise ValueError("EAF-ICER V37 orthogonal residual schema is inconsistent")
-        rz = (zperp - rmean) / np.maximum(rstd, 1.0e-6)
-        value += float(rz @ rw + float(scir_cfg.get("post_selection_residual_bias", 0.0)))
-        value_feature = np.concatenate([np.asarray([u], dtype=np.float64), zperp])
-        value_names = ["post_value::frozen_rsmr_score"] + [f"post_value_orthogonal::{n}" for n in stored_names]
+        if mode == "orthogonal_proposal_value":
+            ww = float(rank_w @ rank_w)
+            if ww <= 1.0e-12:
+                raise ValueError("EAF-ICER V37 frozen RSMR score direction has zero norm")
+            zperp = z - rank_w * (u_linear / ww)
+            if abs(float(zperp @ rank_w)) > 1.0e-8 * max(1.0, float(np.linalg.norm(zperp)), float(np.linalg.norm(rank_w))):
+                raise ValueError("EAF-ICER V37 orthogonal proposal feature lost score orthogonality")
+            rmean = np.asarray(scir_cfg.get("post_selection_residual_feature_mean", []), dtype=np.float64).reshape(-1)
+            rstd = np.asarray(scir_cfg.get("post_selection_residual_feature_std", []), dtype=np.float64).reshape(-1)
+            rw = np.asarray(scir_cfg.get("post_selection_residual_weights", []), dtype=np.float64).reshape(-1)
+            if len(rmean) != X.shape[1] or len(rstd) != X.shape[1] or len(rw) != X.shape[1]:
+                raise ValueError("EAF-ICER V37 orthogonal residual schema is inconsistent")
+            rz = (zperp - rmean) / np.maximum(rstd, 1.0e-6)
+            value += float(rz @ rw + float(scir_cfg.get("post_selection_residual_bias", 0.0)))
+            value_feature = np.concatenate([np.asarray([u], dtype=np.float64), zperp])
+            value_names = ["post_value::frozen_rsmr_score"] + [f"post_value_orthogonal::{n}" for n in stored_names]
     if not math.isfinite(value):
-        raise ValueError("EAF-ICER V37 post-selection value is non-finite")
+        raise ValueError("EAF-ICER post-selection value is non-finite")
     max_abs = max(float(scir_cfg.get("post_selection_value_max_abs", 40.0)), 1.0e-6)
     value = float(np.clip(value, -max_abs, max_abs))
     return value, value_feature, value_names

@@ -10677,3 +10677,65 @@ If supported by double fresh and later full-validation/closed-loop evidence, the
 `bounded evidence -> exact EAF attribution -> contrastive regret-aligned extremal ranking -> frozen proposal -> proposal-conditioned absolute value recovery -> deterministic incumbent containment`.
 
 The conceptual claim is that decision sufficiency is operator-dependent: relative evidence can be sufficient for challenger ordering while the post-extremal incumbent-exit decision requires a distinct absolute-value estimand defined on the selected-policy output distribution. This preserves the paper's existing no-new-query and no-fallback structural guarantees while directly addressing the V36 falsification.
+
+# V64.3.37 uploaded TRAIN result audit -> V64.3.38 EAF-ICER-DAVR
+
+## 1. V37 reliability decision
+
+The uploaded V37 code is byte-identical to the preregistered package (SHA256 `bd152136f003b45cb4c7d8ba4f8adc5c2c738bc18ceadf41c8b805597550b35a`). The output completed all five nested TRAIN folds, server targeted regression is **172/172 PASS**, the scene audit is **782/782 unique direct scenes**, and selected-policy calibration proposal counts are **97/100/98/86/110** (all >=64). The frozen-winner containment contract is valid. The launcher stopped at the exact registered TRAIN diagnosis before creating non-empty CAL500/A500/B500 manifests. Therefore V37 is engineering-valid for TRAIN-level attribution and no V37.1 hotfix is needed.
+
+## 2. V37 scientific result
+
+Frozen RSMR remains:
+
+`502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophes / 107 no-op false / NegRMS 0.3557`.
+
+AVR:
+
+`377 / 158 / 27.53% / +33.8665 / 19 / 72 / 0.3516`.
+
+OPVR:
+
+`341 / 137 / 23.87% / +38.8819 / 15 / 71 / 0.3325`.
+
+Both value arms reduce no-op and catastrophe counts, but both violate the preregistered capture contract. OPVR also has a negative outer-fold selected sum (`fold 1 = -4.0726`). V37 therefore fails scientifically and must not consume fresh data.
+
+## 3. Mechanism verdict
+
+AVR scalar weights are sign-unstable across folds (`+0.1866/-0.0114/+0.2070/-0.1641/+0.0646`), so frozen RSMR score is not a stable cardinal intervention-value coordinate.
+
+OPVR fits calibration residual MSE better in every fold but generalizes poorly: only fold 0 improves outer-test value MSE, while fold 1 degrades from `0.3883` to `1.6325`. Aggregate OPVR selected-proposal MSE is `0.7428` versus AVR `0.5182`; positive AUC is `0.4428`, although non-catastrophe AUC reaches `0.6069`. Cross-fold orthogonal residual directions are unstable and often approximately opposite.
+
+Therefore the V37 question must be answered narrowly: **the 19-D subspace orthogonal to RSMR shows weak downside/tail structure, but V37 does not identify a robust generalizable signed absolute-value mapping.** Because each high-dimensional selected-only fit sees only 86-110 proposals, representation insufficiency cannot yet be separated from selected-only identification/sample inefficiency.
+
+Updated dominant bottleneck:
+
+**selected-policy cardinal zero-crossing/value identifiability under sparse selected-only supervision after a useful ordinal RSMR ranker.**
+
+## 4. New no-repeat constraints
+
+Keep all earlier prohibitions. Additionally do not enlarge OPVR/nonlinear selected-only residual capacity; do not tune value/RSMR thresholds or lambda/alpha/q; do not refit RSMR while claiming a pure value test; do not expand basepoint/selection geometry; and do not let a dense pointwise value model perform the extremal selection, which would return to the V32 failure mechanism.
+
+# V64.3.38 EAF-ICER-DAVR
+
+Full name: **Decoupled All-edge Value Recovery**.
+
+V38 tests **rank/value estimand factorization with supervision-unit decoupling**.
+
+1. Freeze the V34 RSMR proposal identity. RSMR remains the sole ordinal challenger selector.
+2. Train a separate absolute-value ridge on **all fit-fold candidate edges** using the repaired V32.1 scene-equal objective: every scene contributes total squared-loss mass one, fixed `lambda=1`.
+3. The dense value head is never used to rank. It is evaluated only on the already frozen RSMR winner and can only accept it or return incumbent.
+4. Use an independent calibration fold to fit only a **one-dimensional affine selected-policy recalibration** from dense value to selected proposal teacher improvement. No 18-D selected-only residual is fitted.
+5. Keep an AVR scalar-score affine control and a raw DENSE arm so the experiment distinguishes score calibration, dense cardinal identification, and selected-policy shift.
+
+Nested TRAIN keeps the historical `3 fit + 1 value-calibration + 1 test` split and requires >=64 RSMR proposals in each calibration fold. Main DAVR gate remains preregistered at >=20% no-op reduction, capture within 3 pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate and 5/5 fold sums, selected>=64, positive>=32, and exact same-winner containment.
+
+Mechanistic branches are preregistered:
+
+- DAVR success -> V37 was primarily sparse selected-only identification; current 19-D evidence contains usable cardinal signal when supervision unit is dense.
+- DENSE prediction improves but DAVR zero-crossing fails -> cardinal signal exists but selected-policy distribution/zero-crossing reliability remains the next bottleneck.
+- DENSE does not improve beyond AVR and DAVR fails -> stronger evidence the current 19-D contrast is insufficient for selected absolute value; stop this cardinal representation rather than add head capacity.
+
+V37 spent no fresh data. Permanent exclusion remains **10700 tokens**. V38 uses new label-free seed `v64.3.38-eaf-icer-davr-cal500-double-fresh-v1`; only after nested TRAIN pass may it select independent `CAL500+A500+B500`. Fresh A/B evaluate `RAW/V20/PRESERVE/RSMR/AVR/DENSE/DAVR` separately with no pooling. All value arms are monotone subsets of frozen RSMR with no reranking or second-best fallback.
+
+Paper-level candidate mechanism: **operator-conditioned ordinal/cardinal estimand factorization with supervision-unit alignment** under the bounded auditable EAF interface, rather than another classifier/threshold/head trick.
