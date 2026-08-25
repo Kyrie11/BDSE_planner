@@ -1,7 +1,0 @@
-cd bdse_v64_3_30_3_eaf_icer_fbic_pure_auditfix
-bash RUN_V64_3_30_3_EAF_ICER_FBIC_PURE_AUDITFIX_SCREEN_2GPU.sh
-
-# The launcher reuses V30.2 TRAIN provenance by default from:
-# outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1
-# If your old output root is elsewhere:
-# V30_2_ROOT=/path/to/outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1 bash RUN_V64_3_30_3_EAF_ICER_FBIC_PURE_AUDITFIX_SCREEN_2GPU.sh

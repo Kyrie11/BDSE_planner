@@ -1,58 +1,26 @@
-V64.3.43 EAF-ICER-CRVR engineering validation
+V64.3.43 EAF-ICER-CFRV ENGINEERING VALIDATION
 ================================================
+generated_utc=2026-08-25T22:20:58Z
 
-V42 uploaded-result reliability prerequisite
----------------------------------------------
-- Uploaded V42 code archive SHA256: d29e14c0d30833d42ca1b8f70afc6f08a71183cad8b05c6e63a990acfaf216b7
-- Matches the V42 preregistered delivery hash: PASS
-- Uploaded V42 output archive SHA256: 020416452bdbf7620790fcc46661fa1c9dc2f2c4758bbdf358303061447d9c2b
-- Five nested outer folds complete: PASS
-- TRAIN scene audit: 782/782 unique scenes: PASS
-- Server targeted regression: 198/198 PASS (2 historical Transformer warnings)
-- Re-instrumented frozen-TRAIN RSMR signature exactly reproduced: PASS
-  selected=502, positive=221, no-op-false=107, catastrophe=28,
-  teacher sum=+43.29405361274824, capture=38.501742%, NegRMS=0.3556880321206127
-- V42 versus V41 scene audit: scenario tokens/folds/candidate counts/RSMR actions exact: PASS
-- Max RSMR score difference versus V41: 0
-- Max teacher-improvement difference versus V41: 4.44e-16
-- EPV-RAW action/value replay versus V41: exact
-- V42 CAL500/A500/B500 consumed: NO
-- V42 stopped at preregistered scientific TRAIN gate: PASS
-- Engineering hotfix required before V42 attribution: NO
+V42 uploaded-run reliability
+- code SHA256 matches preregistered V42: PASS
+- 3000 frozen TRAIN replay: PASS
+- 782/782 unique direct scenes: PASS
+- 5/5 nested outer folds: PASS
+- value-cal proposals: 97/100/98/86/110: PASS
+- server targeted regression: 198/198 PASS (2 historical warnings)
+- exact frozen RSMR/V41 EPV replay: PASS
+- CAL500/A500/B500 consumed: NO
+- attribution status: ENGINEERING VALID / SCIENTIFIC TRAIN FAILURE
 
-V43 code/static validation
---------------------------
-- Python py_compile for all V43-modified/new Python files: PASS
-- RUN_V64_3_43_EAF_ICER_CRVR_SCREEN_2GPU.sh bash -n: PASS
-- V41+V42+V43 focused regression: 12/12 PASS
-- V13-V43 targeted regression used by launcher: 202/202 PASS
-- Warnings in targeted regression: 2 historical Transformer warnings; no V43-specific warning observed
-- fitter --help / split checker --help / screen checker --help: PASS during development
+V43 static/focused validation
+- Python compileall: PASS
+- main launcher bash -n: PASS
+- focused V42+V43 tests:
+......                                                                   [100%]
+6 passed in 2.44s
 
-V43 mechanism-specific invariants covered
------------------------------------------
-- response-envelope observables are computed only from current RuntimeFeatures, candidate trajectories, and already selected evidence atoms
-- build_response_modes is called with label_future=None; logged response mode is not emitted and any uses_label_future/logged mode is rejected fail-closed
-- response observables do not participate in RSMR challenger selection
-- same frozen RSMR winner or incumbent only; no rerank, no second-best, no fallback rescue
-- Q/CV/MEAN/ROBUST observable improvements are incumbent-cost minus candidate-cost
-- known analytic costs are divided by the exact per-scene pair-margin target scale before fixed +1 accounting
-- endpoint potential is trained only on target residual after the analytic anchor, zero bias, scene-equal, fixed lambda=1
-- no learned observable coefficient and no selected-policy translation in V43 promoted arms
-- selected-evidence response cost is identity-zero when candidate==incumbent by cost-difference construction
-- TRAIN-only teacher-component oracle closes the normalized teacher target decomposition and is never a runtime feature
-- malformed/missing response observable schema and invalid target scale fail closed
-- fitter hard-stops as ENGINEERING failure if V43 instrumentation changes the historical frozen-RSMR TRAIN signature
-
-Full repository regression note
--------------------------------
-A full repository pytest run was attempted locally. It progressed to approximately 82% without an observed failure before the container execution limit terminated the run. A subsequent fixed-partition attempt likewise made substantial progress without an observed failure but exceeded the local execution budget because of historical long-running tests.
-
-Therefore this artifact intentionally does NOT claim a new full-repository PASS count for V43. The completed, reproducible evidence is the 202/202 V13-V43 targeted regression plus the 12/12 focused V41-V43 regression and static checks above. The server launcher reruns the complete 202-test targeted gate before any TRAIN replay or fresh selection.
-
-Scientific-protocol notes
--------------------------
-- V43 TRAIN remains the only development gate.
-- If TRAIN fails, launcher STOPs before any fresh selection.
-- V43 has no post-TRAIN calibration parameter; only after TRAIN pass does it select new independent A500+B500 (no CAL500), with seed v64.3.43-eaf-icer-crvr-double-fresh-v1.
-- Official full-validation and nuPlan closed-loop remain forbidden until TRAIN and both fresh blocks pass.
+Notes:
+- Full repository / V13-V43 regression was started locally but exceeds the artifact-session execution window; no failure was observed before timeout. It is intentionally not claimed as PASS.
+- The delivered server launcher runs the full preregistered V13-V43 targeted regression before TRAIN replay.
+- The V43 scientific experiment itself cannot be run here because the nuPlan caches and EAF checkpoint are server-side.

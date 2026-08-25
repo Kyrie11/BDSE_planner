@@ -122,6 +122,15 @@ def runtime_value_observable_costs(
         axis=1,
     )
     out = np.concatenate([quality, risk], axis=1).astype(np.float64)
-    if out.shape != (K, len(VALUE_OBSERVABLE_NAMES)) or not np.all(np.isfinite(out)):
-        raise ValueError("V42 deployment value-observable matrix is malformed or non-finite")
-    return out, list(VALUE_OBSERVABLE_NAMES)
+    names = list(VALUE_OBSERVABLE_NAMES)
+    ic = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {}) if isinstance(cfg, dict) else {}
+    if bool(ic.get("instrument_future_response_observables", False)):
+        from bdse.planner.response_value_observables import FUTURE_RESPONSE_OBSERVABLE_NAMES, runtime_future_response_observable_costs
+        future, fn = runtime_future_response_observable_costs(runtime, candidates, cfg)
+        if fn != FUTURE_RESPONSE_OBSERVABLE_NAMES or future.shape != (K, len(FUTURE_RESPONSE_OBSERVABLE_NAMES)):
+            raise ValueError("V43 future-response observable schema mismatch")
+        out = np.concatenate([out, future], axis=1)
+        names.extend(fn)
+    if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
+        raise ValueError("deployment value-observable matrix is malformed or non-finite")
+    return out, names

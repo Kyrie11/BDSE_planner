@@ -2582,7 +2582,6 @@ def _icer_post_selection_value(
     legacy_action: int | None = None,
     value_observable_matrix: np.ndarray | None = None,
     value_observable_names: list[str] | np.ndarray | None = None,
-    value_target_scale: float = 1.0,
 ) -> tuple[float, np.ndarray, list[str]]:
     """Absolute value readout for an already frozen RSMR proposal.
 
@@ -2603,7 +2602,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_residual_quality_anchor", "endpoint_residual_quality_cv_evidence_anchor", "endpoint_residual_quality_mean_response_anchor", "endpoint_residual_quality_robust_response_anchor"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2628,7 +2627,7 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_residual_quality_anchor", "endpoint_residual_quality_cv_evidence_anchor", "endpoint_residual_quality_mean_response_anchor", "endpoint_residual_quality_robust_response_anchor"}:
+    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift"}:
         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
@@ -2663,54 +2662,44 @@ def _icer_post_selection_value(
         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
         value_feature = phi
         value_names = [f"post_value::{n}" for n in runtime_value_names]
-        if mode in {"endpoint_residual_quality_anchor", "endpoint_residual_quality_cv_evidence_anchor", "endpoint_residual_quality_mean_response_anchor", "endpoint_residual_quality_robust_response_anchor"}:
+        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift"}:
             if value_observable_matrix is None or value_observable_names is None:
-                raise ValueError("EAF-ICER V43 anchored value mode requires deployment and response observable matrix")
+                raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
             om = np.asarray(value_observable_matrix, dtype=np.float64)
             on = [str(x) for x in value_observable_names]
             if om.ndim != 2 or om.shape[0] != X.shape[0] or not (0 <= legacy < om.shape[0]) or not (0 <= b < om.shape[0]):
-                raise ValueError("EAF-ICER V43 anchored observable runtime matrix shape mismatch")
+                raise ValueError("EAF-ICER V43 observable runtime matrix shape mismatch")
             stored_obs = [str(x) for x in scir_cfg.get("post_selection_observable_names", [])]
             if on != stored_obs:
-                raise ValueError("EAF-ICER V43 anchored observable schema mismatch")
+                raise ValueError("EAF-ICER V43 observable schema mismatch")
             delta_obs = om[legacy] - om[b]
-            qnames = [
-                "route_deviation_cost",
-                "progress_deficit_cost",
-                "global_comfort_cost",
-            ]
-            pos_obs = {n: i for i, n in enumerate(on)}
-            if any(n not in pos_obs for n in qnames):
-                raise ValueError("EAF-ICER V43 quality anchor is incomplete")
-            anchor_parts = [float(delta_obs[pos_obs[n]]) for n in qnames]
-            anchor_names = [f"analytic_anchor::{n}" for n in qnames]
-            response_name = None
-            if mode == "endpoint_residual_quality_cv_evidence_anchor":
-                response_name = "selected_evidence_cv_cost"
-            elif mode == "endpoint_residual_quality_mean_response_anchor":
-                response_name = "selected_evidence_response_mean_cost"
-            elif mode == "endpoint_residual_quality_robust_response_anchor":
-                response_name = "selected_evidence_response_robust_cost"
-            if response_name is not None:
-                if response_name not in pos_obs:
-                    raise ValueError(f"EAF-ICER V43 missing response anchor {response_name}")
-                anchor_parts.append(float(delta_obs[pos_obs[response_name]]))
-                anchor_names.append(f"analytic_anchor::{response_name}")
-            target_scale = float(value_target_scale)
-            if not math.isfinite(target_scale) or target_scale <= 0.0:
-                raise ValueError("EAF-ICER V43 analytic anchor requires positive finite pair-margin target scale")
-            # The scientific target logged by the EAF frontier is the teacher
-            # margin divided by the pair-margin scale.  Observable costs are in
-            # raw teacher-cost units, so first put them into the exact same units;
-            # only then are their physical coefficients structurally +1.
-            anchor_parts = [float(x) / target_scale for x in anchor_parts]
-            anchor = float(np.sum(np.asarray(anchor_parts, dtype=np.float64)))
-            # V43 reverses the V42 regression topology: known normalized cost
-            # terms enter with fixed +1 coefficients; the endpoint potential is
-            # trained only on the unexplained normalized remainder.
-            value = float(np.clip(value + anchor, -40.0, 40.0))
-            value_feature = np.concatenate([phi, np.asarray(anchor_parts, dtype=np.float64)])
-            value_names = [f"post_value::{n}" for n in runtime_value_names] + anchor_names
+            qnames = [str(x) for x in scir_cfg.get("post_selection_quality_observable_names", [])]
+            qidx = [on.index(n) for n in qnames] if qnames and all(n in on for n in qnames) else []
+            qscale = np.asarray(scir_cfg.get("post_selection_quality_observable_scale", []), dtype=np.float64).reshape(-1)
+            qw = np.asarray(scir_cfg.get("post_selection_quality_observable_weights", []), dtype=np.float64).reshape(-1)
+            if len(qidx) != 3 or qscale.size != len(qidx) or qw.size != len(qidx):
+                raise ValueError("EAF-ICER V43 frozen QUALITY residual schema mismatch")
+            qobs = delta_obs[np.asarray(qidx, dtype=np.int64)]
+            qres = float((qobs / np.maximum(qscale, 1.0e-6)) @ qw)
+            value = float(np.clip(value + qres, -40.0, 40.0))
+            rname = str(scir_cfg.get("post_selection_future_response_observable_name", ""))
+            if rname not in on:
+                raise ValueError("EAF-ICER V43 selected future-response observable missing")
+            ridx = on.index(rname)
+            rscale = float(scir_cfg.get("post_selection_future_response_scale", float("nan")))
+            rw = float(scir_cfg.get("post_selection_future_response_weight", float("nan")))
+            if not math.isfinite(rscale) or rscale <= 0.0 or not math.isfinite(rw):
+                raise ValueError("EAF-ICER V43 future-response residual parameters invalid")
+            robs = float(delta_obs[ridx])
+            rres = float((robs / max(rscale, 1.0e-6)) * rw)
+            value = float(np.clip(value + rres, -40.0, 40.0))
+            value_feature = np.concatenate([phi, qobs, np.asarray([robs], dtype=np.float64)])
+            value_names = [f"post_value::{n}" for n in runtime_value_names] + [f"observable_improvement::{n}" for n in qnames] + [f"future_response_improvement::{rname}"]
+            if mode == "endpoint_potential_quality_future_response_robust_shift":
+                shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
+                if not math.isfinite(shift):
+                    raise ValueError("EAF-ICER V43 selected translation bias invalid")
+                value = float(np.clip(value + shift, -40.0, 40.0))
         elif mode in {"endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}:
             if value_observable_matrix is None or value_observable_names is None:
                 raise ValueError("EAF-ICER V42 observable value mode requires deployment value-observable matrix")
@@ -2919,7 +2908,6 @@ def _apply_decisive_frontier_icer(
     selected_atom_type_names: list[str] | np.ndarray | None = None,
     value_observable_matrix: np.ndarray | None = None,
     value_observable_names: list[str] | np.ndarray | None = None,
-    value_target_scale: float = 1.0,
 ) -> tuple[int, dict[str, Any]]:
     """V64.3.19+ incumbent-contrastive extremal recovery.
 
@@ -3307,8 +3295,7 @@ def _apply_decisive_frontier_icer(
                         scir_post_selection_value, scir_post_selection_value_feature, scir_post_selection_value_feature_names = _icer_post_selection_value(
                             best, scir_raw_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_cfg,
                             raw_feat=feat, raw_feature_names=names, support_logits=support_logits, legacy_action=legacy,
-                            value_observable_matrix=value_observable_matrix, value_observable_names=value_observable_names,
-                            value_target_scale=value_target_scale,
+                            value_observable_matrix=value_observable_matrix, value_observable_names=value_observable_names
                         )
                         # For diagnostics, replace only the frozen proposal's
                         # absolute intervention value.  All non-proposal scores
@@ -3814,7 +3801,6 @@ def run_pair_conditioned_tournament(
             selected_atom_type_names=selected_atom_type_names,
             value_observable_matrix=value_observable_matrix,
             value_observable_names=value_observable_names,
-            value_target_scale=float(pair_margin_scale) if normalize_margins and pair_margin_scale is not None else 1.0,
         )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))
