@@ -11027,3 +11027,122 @@ Only a complete nested TRAIN pass may select independent `CAL500 + A500 + B500`.
 - Added `RUN_V64_3_42_DIAGNOSTIC_NUPLAN_CL20.sh`, which selects 20 scenarios label-free from the already permanent-design-excluded validation population and compares `V20 / PRESERVE / RSMR / EPV-RAW / OVDR-RAW`.
 - This CL20 is explicitly **diagnostic-only**: it may test whether open-loop near-zero capture misses affect progress and whether open-loop catastrophes correspond to collision/TTC/drivable degradation, but it must not tune V42 or replace TRAIN/double-fresh gates.
 - Official paper-facing closed-loop should follow double-fresh plus one frozen full-validation reproduction.
+
+# V64.3.42 uploaded TRAIN result audit -> V64.3.43 EAF-ICER-CRVR
+
+## V64.3.42 result validity
+
+- Uploaded V42 code archive is byte-identical to the preregistered package: `sha256=d29e14c0d30833d42ca1b8f70afc6f08a71183cad8b05c6e63a990acfaf216b7`.
+- Server targeted regression: **198/198 PASS** (2 historical Transformer warnings).
+- Five nested outer folds completed; TRAIN scene audit is **782/782 unique**.
+- Newly instrumented TRAIN replay reproduces frozen RSMR exactly: `502 selected / 221 positive / 107 no-op false / 28 catastrophes / +43.29405361274824 sum / 38.501742% capture / NegRMS 0.355688`.
+- Relative to the V41 scene audit: tokens/folds/candidate counts/RSMR actions are exact, max RSMR score difference is 0, max teacher-improvement difference is `4.44e-16`, and EPV-RAW action/value replays exactly.
+- V42 stopped at TRAIN scientific gate before CAL500/A500/B500 selection; no fresh population was consumed. Permanent design exclusion remains 10700.
+- Conclusion: **engineering-valid TRAIN-level scientific attribution; no V42.1 required.**
+
+The V42 fitter's text diagnosis `current_physical_risk_observable_is_primary_missing_tail_mediator` is an AUC-first reporting heuristic and must not override preregistered gates. Actual gates have QUALITY tail PASS and RISK tail FAIL. This is a diagnosis/reporting issue only and does not invalidate actions, metrics, nesting, or freshness.
+
+## V64.3.42 scientific result
+
+Frozen RSMR: `502 / 221 / capture 38.50% / sum +43.294 / cat 28 / no-op 107 / NegRMS 0.3557`.
+
+- EPV-RAW: `203 / 118 / 20.56% / +25.969 / cat 15 / no-op 39 / NegRMS 0.4543`.
+- QUALITY: `205 / 129 / 22.47% / +43.906 / cat 13 / no-op 30 / NegRMS 0.3127`; **tail gate PASS**, capture gate FAIL, all 5 fold sums nonnegative.
+- RISK: `205 / 122 / 21.25% / +43.300 / cat 11 / no-op 40 / NegRMS 0.3901`; count-level tail improves but NegRMS remains worse than RSMR.
+- JOINT-RAW: `186 / 109 / 18.99% / +40.777 / cat 11 / no-op 37 / NegRMS 0.4244`; learned joint fusion creates negative transfer.
+- OVDR-MAIN: `285 / 129 / 22.47% / +41.246 / cat 16 / no-op 63 / NegRMS 0.3894`; selected translation re-adds harmful interventions and remains far below the 35.50% capture floor.
+
+Mechanism verdict: **partial success but TRAIN promotion failure**. Direct trajectory consequence is a real mediator. QUALITY almost preserves the full RSMR aggregate teacher gain while halving catastrophes and cutting no-op false interventions by ~72%, so V42 is not a blanket-abstention failure. But current-state observables are not sufficient for the absolute incumbent-exit boundary.
+
+Critical observability evidence on the frozen 502 RSMR proposals:
+
+- current RISK delta is identically zero for hard-agent, hard-off-route, and red-light coordinates;
+- the entire current RISK block is zero on 286/502 proposals;
+- 17/28 catastrophes (60.7%, teacher sum -19.308) have zero current RISK delta;
+- 21/50 material positives (`DeltaT>0.2`, teacher sum +25.707) have zero current RISK delta;
+- 17 material positives totaling +20.902 are rejected by QUALITY, RISK, and JOINT simultaneously.
+
+QUALITY and RISK nevertheless rescue V41 high-value EPV false negatives such as `7418da8c04e85efb` (+4.008) and `054033a129155c88` (+3.994), proving that value-specific physical consequence is a valid direction.
+
+Updated dominant bottleneck:
+
+> **deployment-sufficient counterfactual consequence observability for the frozen extremal proposal, especially future-agent response and omitted teacher consequence at the absolute incumbent-exit boundary.**
+
+Additional V42 decomposition lesson: route/progress/comfort are exact observable teacher-base components, but V42 hands their residual coefficients back to ridge. The learned full-TRAIN QUALITY progress coefficient changes sign, and JOINT route changes sign. Moreover the value target is pair-margin normalized whereas observable costs are raw teacher-cost units. Future analytic accounting must divide observable cost improvement by the exact per-scene pair-margin scale before assigning a fixed +1 physical coefficient.
+
+## V64.3.43 EAF-ICER-CRVR
+
+Full name: **Counterfactual Response Value Recovery**.
+
+V43 keeps RSMR as the sole challenger selector and preserves the exact same-winner/no-fallback topology. It adds no neural evidence query and never consumes logged future at runtime.
+
+### Structural value decomposition
+
+For the frozen RSMR proposal `b_hat`, teacher-aligned observable cost improvements are converted to the same normalized units as the learned value target:
+
+`DeltaC_norm = [C(incumbent)-C(candidate)] / pair_margin_scale`.
+
+Known components enter with fixed coefficient +1. Endpoint potential is fitted only to the unexplained remainder:
+
+`Y - analytic_anchor`.
+
+This prevents known physical semantics from being relearned/reversed by a joint ridge.
+
+### Runtime-only counterfactual response envelope
+
+Evaluate the already selected evidence atoms under fixed current-state response hypotheses:
+
+`CV / CA / brake / yield / nonyield`.
+
+Logged response is explicitly forbidden. Build three lower-is-better selected-evidence costs:
+
+1. CV response cost;
+2. probability-weighted response mean cost;
+3. fixed mean/CVaR robust response cost.
+
+All are computed from current runtime state, candidate trajectories and already selected evidence only. They never enter challenger ranking.
+
+### Preregistered causal arms and simplicity-first promotion
+
+1. `Q-ANCHOR`: exact normalized route+progress+comfort + endpoint remainder.
+2. `CV-ANCHOR`: Q + selected-evidence CV cost + endpoint remainder.
+3. `MEAN-ANCHOR`: Q + selected-evidence multi-response mean + endpoint remainder.
+4. `ROBUST-ANCHOR` / CRVR: Q + selected-evidence response mean/CVaR + endpoint remainder.
+
+Promotion selects the **first** passing arm in fixed order Q -> CV -> MEAN -> ROBUST. This prevents crediting response complexity if exact current accounting already suffices.
+
+V42 QUALITY is replayed as a non-promoted control. No selected-policy translation is fitted in V43.
+
+### TRAIN-only oracle decomposition
+
+V43 logs teacher base/evidence/selected-evidence/unselected-evidence costs and the exact target scale only on frozen TRAIN, and verifies:
+
+`Y = current_quality + demo_label_only + selected_evidence_teacher + unselected_evidence_teacher`
+
+in normalized units. These fields are never runtime inputs. If all response arms fail, this oracle separates response-model insufficiency, bounded-interface omission, and label-only teacher/runtime estimand mismatch instead of triggering another ambiguous head iteration.
+
+### Gate
+
+Unchanged versus RSMR:
+
+- >=20% no-op false reduction;
+- capture >=35.5017%;
+- >=25% catastrophe reduction;
+- NegRMS non-worse;
+- aggregate and 5/5 fold sums nonnegative;
+- selected>=64 and positive>=32;
+- exact monotone same-winner containment.
+
+No threshold/lambda/alpha/q/top-K/candidate-count/capacity/temperature sweep.
+
+### Falsification branch
+
+- Q first pass -> current analytic consequence sufficient; discard response envelope.
+- CV first pass -> physical selected-evidence reconstruction sufficient; no multimodal-response claim.
+- MEAN first pass -> response expectation is necessary.
+- ROBUST first pass -> tail-response functional is necessary.
+- all fail -> close handcrafted runtime response envelope and use the TRAIN-only oracle to decide between data-conditioned predictive future consequence, bounded-interface augmentation, or teacher/runtime estimand correction. Do not increase head capacity on the same observables.
+
+### Fresh protocol
+
+V43 has no post-TRAIN calibration parameter. If TRAIN passes, consume only a new independent **A500+B500** under seed `v64.3.43-eaf-icer-crvr-double-fresh-v1`; no CAL500 is selected. A/B remain unpooled. Official full-validation and nuPlan closed-loop remain forbidden until TRAIN + both fresh blocks pass.

@@ -684,11 +684,19 @@ class BDSEPlannerCore:
         # selection; the frozen RSMR winner is chosen before they are consumed.
         value_observable_matrix = None
         value_observable_names = None
+        _need_v43_response = False
         try:
             _ic = (((stage_cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {})
             _scir = (_ic.get("selection_conditioned_intervention_recovery", {}) or {})
             _vmode = str(_scir.get("post_selection_value_mode", "")).strip().lower()
-            _need_vobs = bool(_ic.get("instrument_value_observables", False)) or _vmode in {
+            _v43_modes = {
+                "endpoint_residual_quality_cv_evidence_anchor",
+                "endpoint_residual_quality_mean_response_anchor",
+                "endpoint_residual_quality_robust_response_anchor",
+            }
+            _need_v43_response = bool(_ic.get("instrument_response_value_observables", False)) or _vmode in _v43_modes
+            _need_vobs = bool(_ic.get("instrument_value_observables", False)) or _need_v43_response or _vmode in {
+                "endpoint_residual_quality_anchor",
                 "endpoint_potential_quality_observable",
                 "endpoint_potential_risk_observable",
                 "endpoint_potential_joint_observable",
@@ -714,6 +722,19 @@ class BDSEPlannerCore:
             structural_mask = np.pad(structural_mask, (0, evidence_bank.E - structural_mask.shape[0]), constant_values=False)
         structural_mask = structural_mask[: evidence_bank.E] & np.asarray(evidence_bank.active_mask, dtype=bool)
         decision_atom_active = atom_active & ~structural_mask if structural_safety_bypass else atom_active
+        if _need_v43_response:
+            from bdse.planner.response_value_observables import runtime_selected_response_costs
+            response_matrix, response_names = runtime_selected_response_costs(
+                runtime, candidates, evidence_bank, np.flatnonzero(atom_active), stage_cfg
+            )
+            if value_observable_matrix is None:
+                value_observable_matrix = response_matrix
+                value_observable_names = list(response_names)
+            else:
+                value_observable_matrix = np.concatenate(
+                    [np.asarray(value_observable_matrix, dtype=np.float64), np.asarray(response_matrix, dtype=np.float64)], axis=1
+                )
+                value_observable_names = list(value_observable_names or []) + list(response_names)
         family_ids = np.asarray(pred.get("family_ids", family_ids_from_atoms(evidence_bank.atoms, max_atoms=evidence_bank.E)), dtype=np.int64)
         family_caps = pred.get("family_budget_caps", None)
         baseline_mode = str(stage_cfg.get("planner", {}).get("baseline_mode", "bdse")).lower().replace("-", "_")

@@ -1,0 +1,30 @@
+V64.3.43 EAF-ICER-CRVR next commands
+====================================
+
+Default server paths:
+
+cd bdse_v64_3_43_eaf_icer_crvr
+bash RUN_V64_3_43_EAF_ICER_CRVR_SCREEN_2GPU.sh
+
+If V42 output / caches are elsewhere:
+
+cd bdse_v64_3_43_eaf_icer_crvr
+V42_ROOT=/your/outputs_v64_3_42_eaf_icer_ovdr_screen_2gpu_v1 \
+BDSE_TRAIN_CACHE=/your/bdse_train_v2 \
+BDSE_VAL_CACHE=/your/bdse_val_v2 \
+EAF_V64_3_13_ROOT=/your/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+OUT_ROOT=/your/outputs_v64_3_43_eaf_icer_crvr_screen_2gpu_v1 \
+GPU0=0 GPU1=1 \
+bash RUN_V64_3_43_EAF_ICER_CRVR_SCREEN_2GPU.sh
+
+Expected behavior:
+1. Reproduce the exact V42 TRAIN failure signature and verify V42 fresh remains unspent.
+2. Compile + run V13->V43 targeted regression.
+3. Replay the exact frozen 3000 TRAIN tokens with current observables, runtime-only response envelope, exact pair-margin scale, and TRAIN-only teacher decomposition.
+4. Hard-stop as ENGINEERING failure if frozen RSMR does not exactly replay 502/221/107/28/+43.29405361274824/38.501742%.
+5. Run nested Q/CV/MEAN/ROBUST gates. If no arm passes, STOP before any fresh token selection.
+6. If TRAIN passes, select only A500+B500 under the new label-free seed. No CAL500 is consumed because V43 has no post-TRAIN calibration parameter.
+7. Run both fresh blocks independently; never pool A/B.
+8. Only if both fresh blocks pass: freeze the promoted arm, perform one independent full-validation reproduction, then run official nuPlan closed-loop.
+
+Do not run the V42 diagnostic CL20 to tune V43 and do not use any diagnostic closed-loop result to alter the V43 preregistered gate.

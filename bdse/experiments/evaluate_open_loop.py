@@ -1042,6 +1042,25 @@ def main() -> None:
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
                 normalized = bool(tour_diag.get("normalized_margins", cfg.get("model", {}).get("pair_margin_normalized", False)))
                 mscale = max(float(tour_diag.get("margin_scale", pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 1.0)))) if normalized else 1.0, 1.0e-6)
+                # V64.3.43 TRAIN-only oracle decomposition.  These arrays come
+                # exclusively from offline teacher labels and are written only
+                # when explicitly instrumented; they never enter planner runtime
+                # selection/value logic.  They close the normalized teacher
+                # improvement into observable base quality, label-only demo,
+                # selected-evidence, and omitted-evidence components.
+                _v43_ic = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {})
+                v43_oracle_enabled = bool(_v43_ic.get("instrument_v43_teacher_decomposition", False))
+                v43_teacher_base = np.asarray(sample.teacher.J_base, dtype=np.float64).reshape(-1) if v43_oracle_enabled else np.zeros((0,), dtype=np.float64)
+                v43_teacher_evid = np.asarray(sample.teacher.J_evid, dtype=np.float64).reshape(-1) if v43_oracle_enabled else np.zeros((0,), dtype=np.float64)
+                v43_selected_evid = np.zeros_like(v43_teacher_evid)
+                if v43_oracle_enabled:
+                    g_teacher = np.asarray(sample.teacher.g_evid, dtype=np.float64)
+                    sel_mask = np.asarray(stage_atom_active, dtype=bool).reshape(-1)
+                    if g_teacher.ndim != 2 or g_teacher.shape[1] != edge_valid.size or sel_mask.size != g_teacher.shape[0]:
+                        raise RuntimeError("V43 teacher-decomposition instrumentation schema mismatch")
+                    if np.any(sel_mask):
+                        v43_selected_evid = g_teacher[sel_mask].sum(axis=0, dtype=np.float64)
+                v43_unselected_evid = v43_teacher_evid - v43_selected_evid if v43_oracle_enabled else np.zeros((0,), dtype=np.float64)
                 mat = None if edge_features is None else np.asarray(edge_features, dtype=np.float64)
                 for challenger in np.flatnonzero(edge_valid).tolist():
                     challenger = int(challenger)
@@ -1098,6 +1117,16 @@ def main() -> None:
                         "icer_scir_certificate_accepted": float(tour_diag.get("decisive_frontier_icer_scir_certificate_accepted", 0.0)),
                         "icer_admissible": float(icer_admissible[challenger]) if icer_admissible.size == edge_valid.size else 0.0,
                     }
+                    if v43_oracle_enabled:
+                        if not (v43_teacher_base.size == v43_teacher_evid.size == v43_selected_evid.size == v43_unselected_evid.size == edge_valid.size):
+                            raise RuntimeError("V43 teacher-decomposition candidate dimension mismatch")
+                        row.update({
+                            "v43_value_target_scale": float(mscale),
+                            "v43_oracle_teacher_base_cost": float(v43_teacher_base[challenger]),
+                            "v43_oracle_teacher_evidence_cost": float(v43_teacher_evid[challenger]),
+                            "v43_oracle_teacher_selected_evidence_cost": float(v43_selected_evid[challenger]),
+                            "v43_oracle_teacher_unselected_evidence_cost": float(v43_unselected_evid[challenger]),
+                        })
                     if mat is not None and mat.ndim == 2 and mat.shape[0] == edge_valid.size and mat.shape[1] == len(feature_names):
                         for j, name in enumerate(feature_names):
                             row[f"feature_{name}"] = float(mat[challenger, j])
