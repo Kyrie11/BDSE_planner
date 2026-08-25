@@ -1,0 +1,197 @@
+{
+  "audit": "v64_3_38_uploaded_result_causal_audit_for_v64_3_39",
+  "mechanism_diagnostics": {
+    "davr_capture_loss_pp_vs_rsmr": 7.491289198606271,
+    "dense_affine_negative_slope_fold_count": 3,
+    "dense_and_davr_deletion_effects": {
+      "davr": {
+        "accepted_count": 398,
+        "catastrophe_acceptance_rate": 0.6785714285714286,
+        "deleted_catastrophe_count": 9,
+        "deleted_positive_count": 43,
+        "deleted_rsmr_proposal_count": 104,
+        "deleted_teacher_improvement_sum": 8.710528145367553,
+        "positive_acceptance_rate": 0.8054298642533937
+      },
+      "dense": {
+        "accepted_count": 263,
+        "catastrophe_acceptance_rate": 0.8214285714285714,
+        "deleted_catastrophe_count": 5,
+        "deleted_positive_count": 83,
+        "deleted_rsmr_proposal_count": 239,
+        "deleted_teacher_improvement_sum": 31.075696662199697,
+        "positive_acceptance_rate": 0.6244343891402715
+      }
+    },
+    "dense_noncatastrophe_auc": 0.32610006027727545,
+    "dense_positive_auc_gain_over_rsmr": 0.0599668282314294,
+    "dense_selected_policy_affine_slopes": [
+      0.18673261371614086,
+      -0.04740388694821142,
+      0.2031736945028945,
+      -0.1970596045363773,
+      -0.03375865253242157
+    ],
+    "dense_zero_sign_accuracy_gain_over_rsmr": 0.14541832669322713
+  },
+  "metrics": {
+    "davr": {
+      "catastrophic_count": 19,
+      "no_positive_opportunity_false_intervention_count": 81,
+      "no_positive_opportunity_false_intervention_rate": 0.3894230769230769,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 178,
+      "positive_capture_rate": 0.31010452961672474,
+      "positive_opportunity_proposal_rate": 0.5522648083623694,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 317,
+      "positive_opportunity_selected_precision": 0.5615141955835962,
+      "selected_count": 398,
+      "selected_positive_count": 178,
+      "selected_precision": 0.4472361809045226,
+      "teacher_improvement_sum": 34.583525467380696,
+      "teacher_improvement_worst": -3.806486467696913,
+      "teacher_negative_rms": 0.347332788486632
+    },
+    "davr_gate": {
+      "all_folds_sum_nonnegative": true,
+      "existence_and_capture": false,
+      "pass": false,
+      "population": true,
+      "tail": true
+    },
+    "dense": {
+      "catastrophic_count": 23,
+      "no_positive_opportunity_false_intervention_count": 50,
+      "no_positive_opportunity_false_intervention_rate": 0.2403846153846154,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 138,
+      "positive_capture_rate": 0.24041811846689895,
+      "positive_opportunity_proposal_rate": 0.3710801393728223,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 213,
+      "positive_opportunity_selected_precision": 0.647887323943662,
+      "selected_count": 263,
+      "selected_positive_count": 138,
+      "selected_precision": 0.5247148288973384,
+      "teacher_improvement_sum": 12.218356950548547,
+      "teacher_improvement_worst": -3.806486467696913,
+      "teacher_negative_rms": 0.4702196046589013
+    },
+    "dense_gate": {
+      "all_folds_sum_nonnegative": false,
+      "existence_and_capture": false,
+      "pass": false,
+      "population": true,
+      "tail": false
+    },
+    "rsmr": {
+      "catastrophic_count": 28,
+      "no_positive_opportunity_false_intervention_count": 107,
+      "no_positive_opportunity_false_intervention_rate": 0.5144230769230769,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 221,
+      "positive_capture_rate": 0.38501742160278746,
+      "positive_opportunity_proposal_rate": 0.6881533101045296,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 395,
+      "positive_opportunity_selected_precision": 0.5594936708860759,
+      "selected_count": 502,
+      "selected_positive_count": 221,
+      "selected_precision": 0.4402390438247012,
+      "teacher_improvement_sum": 43.29405361274824,
+      "teacher_improvement_worst": -3.806486467696913,
+      "teacher_negative_rms": 0.3556880321206127
+    },
+    "selected_value_diagnostics": {
+      "avr": {
+        "mae": 0.33980660949628,
+        "mse": 0.5181757165498314,
+        "noncatastrophe_auc": 0.5272001205545509,
+        "pearson": -0.03752154387285911,
+        "positive_auc": 0.4394132139579073,
+        "rmse": 0.7198442307540093,
+        "sample_count": 502,
+        "zero_sign_accuracy": 0.43824701195219123
+      },
+      "davr": {
+        "mae": 0.3468594103660932,
+        "mse": 0.5293535245741684,
+        "noncatastrophe_auc": 0.57542194092827,
+        "pearson": -0.09047715677360783,
+        "positive_auc": 0.43740036392328624,
+        "rmse": 0.7275668523057991,
+        "sample_count": 502,
+        "zero_sign_accuracy": 0.4760956175298805
+      },
+      "dense": {
+        "mae": 0.31254266497679195,
+        "mse": 0.5477831104181992,
+        "noncatastrophe_auc": 0.32610006027727545,
+        "pearson": -0.026377279322654667,
+        "positive_auc": 0.6527592148274585,
+        "rmse": 0.7401237129144014,
+        "sample_count": 502,
+        "zero_sign_accuracy": 0.5856573705179283
+      },
+      "rsmr": {
+        "mae": 0.3859621202758237,
+        "mse": 0.5798110509132094,
+        "noncatastrophe_auc": 0.4816154309825196,
+        "pearson": -0.014447624424429944,
+        "positive_auc": 0.5927923865960291,
+        "rmse": 0.761453249328683,
+        "sample_count": 502,
+        "zero_sign_accuracy": 0.4402390438247012
+      }
+    }
+  },
+  "reliability": {
+    "engineering_valid_for_train_attribution": true,
+    "fold_counts": {
+      "0": 168,
+      "1": 131,
+      "2": 151,
+      "3": 170,
+      "4": 162
+    },
+    "fresh_tokens_consumed": false,
+    "matches_preregistered_v38_package": true,
+    "monotone_frozen_winner_contract_valid": true,
+    "scene_audit_rows": 782,
+    "scene_audit_unique_tokens": 782,
+    "stop_stage": "nested_TRAIN_scientific_gate",
+    "targeted_regression_failed": 0,
+    "targeted_regression_passed": 178,
+    "uploaded_code_sha256": "2fdd008b010600d83638d28531c9408f41e32f82d6f691654fe714a2b0c01fd2",
+    "value_calibration_proposal_counts": [
+      97,
+      100,
+      98,
+      86,
+      110
+    ]
+  },
+  "v39_preregistered_test": {
+    "controls": [
+      "RSMR",
+      "DENSE",
+      "DENSE-SHIFT translation-only",
+      "CFSR-RAW",
+      "CFSR-MAIN"
+    ],
+    "hypothesis": "V37 orthogonal residual tail signal and V38 dense ordinary sign signal are complementary. Honest inner cross-fitting can increase selected-policy residual supervision density while preserving outer-test independence; an orthogonal residual corrector can model selection distortion without relearning rank/dense scalars. Independent calibration is translation-only so it cannot flip learned value ordering.",
+    "name": "V64.3.39 EAF-ICER-CFSR \u2014 Cross-Fitted Selection Residual Recovery"
+  },
+  "verdict": {
+    "davr_success": false,
+    "dense_all_edge_success": false,
+    "dominant_bottleneck": "selection-induced conditional residual/tail distortion of the frozen extremal policy output: learn E[Delta|X, selected_by_RSMR], not only E[Delta|X] or rank score, without sparse selected-only overfit or blanket abstention.",
+    "mechanism_conclusion": "RSMR ordinal score and population-edge cardinal value are distinct estimands, and population-edge cardinal value is itself insufficient as the selected-policy value. V38 supports usable ordinary 19-D cardinal sign information but falsifies simple operator-invariant cardinal sufficiency on the extremal selected tail.",
+    "partial_signal": "dense all-edge supervision improves ordinary selected-proposal sign discrimination/precision, but catastrophic selected tail is anti-ordered; DAVR controls some tail and preserves 5/5 fold positive sum but loses 7.49pp capture.",
+    "v38_promotion_success": false
+  }
+}

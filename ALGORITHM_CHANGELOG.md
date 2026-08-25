@@ -10739,3 +10739,60 @@ Mechanistic branches are preregistered:
 V37 spent no fresh data. Permanent exclusion remains **10700 tokens**. V38 uses new label-free seed `v64.3.38-eaf-icer-davr-cal500-double-fresh-v1`; only after nested TRAIN pass may it select independent `CAL500+A500+B500`. Fresh A/B evaluate `RAW/V20/PRESERVE/RSMR/AVR/DENSE/DAVR` separately with no pooling. All value arms are monotone subsets of frozen RSMR with no reranking or second-best fallback.
 
 Paper-level candidate mechanism: **operator-conditioned ordinal/cardinal estimand factorization with supervision-unit alignment** under the bounded auditable EAF interface, rather than another classifier/threshold/head trick.
+
+# V64.3.38 uploaded TRAIN result audit -> V64.3.39 EAF-ICER-CFSR
+
+## 1. V38 reliability decision
+
+The uploaded V38 code is byte-identical to the preregistered package (SHA256 `2fdd008b010600d83638d28531c9408f41e32f82d6f691654fe714a2b0c01fd2`). The run completed all five nested TRAIN folds, server targeted regression is **178/178 PASS**, the scene audit is **782/782 unique direct scenes**, and value-calibration proposal counts are **97/100/98/86/110**. DENSE/DAVR are exact same-winner monotone subsets of frozen RSMR. The launcher stopped at the registered TRAIN scientific failure and created no CAL500/A500/B500 manifests. V38 is engineering-valid for TRAIN-level attribution; no V38.1 hotfix is required.
+
+## 2. V38 result
+
+Frozen RSMR: `502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophes / 107 no-op false / NegRMS 0.3557`.
+
+DENSE: `263 / 138 / 24.04% / +12.2184 / 23 / 50 / 0.4702`.
+
+DAVR: `398 / 178 / 31.01% / +34.5835 / 19 / 81 / 0.3473`.
+
+DAVR passes tail, population and 5/5 nonnegative-fold-sum sub-gates but violates the registered capture floor `>=35.50%`, so V38 fails promotion before fresh.
+
+## 3. New mechanism evidence
+
+Selected-proposal diagnostics show a mixed but highly informative result. DENSE improves ordinary positive discrimination from RSMR positive AUC `0.5928 -> 0.6528` and zero-sign accuracy `0.4402 -> 0.5857`, proving that the current 19-D evidence contains usable ordinary cardinal sign information under dense all-edge supervision. However DENSE non-catastrophe AUC is only `0.3261` and it accepts `23/28` RSMR catastrophes. Its mean prediction is higher on catastrophes than on true positives. Thus ordinary pointwise cardinal value is not selection-stable on the extremal policy output.
+
+The five DAVR selected-policy affine slopes are approximately `+0.1867/-0.0474/+0.2032/-0.1971/-0.0338`; three folds reverse the DENSE value axis. DAVR controls some tail but loses 7.49 pp capture. Therefore V38 adds a second estimand distinction to the V37 conclusion:
+
+`RSMR ordinal score != population-edge cardinal value != selected-policy cardinal value`.
+
+Updated dominant bottleneck:
+
+> **selection-induced conditional residual/tail distortion at the frozen RSMR output: stable selected-proposal absolute-value identification after extremal selection, without sparse selected-only overfit or blanket abstention.**
+
+## 4. New no-repeat constraints
+
+Keep all historical prohibitions. Additionally do not: restore DENSE/mean as the extremal selector; tune DENSE/RSMR thresholds, lambda, alpha/q, affine slope constraints, candidate count or top-K; add a generic catastrophe classifier/tail head; enlarge V37 nonlinear selected-only residual capacity; expand basepoint/selection geometry as a first-order rescue; or use an unconstrained selected-policy affine map that can reverse learned value ordering.
+
+## 5. V64.3.39 EAF-ICER-CFSR
+
+Full name: **Cross-Fitted Selection Residual Recovery**.
+
+V39 combines the complementary V37/V38 evidence without changing the ranker. RSMR remains the only challenger selector; DENSE remains the corrected scene-equal all-edge cardinal base. Within each outer three-fit-fold population, V39 performs an inner three-way cross-fit: inner RSMR+DENSE are trained on two fit folds and emit frozen proposals on the held-out fit fold, producing honest OOF selected residual targets `Delta_T - v_DENSE`. Require >=192 inner OOF selected proposals per outer fit.
+
+Fit a fixed-`lambda=1` linear selection-residual correction on these OOF selected outputs. In a common standardized coordinate system, remove the span of the final outer-fit RSMR and DENSE linear directions; the residual correction is constrained to the orthogonal complement, so it cannot simply relearn either existing scalar estimand.
+
+V39 also replaces V38's unconstrained selected-policy affine map with **translation-only unit-slope calibration** on the independent calibration fold. This can align the selected-policy zero point but cannot reverse DENSE/CFSR value ordering.
+
+Causal arms: `RSMR / DENSE / DENSE-SHIFT / CFSR-RAW / CFSR-MAIN`.
+
+Nested TRAIN main gate remains >=20% no-op reduction, capture within 3 pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate and 5/5 fold sums, selected>=64, positive>=32, exact frozen-winner containment, inner OOF selected population>=192, and residual orthogonality<=1e-8. No threshold/lambda/feature/temperature sweep.
+
+Mechanistic branches are preregistered:
+
+- `DENSE-SHIFT` passes while CFSR adds no benefit -> scalar selected-policy offset is sufficient; simplify and discard residual mechanism;
+- DENSE-SHIFT fails but CFSR passes -> support genuine feature-dependent policy-output residual distortion beyond population-edge cardinal value;
+- CFSR tail signal improves but gate fails -> selected residual exists but current zero crossing/representation remains insufficient;
+- neither CFSR nor translation works with adequate OOF population -> close the current linear 19-D selected-value route rather than add head capacity.
+
+V38 spent no fresh data. Permanent exclusion stays **10700 tokens**. New seed: `v64.3.39-eaf-icer-cfsr-cal500-double-fresh-v1`. Only after nested TRAIN pass may independent CAL500+A500+B500 be selected; A/B remain unpooled.
+
+Paper-level candidate mechanism: **operator-conditioned ordinal/cardinal/residual factorization with cross-fitted policy-output adaptation** under the bounded auditable EAF planner interface.

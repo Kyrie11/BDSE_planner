@@ -2599,7 +2599,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2624,7 +2624,7 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"dense_edge_value", "dense_edge_affine"}:
+    if mode in {"dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}:
         dmean = np.asarray(scir_cfg.get("post_selection_dense_feature_mean", []), dtype=np.float64).reshape(-1)
         dstd = np.asarray(scir_cfg.get("post_selection_dense_feature_std", []), dtype=np.float64).reshape(-1)
         dw = np.asarray(scir_cfg.get("post_selection_dense_weights", []), dtype=np.float64).reshape(-1)
@@ -2637,7 +2637,7 @@ def _icer_post_selection_value(
             value = dense_value
             value_feature = np.asarray([dense_value], dtype=np.float64)
             value_names = ["post_value::dense_all_edge_absolute_value"]
-        else:
+        elif mode == "dense_edge_affine":
             cm = float(scir_cfg.get("post_selection_dense_cal_mean", float("nan")))
             cs = float(scir_cfg.get("post_selection_dense_cal_std", float("nan")))
             ci = float(scir_cfg.get("post_selection_dense_cal_intercept", float("nan")))
@@ -2647,6 +2647,32 @@ def _icer_post_selection_value(
             value = ci + cw * ((dense_value - cm) / max(cs, 1.0e-6))
             value_feature = np.asarray([dense_value, u], dtype=np.float64)
             value_names = ["post_value::dense_all_edge_absolute_value", "post_value::frozen_rsmr_score_diagnostic"]
+        elif mode == "dense_edge_shift":
+            shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
+            if not math.isfinite(shift):
+                raise ValueError("EAF-ICER V39 dense translation bias is invalid")
+            value = dense_value + shift
+            value_feature = np.asarray([dense_value], dtype=np.float64)
+            value_names = ["post_value::dense_all_edge_absolute_value"]
+        else:
+            cmean = np.asarray(scir_cfg.get("post_selection_cfsr_feature_mean", []), dtype=np.float64).reshape(-1)
+            cstd = np.asarray(scir_cfg.get("post_selection_cfsr_feature_std", []), dtype=np.float64).reshape(-1)
+            cw = np.asarray(scir_cfg.get("post_selection_cfsr_weights", []), dtype=np.float64).reshape(-1)
+            cb = float(scir_cfg.get("post_selection_cfsr_bias", 0.0))
+            if len(cmean) != X.shape[1] or len(cstd) != X.shape[1] or len(cw) != X.shape[1] or not math.isfinite(cb):
+                raise ValueError("EAF-ICER V39 CFSR residual schema is inconsistent")
+            cz = (X[b] - cmean) / np.maximum(cstd, 1.0e-6)
+            corr = float(cz @ cw + cb)
+            if not math.isfinite(corr):
+                raise ValueError("EAF-ICER V39 CFSR residual is non-finite")
+            value = dense_value + corr
+            value_feature = np.asarray([dense_value, corr], dtype=np.float64)
+            value_names = ["post_value::dense_all_edge_absolute_value", "post_value::cross_fitted_selection_residual"]
+            if mode == "dense_edge_cfsr_shift":
+                shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
+                if not math.isfinite(shift):
+                    raise ValueError("EAF-ICER V39 CFSR translation bias is invalid")
+                value += shift
     else:
         score_mean = float(scir_cfg.get("post_selection_score_mean", float("nan")))
         score_std = float(scir_cfg.get("post_selection_score_std", float("nan")))

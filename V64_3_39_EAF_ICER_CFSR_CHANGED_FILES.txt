@@ -1,0 +1,18 @@
+Modified from V64.3.38:
+- ALGORITHM_CHANGELOG.md
+- bdse/planner/tournament.py
+
+Added in V64.3.39:
+- RUN_V64_3_39_EAF_ICER_CFSR_SCREEN_2GPU.sh
+- bdse/tools/fit_v64_3_39_eaf_icer_cfsr.py
+- bdse/tools/calibrate_v64_3_39_eaf_icer_cfsr.py
+- bdse/tools/check_v64_3_39_eaf_icer_cfsr_split.py
+- bdse/tools/check_v64_3_39_eaf_icer_cfsr_screen.py
+- bdse/tests/test_v64_3_39_eaf_icer_cfsr.py
+- V64_3_38_RESULT_POSTMORTEM_AND_V64_3_39_CFSR_DESIGN.md
+- V64_3_38_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_39.json
+- V64_3_38_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_39.csv
+- V64_3_39_ENGINEERING_VALIDATION.txt
+- V64_3_39_EAF_ICER_CFSR.patch
+- V64_3_39_EAF_ICER_CFSR_CHANGED_FILES.txt
+- NEXT_COMMANDS_V64_3_39_EAF_ICER_CFSR.txt
