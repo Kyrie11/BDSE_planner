@@ -2580,6 +2580,8 @@ def _icer_post_selection_value(
     raw_feature_names: list[str] | None = None,
     support_logits: np.ndarray | None = None,
     legacy_action: int | None = None,
+    value_observable_matrix: np.ndarray | None = None,
+    value_observable_names: list[str] | np.ndarray | None = None,
 ) -> tuple[float, np.ndarray, list[str]]:
     """Absolute value readout for an already frozen RSMR proposal.
 
@@ -2600,7 +2602,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2625,7 +2627,7 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift"}:
+    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}:
         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
@@ -2656,15 +2658,50 @@ def _icer_post_selection_value(
         w_ep = np.asarray(scir_cfg.get("post_selection_endpoint_weights", []), dtype=np.float64).reshape(-1)
         b_ep = float(scir_cfg.get("post_selection_endpoint_bias", 0.0))
         if stored != runtime_value_names or len(stored) != phi.size or scale_ep.size != phi.size or w_ep.size != phi.size or abs(b_ep) > 1.0e-12:
-            raise ValueError("EAF-ICER V41 endpoint value parameter/schema mismatch")
+            raise ValueError("EAF-ICER V41/V42 endpoint value parameter/schema mismatch")
         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
-        if mode == "endpoint_potential_shift":
+        value_feature = phi
+        value_names = [f"post_value::{n}" for n in runtime_value_names]
+        if mode in {"endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}:
+            if value_observable_matrix is None or value_observable_names is None:
+                raise ValueError("EAF-ICER V42 observable value mode requires deployment value-observable matrix")
+            om = np.asarray(value_observable_matrix, dtype=np.float64)
+            on = [str(x) for x in value_observable_names]
+            if om.ndim != 2 or om.shape[0] != X.shape[0] or not (0 <= legacy < om.shape[0]) or not (0 <= b < om.shape[0]):
+                raise ValueError("EAF-ICER V42 observable runtime matrix shape mismatch")
+            stored_obs = [str(x) for x in scir_cfg.get("post_selection_observable_names", [])]
+            if on != stored_obs:
+                raise ValueError("EAF-ICER V42 observable schema mismatch")
+            # Cost-like observables are lower-is-better, hence incumbent-candidate
+            # is the candidate's deployment-observable improvement.
+            delta_obs = om[legacy] - om[b]
+            qdim = int(scir_cfg.get("post_selection_observable_quality_dim", 3))
+            if qdim < 0 or qdim > delta_obs.size:
+                raise ValueError("EAF-ICER V42 quality/risk observable split is invalid")
+            if mode == "endpoint_potential_quality_observable":
+                obs = delta_obs[:qdim]; obs_names = on[:qdim]
+            elif mode == "endpoint_potential_risk_observable":
+                obs = delta_obs[qdim:]; obs_names = on[qdim:]
+            else:
+                obs = delta_obs; obs_names = on
+            scale_obs = np.asarray(scir_cfg.get("post_selection_observable_scale", []), dtype=np.float64).reshape(-1)
+            w_obs = np.asarray(scir_cfg.get("post_selection_observable_weights", []), dtype=np.float64).reshape(-1)
+            if scale_obs.size != obs.size or w_obs.size != obs.size:
+                raise ValueError("EAF-ICER V42 observable residual parameter size mismatch")
+            residual = float((obs / np.maximum(scale_obs, 1.0e-6)) @ w_obs)
+            value = float(np.clip(value + residual, -40.0, 40.0))
+            value_feature = np.concatenate([phi, obs])
+            value_names = [f"post_value::{n}" for n in runtime_value_names] + [f"observable_improvement::{n}" for n in obs_names]
+            if mode == "endpoint_potential_joint_observable_shift":
+                shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
+                if not math.isfinite(shift):
+                    raise ValueError("EAF-ICER V42 selected observable translation is invalid")
+                value = float(np.clip(value + shift, -40.0, 40.0))
+        elif mode == "endpoint_potential_shift":
             shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
             if not math.isfinite(shift):
                 raise ValueError("EAF-ICER V41 endpoint selected translation is invalid")
             value = float(np.clip(value + shift, -40.0, 40.0))
-        value_feature = phi
-        value_names = [f"post_value::{n}" for n in runtime_value_names]
     elif mode in {"dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}:
         def _hurdle_linear(prefix: str) -> float:
             hm = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_feature_mean", []), dtype=np.float64).reshape(-1)
@@ -2831,6 +2868,8 @@ def _apply_decisive_frontier_icer(
     maneuver_ids: np.ndarray | None = None,
     selected_atom_family_ids: np.ndarray | list[int] | None = None,
     selected_atom_type_names: list[str] | np.ndarray | None = None,
+    value_observable_matrix: np.ndarray | None = None,
+    value_observable_names: list[str] | np.ndarray | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """V64.3.19+ incumbent-contrastive extremal recovery.
 
@@ -3217,7 +3256,8 @@ def _apply_decisive_frontier_icer(
                     else:
                         scir_post_selection_value, scir_post_selection_value_feature, scir_post_selection_value_feature_names = _icer_post_selection_value(
                             best, scir_raw_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_cfg,
-                            raw_feat=feat, raw_feature_names=names, support_logits=support_logits, legacy_action=legacy
+                            raw_feat=feat, raw_feature_names=names, support_logits=support_logits, legacy_action=legacy,
+                            value_observable_matrix=value_observable_matrix, value_observable_names=value_observable_names
                         )
                         # For diagnostics, replace only the frozen proposal's
                         # absolute intervention value.  All non-proposal scores
@@ -3389,6 +3429,8 @@ def _apply_decisive_frontier_icer(
         if attribution_star is None else np.asarray(attribution_star, dtype=np.float32),
         "_decisive_frontier_icer_feature_matrix": np.asarray(feat, dtype=np.float32),
         "_decisive_frontier_icer_feature_names": names,
+        "_decisive_frontier_icer_value_observable_matrix": np.zeros((len(valid), 0), dtype=np.float32) if value_observable_matrix is None else np.asarray(value_observable_matrix, dtype=np.float32),
+        "_decisive_frontier_icer_value_observable_names": [] if value_observable_names is None else [str(x) for x in value_observable_names],
         "_decisive_frontier_icer_attribution_resolved_feature_matrix": np.asarray(attribution_resolved, dtype=np.float32),
         "_decisive_frontier_icer_attribution_resolved_feature_names": list(attribution_resolved_names),
         "_decisive_frontier_icer_semantic_family_feature_matrix": np.asarray(semantic_family, dtype=np.float32),
@@ -3443,6 +3485,8 @@ def run_pair_conditioned_tournament(
     evidence_certificate_fraction: float | None = None,
     selected_atom_family_ids: np.ndarray | list[int] | None = None,
     selected_atom_type_names: list[str] | np.ndarray | None = None,
+    value_observable_matrix: np.ndarray | None = None,
+    value_observable_names: list[str] | np.ndarray | None = None,
 ) -> TournamentResult:
     tc = cfg.get("tournament", {})
     sc = cfg.get("selector", {})
@@ -3717,6 +3761,8 @@ def run_pair_conditioned_tournament(
             maneuver_ids=maneuver_ids,
             selected_atom_family_ids=selected_atom_family_ids,
             selected_atom_type_names=selected_atom_type_names,
+            value_observable_matrix=value_observable_matrix,
+            value_observable_names=value_observable_names,
         )
         frontier_runtime_cfg = runtime_cfg.get("decisive_frontier_value", {}) or {}
         raer_enabled_runtime = bool((frontier_runtime_cfg.get("reliability_aware_extremal_reranking", {}) or {}).get("enabled", False))

@@ -10895,3 +10895,135 @@ Causal interpretation: ZDELTA gain -> solver/null consistency; DNLV gain -> gene
 Main TRAIN gate remains unchanged: >=20% no-op false reduction, capture within 3 pp of frozen RSMR, >=25% catastrophe reduction, non-worse NegRMS, aggregate and 5/5 fold sums nonnegative, selected>=64, positive>=32, exact frozen-winner containment. No threshold/lambda/alpha/feature-choice/top-K/candidate-count/temperature sweep after results.
 
 V40 spent no fresh data. Permanent exclusion remains **10700 tokens**. V41 fresh seed is `v64.3.41-eaf-icer-epvr-cal500-double-fresh-v1`; only nested TRAIN pass may select independent CAL500+A500+B500, with A/B unpooled.
+
+# V64.3.41 uploaded result audit -> V64.3.42 EAF-ICER-OVDR
+
+## V64.3.41 result validity
+
+- Uploaded V41 code archive exactly matches the preregistered package (`sha256=3bd2dfb9bf81687adde1f7fec008fdf6a77aee71666d13727802c4c54ef591c2`).
+- Five nested outer folds completed; TRAIN scene audit is `782/782` unique direct scenes.
+- Independent value-calibration proposal counts: `97/100/98/86/110`, all above the frozen minimum 64.
+- Server targeted regression: `195/195 PASS`.
+- Frozen RSMR winner containment is valid for all V41 value arms; no re-ranking, second-best fallback, or new proposal creation.
+- Run stopped at the preregistered scientific TRAIN gate with `endpoint_potential_adds_tail_signal_but_zero_crossing_still_fails`.
+- No CAL500/A500/B500 token manifest was created; permanent 10700-token design exclusion remains untouched.
+- Conclusion: **engineering-valid TRAIN-level algorithm attribution; no V41.1 hotfix required**.
+
+## V64.3.41 mechanism result
+
+Frozen RSMR remains `502 selected / 221 positive / 38.50% capture / +43.294 sum / 28 catastrophe / 107 no-op false / NegRMS 0.3557`.
+
+- ZDELTA: `227/128`, capture `22.30%`, sum `+10.152`, cat `22`, no-op `43`, NegRMS `0.5017` -> zero-consistent topology alone is insufficient.
+- DNL: `317/124`, capture `21.60%`, sum `+30.719`, cat `17`, no-op `60`, NegRMS `0.3338` -> generic nonlinear delta improves magnitude/tail but does not close intervention-existence/capture.
+- EPV-RAW: `203/118`, precision `58.1%`, capture `20.56%`, sum `+25.969`, cat `15`, no-op `39`, all five fold sums nonnegative -> **endpoint/basepoint interaction adds real selective/tail information but remains over-conservative**.
+- EPV-MAIN: `397/184`, capture `32.06%`, sum `+40.363`, cat `22`, no-op `77`, all five fold sums nonnegative -> translation restores coverage/value but re-admits tail and remains below the 35.50% capture floor.
+
+Strong set-level evidence for independent endpoint interaction:
+
+- EPV-only versus ZDELTA: `56` proposals, `+16.111` teacher sum, `0` catastrophe.
+- ZDELTA-only versus EPV: `80` proposals, only `+0.294` teacher sum, `7` catastrophes.
+
+Therefore do **not** conclude that basepoint is useless. The supported conclusion is narrower and stronger: endpoint/basepoint geometry identifies a better high-precision selected-value core, but existing EAF endpoint features still lack a transferable absolute incumbent-exit scale / catastrophic consequence observable.
+
+## Dominant bottleneck after V41
+
+Updated dominant bottleneck:
+
+> **value-specific observable sufficiency for the frozen extremal proposal, especially physical downside at the absolute incumbent-exit boundary.**
+
+The following are now frozen/closed as first-order answers:
+
+- pure 19-D selected-value head/target changes (V37-V40 falsification);
+- zero-origin topology rescue;
+- generic nonlinear delta expansion;
+- richer endpoint polynomial/head expansion;
+- basepoint common shifts / scene reservation;
+- selection-geometry reservation;
+- classifier/threshold/alpha/q/lambda/top-K/candidate-count rescue.
+
+RSMR challenger ordering stays frozen and is the sole proposal selector.
+
+## V64.3.42 EAF-ICER-OVDR — Observable Value Decomposition Recovery
+
+### Core hypothesis
+
+V41 shows that algebraic transforms of EAF endpoint state are not sufficient for selected absolute value. V42 therefore introduces **new value-specific deployment observables**, not a larger selected head and not extra neural evidence queries.
+
+For each candidate, compute label-free lower-is-better consequence costs from the candidate trajectory and current scene:
+
+**QUALITY block** (teacher-aligned observable base-cost partition; no logged future/demo):
+
+1. route deviation cost;
+2. relative progress-deficit cost;
+3. global comfort cost.
+
+**RISK block** (continuous current-map/current-agent physical severity):
+
+1. hard-agent risk;
+2. soft-agent risk;
+3. TTC risk;
+4. hard off-route risk;
+5. soft off-route risk;
+6. red-light risk.
+
+For frozen incumbent `i` and frozen RSMR winner `b`, convert cost to value-oriented improvement:
+
+`observable_delta = cost(i) - cost(b)`.
+
+This is zero at identical endpoints and changes sign under endpoint exchange.
+
+### Causal topology
+
+1. RSMR alone selects `b_hat`.
+2. EPV estimates endpoint latent value.
+3. V42 fits a zero-bias scene-equal residual for `teacher_improvement - EPV_prediction` from deployment observables.
+4. Value arm may only accept the same `b_hat` or return incumbent.
+5. No observable enters challenger ranking; no second-best/fallback.
+
+All residual fits use fixed `lambda=1` and unnormalized per-scene-total-one squared-loss weights (V32.1 semantics).
+
+### Preregistered arms
+
+- `EPV-RAW`: V41 endpoint-potential control.
+- `EPV+QUALITY`: isolates missing trajectory-quality consequence.
+- `EPV+RISK`: isolates missing current physical downside consequence.
+- `EPV+JOINT`: tests complementarity.
+- `OVDR-MAIN`: JOINT plus independent CAL500 unit-slope translation only.
+
+### TRAIN gate (unchanged)
+
+Relative to frozen RSMR:
+
+- no-op false-intervention reduction >=20%;
+- useful capture >= RSMR - 3pp;
+- catastrophe reduction >=25%;
+- NegRMS no worse;
+- aggregate selected sum >=0;
+- all 5 outer test folds selected sum >=0;
+- selected >=64; positive selected >=32.
+
+Before scientific attribution, V42 additionally hard-checks that the newly instrumented 3000-scene TRAIN replay reproduces the exact historical RSMR signature (`502/221/107/28/+43.29405361274824/38.501742%`). Any mismatch is an **engineering STOP**, not an algorithm result.
+
+### Preregistered interpretation branches
+
+- QUALITY pass, RISK fail: trajectory-quality observable is primary mediator; keep QUALITY only.
+- RISK pass, QUALITY fail: physical downside observable is primary mediator; keep RISK only.
+- JOINT pass with neither single block sufficient: complementary physical/quality consequence decomposition is required.
+- observable diagnostics improve but gate still fails: current observable partition is real but incomplete -> next study future-sensitive value observable / robust response uncertainty, **not a larger head**.
+- no block adds independent gain: close this deployment-observable partition and move directly to a genuinely new future-sensitive observable.
+
+### Fresh protocol
+
+V41 did not consume fresh. Permanent exclusion remains 10700 tokens. V42 uses a new label-free seed:
+
+`v64.3.42-eaf-icer-ovdr-cal500-double-fresh-v1`
+
+Only a complete nested TRAIN pass may select independent `CAL500 + A500 + B500`. A/B remain strictly unpooled.
+
+## nuPlan closed-loop status after V41
+
+- **Official promotion closed loop: still premature.** V41 failed TRAIN and no V41 fresh evidence exists.
+- **Small paired diagnostic closed loop: now scientifically useful** because B16/EAF, support/admissibility, RSMR ordering, structural delegation and incumbent/no-fallback are comparatively mature and frozen; the unresolved layer is narrowly localized to intervention value.
+- Added `RUN_V64_3_42_DIAGNOSTIC_NUPLAN_CL20.sh`, which selects 20 scenarios label-free from the already permanent-design-excluded validation population and compares `V20 / PRESERVE / RSMR / EPV-RAW / OVDR-RAW`.
+- This CL20 is explicitly **diagnostic-only**: it may test whether open-loop near-zero capture misses affect progress and whether open-loop catastrophes correspond to collision/TTC/drivable degradation, but it must not tune V42 or replace TRAIN/double-fresh gates.
+- Official paper-facing closed-loop should follow double-fresh plus one frozen full-validation reproduction.

@@ -1,0 +1,17 @@
+ALGORITHM_CHANGELOG.md
+NEXT_COMMANDS_V64_3_42_EAF_ICER_OVDR.txt
+RUN_V64_3_42_DIAGNOSTIC_NUPLAN_CL20.sh
+RUN_V64_3_42_EAF_ICER_OVDR_SCREEN_2GPU.sh
+V64_3_41_RESULT_POSTMORTEM_AND_V64_3_42_OVDR_DESIGN.md
+V64_3_41_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_42.csv
+V64_3_41_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_42.json
+V64_3_42_ENGINEERING_VALIDATION.txt
+bdse/experiments/evaluate_open_loop.py
+bdse/planner/nuplan_planner.py
+bdse/planner/tournament.py
+bdse/planner/value_observables.py
+bdse/tests/test_v64_3_42_eaf_icer_ovdr.py
+bdse/tools/calibrate_v64_3_42_eaf_icer_ovdr.py
+bdse/tools/check_v64_3_42_eaf_icer_ovdr_screen.py
+bdse/tools/check_v64_3_42_eaf_icer_ovdr_split.py
+bdse/tools/fit_v64_3_42_eaf_icer_ovdr.py

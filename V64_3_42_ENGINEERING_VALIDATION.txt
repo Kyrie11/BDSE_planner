@@ -1,0 +1,48 @@
+V64.3.42 EAF-ICER-OVDR engineering validation
+================================================
+
+V41 uploaded-result reliability prerequisite
+---------------------------------------------
+- Uploaded V41 code SHA256 matches preregistered package: PASS
+- Five nested outer folds complete: PASS
+- TRAIN scene audit: 782/782 unique scenes: PASS
+- Value-calibration proposal counts: 97/100/98/86/110 >=64: PASS
+- Frozen RSMR winner/subset contract: PASS
+- Server V41 targeted regression: 195/195 PASS
+- V41 stopped at preregistered scientific TRAIN gate: PASS
+- V41 CAL500/A500/B500 consumed: NO
+- Engineering hotfix required before attribution: NO
+
+V42 code/static validation
+--------------------------
+- Python compileall: PASS
+- RUN_V64_3_42_EAF_ICER_OVDR_SCREEN_2GPU.sh bash -n: PASS
+- RUN_V64_3_42_DIAGNOSTIC_NUPLAN_CL20.sh bash -n: PASS
+- V42 focused tests: 3/3 PASS
+- V41+V42 focused tests: 8/8 PASS
+- V13-V42 targeted regression: 198/198 PASS (2 historical Transformer warnings)
+
+Full repository regression
+--------------------------
+117 mutually exclusive/exhaustive test_*.py files, four fixed partitions:
+- partition 0: 153/153 PASS (12 historical warnings)
+- partition 1: 127/127 PASS (12 historical warnings)
+- partition 2: 115/115 PASS (5 historical warnings)
+- partition 3: 133/133 PASS (7 historical warnings)
+TOTAL: 528/528 PASS
+Warnings: 36 historical / 0 new warning class
+
+V42 mechanism-specific regression coverage
+------------------------------------------
+- deployment value-observable matrix is finite and schema-stable: PASS
+- trajectory-quality route consequence behaves in expected direction: PASS
+- runtime post-selection observable uses incumbent-cost minus candidate-cost: PASS
+- new value head executes only after frozen RSMR proposal: PASS by topology + runtime unit test
+- scene-equal observable residual ridge invariant to uniform candidate duplication within a scene: PASS
+- V42 observable modes fail closed on missing/malformed runtime schema: implemented
+- no second-best fallback / no rerank: preserved by existing post-selection topology
+- new train fitter hard-stops as ENGINEERING failure if observable instrumentation changes historical frozen-RSMR TRAIN signature
+
+Notes
+-----
+The V42 TRAIN/fresh experiment cannot be executed in this local artifact environment because the nuPlan train/val cache and EAF checkpoint are server-side. The launcher is designed to replay exactly the frozen 3000 TRAIN token list with the new label-free observable instrumentation, and it requires exact historical RSMR reproduction before any V42 mechanism attribution.

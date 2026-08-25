@@ -678,6 +678,30 @@ class BDSEPlannerCore:
         J0, g = pred["J0"], pred["g"]
         g_var = pred.get("g_var", None)
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, stage_cfg)
+        # V64.3.42: value-specific deployment observables are instrumented only
+        # when explicitly requested or when a V42 post-selection value mode is
+        # active.  They are label-free and never participate in challenger
+        # selection; the frozen RSMR winner is chosen before they are consumed.
+        value_observable_matrix = None
+        value_observable_names = None
+        try:
+            _ic = (((stage_cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {})
+            _scir = (_ic.get("selection_conditioned_intervention_recovery", {}) or {})
+            _vmode = str(_scir.get("post_selection_value_mode", "")).strip().lower()
+            _need_vobs = bool(_ic.get("instrument_value_observables", False)) or _vmode in {
+                "endpoint_potential_quality_observable",
+                "endpoint_potential_risk_observable",
+                "endpoint_potential_joint_observable",
+                "endpoint_potential_joint_observable_shift",
+            }
+            if _need_vobs:
+                from bdse.planner.value_observables import runtime_value_observable_costs
+                value_observable_matrix, value_observable_names = runtime_value_observable_costs(runtime, candidates, stage_cfg)
+        except Exception:
+            # A V42 mode must fail closed.  Pure instrumentation on historical
+            # arms is also expected to be exact, so propagate instead of hiding
+            # malformed schemas.
+            raise
         sel_cfg = stage_cfg.get("selector", {})
         tour_cfg = stage_cfg.get("tournament", {})
         atom_active = np.zeros((evidence_bank.E,), dtype=bool)
@@ -783,6 +807,8 @@ class BDSEPlannerCore:
                         predicted_atom_costs=np.asarray(pred["g"], dtype=np.float32),
                         residual_action_potential=None,
                         residual_action_variance=None,
+                        value_observable_matrix=value_observable_matrix,
+                        value_observable_names=value_observable_names,
                     )
                     trial = self._apply_all_flagged_structural_guard(
                         trial, runtime, candidates, runtime_flags, stage_cfg
@@ -1145,6 +1171,8 @@ class BDSEPlannerCore:
                 ),
                 selected_atom_family_ids=np.asarray(family_ids, dtype=np.int64)[np.asarray(selection.selected, dtype=np.int64)],
                 selected_atom_type_names=[str(evidence_bank.atoms[int(i)].type) for i in np.asarray(selection.selected, dtype=np.int64).tolist()],
+                value_observable_matrix=value_observable_matrix,
+                value_observable_names=value_observable_names,
             )
         else:
             selector_started = time.perf_counter()

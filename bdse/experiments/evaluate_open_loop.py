@@ -1037,6 +1037,8 @@ def main() -> None:
             icer_semantic_type_names = list(tour_diag.get("_decisive_frontier_icer_semantic_type_feature_names", []))
             icer_admissible = np.asarray(tour_diag.get("_decisive_frontier_icer_admissible_mask", []), dtype=bool).reshape(-1)
             icer_feature_names = list(tour_diag.get("_decisive_frontier_icer_feature_names", []))
+            icer_value_observables = tour_diag.get("_decisive_frontier_icer_value_observable_matrix", None)
+            icer_value_observable_names = list(tour_diag.get("_decisive_frontier_icer_value_observable_names", []))
             if edge_anchor >= 0 and edge_margins.size == edge_valid.size and edge_attr.size == edge_valid.size:
                 normalized = bool(tour_diag.get("normalized_margins", cfg.get("model", {}).get("pair_margin_normalized", False)))
                 mscale = max(float(tour_diag.get("margin_scale", pred.get("rival_pair_margin_scale", pred.get("pair_margin_scale", 1.0)))) if normalized else 1.0, 1.0e-6)
@@ -1111,6 +1113,10 @@ def main() -> None:
                     if imat is not None and imat.ndim == 2 and imat.shape[0] == edge_valid.size and imat.shape[1] == len(icer_feature_names):
                         for j, name in enumerate(icer_feature_names):
                             row[f"icer_feature_{name}"] = float(imat[challenger, j])
+                    vmat = None if icer_value_observables is None else np.asarray(icer_value_observables, dtype=np.float64)
+                    if vmat is not None and vmat.ndim == 2 and vmat.shape[0] == edge_valid.size and vmat.shape[1] == len(icer_value_observable_names):
+                        for j, name in enumerate(icer_value_observable_names):
+                            row[f"icer_value_observable_{name}"] = float(vmat[challenger, j])
                     simat = None if icer_scir_features is None else np.asarray(icer_scir_features, dtype=np.float64)
                     if simat is not None and simat.ndim == 2 and simat.shape[0] == edge_valid.size and simat.shape[1] == len(icer_scir_feature_names):
                         for j, name in enumerate(icer_scir_feature_names):
