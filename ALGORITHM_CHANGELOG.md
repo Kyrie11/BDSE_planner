@@ -10865,3 +10865,33 @@ Mechanistic branches are preregistered:
 V39 spent no fresh data. Permanent exclusion remains **10700 tokens**. New label-free seed: `v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1`. Only after nested TRAIN pass may independent CAL500+A500+B500 be selected; A/B remain unpooled.
 
 Paper-level candidate mechanism: **operator-conditioned distributional decision sufficiency**, separating ordinal extremal ranking, population outcome distribution, and selected-policy sign/magnitude alignment under deterministic frozen-winner incumbent containment.
+
+# V64.3.40 uploaded TRAIN result audit -> V64.3.41 EAF-ICER-EPVR
+
+V40 is engineering-valid for TRAIN-level attribution: exact preregistered code hash, 5/5 nested folds, 782 unique scene audits, 190/190 targeted regression, adequate value-calibration and inner-OOF sign-class populations, exact frozen-RSMR containment, and no CAL/fresh consumption. It fails the preregistered scientific gate rather than an engineering gate.
+
+V40 aggregates: RSMR `502 selected / 221 positive / capture 38.50% / 28 catastrophe / 107 no-op false / sum +43.294`; HURDLE `241/125/21.78%/20/50/+9.725`; SIGN-SHIFT `168/92/16.03%/15/37/+8.664`; SDFR-RAW `339/149/25.96%/20/72/+31.997`; SDFR-MAIN `403/172/29.97%/22/83/+32.665`, with one negative outer-fold selected sum. All V40 gates fail.
+
+The selected positive-probability AUC is only `0.6039`; mean probabilities for true-positive/mild-harm/catastrophe proposals are roughly `0.450/0.427/0.424`. Predicted negative magnitude on catastrophes averages only `0.171`, while predicted positive magnitude is largest on catastrophes. Scalar selected distribution adaptation does not stably improve inner-OOF MSE. Thus sign/magnitude factorization on the pure 19-D delta evidence does not solve the selected zero/tail problem.
+
+This triggers the V40 preregistered closure: **stop further target/head changes on the current pure 19-D selected-value route**. Continue to freeze RSMR ordering, B16/M24, acquisition, EAF, support/admissibility, structural delegation, incumbent default/no-fallback, and all prior rejected threshold/capacity/classifier/KNN/basepoint-reservation/selection-geometry routes.
+
+New dominant bottleneck: **value-specific representation sufficiency for the already frozen RSMR proposal**. A pure delta model assumes a globally stationary intervention-value map. V35/V36 tested only scene-common basepoint shifts/reservations; they did not test candidate-specific basepoint-dependent slopes.
+
+## V64.3.41 EAF-ICER-EPVR
+
+V41 freezes RSMR as the sole challenger selector and introduces no new evidence query. Define 19-D endpoint evidence `q=[18-D frozen EAF evidence, support_logit]`, `delta=q_b-q_i`, and midpoint `m=(q_b+q_i)/2`.
+
+Three preregistered value-representation arms use dense all-edge scene-equal supervision, fixed `lambda=1`, zero-preserving RMS scaling and zero bias:
+
+1. **ZDELTA**: `phi=[delta]`; controls the null-consistent solver/topology.
+2. **DNLV**: `phi=[delta, delta*|delta|]`; tests generic nonlinear delta geometry without basepoint information.
+3. **EPV**: `phi=[delta, m*delta]`; this is the exact difference of a diagonal quadratic latent potential `U(q)=a^Tq+1/2 b^Tq^2`, hence is antisymmetric under endpoint swap and exactly zero for identical endpoints. It tests candidate-specific basepoint-conditioned local utility gradients without naive candidate/incumbent concatenation.
+
+All arms are evaluated only after the RSMR winner is frozen and can only keep that exact winner or return incumbent. EPVR-MAIN adds only independent selected-policy **unit-slope translation** to EPV; it cannot rerank or reverse learned value ordering.
+
+Causal interpretation: ZDELTA gain -> solver/null consistency; DNLV gain -> generic nonlinear contrast; EPV-specific gain -> basepoint-conditioned endpoint geometry; EPV sign gain with tail failure -> new tail observable required; no representation gain -> close the current EAF endpoint-value family and require a genuinely new value-specific observable rather than more head capacity.
+
+Main TRAIN gate remains unchanged: >=20% no-op false reduction, capture within 3 pp of frozen RSMR, >=25% catastrophe reduction, non-worse NegRMS, aggregate and 5/5 fold sums nonnegative, selected>=64, positive>=32, exact frozen-winner containment. No threshold/lambda/alpha/feature-choice/top-K/candidate-count/temperature sweep after results.
+
+V40 spent no fresh data. Permanent exclusion remains **10700 tokens**. V41 fresh seed is `v64.3.41-eaf-icer-epvr-cal500-double-fresh-v1`; only nested TRAIN pass may select independent CAL500+A500+B500, with A/B unpooled.

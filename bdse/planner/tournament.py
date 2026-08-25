@@ -2576,6 +2576,10 @@ def _icer_post_selection_value(
     scir_feature_matrix: np.ndarray,
     scir_feature_names: list[str],
     scir_cfg: dict[str, Any],
+    raw_feat: np.ndarray | None = None,
+    raw_feature_names: list[str] | None = None,
+    support_logits: np.ndarray | None = None,
+    legacy_action: int | None = None,
 ) -> tuple[float, np.ndarray, list[str]]:
     """Absolute value readout for an already frozen RSMR proposal.
 
@@ -2596,7 +2600,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2621,7 +2625,47 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}:
+    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift"}:
+        if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
+            raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
+        xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
+        base_names = list(scir_cfg.get("base_feature_names", _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES))
+        pos = {str(n): i for i, n in enumerate(raw_feature_names)}
+        missing = [n for n in base_names if n not in pos]
+        if missing or xx.ndim != 2 or sup.shape[0] != xx.shape[0] or not (0 <= legacy < xx.shape[0]) or not (0 <= b < xx.shape[0]):
+            raise ValueError("EAF-ICER V41 endpoint runtime schema is incomplete")
+        base = xx[:, [pos[n] for n in base_names]]
+        qi = np.concatenate([base[legacy], np.asarray([float(sup[legacy])])])
+        qb = np.concatenate([base[b], np.asarray([float(sup[b])])])
+        delta_ep = qb - qi
+        if delta_ep.shape != X[b].shape or np.max(np.abs(delta_ep - X[b])) > 1.0e-8:
+            raise ValueError("EAF-ICER V41 endpoint delta does not replay frozen 19-D RSMR evidence")
+        endpoint_names = list(base_names) + ["support_logit"]
+        if mode == "endpoint_zero_delta":
+            phi = delta_ep
+            runtime_value_names = [f"zdelta::{n}" for n in endpoint_names]
+        elif mode == "endpoint_delta_nonlinear":
+            phi = np.concatenate([delta_ep, delta_ep * np.abs(delta_ep)])
+            runtime_value_names = [f"zdelta::{n}" for n in endpoint_names] + [f"delta_signed_square::{n}" for n in endpoint_names]
+        else:
+            midpoint = 0.5 * (qi + qb)
+            phi = np.concatenate([delta_ep, midpoint * delta_ep])
+            runtime_value_names = [f"zdelta::{n}" for n in endpoint_names] + [f"midpoint_times_delta::{n}" for n in endpoint_names]
+        stored = list(scir_cfg.get("post_selection_endpoint_feature_names", []))
+        scale_ep = np.asarray(scir_cfg.get("post_selection_endpoint_feature_scale", []), dtype=np.float64).reshape(-1)
+        w_ep = np.asarray(scir_cfg.get("post_selection_endpoint_weights", []), dtype=np.float64).reshape(-1)
+        b_ep = float(scir_cfg.get("post_selection_endpoint_bias", 0.0))
+        if stored != runtime_value_names or len(stored) != phi.size or scale_ep.size != phi.size or w_ep.size != phi.size or abs(b_ep) > 1.0e-12:
+            raise ValueError("EAF-ICER V41 endpoint value parameter/schema mismatch")
+        value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
+        if mode == "endpoint_potential_shift":
+            shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
+            if not math.isfinite(shift):
+                raise ValueError("EAF-ICER V41 endpoint selected translation is invalid")
+            value = float(np.clip(value + shift, -40.0, 40.0))
+        value_feature = phi
+        value_names = [f"post_value::{n}" for n in runtime_value_names]
+    elif mode in {"dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}:
         def _hurdle_linear(prefix: str) -> float:
             hm = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_feature_mean", []), dtype=np.float64).reshape(-1)
             hs = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_feature_std", []), dtype=np.float64).reshape(-1)
@@ -3172,7 +3216,8 @@ def _apply_decisive_frontier_icer(
                         selected = int(baseline)
                     else:
                         scir_post_selection_value, scir_post_selection_value_feature, scir_post_selection_value_feature_names = _icer_post_selection_value(
-                            best, scir_raw_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_cfg
+                            best, scir_raw_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_cfg,
+                            raw_feat=feat, raw_feature_names=names, support_logits=support_logits, legacy_action=legacy
                         )
                         # For diagnostics, replace only the frozen proposal's
                         # absolute intervention value.  All non-proposal scores
