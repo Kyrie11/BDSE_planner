@@ -10796,3 +10796,72 @@ Mechanistic branches are preregistered:
 V38 spent no fresh data. Permanent exclusion stays **10700 tokens**. New seed: `v64.3.39-eaf-icer-cfsr-cal500-double-fresh-v1`. Only after nested TRAIN pass may independent CAL500+A500+B500 be selected; A/B remain unpooled.
 
 Paper-level candidate mechanism: **operator-conditioned ordinal/cardinal/residual factorization with cross-fitted policy-output adaptation** under the bounded auditable EAF planner interface.
+
+# V64.3.39 uploaded TRAIN result audit -> V64.3.40 EAF-ICER-SDFR
+
+## 1. V39 reliability decision
+
+The uploaded V39 code is byte-identical to the preregistered package (SHA256 `73debeb3b9348309b78fe7195fad478818b7b650c5723d91e5a10148331c0edb`). The run completed all five nested outer folds and all inner OOF residual populations. Server targeted regression is **184/184 PASS**; the audit contains **782/782 unique direct scenes**. Value-calibration proposal counts are `97/100/98/86/110`, and inner OOF selected residual populations are `347/318/266/260/285`, all above their frozen minima. CFSR remains an exact same-winner monotone subset of frozen RSMR. The launcher stopped at the preregistered TRAIN scientific failure and did not create non-empty CAL500/A500/B500 manifests. V39 is engineering-valid for TRAIN-level attribution; no V39.1 hotfix is required.
+
+## 2. V39 result and mechanism verdict
+
+Frozen RSMR remains `502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophes / 107 no-op false / NegRMS 0.3557`.
+
+DENSE-SHIFT is `376 / 175 / capture 30.49% / sum +28.3339 / 21 catastrophes / 80 no-op false / NegRMS 0.3702` and fails; therefore a selected-policy scalar zero-point translation is insufficient.
+
+CFSR-RAW is `316 / 143 / capture 24.91% / sum +41.8810 / 15 catastrophes / 55 no-op false / NegRMS 0.2872`.
+
+CFSR-MAIN is `354 / 149 / capture 25.96% / sum +43.5752 / 14 catastrophes / 67 no-op false / NegRMS 0.3073` with **5/5 nonnegative outer-fold sums**. It passes the no-op, tail, NegRMS, aggregate-direction, fold-direction and population sub-gates but fails the registered capture floor `>=35.50%`.
+
+On the 502 frozen RSMR proposals, CFSR-MAIN deletes 148 proposals whose true teacher-improvement sum is only `-0.2811`, while deleting 14/28 catastrophes. This is genuine feature-dependent selected-tail signal and is substantially more selective than V36 blanket abstention. However it also deletes 72 positives. Of those, **56 have true improvement <=0.01 and total only +0.0383**, showing that the remaining count-level capture failure is concentrated at the zero boundary, although several material positive misses remain.
+
+Thus V39 falsifies the strong sufficiency claim but supports the residual-existence claim:
+
+`feature-dependent selected-policy residual exists`, but `linear signed-mean residual on the current 19-D evidence is sufficient for zero-crossing reliability` is false.
+
+Updated estimand chain:
+
+`RSMR ordinal ranking != population-edge cardinal mean != operator-conditioned selected outcome distribution`.
+
+Updated dominant bottleneck:
+
+**operator-conditioned selected-outcome distribution at the incumbent zero boundary: signed-mean regression conflates beneficial-event frequency with positive/negative conditional magnitude, allowing excellent aggregate/tail behavior while missing many near-zero positive opportunities.**
+
+## 3. V39-specific no-repeat constraints
+
+Keep all historical prohibitions. Additionally do not enlarge CFSR/OPVR with nonlinear/high-dimensional selected heads; do not relax/redefine the positive/capture gate post hoc; do not refit RSMR while claiming a value-only mechanism; do not let DENSE/value heads rerank; do not add a generic catastrophe classifier/fallback; do not restore unconstrained affine slope reversal; and do not tune lambda, alpha/q, threshold, top-K, candidate count, temperature, or selected-value cutoff.
+
+# V64.3.40 EAF-ICER-SDFR
+
+Full name: **Selection-Distribution Factorized Recovery**.
+
+V40 does not increase selected-policy model dimensionality. It freezes V34 RSMR as the sole challenger selector and retains the same 19-D evidence and fixed `lambda=1` linear family. It changes the unresolved value target from one signed mean to the exact hurdle-distribution identity
+
+`E[Y|X,S] = P(Y>0|X,S) E[Y|Y>0,X,S] - P(Y<=0|X,S) E[-Y|Y<=0,X,S]`.
+
+Using the corrected V32.1 scene-equal all-edge objective, fit three dense population components: beneficial-event probability (Brier ridge), positive conditional magnitude, and non-positive conditional magnitude. These components never participate in argmax; they are read only on the frozen RSMR proposal.
+
+Within each outer three-fit-fold population, inner OOF frozen-RSMR proposals provide honest selected-policy component adaptation. Require >=192 selected outputs and >=64 examples in each sign class. Selected adaptation is scalar only: a logit intercept for beneficial-event probability and nonnegative scalar scales for positive/negative magnitudes. No selected feature head is fitted.
+
+Causal arms:
+
+`RSMR / DENSE / HURDLE / SIGN-SHIFT / SDFR-RAW / SDFR-MAIN`.
+
+- HURDLE tests whether distributional target factorization alone solves the failure.
+- SIGN-SHIFT changes only selected beneficial-event frequency, isolating sign-prior/zero-boundary shift.
+- SDFR-RAW additionally adapts positive/negative magnitude scales.
+- SDFR-MAIN uses only an independent calibration-fold **unit-slope translation**, which cannot reverse the value axis.
+
+Main nested TRAIN gate remains: >=20% no-op reduction, capture within 3 pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, aggregate and 5/5 fold sums nonnegative, selected>=64, positive>=32, exact frozen-winner containment, inner OOF selected>=192, and >=64 selected examples per sign class. No threshold/lambda/feature/temperature sweep.
+
+Mechanistic branches are preregistered:
+
+- HURDLE succeeds -> population distribution target suffices; discard selected adaptation.
+- SIGN-SHIFT succeeds but full SDFR does not -> selected beneficial-event frequency is the primary mediator; discard magnitude adaptation.
+- SDFR succeeds -> distribution factorization closes zero/tail tradeoff without representation expansion.
+- sign/capture improves but tail remains -> next missing layer is value-specific downside representation.
+- all distribution arms fail despite adequate selected sign-class population -> **close the current 19-D selected-value distribution route** and require a value-specific representation/observable rather than another head on the same evidence.
+
+V39 spent no fresh data. Permanent exclusion remains **10700 tokens**. New label-free seed: `v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1`. Only after nested TRAIN pass may independent CAL500+A500+B500 be selected; A/B remain unpooled.
+
+Paper-level candidate mechanism: **operator-conditioned distributional decision sufficiency**, separating ordinal extremal ranking, population outcome distribution, and selected-policy sign/magnitude alignment under deterministic frozen-winner incumbent containment.

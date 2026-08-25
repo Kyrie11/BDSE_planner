@@ -1,0 +1,59 @@
+V64.3.40 EAF-ICER-SDFR engineering validation
+===============================================
+
+Scientific purpose
+------------------
+Freeze V34 RSMR challenger ordering and test operator-conditioned selected-outcome distribution factorization without adding a high-dimensional selected-policy head or tuning thresholds.
+
+Static validation
+-----------------
+Python compileall: PASS
+launcher bash -n: PASS
+
+Focused regression
+------------------
+bdse/tests/test_v64_3_40_eaf_icer_sdfr.py: 6/6 PASS
+
+Historical targeted regression V13 -> V40
+-----------------------------------------
+190/190 PASS
+Warnings: 2 historical torch TransformerEncoder warnings; no new warning class.
+
+Full repository regression
+--------------------------
+115 unique test_*.py files, partitioned into four mutually exclusive/exhaustive deterministic round-robin file groups.
+Group 0: 142/142 PASS, 6 warnings
+Group 1: 127/127 PASS, 16 warnings
+Group 2: 123/123 PASS, 11 warnings
+Group 3: 128/128 PASS, 3 warnings
+TOTAL: 520/520 PASS
+Warnings: 36 historical warnings, 0 new warning class.
+
+V40-specific contracts covered
+------------------------------
+- hurdle identity reconstructs signed expected value from positive-event probability and positive/negative conditional magnitudes;
+- selected distribution fit uses scalar logit shift and nonnegative magnitude scales only;
+- runtime distribution modes evaluate only the already frozen RSMR proposal;
+- SIGN-SHIFT changes only selected positive-event probability and cannot use magnitude scales;
+- selected adaptation/final unit-slope translation cannot rerank or create a second-best proposal;
+- malformed selected distribution parameters fail closed;
+- RSMR replay is required before any post-selection distribution readout;
+- V39 frozen-winner containment behavior remains covered by historical regression.
+
+Frozen scientific settings
+--------------------------
+- fixed ridge lambda = 1;
+- unchanged historical nested fold hash;
+- unchanged 19-D candidate-minus-incumbent evidence schema;
+- V34 RSMR remains sole challenger selector;
+- no value/distribution arm can rerank, create proposal, or second-best fallback;
+- inner OOF selected distribution population >=192 and each sign class >=64;
+- no-op false-intervention reduction >=20%;
+- positive capture no worse than RSMR by >3 pp;
+- catastrophe reduction >=25%;
+- NegRMS non-worse;
+- aggregate and all five outer-fold selected sums nonnegative;
+- independent CAL uses unit-slope translation only;
+- no threshold/lambda/alpha/q/top-K/candidate-count/temperature sweep;
+- A/B never pooled;
+- fresh seed v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1.

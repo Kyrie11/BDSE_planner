@@ -2582,14 +2582,11 @@ def _icer_post_selection_value(
     V37 modes remain supported:
       score_affine, orthogonal_proposal_value.
 
-    V38 adds rank/value factorization modes:
-      dense_edge_value:
-        a corrected V32.1 scene-equal absolute teacher-improvement ridge is
-        trained on *all fit candidate edges* but evaluated only after RSMR has
-        frozen one proposal;
-      dense_edge_affine:
-        the same dense value followed by a one-dimensional selected-policy
-        affine recalibration fitted on an independent calibration population.
+    V38 adds rank/value factorization modes based on an all-edge signed mean.
+    V39 adds cross-fitted selected-residual modes.
+    V40 adds distribution-factorized modes that reconstruct the already frozen
+    proposal value from beneficial-event probability and positive/negative
+    conditional magnitudes; selected-policy adaptation is scalar-only.
 
     Every mode can only accept the exact frozen RSMR proposal or veto it to the
     incumbent.  None can score a second-best action after proposal freezing.
@@ -2599,7 +2596,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2624,7 +2621,50 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}:
+    if mode in {"dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}:
+        def _hurdle_linear(prefix: str) -> float:
+            hm = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_feature_mean", []), dtype=np.float64).reshape(-1)
+            hs = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_feature_std", []), dtype=np.float64).reshape(-1)
+            hw = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_weights", []), dtype=np.float64).reshape(-1)
+            hb = float(scir_cfg.get(f"post_selection_hurdle_{prefix}_bias", float("nan")))
+            if len(hm) != X.shape[1] or len(hs) != X.shape[1] or len(hw) != X.shape[1] or not math.isfinite(hb):
+                raise ValueError(f"EAF-ICER V40 hurdle {prefix} parameter schema is inconsistent")
+            hz = (X[b] - hm) / np.maximum(hs, 1.0e-6)
+            vv = float(hz @ hw + hb)
+            if not math.isfinite(vv):
+                raise ValueError(f"EAF-ICER V40 hurdle {prefix} output is non-finite")
+            return vv
+
+        peps = float(scir_cfg.get("post_selection_hurdle_probability_clip", 1.0e-4))
+        peps = min(max(peps, 1.0e-8), 0.1)
+        ppos = float(np.clip(_hurdle_linear("sign"), peps, 1.0 - peps))
+        mpos = float(np.clip(_hurdle_linear("positive_magnitude"), 0.0, 40.0))
+        mneg = float(np.clip(_hurdle_linear("negative_magnitude"), 0.0, 40.0))
+        if mode != "dense_edge_hurdle":
+            logit_shift = float(scir_cfg.get("post_selection_hurdle_selected_logit_shift", float("nan")))
+            if not math.isfinite(logit_shift):
+                raise ValueError("EAF-ICER V40 selected hurdle logit shift is invalid")
+            logit = math.log(ppos / max(1.0 - ppos, 1.0e-12)) + logit_shift
+            if logit >= 0.0:
+                ee = math.exp(-min(logit, 60.0)); ppos = 1.0 / (1.0 + ee)
+            else:
+                ee = math.exp(max(logit, -60.0)); ppos = ee / (1.0 + ee)
+            if mode in {"dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}:
+                sp = float(scir_cfg.get("post_selection_hurdle_selected_positive_magnitude_scale", float("nan")))
+                sn = float(scir_cfg.get("post_selection_hurdle_selected_negative_magnitude_scale", float("nan")))
+                if not math.isfinite(sp) or not math.isfinite(sn) or sp < 0.0 or sn < 0.0:
+                    raise ValueError("EAF-ICER V40 selected hurdle magnitude scales are invalid")
+                mpos *= sp
+                mneg *= sn
+        value = ppos * mpos - (1.0 - ppos) * mneg
+        if mode == "dense_edge_hurdle_selected_shift":
+            shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
+            if not math.isfinite(shift):
+                raise ValueError("EAF-ICER V40 SDFR translation bias is invalid")
+            value += shift
+        value_feature = np.asarray([ppos, mpos, mneg], dtype=np.float64)
+        value_names = ["post_value::selected_positive_probability", "post_value::selected_positive_magnitude", "post_value::selected_negative_magnitude"]
+    elif mode in {"dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}:
         dmean = np.asarray(scir_cfg.get("post_selection_dense_feature_mean", []), dtype=np.float64).reshape(-1)
         dstd = np.asarray(scir_cfg.get("post_selection_dense_feature_std", []), dtype=np.float64).reshape(-1)
         dw = np.asarray(scir_cfg.get("post_selection_dense_weights", []), dtype=np.float64).reshape(-1)

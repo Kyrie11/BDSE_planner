@@ -1,0 +1,24 @@
+V64.3.40 EAF-ICER-SDFR changed / added files relative to uploaded V64.3.39
+
+MODIFIED
+- ALGORITHM_CHANGELOG.md
+- bdse/planner/tournament.py
+
+ADDED: algorithm / runtime / audit code
+- bdse/tools/fit_v64_3_40_eaf_icer_sdfr.py
+- bdse/tools/calibrate_v64_3_40_eaf_icer_sdfr.py
+- bdse/tools/check_v64_3_40_eaf_icer_sdfr_split.py
+- bdse/tools/check_v64_3_40_eaf_icer_sdfr_screen.py
+- bdse/tests/test_v64_3_40_eaf_icer_sdfr.py
+- RUN_V64_3_40_EAF_ICER_SDFR_SCREEN_2GPU.sh
+- NEXT_COMMANDS_V64_3_40_EAF_ICER_SDFR.txt
+
+ADDED: V39 causal audit / V40 preregistration artifacts
+- V64_3_39_RESULT_POSTMORTEM_AND_V64_3_40_SDFR_DESIGN.md
+- V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json
+- V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv
+- V64_3_40_ENGINEERING_VALIDATION.txt
+
+Generated delivery artifacts
+- V64_3_40_EAF_ICER_SDFR.patch
+- V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt
