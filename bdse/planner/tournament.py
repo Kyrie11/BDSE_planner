@@ -2569,6 +2569,92 @@ def _icer_scene_reservation_value(
     return float(reservation), x, runtime_names
 
 
+
+def _icer_post_selection_value(
+    proposal_action: int,
+    raw_predicted_improvement: np.ndarray,
+    scir_feature_matrix: np.ndarray,
+    scir_feature_names: list[str],
+    scir_cfg: dict[str, Any],
+) -> tuple[float, np.ndarray, list[str]]:
+    """V64.3.37 absolute value readout for an already frozen RSMR proposal.
+
+    Ranking and post-selection value are deliberately separate estimands.  The
+    RSMR argmax is frozen before this function is called.  This head may only
+    accept that exact proposal or veto it to the incumbent; it cannot score a
+    second-best alternative or create a new proposal.
+
+    Modes:
+      score_affine:
+        affine calibration of the scalar frozen RSMR score;
+      orthogonal_proposal_value:
+        the same affine term plus a residual readout from the selected 19-D
+        standardized evidence projected orthogonal to the frozen RSMR score
+        direction.  This prevents the residual head from learning another copy
+        of the ranking scalar while retaining proposal-specific evidence that
+        scalarization discarded.
+    """
+    if not bool(scir_cfg.get("post_selection_value_enabled", False)):
+        return 0.0, np.zeros((0,), dtype=np.float64), []
+    if bool(scir_cfg.get("scene_reservation_enabled", False)):
+        raise ValueError("EAF-ICER V37 post-selection value is mutually exclusive with V36 scene reservation")
+    mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
+    if mode not in {"score_affine", "orthogonal_proposal_value"}:
+        raise ValueError(f"unknown EAF-ICER V37 post_selection_value_mode={mode}")
+    b = int(proposal_action)
+    mu = np.asarray(raw_predicted_improvement, dtype=np.float64).reshape(-1)
+    X = np.asarray(scir_feature_matrix, dtype=np.float64)
+    if X.ndim != 2 or not (0 <= b < X.shape[0]) or mu.size != X.shape[0]:
+        raise ValueError("EAF-ICER V37 proposal/value runtime shapes are inconsistent")
+    stored_names = list(scir_cfg.get("feature_names", []))
+    if list(scir_feature_names) != stored_names or len(stored_names) != X.shape[1]:
+        raise ValueError("EAF-ICER V37 selected-proposal feature schema does not match frozen RSMR")
+    mean = np.asarray(scir_cfg.get("feature_mean", []), dtype=np.float64).reshape(-1)
+    std = np.asarray(scir_cfg.get("feature_std", []), dtype=np.float64).reshape(-1)
+    rank_w = np.asarray(scir_cfg.get("weights", []), dtype=np.float64).reshape(-1)
+    if len(mean) != X.shape[1] or len(std) != X.shape[1] or len(rank_w) != X.shape[1]:
+        raise ValueError("EAF-ICER V37 frozen RSMR parameter schema is inconsistent")
+    rank_bias = float(scir_cfg.get("bias", 0.0))
+    if abs(rank_bias) > 1.0e-12:
+        raise ValueError("EAF-ICER V37 requires zero-bias frozen RSMR so incumbent remains exact score zero")
+    z = (X[b] - mean) / np.maximum(std, 1.0e-6)
+    u_linear = float(z @ rank_w)
+    u = float(np.clip(u_linear + rank_bias, -40.0, 40.0))
+    if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
+        raise ValueError("EAF-ICER V37 frozen RSMR score does not replay from selected-proposal evidence")
+
+    score_mean = float(scir_cfg.get("post_selection_score_mean", float("nan")))
+    score_std = float(scir_cfg.get("post_selection_score_std", float("nan")))
+    intercept = float(scir_cfg.get("post_selection_affine_intercept", float("nan")))
+    score_weight = float(scir_cfg.get("post_selection_affine_score_weight", float("nan")))
+    if not all(math.isfinite(v) for v in [score_mean, score_std, intercept, score_weight]) or score_std <= 0.0:
+        raise ValueError("EAF-ICER V37 affine post-selection value parameters are invalid")
+    value = intercept + score_weight * ((u - score_mean) / max(score_std, 1.0e-6))
+    value_feature = np.asarray([u], dtype=np.float64)
+    value_names = ["post_value::frozen_rsmr_score"]
+
+    if mode == "orthogonal_proposal_value":
+        ww = float(rank_w @ rank_w)
+        if ww <= 1.0e-12:
+            raise ValueError("EAF-ICER V37 frozen RSMR score direction has zero norm")
+        zperp = z - rank_w * (u_linear / ww)
+        if abs(float(zperp @ rank_w)) > 1.0e-8 * max(1.0, float(np.linalg.norm(zperp)), float(np.linalg.norm(rank_w))):
+            raise ValueError("EAF-ICER V37 orthogonal proposal feature lost score orthogonality")
+        rmean = np.asarray(scir_cfg.get("post_selection_residual_feature_mean", []), dtype=np.float64).reshape(-1)
+        rstd = np.asarray(scir_cfg.get("post_selection_residual_feature_std", []), dtype=np.float64).reshape(-1)
+        rw = np.asarray(scir_cfg.get("post_selection_residual_weights", []), dtype=np.float64).reshape(-1)
+        if len(rmean) != X.shape[1] or len(rstd) != X.shape[1] or len(rw) != X.shape[1]:
+            raise ValueError("EAF-ICER V37 orthogonal residual schema is inconsistent")
+        rz = (zperp - rmean) / np.maximum(rstd, 1.0e-6)
+        value += float(rz @ rw + float(scir_cfg.get("post_selection_residual_bias", 0.0)))
+        value_feature = np.concatenate([np.asarray([u], dtype=np.float64), zperp])
+        value_names = ["post_value::frozen_rsmr_score"] + [f"post_value_orthogonal::{n}" for n in stored_names]
+    if not math.isfinite(value):
+        raise ValueError("EAF-ICER V37 post-selection value is non-finite")
+    max_abs = max(float(scir_cfg.get("post_selection_value_max_abs", 40.0)), 1.0e-6)
+    value = float(np.clip(value, -max_abs, max_abs))
+    return value, value_feature, value_names
+
 def _icer_select_scir_candidate(
     candidate_indices: np.ndarray | list[int],
     predicted_improvement: np.ndarray,
@@ -2683,6 +2769,9 @@ def _apply_decisive_frontier_icer(
     scir_scene_reservation = 0.0
     scir_scene_reservation_feature = np.zeros((0,), dtype=np.float64)
     scir_scene_reservation_feature_names: list[str] = []
+    scir_post_selection_value = 0.0
+    scir_post_selection_value_feature = np.zeros((0,), dtype=np.float64)
+    scir_post_selection_value_feature_names: list[str] = []
     scir_selection_scale = np.ones((len(valid),), dtype=np.float64)
     scir_lower_bound = np.zeros((len(valid),), dtype=np.float64)
     scir_feature_matrix = np.zeros((len(valid), 0), dtype=np.float64)
@@ -2971,7 +3060,38 @@ def _apply_decisive_frontier_icer(
                 replacement_positive = np.isfinite(replacement_regret_risk_logits) & (replacement_regret_risk_logits > 0.0)
             if scir_enabled:
                 reservation_enabled = bool(scir_cfg.get("scene_reservation_enabled", False))
-                if reservation_enabled:
+                post_value_enabled = bool(scir_cfg.get("post_selection_value_enabled", False))
+                if reservation_enabled and post_value_enabled:
+                    raise ValueError("EAF-ICER cannot enable V36 scene reservation and V37 post-selection value simultaneously")
+                if post_value_enabled:
+                    # V64.3.37: freeze the exact RSMR winner first.  The value
+                    # readout is evaluated only for that winner and may either
+                    # keep it or veto it to the incumbent.  It never re-ranks.
+                    raw_positive = np.isfinite(scir_raw_predicted_improvement) & (scir_raw_predicted_improvement > 0.0)
+                    raw_cand = np.flatnonzero(alternative & raw_positive).astype(np.int64)
+                    best = _icer_select_scir_candidate(
+                        raw_cand, scir_raw_predicted_improvement, support_logits, margin_star, utility_prior
+                    )
+                    scir_proposal_exists = bool(best is not None)
+                    scir_proposal_action = int(legacy if best is None else best)
+                    scir_predicted_improvement = scir_raw_predicted_improvement.copy()
+                    scir_lower_bound = scir_predicted_improvement.copy()
+                    if best is None:
+                        scir_certificate_accepted = False
+                        selected = int(baseline)
+                    else:
+                        scir_post_selection_value, scir_post_selection_value_feature, scir_post_selection_value_feature_names = _icer_post_selection_value(
+                            best, scir_raw_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_cfg
+                        )
+                        # For diagnostics, replace only the frozen proposal's
+                        # absolute intervention value.  All non-proposal scores
+                        # remain raw RSMR ranking scores and are never consulted
+                        # after proposal freezing.
+                        scir_predicted_improvement[best] = scir_post_selection_value
+                        scir_lower_bound[best] = scir_post_selection_value
+                        scir_certificate_accepted = bool(scir_post_selection_value > 0.0)
+                        selected = int(best if scir_certificate_accepted else baseline)
+                elif reservation_enabled:
                     # V64.3.36: proposal identity is frozen *before* reservation.
                     # The reservation is a non-negative, scene-common subtraction
                     # and can only accept that exact RSMR proposal or return the
@@ -3091,6 +3211,8 @@ def _apply_decisive_frontier_icer(
         "decisive_frontier_icer_scir_selected_predicted_improvement": float(scir_predicted_improvement[selected]) if scir_enabled and 0 <= selected < len(valid) and selected != legacy else 0.0,
         "decisive_frontier_icer_scir_scene_reservation_enabled": float(bool(scir_enabled and scir_cfg.get("scene_reservation_enabled", False))),
         "decisive_frontier_icer_scir_scene_reservation_value": float(scir_scene_reservation) if scir_enabled else 0.0,
+        "decisive_frontier_icer_scir_post_selection_value_enabled": float(bool(scir_enabled and scir_cfg.get("post_selection_value_enabled", False))),
+        "decisive_frontier_icer_scir_post_selection_value": float(scir_post_selection_value) if scir_enabled else 0.0,
         "decisive_frontier_icer_scir_proposal_predicted_improvement": float(scir_predicted_improvement[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
         "decisive_frontier_icer_scir_proposal_lower_bound": float(scir_lower_bound[scir_proposal_action]) if scir_enabled and scir_proposal_exists and 0 <= scir_proposal_action < len(valid) else 0.0,
         "decisive_frontier_icer_scir_conformal_alpha": float(scir_cfg.get("conformal_alpha", 0.0)) if scir_enabled else 0.0,
@@ -3149,6 +3271,8 @@ def _apply_decisive_frontier_icer(
         "_decisive_frontier_icer_scir_raw_predicted_improvement_star": np.asarray(scir_raw_predicted_improvement, dtype=np.float32),
         "_decisive_frontier_icer_scir_scene_reservation_feature": np.asarray(scir_scene_reservation_feature, dtype=np.float32),
         "_decisive_frontier_icer_scir_scene_reservation_feature_names": list(scir_scene_reservation_feature_names),
+        "_decisive_frontier_icer_scir_post_selection_value_feature": np.asarray(scir_post_selection_value_feature, dtype=np.float32),
+        "_decisive_frontier_icer_scir_post_selection_value_feature_names": list(scir_post_selection_value_feature_names),
         "_decisive_frontier_icer_scir_selection_scale_star": np.asarray(scir_selection_scale, dtype=np.float32),
         "_decisive_frontier_icer_scir_lower_bound_star": np.asarray(scir_lower_bound, dtype=np.float32),
         "_decisive_frontier_icer_scir_feature_matrix": np.asarray(scir_feature_matrix, dtype=np.float32),

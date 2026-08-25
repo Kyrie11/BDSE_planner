@@ -10478,3 +10478,202 @@ Candidate high-level contribution stack:
 The intended conceptual novelty is **invariance-factorized decision sufficiency**: challenger identity is a relative/contrastive ordering problem, while leaving the incumbent is a scene-level reservation problem after data-dependent extremal selection. The reservation may only shrink the frozen intervention set; it cannot create or re-rank paths.
 
 Do not headline the five geometry statistics or ridge regression. They are low-capacity instruments for testing the selection-geometry hypothesis, not the paper contribution themselves.
+
+# V64.3.36 uploaded TRAIN result audit → V64.3.37 EAF-ICER-PVR
+
+## 1. V36 is engineering-valid for TRAIN-level attribution
+
+The uploaded V36 run completed the intended nested frozen-RSMR reservation experiment and stopped at the preregistered TRAIN scientific gate. Independent audit found no runtime/schema/candidate-population/objective-scale/fold-leakage/frozen-winner/monotone-containment blocker that invalidates the result.
+
+Key engineering facts:
+
+- server targeted regression: **167/167 PASS** (2 historical warnings in that targeted invocation);
+- all five reservation calibration folds contain enough frozen-RSMR proposals: **97 / 100 / 98 / 86 / 110**, all >=64;
+- monotone subset and frozen winner identity contracts pass in all five folds;
+- the V36 RSMR replay matches the bundled V34 scene audit on all **782** direct scenes for fold, candidate count, opportunity label, selected action, selected score and selected teacher improvement; maximum selected-score difference is **0.0**;
+- V36 generated no non-empty CAL500/A500/B500 token manifest. Fresh validation remains untouched.
+
+Therefore do **not** create V36.1. The current result is a real TRAIN-level scientific failure of the frozen reservation hypothesis, not an engineering false negative.
+
+The V36 fresh checker had an unexecuted diagnostic ambiguity: its historical `_policy_diag` reports the raw RSMR proposal even after a reservation veto. This did not affect V36 because execution stopped before fresh selection. V37 fresh auditing instead computes intervention-existence/tail statistics from the actual final selected action.
+
+## 2. V36 result: partial tail success, intervention-value failure
+
+Frozen RSMR baseline remains exactly V34:
+
+`502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophes / 107 no-opportunity false interventions`.
+
+Clean basepoint reservation (BPR):
+
+`152 / 83 / 14.46% / +25.5542 / 7 / 22`.
+
+Selection-geometry reservation (SGRR):
+
+`204 / 88 / 15.33% / +18.9162 / 6 / 39`.
+
+SGRR therefore has a real tail-suppression signal (`28→6` catastrophes; NegRMS `0.3557→0.3329`) and a large no-op reduction (`107→39`), but it destroys the pre-registered useful-opportunity contract: capture collapses by **23.17 pp** from 38.50% to 15.33%, and outer fold 1 selected sum is negative (`-0.4349`). The official TRAIN gate failure is scientifically correct.
+
+BPR is even more conservative. It reduces no-op false interventions to 22 and catastrophes to 7 but capture is only 14.46%; clean frozen-order basepoint information is therefore not a first-order solution.
+
+## 3. Why SGRR improves tail while failing the mechanism
+
+On the 502 frozen RSMR proposals:
+
+- RSMR score AUC for positive outcome is only **0.5928**;
+- RSMR score AUC for non-catastrophe is **0.4816**;
+- catastrophe proposals actually have a larger mean RSMR score (**0.4813**) than positive proposals (**0.2089**);
+- selected-policy overprediction target mean rises from **0.1502** on positive proposals to **1.8622** on catastrophes.
+
+The fitted SGRR reservation is highly aliased with the frozen top score:
+
+`corr(reservation, raw RSMR score) = 0.9353`.
+
+It is not a selective sign/value discriminator:
+
+- acceptance among RSMR positives: **39.82%**;
+- acceptance among harmful opportunity proposals: **44.25%**;
+- acceptance among no-op false proposals: **36.45%**;
+- it removes **133 positive** proposals together with 22 catastrophes;
+- the removed set has teacher-improvement sum **+24.3778**.
+
+Thus SGRR mainly learns a broad abstention/high-score shrinkage operator. It does not learn “veto harmful but retain useful intervention.”
+
+Concrete aliasing examples are decisive. `75fd8a14d25350e5` has frozen RSMR score only `0.0451` but teacher improvement `+6.0603`; SGRR vetoes it. Conversely `2b32a9f406845f75` has score `0.00342`, no positive opportunity, and teacher improvement `-3.8065`; SGRR predicts zero reservation and accepts it. A scene-common nonnegative correction cannot resolve this proposal-conditioned sign ambiguity.
+
+## 4. Updated dominant bottleneck
+
+V36 closes the current first-order hypothesis
+
+`frozen RSMR ordering + low-capacity scene-common nonnegative reservation from basepoint/set geometry`.
+
+The bottleneck is now:
+
+**proposal-conditioned absolute intervention-value/sign sufficiency after extremal challenger ranking.**
+
+The important distinction is that the V34 structured RSMR score is a useful **pre-selection ranking/regret estimand**, but its scalar magnitude/sign is not identified as calibrated teacher improvement. `which challenger?` and `is this selected challenger actually worth leaving the incumbent for?` must therefore be estimated separately.
+
+This explains the V33→V36 evidence chain without returning to earlier falsified routes:
+
+- V33 null-action PAIR learns abstention but loses opportunity;
+- V34 regret-structured RSMR learns useful high-value ordering but not a reliable absolute exit boundary;
+- V35 basepoint context is a weak secondary mediator;
+- V36 scene-common reservation suppresses tails mainly by blanket abstention and cannot distinguish high-value low-score from harmful proposals.
+
+## 5. New no-repeat constraints after V36
+
+Retain all earlier constraints. Additionally, do **not**:
+
+- add more selection-geometry statistics, candidate-count gates, top-K rules or nonlinear scene-reservation capacity;
+- enlarge incumbent basepoint/context after clean BPR failed the capture contract;
+- tune reservation threshold, ReLU floor, ridge lambda, alpha/q or an RSMR score cutoff;
+- interpret catastrophe reduction obtained through large positive-recovery deletion as intervention-value learning;
+- use RSMR score magnitude as a safety confidence without a separately validated value estimand;
+- refit the challenger ranker while claiming to test only post-selection intervention value;
+- return to PTMC/classifier/KNN/tail-mode confirmation, which has already failed independent generalization tests;
+- naively concatenate the selected proposal features into the RSMR ranking head.
+
+# V64.3.37 EAF-ICER-PVR
+
+Full name: **Evidence-Attributed Incumbent-Contrastive Proposal-Value Recovery**.
+
+V37 freezes B16/M24, acquisition, EAF, support/admissibility, structural delegation, incumbent default/no fallback, and the exact V34 RSMR challenger ranking.
+
+## 1. Separate ranking and post-selection value estimands
+
+First freeze the RSMR proposal
+
+`bhat = argmax_{b: u_b>0} u_b`.
+
+V37 never evaluates another challenger after `bhat` is frozen. A post-selection value estimate `vhat(bhat)` is then used only as
+
+`execute bhat iff vhat(bhat)>0; otherwise return incumbent`.
+
+Therefore both V37 arms satisfy deterministic action-path containment:
+
+- every V37 intervention is an RSMR intervention with the **same action**;
+- no new proposal can be created;
+- no re-ranking or second-best fallback exists.
+
+Unlike V36, the correction is allowed to be signed. Monotone **action-set containment** does not require a nonnegative score subtraction once proposal identity is frozen.
+
+## 2. AVR scalar-calibration control
+
+`AVR` fits the absolute teacher improvement of independent-fold frozen RSMR proposals as an affine function of the scalar RSMR score:
+
+`v_A = beta0 + beta1 * (u - mean_u) / std_u`.
+
+The slope uses fixed `lambda=1`; the intercept is the calibration-population mean target. This tests the minimal hypothesis that V36 failed only because the structured RSMR scalar has the wrong scale/offset.
+
+AVR is a causal diagnostic control, not the main paper mechanism.
+
+## 3. OPVR score-orthogonal proposal-value residual
+
+For the selected proposal, let
+
+`z = x_selected / RSMR_scale`, `u = w_RSMR^T z`.
+
+Remove the exact ranking-score direction:
+
+`z_perp = z - w_RSMR * u / ||w_RSMR||^2`.
+
+Then fit, on an independent selected-policy calibration fold,
+
+`teacher_improvement - v_A = g(z_perp)`
+
+with fixed `lambda=1` ridge and no residual intercept. The final value is
+
+`v_O = v_A + g(z_perp)`.
+
+By construction `w_RSMR^T z_perp = 0`. The residual head cannot simply learn another copy of the RSMR scalar score; it tests whether proposal-specific absolute sign/value information remains in the existing 19-D selected evidence after the ranking direction has been removed.
+
+This is not naive feature concatenation because the 19-D readout is applied **only after** winner identity is frozen and is mathematically prevented from changing challenger ordering.
+
+## 4. Nested TRAIN causal gate
+
+Reuse the exact historical fold hash:
+
+`3 folds RSMR fit + 1 independent selected-policy value-calibration fold + 1 test fold`.
+
+Each calibration fold must contain at least 64 frozen RSMR proposals. Compare exact RSMR / AVR / OPVR.
+
+OPVR must satisfy before any fresh data:
+
+- exact subset containment and frozen winner identity;
+- >=20% no-opportunity false-intervention reduction vs RSMR;
+- positive capture no worse than RSMR by more than 3 pp;
+- >=25% catastrophe reduction vs RSMR;
+- NegRMS no worse than RSMR;
+- aggregate selected sum >=0 and all five outer-fold sums >=0;
+- >=64 selected and >=32 positive.
+
+AVR is reported with the same diagnostic gate but does not rescue an OPVR TRAIN failure. Its purpose is mechanism identification:
+
+- AVR succeeds and OPVR adds no robust gain → scalar calibration is sufficient; simplify the mechanism;
+- AVR fails but OPVR succeeds → scalarization discarded proposal-specific value/sign information;
+- both fail → stop scene geometry/basepoint/linear selected-proposal expansion and reopen selected-proposal representation/target sufficiency.
+
+No threshold/lambda/feature sweep is allowed.
+
+## 5. Fresh protocol if TRAIN passes
+
+V36 consumed no fresh population. Permanent design exclusion remains **10700 tokens**. Use new label-free seed
+
+`v64.3.37-eaf-icer-pvr-cal500-double-fresh-v1`.
+
+Only after nested TRAIN pass select independent `CAL500 + A500 + B500`.
+
+CAL500 replays frozen full-TRAIN RSMR proposals and fits AVR/OPVR. A/B independently evaluate
+
+`RAW / V20 / PRESERVE / RSMR / AVR / OPVR`.
+
+No A/B pooling. Fresh auditing uses the **actual accepted final action**, not raw proposal-exists diagnostics. OPVR promotion requires engineering/containment validity, the same no-op/capture mechanism gain, zero catastrophes with worst > -0.5 and nonnegative selected sum, >=3 pp direct useful-capture gain over PRESERVE, and endpoint non-inferiority to PRESERVE and V20 on each independent block.
+
+## 6. Paper-line implication
+
+If supported by double fresh and later full-validation/closed-loop evidence, the paper-level mechanism is not “an orthogonal ridge head.” It is:
+
+**post-selection estimand factorization under a bounded auditable planner interface**:
+
+`bounded evidence -> exact EAF attribution -> contrastive regret-aligned extremal ranking -> frozen proposal -> proposal-conditioned absolute value recovery -> deterministic incumbent containment`.
+
+The conceptual claim is that decision sufficiency is operator-dependent: relative evidence can be sufficient for challenger ordering while the post-extremal incumbent-exit decision requires a distinct absolute-value estimand defined on the selected-policy output distribution. This preserves the paper's existing no-new-query and no-fallback structural guarantees while directly addressing the V36 falsification.

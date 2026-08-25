@@ -1,0 +1,27 @@
+V64.3.37 EAF-ICER-PVR changed/new files vs V64.3.36
+
+Core runtime / instrumentation
+- bdse/planner/tournament.py
+- bdse/experiments/evaluate_open_loop.py
+
+V37 fitting / calibration / screening
+- bdse/tools/fit_v64_3_37_eaf_icer_pvr.py
+- bdse/tools/calibrate_v64_3_37_eaf_icer_pvr.py
+- bdse/tools/check_v64_3_37_eaf_icer_pvr_split.py
+- bdse/tools/check_v64_3_37_eaf_icer_pvr_screen.py
+
+Tests
+- bdse/tests/test_v64_3_37_eaf_icer_pvr.py
+
+Launcher / commands
+- RUN_V64_3_37_EAF_ICER_PVR_SCREEN_2GPU.sh
+- NEXT_COMMANDS_V64_3_37_EAF_ICER_PVR.txt
+
+Research record / provenance generated from uploaded V36
+- ALGORITHM_CHANGELOG.md
+- V64_3_36_RESULT_POSTMORTEM_AND_V64_3_37_PVR_DESIGN.md
+- V64_3_36_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_37.json
+- V64_3_36_SCENE_LEVEL_MECHANISM_AUDIT_FOR_V64_3_37.csv
+- V64_3_37_ENGINEERING_VALIDATION.txt
+- V64_3_37_EAF_ICER_PVR.patch
+- V64_3_37_EAF_ICER_PVR_CHANGED_FILES.txt

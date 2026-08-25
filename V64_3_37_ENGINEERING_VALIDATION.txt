@@ -1,0 +1,22 @@
+V64.3.37 EAF-ICER-PVR engineering validation
+
+Python compile: PASS
+Launcher bash -n: PASS
+V37 focused: 5/5 PASS
+V13-V37 targeted: 172/172 PASS
+  fixed batches: 77/77 + 55/55 + 40/40
+Full repository: 502/502 PASS
+  deterministic complete file partition: 71/71 + 109/109 + 172/172 + 150/150
+Warnings: 36 historical / 0 new warning class
+
+Important execution note:
+- A one-shot full pytest invocation printed 100% test progress but the outer tool timeout occurred before pytest returned its final summary/exit status. It is NOT counted as a pass.
+- The 502/502 full-repository result comes from four disjoint, exhaustive test-file partitions covering all 112 test_*.py files, each returning exit code 0.
+
+V37-specific contracts tested:
+- signed affine absolute-value readout;
+- score-orthogonal proposal residual can add signed value correction;
+- z_perp is numerically orthogonal to frozen RSMR rank direction;
+- post-selection value and V36 scene reservation are mutually exclusive / malformed schema fails closed;
+- independent CAL replay preserves frozen RSMR weights and exact logged score;
+- AVR/OPVR runtime topology can only accept the frozen proposal or return incumbent; no re-ranking/second-best path is implemented.

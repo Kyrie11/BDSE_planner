@@ -1,0 +1,22 @@
+# V64.3.37 EAF-ICER-PVR next command
+
+cd bdse_v64_3_37_eaf_icer_pvr
+bash RUN_V64_3_37_EAF_ICER_PVR_SCREEN_2GPU.sh
+
+# If historical output roots are not at the defaults:
+cd bdse_v64_3_37_eaf_icer_pvr
+V30_2_ROOT=/your/outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1 \
+V36_ROOT=/your/outputs_v64_3_36_eaf_icer_sgrr_screen_2gpu_v1 \
+bash RUN_V64_3_37_EAF_ICER_PVR_SCREEN_2GPU.sh
+
+# Do not modify before this run:
+# - ridge lambda=1
+# - B/M or evidence/query schema
+# - V34 RSMR 19-D feature schema / ordering objective
+# - support/admissibility population
+# - frozen winner-before-value topology
+# - OPVR orthogonal projection definition
+# - 20% no-op reduction gate / 3pp capture tolerance / 25% catastrophe reduction gate
+# - selected>=64 / positive>=32 / calibration proposal minimum 64
+# - fresh hash seed or permanent exclusion manifests
+# - no second-best/no fallback rule
