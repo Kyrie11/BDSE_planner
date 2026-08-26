@@ -11681,33 +11681,258 @@ A/B remain strictly unpooled.
 
 Candidate paper mechanism, conditional on untouched validation and frozen closed-loop evidence: **Selection–Valuation–Future-State Sufficiency under a bounded auditable planner interface**. Ordinal extremal selection and absolute execution valuation require different sufficient statistics; the latter can require separately identifiable future agent response geometry and ego-reference consequences. Logged future is TRAIN-only supervision for nuisance prediction, never runtime information. Causal interaction claims still require later frozen interventional/closed-loop evaluation.
 
-# V64.3.47.1 engineering hotfix — canonical V46 historical-signature replay
+# V64.3.47 uploaded TRAIN result audit -> V64.3.48 EAF-ICER-OCRR
 
-## Trigger
+## V47 reliability decision
 
-Running the unchanged V47 launcher stopped before any V47 TRAIN work with:
+The uploaded V47 code archive SHA256 is exactly the preregistered delivery:
 
-`STOP V47: V46 signature changed distribution_mean_aggregate: (216, 118, 39, 9, 57.52556590728618)`
+`104c336c3b54bea59d123f53edc31a6433b1909e4ed9138e24010c290a5614a4`.
 
-This is an **engineering false stop**, not a V47 scientific branch result. The four discrete components of the V46 historical signature exactly match the frozen V46 audit; the launcher/fitter expected value was copied with a small floating-point transcription error. The same problem existed in all three new V46 arms, so fixing only DIST-MEAN would have exposed later false stops for TEMPORAL-PROFILE and DIRP-JOINT.
+The uploaded V47 result archive SHA256 is:
 
-Authoritative V46 uploaded-result values are:
+`68b59adacce4c3547c8cac560d49c09cd3bb09d87f986f1f089b5aad16cc51ed`.
 
-- `distribution_mean_aggregate = (216, 118, 39, 9, 57.52556590728618)`;
-- `temporal_profile_aggregate = (217, 119, 41, 14, 51.263247843232456)`;
-- `dirp_joint_aggregate = (207, 115, 39, 12, 55.303074132712666)`.
+The result contains 3000 frozen TRAIN scenes, 782/782 unique direct scientific scenes, 5/5 nested outer folds, exact V45 PLAN occupancy replay (`max_abs=0`), no deployment logged future, no rerank/second-best/fallback, and no fresh A500/B500 manifests. The fit terminates at the preregistered TRAIN scientific stop before fresh selection.
 
-The originally hard-coded V47 values were respectively `57.52557473140379`, `51.26324847539882`, and `55.30307441748546`, which differ by approximately `8.82e-6`, `6.32e-7`, and `2.85e-7`. The historical guard intentionally uses `1e-9`; therefore this was deterministic false rejection rather than evidence that V46 changed.
+Server targeted regression reports **227/227 PASS**. Re-running the exact uploaded V47 code package locally collects **225/225 PASS**, matching the V47 engineering-validation file. The two-test collection-count discrepancy is treated as a **non-blocking provenance-hygiene warning**, not as a functional failure: both suites pass and all scientific hard signatures replay exactly. However, V47 does not provide a server-source manifest, so server worktree byte identity cannot be proven from the result archive alone. V48 fixes this permanently by hard-checking a package-wide source SHA256 manifest before any scientific computation.
 
-## Repair
+Decision: **V47 is engineering-valid for TRAIN-level attribution; no V47.1 algorithm hotfix is required.** The provenance warning prevents treating the run as final paper evidence, but it does not invalidate the internally consistent preregistered TRAIN mechanism test.
 
-- Correct the three V46 aggregate sums in `bdse/tools/fit_v64_3_47_eaf_icer_fsfr.py` to the authoritative uploaded-result audit values.
-- Remove the duplicate V46 aggregate hard-coding from `RUN_V64_3_47_EAF_ICER_FSFR_SCREEN_2GPU.sh`; the launcher now calls the fitter's single canonical `_check_v46()` implementation before checking frozen TRAIN identity and fresh-unspent state.
-- Keep the `1e-9` historical-signature tolerance unchanged. This hotfix does **not** weaken fail-closed behavior.
-- Add regression tests proving that the authoritative V46 signature passes while a genuine `1e-4` aggregate drift still raises `V47 ENGINEERING STOP`.
+## V47 preregistered verdict: promotion failure
 
-## Scientific status
+Frozen RSMR remains:
 
-**No algorithm mechanism, feature, target, fold split, gate, threshold, winner selector, fresh seed, or preregistered branch is changed.** V47 remains the same FSFR stopping experiment. No V47 algorithm conclusion may be drawn from the original STOP because execution never reached V47 nuisance fitting or TRAIN value arms.
+- selected `502`;
+- selected positive `221`;
+- capture `38.5017%`;
+- teacher sum `+43.2941`;
+- catastrophe `28`;
+- no-positive-opportunity false intervention `107`;
+- negative RMS `0.355688`.
 
-The next action is therefore to rerun the **same original command**. Only after complete V47 TRAIN output exists should AGENT-2D / EGO-REF / FSFR-JOINT be attributed according to the existing preregistration. In particular, the existing rule remains binding: if both V47 future-state nuisances are identifiable and ordinary prediction improves but all deployment gates fail, stop representation expansion and move to the selected-policy zero/tail deployment functional; do not add another feature family.
+The unchanged capture floor is:
+
+`38.5017% - 3pp = 35.5017%`.
+
+V47 TRAIN aggregates:
+
+| arm | selected | positive | capture | sum ΔT | catastrophe | no-op false | NegRMS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| RSMR | 502 | 221 | 38.5017% | +43.2941 | 28 | 107 | 0.355688 |
+| QUALITY | 205 | 129 | 22.4739% | +43.9055 | 13 | 30 | 0.312658 |
+| PLAN-CONTROL | 217 | 121 | 21.0801% | +56.5512 | 9 | 38 | 0.240173 |
+| AGENT-2D | 213 | 118 | 20.5575% | +52.3056 | 10 | 36 | 0.256374 |
+| EGO-REF | 251 | 136 | 23.6934% | +59.5327 | 9 | 45 | 0.223314 |
+| FSFR-JOINT | 249 | 135 | 23.5192% | +57.0049 | 9 | 42 | 0.229206 |
+
+Every V47 value arm passes tail, population and 5/5 nonnegative-fold-sum sub-gates but fails the preregistered existence/capture gate. Therefore **V47 has no promotion arm** and the launcher correctly stops before fresh selection.
+
+## V47 nuisance identification: both families are learnable
+
+### Lateral agent response
+
+Honest OOF MSE:
+
+`zero drift 0.190161 -> LOCAL 0.184763 -> PLAN 0.184742`.
+
+LOCAL beats zero in 5/5 folds and PLAN beats LOCAL in 5/5 folds, so the formal nuisance gate is true. But the candidate-conditioned lateral increment is extremely small: the aggregate LOCAL->PLAN relative MSE gain is only about `0.0109%`. Thus the data support a weak conditional lateral signal, not a first-order deployment mechanism.
+
+### Runtime-predictable ego reference
+
+Honest OOF MSE:
+
+`current-CV proxy 13.1037 -> predicted reference 4.16159`, with improvement in **5/5 folds** (about 68.2% aggregate reduction).
+
+This is a strong nuisance-identification result. The future non-agent/reference consequence is not absent from the runtime-available state and is not intrinsically unlearnable.
+
+## V47 mechanism attribution
+
+### AGENT-2D is closed
+
+PLAN-CONTROL -> AGENT-2D selected-set rotation:
+
+- common: 207 scenes, `+53.5290`, 9 catastrophes;
+- PLAN-only: 10 scenes, `+3.0222`, 2 material positives, 0 catastrophes;
+- **AGENT-2D-only: 6 scenes, `-1.2234`, 0 material positives, 1 catastrophe**.
+
+AGENT-2D also worsens selected-value RMSE/Pearson relative to PLAN (`0.6478/0.4171 -> 0.6584/0.3887`). Therefore the low-order constant local-normal drift family is **identifiable but deployment-harmful**. Do not enlarge it, tune it, or carry it into the V48 main mechanism.
+
+### EGO-REF is a real supporting mediator, but not deployment-sufficient
+
+PLAN-CONTROL -> EGO-REF rotation:
+
+- common: 211 scenes, `+56.5520`, 35 material positives, 9 catastrophes;
+- PLAN-only: 6 scenes, approximately `-0.0008`, 0 material positives, 0 catastrophes;
+- **EGO-REF-only: 40 scenes, `+2.9807`, 20 positives, 2 material positives totaling `+2.9604`, 0 catastrophes**;
+- neither: 245 scenes, `-16.2378`, including 13 missed material positives totaling `+12.8356` and 19 catastrophes.
+
+EGO-REF raises material-positive recovery from `35/50` to `37/50`, total accepted material value from `+66.94` to `+69.90`, leaves catastrophes at 9, and lowers NegRMS to `0.2233`. Its ordinary selected-value diagnostics also improve modestly over PLAN (RMSE `0.6478 -> 0.6434`, Pearson `0.4171 -> 0.4235`, positive AUC `0.6146 -> 0.6298`).
+
+Hence EGO-REF is retained as a **supporting validated consequence coordinate**, not as the headline deployment mechanism. It carries useful information but the signed-mean zero boundary still discards too many RSMR positives.
+
+### JOINT does not rescue AGENT-2D
+
+EGO-REF -> FSFR-JOINT adds 8 joint-only scenes with net `-1.2256` and one catastrophe. The joint arm is worse than EGO-REF in sum, capture and NegRMS. No interaction synergy justifies retaining the lateral branch.
+
+## The V47 stopping condition is now satisfied
+
+V46 preregistered V47 as the final future-representation falsification before changing the deployment operator. V47 has now shown all of the required conditions:
+
+1. both future-state nuisance families pass honest OOF identification;
+2. EGO-REF provides additional predictive and selected-set information;
+3. all deployment arms still fail the unchanged capture gate;
+4. AGENT-2D expansion is harmful;
+5. fresh evidence remains unspent.
+
+Therefore **future-state representation expansion is now formally stopped**. There must be no V48 third future-state block, larger trajectory network, temporal-statistic extension, variance resurrection, or generic value-capacity increase before testing the selected-policy operator.
+
+## Dominant bottleneck after V47
+
+Primary bottleneck:
+
+> **operator-conditioned selected-policy zero/tail functional for the already frozen extremal RSMR proposal.**
+
+The key remaining problem is no longer “which future feature is missing?” but “what conditional law is appropriate after an extremal proposal has already been selected?” The deployed decision is a different operator from ordinary all-edge signed-mean prediction.
+
+A structural count makes the constraint explicit. RSMR contains 221 true-positive selected proposals. To remain within the 3pp absolute capture tolerance, a veto layer must retain at least 204/221 of them (about 92.3%) while simultaneously reducing no-op false interventions from 107 to at most 85 and catastrophes from 28 to at most 21. The task is therefore **selective post-selection veto with near-complete useful-winner retention**, not stronger blanket abstention.
+
+## Historical closure check: why V48 is not a resurrection of V40
+
+V40 SDFR already falsified sign/magnitude factorization on the **pure 19-D selected-value evidence route**. That closure remains permanent.
+
+V48 is allowed only because V41-V47 subsequently established new, physically interpretable consequence coordinates that were absent from V40: endpoint/current consequence, full-horizon ungated occupancy support, agent-local longitudinal response, and runtime-predictable ego-reference consequence. V48 therefore:
+
+- does **not** reopen a 19-D selected head;
+- does **not** fit another all-edge value model;
+- does **not** enlarge an MLP or learn sign/magnitude components on raw EAF deltas;
+- uses only the already validated low-dimensional consequence decomposition of the frozen proposal;
+- changes the post-selection functional and tests one explicit property of the extremal operator.
+
+# V64.3.48 EAF-ICER-OCRR
+
+Full name: **Operator-Conditioned Risk Retention**.
+
+## Core hypothesis: post-selection law depends on the extremal selection event
+
+RSMR first freezes exactly one proposal `b_hat`. V48 never changes that proposal identity.
+
+For the frozen proposal, define three already validated value coordinates:
+
+- `Q`: V42/V43 QUALITY consequence value;
+- `P`: V45 PLAN-CONTROL value using the validated prospective ungated support + longitudinal response mean;
+- `E`: V47 EGO-REF value.
+
+The V48 operator state is deliberately four-dimensional:
+
+`z = [ Q, P-Q, E-P, log K ]`,
+
+where `K` is the **observed size of the existing deployment-admissible challenger set** from which the RSMR extremal proposal is chosen. V48 does not change, sweep or top-K truncate the candidate bank. `K` is a conditioning variable of the already existing selection operator.
+
+The use of `log K` is not a hand safety penalty and its learned coefficient is not sign-constrained. The hypothesis is that the post-selection outcome law changes with selection multiplicity; the data determine the direction after conditioning on the consequence coordinates.
+
+## Selected-policy sign-risk objective
+
+On frozen RSMR selected proposals only, V48 fits a zero-bias linear pairwise risk ranker. For a harmful/nonpositive selected outcome `y^- <= 0` and a beneficial selected outcome `y^+ > 0`, optimize
+
+`log(1 + exp(-(r(z^-)-r(z^+)))) + (lambda/2)||w||^2`,
+
+with fixed `lambda=1` and `r(z)=w^T standardize(z)`.
+
+This objective learns only the ordering “which already-selected proposal is more likely to be unsafe/non-beneficial to retain?” It does not regress teacher magnitude and does not participate in challenger argmax.
+
+## Retention boundary: capture-budget split calibration, not threshold tuning
+
+The existing value gate permits at most `CAPTURE_TOL=0.03` absolute capture loss relative to frozen RSMR. The corresponding conditional false-veto budget among RSMR true-positive proposals is fixed as
+
+`alpha_ret = 0.03 / 0.38501742160278746 = 0.0779185520`.
+
+Within every nested outer fold, the risk ranker excludes both outer-test and calibration folds. The retention threshold is then the fixed split-calibration `(1-alpha_ret)` quantile of risk on the held-out calibration-fold **RSMR true positives**. No threshold, class weight, temperature, translation, catastrophe cutoff or hyperparameter sweep is performed.
+
+At runtime:
+
+- if selected risk `<= tau`, retain the exact RSMR winner;
+- otherwise return to the incumbent.
+
+No rerank, no second best and no fallback are possible.
+
+## V48 causal arms
+
+V48 has only two scientific arms:
+
+1. **SIGN-NOMULT** — selected-policy sign-risk on `[Q, P-Q, E-P]`; the multiplicity coordinate is identically zero.
+2. **SIGN-MULT / OCRR-MAIN** — the identical model, loss, calibration rule and proposal population, with only `log K` restored.
+
+This makes extremal multiplicity the only mechanism difference.
+
+Independent risk-identification gate: selected nonpositive-risk AUC must exceed the strongest directly preceding frozen EGO-REF signed-value baseline in aggregate and in at least 4/5 outer folds. Promotion still additionally requires the unchanged deployment gate.
+
+## V48 design-only nested replay on already consumed TRAIN
+
+This replay is **mechanism-design evidence only, not independent promotion evidence**. It is recorded to preregister V48 before A/B are consumed.
+
+SIGN-NOMULT:
+
+- selected `411`;
+- positive `187`;
+- capture `32.5784%` -> **FAIL**;
+- sum `+53.4956`;
+- catastrophe `18`;
+- no-op false `78`;
+- NegRMS `0.270655`;
+- nonpositive-risk AUC `0.613919` vs EGO-REF baseline `0.629829`, only `3/5` folds better -> **not identified**.
+
+SIGN-MULT:
+
+- selected `439`;
+- positive `204`;
+- capture `35.5401%` -> **PASS** against `35.5017%` floor;
+- sum `+62.6341`;
+- catastrophe `14` -> **PASS**;
+- no-op false `74` -> **PASS**;
+- NegRMS `0.229885` -> **PASS**;
+- 5/5 outer-fold sums nonnegative;
+- selected/nonpositive risk AUC `0.637413` vs EGO-REF `0.629829`, **4/5 folds better**.
+
+The ablation therefore supports the preregistered V48 hypothesis strongly enough to justify untouched validation: **the selected-policy functional without the selection-multiplicity state fails, while the otherwise identical operator-conditioned arm closes the TRAIN gate.** This is not yet a paper claim until both untouched A500 and B500 independently pass.
+
+## V48 preregistered branch and stopping rule
+
+- If SIGN-NOMULT independently passes TRAIN/fresh first, multiplicity is unnecessary; keep the simpler selected-policy functional.
+- If SIGN-NOMULT fails and SIGN-MULT passes identification + deployment gates, support **extremal selection-multiplicity-conditioned risk retention**.
+- If both fail on exact rerun or either A/B fresh split fails, STOP. Do not tune `K`, transform, threshold, pairwise loss, lambda, class weights, or add operator features from the failed fresh data.
+- A500 and B500 are evaluated independently and never pooled.
+- Only if both fresh splits pass may V48 be frozen for full validation and official closed-loop/interventional evaluation.
+
+New label-free fresh seed:
+
+`v64.3.48-eaf-icer-ocrr-double-fresh-v1`.
+
+## V48 source-provenance hard gate
+
+Before prerequisites, tests, fitting, or fresh selection, the launcher runs:
+
+`sha256sum -c V64_3_48_SOURCE_MANIFEST.sha256`.
+
+This closes the V47 server-worktree provenance gap: any source/test/config byte drift in the delivered V48 runtime package causes an ENGINEERING STOP before scientific attribution.
+
+## V48 additional no-repeat constraints
+
+All prior constraints remain. In particular:
+
+- do not alter RSMR, B16/M24, acquisition, admissibility, candidate bank or proposal ordering;
+- do not interpret `K` as permission to sweep candidate count/top-K; it is observation-only;
+- do not add runner-up/fallback/re-ranking behavior;
+- do not resurrect V40 pure-19D SDFR or generic selected MLP/classifier heads;
+- do not add a standalone catastrophe classifier/binary safety veto;
+- do not tune selected translation, zero threshold, CVaR, temporal weights, variance scale or response modes;
+- do not carry V47 AGENT-2D into OCRR-MAIN;
+- do not append another future-state observable if V48 fails;
+- do not use logged future or teacher quantities at deployment;
+- do not pool A/B or tune anything from one fresh split to rescue the other.
+
+Candidate paper mechanism, conditional on untouched A/B and frozen closed-loop validation:
+
+> **Selection–Valuation–Operator Sufficiency under a Bounded Auditable Planner Interface.**
+>
+> Bounded EAF evidence can be sufficient for ordinal extremal selection, while absolute incumbent-exit valuation requires consequence-specific statistics and an explicit conditioning on the extremal selection operator. Prediction sufficiency, representation identifiability, and post-selection decision sufficiency are empirically distinct.

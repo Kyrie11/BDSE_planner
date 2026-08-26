@@ -1,0 +1,1257 @@
+--- /mnt/data/_v47_code/bdse_v64_3_47_eaf_icer_fsfr/bdse/planner/tournament.py	2026-08-26 05:02:22.000000000 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/bdse/planner/tournament.py	2026-08-26 09:36:11.045642513 +0000
+@@ -12,6 +12,7 @@
+ from bdse.planner.pair_screen import build_rival_sets_from_base, SAFE_LIKE_MANEUVER_IDS, PROGRESSIVE_MANEUVER_IDS
+ from bdse.model.potential_projection import project_pair_residual_to_action_potential_numpy
+ from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, full_interface_margin, margin_normalization_scale
++from bdse.planner.operator_conditioned_risk_retention import operator_state as _ocrr_operator_state, runtime_certificate as _ocrr_runtime_certificate
+ from bdse.utils import softmin_np
+ 
+ 
+@@ -2582,6 +2583,7 @@
+     legacy_action: int | None = None,
+     value_observable_matrix: np.ndarray | None = None,
+     value_observable_names: list[str] | np.ndarray | None = None,
++    selection_multiplicity: int | None = None,
+ ) -> tuple[float, np.ndarray, list[str]]:
+     """Absolute value readout for an already frozen RSMR proposal.
+ 
+@@ -2602,7 +2604,7 @@
+     if bool(scir_cfg.get("scene_reservation_enabled", False)):
+         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
+     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
+-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}
++    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention"}
+     if mode not in allowed:
+         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
+     b = int(proposal_action)
+@@ -2627,7 +2629,7 @@
+     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
+         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
+ 
+-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
++    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention"}:
+         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
+             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
+         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
+@@ -2662,7 +2664,7 @@
+         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
+         value_feature = phi
+         value_names = [f"post_value::{n}" for n in runtime_value_names]
+-        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
++        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention"}:
+             if value_observable_matrix is None or value_observable_names is None:
+                 raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
+             om = np.asarray(value_observable_matrix, dtype=np.float64)
+@@ -2682,7 +2684,42 @@
+             qobs = delta_obs[np.asarray(qidx, dtype=np.int64)]
+             qres = float((qobs / np.maximum(qscale, 1.0e-6)) @ qw)
+             value = float(np.clip(value + qres, -40.0, 40.0))
+-            if mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
++            if mode == "endpoint_potential_quality_operator_conditioned_risk_retention":
++                if selection_multiplicity is None or int(selection_multiplicity) < 1:
++                    raise ValueError("EAF-ICER V48 OCRR requires observed admissible-challenger multiplicity")
++                # Reconstruct the two already-frozen V47 value views.  V48 does
++                # not learn another future-state residual: it only changes the
++                # selected-policy functional and conditions it on the size of
++                # the existing extremal competition set.
++                pnames = [str(x) for x in scir_cfg.get("selected_policy_risk_plan_response_names", [])]
++                pscale = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_scales", []), dtype=np.float64).reshape(-1)
++                pw = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_weights", []), dtype=np.float64).reshape(-1)
++                enames = [str(x) for x in scir_cfg.get("selected_policy_risk_ego_reference_names", [])]
++                escale = np.asarray(scir_cfg.get("selected_policy_risk_ego_reference_scales", []), dtype=np.float64).reshape(-1)
++                ew = np.asarray(scir_cfg.get("selected_policy_risk_ego_reference_weights", []), dtype=np.float64).reshape(-1)
++                if not pnames or any(n not in on for n in pnames) or not enames or any(n not in on for n in enames):
++                    raise ValueError("EAF-ICER V48 OCRR frozen PLAN/EGOREF observable schema missing")
++                if pscale.size != len(pnames) or pw.size != len(pnames) or escale.size != len(enames) or ew.size != len(enames):
++                    raise ValueError("EAF-ICER V48 OCRR frozen PLAN/EGOREF parameter size mismatch")
++                if np.any(pscale <= 0.0) or np.any(escale <= 0.0) or np.any(~np.isfinite(pscale)) or np.any(~np.isfinite(escale)) or np.any(~np.isfinite(pw)) or np.any(~np.isfinite(ew)):
++                    raise ValueError("EAF-ICER V48 OCRR frozen PLAN/EGOREF parameters invalid")
++                quality_value = float(value)
++                pobs = delta_obs[np.asarray([on.index(n) for n in pnames], dtype=np.int64)]
++                eobs = delta_obs[np.asarray([on.index(n) for n in enames], dtype=np.int64)]
++                plan_value = float(np.clip(quality_value + (pobs / np.maximum(pscale, 1.0e-6)) @ pw, -40.0, 40.0))
++                ego_value = float(np.clip(quality_value + (eobs / np.maximum(escale, 1.0e-6)) @ ew, -40.0, 40.0))
++                rcfg = scir_cfg.get("operator_conditioned_risk_retention", {})
++                zocr = _ocrr_operator_state(quality_value, plan_value, ego_value, int(selection_multiplicity))
++                if not bool(rcfg.get("use_extremal_multiplicity", True)):
++                    zocr = zocr.copy(); zocr[3] = 0.0
++                cert, rrisk, rparts = _ocrr_runtime_certificate(zocr, rcfg)
++                value = float(np.clip(cert, -40.0, 40.0))
++                value_feature = np.concatenate([phi, qobs, zocr, np.asarray([rrisk], dtype=np.float64)])
++                value_names = ([f"post_value::{n}" for n in runtime_value_names]
++                               + [f"observable_improvement::{n}" for n in qnames]
++                               + [f"ocrr_state::{n}" for n in rcfg.get("feature_names", [])]
++                               + ["ocrr_risk"])
++            elif mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+                 rnames = [str(x) for x in scir_cfg.get("post_selection_future_response_observable_names", [])]
+                 if not rnames or any(n not in on for n in rnames):
+                     raise ValueError("EAF-ICER V46 response-profile observable schema missing")
+@@ -3310,7 +3347,8 @@
+                         scir_post_selection_value, scir_post_selection_value_feature, scir_post_selection_value_feature_names = _icer_post_selection_value(
+                             best, scir_raw_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_cfg,
+                             raw_feat=feat, raw_feature_names=names, support_logits=support_logits, legacy_action=legacy,
+-                            value_observable_matrix=value_observable_matrix, value_observable_names=value_observable_names
++                            value_observable_matrix=value_observable_matrix, value_observable_names=value_observable_names,
++                            selection_multiplicity=int(np.sum(alternative))
+                         )
+                         # For diagnostics, replace only the frozen proposal's
+                         # absolute intervention value.  All non-proposal scores
+--- /dev/null	2026-08-26 08:51:41.597450187 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/bdse/planner/operator_conditioned_risk_retention.py	2026-08-26 09:41:16.078339513 +0000
+@@ -0,0 +1,103 @@
++from __future__ import annotations
++
++"""V64.3.48 operator-conditioned selected-policy risk retention.
++
++V48 never selects or re-ranks an action.  RSMR first freezes exactly one
++proposal.  OCRR then evaluates only that proposal with a deliberately low-
++capacity operator state:
++
++    [QUALITY value,
++     prospective-response increment,
++     ego-reference increment,
++     log(admissible-challenger multiplicity)].
++
++The learned object is a zero-bias pairwise *sign-risk* ranker on the frozen
++selected-policy population.  A stored TRAIN-only split-calibration threshold
++turns risk into a veto-only certificate (threshold - risk).  Thus the runtime
++operator can only retain the same RSMR proposal or return to the incumbent.
++"""
++
++from typing import Any
++import math
++import numpy as np
++
++OCRR_STATE_NAMES = [
++    "quality_value",
++    "prospective_response_increment",
++    "ego_reference_increment",
++    "log_extremal_multiplicity",
++]
++
++
++def operator_state(
++    quality_value: float,
++    plan_control_value: float,
++    ego_reference_value: float,
++    candidate_count: int,
++) -> np.ndarray:
++    """Build the fixed four-dimensional state of the frozen proposal.
++
++    ``candidate_count`` is the observed size of the *existing* admissible
++    challenger set.  V48 does not alter the candidate bank, eligibility, or
++    RSMR selector; multiplicity only conditions the post-selection risk law.
++    """
++    k = max(int(candidate_count), 1)
++    z = np.asarray(
++        [
++            float(quality_value),
++            float(plan_control_value) - float(quality_value),
++            float(ego_reference_value) - float(plan_control_value),
++            math.log(float(k)),
++        ],
++        dtype=np.float64,
++    )
++    if z.shape != (4,) or not np.all(np.isfinite(z)):
++        raise ValueError("V48 OCRR operator state is non-finite")
++    return z
++
++
++def _sign_risk_score(z: np.ndarray, model: dict[str, Any]) -> float:
++    names = [str(x) for x in model.get("feature_names", [])]
++    if names != OCRR_STATE_NAMES:
++        raise ValueError(f"V48 OCRR risk feature schema mismatch: {names}")
++    mean = np.asarray(model.get("feature_mean", []), dtype=np.float64).reshape(-1)
++    std = np.asarray(model.get("feature_std", []), dtype=np.float64).reshape(-1)
++    w = np.asarray(model.get("weights", []), dtype=np.float64).reshape(-1)
++    if (
++        mean.size != 4
++        or std.size != 4
++        or w.size != 4
++        or np.any(~np.isfinite(mean))
++        or np.any(~np.isfinite(std))
++        or np.any(std <= 0.0)
++        or np.any(~np.isfinite(w))
++    ):
++        raise ValueError("V48 OCRR risk parameters are invalid")
++    bias = float(model.get("bias", 0.0))
++    if abs(bias) > 1.0e-12:
++        raise ValueError("V48 OCRR pairwise sign-risk ranker requires zero bias")
++    raw = float(((z - mean) / np.maximum(std, 1.0e-6)) @ w)
++    pmean = float(model.get("fit_positive_score_mean", float("nan")))
++    pstd = float(model.get("fit_positive_score_std", float("nan")))
++    if not math.isfinite(pmean) or not math.isfinite(pstd) or pstd <= 0.0:
++        raise ValueError("V48 OCRR positive-score normalization is invalid")
++    return float((raw - pmean) / max(pstd, 1.0e-6))
++
++
++def runtime_risk(z: np.ndarray, cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
++    zz = np.asarray(z, dtype=np.float64).reshape(-1)
++    if zz.size != 4 or not np.all(np.isfinite(zz)):
++        raise ValueError("V48 OCRR runtime state must be finite 4-D")
++    if str(cfg.get("aggregation", "sign_only")).strip().lower() != "sign_only":
++        raise ValueError("V48 OCRR only permits the preregistered sign_only risk functional")
++    models = cfg.get("components", {}) if isinstance(cfg, dict) else {}
++    s = _sign_risk_score(zz, models.get("sign_risk", {}))
++    return float(s), {"sign_risk": float(s)}
++
++
++def runtime_certificate(z: np.ndarray, cfg: dict[str, Any]) -> tuple[float, float, dict[str, float]]:
++    risk, parts = runtime_risk(z, cfg)
++    tau = float(cfg.get("retention_threshold", float("nan")))
++    if not math.isfinite(tau):
++        raise ValueError("V48 OCRR retention threshold is invalid")
++    return float(tau - risk), float(risk), parts
+--- /dev/null	2026-08-26 08:51:41.597450187 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/bdse/tools/fit_v64_3_48_eaf_icer_ocrr.py	2026-08-26 09:49:54.831873523 +0000
+@@ -0,0 +1,400 @@
++from __future__ import annotations
++
++"""V64.3.48 OCRR nested TRAIN mechanism test.
++
++V47 preregistered a representation stop when both future-state nuisances were
++identifiable but the deployment gate remained open.  V48 therefore freezes all
++V47 runtime observables and changes only the selected-policy functional.
++
++The key hypothesis is post-selection multiplicity: the outcome law of an
++extremal RSMR winner depends on the size of the admissible challenger set from
++which it was selected.  A zero-bias pairwise sign-risk ranker is fit on frozen
++RSMR proposals, and a split-conformal threshold protects the already registered
++capture tolerance.  No action is re-ranked: the risk layer can only retain the
++same RSMR proposal or return to the incumbent.
++"""
++
++import argparse
++import csv
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.planner.operator_conditioned_risk_retention import OCRR_STATE_NAMES
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import FOLDS
++from bdse.tools.fit_v64_3_38_eaf_icer_davr import CAPTURE_TOL, CATASTROPHE_REDUCTION_MIN, NOOP_REDUCTION_MIN, _auc
++from bdse.tools.fit_v64_3_43_eaf_icer_cfrv import _gate, _metrics
++
++EPS = 1.0e-12
++RIDGE_LAMBDA = 1.0
++ARMS = ["sign_nomult", "sign_mult"]
++
++V47_EXPECTED = {
++    "rsmr_rank_aggregate": (502, 221, 107, 28, 43.29405361274824),
++    "quality_control_aggregate": (205, 129, 30, 13, 43.905547394411805),
++    "v45_plan_control_aggregate": (217, 121, 38, 9, 56.55117310290402),
++    "agent_2d_aggregate": (213, 118, 36, 10, 52.305649566059444),
++    "ego_reference_aggregate": (251, 136, 45, 9, 59.53269591505746),
++    "fsfr_joint_aggregate": (249, 135, 42, 9, 57.004928000622115),
++}
++
++
++def _sig(d: dict[str, Any]) -> tuple[Any, Any, Any, Any, float]:
++    return (
++        d.get("selected_count"), d.get("selected_positive_count"),
++        d.get("no_positive_opportunity_false_intervention_count"), d.get("catastrophic_count"),
++        float(d.get("teacher_improvement_sum", float("nan"))),
++    )
++
++
++def _check_v47(path: Path) -> dict[str, Any]:
++    r = json.loads(path.read_text())
++    n = r.get("nested_crossfit", {})
++    for k, e in V47_EXPECTED.items():
++        g = _sig(n.get(k, {}))
++        if any(g[i] != e[i] for i in range(4)) or abs(g[4] - e[4]) > 1.0e-9:
++            raise RuntimeError(f"V48 ENGINEERING STOP: V47 signature mismatch {k}: {g}")
++    if r.get("train_gate_pass") is not False or n.get("train_gate_pass") is not False:
++        raise RuntimeError("V48 ENGINEERING STOP: V47 unexpectedly passed TRAIN gate")
++    ident = n.get("future_state_identification", {})
++    if not bool(ident.get("agent_2d_response_identified", False)) or not bool(ident.get("ego_reference_identified", False)):
++        raise RuntimeError("V48 ENGINEERING STOP: V47 nuisance-identification signature changed")
++    if n.get("failure_diagnosis") != "future_state_nuisances_are_identifiable_but_absolute_zero_requires_selected_deployment_decision_functional_or_more_general_future_state":
++        raise RuntimeError("V48 ENGINEERING STOP: V47 scientific-stop signature changed")
++    # V46/V47 preregistration resolves the legacy diagnosis string: once both
++    # nuisance families are identifiable and deployment still fails, no third
++    # future-state block may be appended before testing the selected operator.
++    return r
++
++
++def _read_audit(path: Path) -> list[dict[str, Any]]:
++    rows: list[dict[str, Any]] = []
++    with path.open(newline="", encoding="utf-8") as f:
++        for r in csv.DictReader(f):
++            z: dict[str, Any] = dict(r)
++            for k in [
++                "outer_test_fold", "calibration_fold", "candidate_count", "positive_opportunity",
++                "rsm_selected_action", "quality_selected_action", "plan_control_selected_action",
++                "agent_2d_selected_action", "ego_ref_selected_action", "fsfr_joint_selected_action",
++            ]:
++                z[k] = int(float(r[k]))
++            for k in [
++                "rsm_selected_teacher_improvement", "quality_value", "plan_control_value", "agent_2d_value",
++                "ego_ref_value", "fsfr_joint_value", "fsfr_plan_1d_occupancy_cost_improvement",
++                "fsfr_plan_2d_occupancy_cost_improvement", "fsfr_predicted_demo_cost_improvement",
++            ]:
++                z[k] = float(r[k]) if str(r[k]).strip() not in {"", "nan", "NaN"} else float("nan")
++            rows.append(z)
++    toks = [str(r["scenario_token"]) for r in rows]
++    if len(rows) != 782 or len(set(toks)) != 782:
++        raise RuntimeError(f"V48 ENGINEERING STOP: V47 scene audit must be 782/782 unique, got {len(rows)}/{len(set(toks))}")
++    if sorted(set(int(r["outer_test_fold"]) for r in rows)) != list(range(FOLDS)):
++        raise RuntimeError("V48 ENGINEERING STOP: V47 audit outer folds are incomplete")
++    return rows
++
++
++def _state(r: dict[str, Any], use_multiplicity: bool) -> np.ndarray:
++    q = float(r["quality_value"])
++    p = float(r["plan_control_value"])
++    e = float(r["ego_ref_value"])
++    k = max(int(r["candidate_count"]), 1)
++    z = np.asarray([q, p - q, e - p, math.log(float(k)) if use_multiplicity else 0.0], dtype=np.float64)
++    if not np.all(np.isfinite(z)):
++        raise ValueError(f"non-finite V48 operator state {r['scenario_token']}")
++    return z
++
++
++def _fit_sign_ranker(rows: list[dict[str, Any]], use_multiplicity: bool) -> dict[str, Any]:
++    rr = [r for r in rows if int(r["rsm_selected_action"]) >= 0]
++    X = np.stack([_state(r, use_multiplicity) for r in rr])
++    y = np.asarray([float(r["rsm_selected_teacher_improvement"]) for r in rr], dtype=np.float64)
++    mean = X.mean(axis=0)
++    std = np.maximum(X.std(axis=0), 1.0e-6)
++    Z = (X - mean[None, :]) / std[None, :]
++    good = Z[y > 0.0]; bad = Z[y <= 0.0]
++    if good.shape[0] < 32 or bad.shape[0] < 32:
++        raise ValueError("V48 selected sign ranker has insufficient sign populations")
++    D = (bad[:, None, :] - good[None, :, :]).reshape(-1, Z.shape[1])
++    w = np.zeros((Z.shape[1],), dtype=np.float64)
++    before = float(D.shape[0] * math.log(2.0))
++    for _ in range(80):
++        s = D @ w
++        q = 1.0 / (1.0 + np.exp(np.clip(s, -60.0, 60.0)))  # sigmoid(-margin)
++        grad = -(D.T @ q) + RIDGE_LAMBDA * w
++        hw = q * (1.0 - q)
++        H = (D.T * hw) @ D + RIDGE_LAMBDA * np.eye(D.shape[1], dtype=np.float64)
++        step = np.linalg.solve(H, grad)
++        w2 = w - step
++        w = w2
++        if float(np.linalg.norm(step)) < 1.0e-9:
++            break
++    s = D @ w
++    after = float(np.sum(np.logaddexp(0.0, -s)) + 0.5 * RIDGE_LAMBDA * np.dot(w, w))
++    raw = Z @ w
++    pos = raw[y > 0.0]
++    pmean = float(pos.mean()); pstd = max(float(pos.std()), 1.0e-6)
++    return {
++        "model": "zero_bias_pairwise_selected_sign_risk",
++        "feature_names": list(OCRR_STATE_NAMES),
++        "feature_mean": [float(x) for x in mean], "feature_std": [float(x) for x in std],
++        "weights": [float(x) for x in w], "bias": 0.0, "lambda": RIDGE_LAMBDA,
++        "use_extremal_multiplicity": bool(use_multiplicity),
++        "selected_count": int(len(y)), "positive_count": int(np.sum(y > 0.0)), "nonpositive_count": int(np.sum(y <= 0.0)),
++        "pair_count": int(D.shape[0]), "objective_at_zero": before, "objective_final": after,
++        "fit_positive_score_mean": pmean, "fit_positive_score_std": pstd,
++    }
++
++
++def _risk(r: dict[str, Any], m: dict[str, Any]) -> float:
++    z = _state(r, bool(m.get("use_extremal_multiplicity", False)))
++    mean = np.asarray(m["feature_mean"], dtype=np.float64)
++    std = np.asarray(m["feature_std"], dtype=np.float64)
++    w = np.asarray(m["weights"], dtype=np.float64)
++    raw = float(((z - mean) / np.maximum(std, 1.0e-6)) @ w)
++    return float((raw - float(m["fit_positive_score_mean"])) / max(float(m["fit_positive_score_std"]), 1.0e-6))
++
++
++def _retention_alpha(rsmr: dict[str, Any]) -> float:
++    # Existing gate permits at most CAPTURE_TOL absolute loss over opportunity
++    # scenes.  Conditional on an RSMR-selected true positive, this is exactly
++    # the allowed false-veto probability budget below.
++    base_capture = float(rsmr["positive_capture_rate"])
++    if not (base_capture > CAPTURE_TOL > 0.0):
++        raise ValueError("V48 invalid frozen capture/tolerance relation")
++    return float(CAPTURE_TOL / base_capture)
++
++
++def _conformal_threshold(cal: list[dict[str, Any]], m: dict[str, Any], alpha: float) -> tuple[float, dict[str, Any]]:
++    vals = sorted(_risk(r, m) for r in cal if int(r["rsm_selected_action"]) >= 0 and float(r["rsm_selected_teacher_improvement"]) > 0.0)
++    n = len(vals)
++    if n < 16:
++        raise ValueError("V48 calibration has too few frozen-policy positives")
++    rank = min(max(int(math.ceil((n + 1) * (1.0 - alpha))), 1), n)
++    tau = float(vals[rank - 1])
++    return tau, {"positive_calibration_count": n, "conformal_rank": rank, "alpha": float(alpha), "threshold": tau}
++
++
++def _nested(rows: list[dict[str, Any]], v47: dict[str, Any], audit_csv: Path) -> dict[str, Any]:
++    v47n = v47["nested_crossfit"]
++    rsmr = v47n["rsmr_rank_aggregate"]
++    alpha = _retention_alpha(rsmr)
++    arms = ["rsmr", "plan_control", "ego_ref"] + ARMS
++    vals = {a: [] for a in arms}; caps = {a: 0 for a in arms}; noops = {a: 0 for a in arms}; oppsels = {a: 0 for a in arms}
++    total_opp = total_noop = 0
++    folds: list[dict[str, Any]] = []
++    aud: list[dict[str, Any]] = []
++    risk_sign_all = {a: [] for a in ARMS}; risk_y_all: list[float] = []; base_risk_all: list[float] = []
++    better = {a: 0 for a in ARMS}
++
++    for k in range(FOLDS):
++        cf = (k + 1) % FOLDS
++        fit = [r for r in rows if int(r["outer_test_fold"]) not in {k, cf}]
++        cal = [r for r in rows if int(r["outer_test_fold"]) == cf]
++        test = [r for r in rows if int(r["outer_test_fold"]) == k]
++        models = {
++            "sign_nomult": _fit_sign_ranker(fit, False),
++            "sign_mult": _fit_sign_ranker(fit, True),
++        }
++        taus = {a: _conformal_threshold(cal, models[a], alpha) for a in ARMS}
++        fv = {a: [] for a in arms}; fc = {a: 0 for a in arms}; fn = {a: 0 for a in arms}; fo = {a: 0 for a in arms}
++        opp = sum(int(r["positive_opportunity"]) for r in test); noopsc = len(test) - opp
++        fold_risk = {a: [] for a in ARMS}; fold_y: list[float] = []; fold_base: list[float] = []
++        for r in test:
++            has = bool(int(r["positive_opportunity"]))
++            y = float(r["rsm_selected_teacher_improvement"])
++            rsm_sel = int(r["rsm_selected_action"]) >= 0
++            chosen = {
++                "rsmr": rsm_sel,
++                "plan_control": int(r["plan_control_selected_action"]) >= 0,
++                "ego_ref": int(r["ego_ref_selected_action"]) >= 0,
++                "sign_nomult": False,
++                "sign_mult": False,
++            }
++            rs: dict[str, float] = {a: float("nan") for a in ARMS}
++            if rsm_sel:
++                for a in ARMS:
++                    rs[a] = _risk(r, models[a]); chosen[a] = bool(rs[a] <= taus[a][0])
++                fold_y.append(y); fold_base.append(-float(r["ego_ref_value"]))
++                for a in ARMS: fold_risk[a].append(rs[a])
++            for a in arms:
++                if not chosen[a]: continue
++                fv[a].append(y); fc[a] += int(has and y > 0.0); fn[a] += int(not has); fo[a] += int(has)
++            aud.append({
++                **r,
++                "v48_sign_nomult_risk": rs["sign_nomult"], "v48_sign_mult_risk": rs["sign_mult"],
++                "v48_sign_nomult_threshold": taus["sign_nomult"][0], "v48_sign_mult_threshold": taus["sign_mult"][0],
++                "v48_sign_nomult_selected_action": int(r["rsm_selected_action"]) if chosen["sign_nomult"] else -1,
++                "v48_sign_mult_selected_action": int(r["rsm_selected_action"]) if chosen["sign_mult"] else -1,
++            })
++        total_opp += opp; total_noop += noopsc
++        fd: dict[str, Any] = {}
++        for a in arms:
++            fd[a] = _metrics(fv[a], fc[a], opp, fn[a], fo[a], noopsc)
++            vals[a] += fv[a]; caps[a] += fc[a]; noops[a] += fn[a]; oppsels[a] += fo[a]
++        fy = np.asarray(fold_y, dtype=np.float64); fb = np.asarray(fold_base, dtype=np.float64)
++        diag: dict[str, Any] = {}
++        for a in ARMS:
++            rr = np.asarray(fold_risk[a], dtype=np.float64)
++            auc = _auc(fy <= 0.0, rr); bauc = _auc(fy <= 0.0, fb)
++            better[a] += int(math.isfinite(auc) and math.isfinite(bauc) and auc > bauc + 1.0e-12)
++            diag[a] = {"selected_nonpositive_risk_auc": auc, "baseline_neg_ego_ref_value_auc": bauc, "auc_better": bool(auc > bauc + 1.0e-12)}
++            risk_sign_all[a] += rr.tolist()
++        risk_y_all += fy.tolist(); base_risk_all += fb.tolist()
++        folds.append({
++            "fold": k, "fit_scenes": len(fit), "value_calibration_scenes": len(cal), "test_scenes": len(test),
++            **{a: fd[a] for a in arms},
++            "risk_identification": diag,
++            "calibration": {a: taus[a][1] for a in ARMS},
++            "monotone_frozen_winner_contract_valid": True,
++        })
++
++    audit_csv.parent.mkdir(parents=True, exist_ok=True)
++    with audit_csv.open("w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=list(aud[0].keys())); w.writeheader(); w.writerows(aud)
++    A = {a: _metrics(vals[a], caps[a], total_opp, noops[a], oppsels[a], total_noop) for a in arms}
++    gates = {a: _gate(A[a], A["rsmr"], folds, a) for a in ["plan_control", "ego_ref"] + ARMS}
++    yy = np.asarray(risk_y_all, dtype=np.float64); bb = np.asarray(base_risk_all, dtype=np.float64)
++    risk_id: dict[str, Any] = {}
++    for a in ARMS:
++        ss = np.asarray(risk_sign_all[a], dtype=np.float64)
++        auc = _auc(yy <= 0.0, ss); bauc = _auc(yy <= 0.0, bb)
++        risk_id[a] = {
++            "aggregate_nonpositive_risk_auc": auc, "aggregate_baseline_neg_ego_ref_value_auc": bauc,
++            "better_fold_count": int(better[a]),
++            "identified": bool(math.isfinite(auc) and auc > bauc + 1.0e-12 and better[a] >= 4),
++        }
++    promotion = {
++        "sign_nomult": bool(gates["sign_nomult"]["pass"] and risk_id["sign_nomult"]["identified"]),
++        "sign_mult": bool(gates["sign_mult"]["pass"] and risk_id["sign_mult"]["identified"]),
++    }
++    preferred = "sign_nomult" if promotion["sign_nomult"] else ("sign_mult" if promotion["sign_mult"] else None)
++    if preferred == "sign_nomult":
++        diag = "selected_policy_sign_risk_is_sufficient_without_extremal_multiplicity"
++    elif preferred == "sign_mult":
++        diag = "extremal_selection_multiplicity_is_required_for_selected_policy_risk_retention"
++    else:
++        diag = "operator_conditioned_sign_risk_improves_identification_but_selected_zero_tail_functional_remains_insufficient"
++    return {
++        "folds": folds, "scene_audit_csv": str(audit_csv),
++        "rsmr_rank_aggregate": A["rsmr"], "v45_plan_control_aggregate": A["plan_control"], "v47_ego_reference_aggregate": A["ego_ref"],
++        "sign_nomult_aggregate": A["sign_nomult"], "sign_mult_aggregate": A["sign_mult"],
++        "gates": gates, "risk_identification": risk_id,
++        "retention_alpha": alpha, "retention_alpha_derivation": "CAPTURE_TOL / frozen_RSMR_capture_rate",
++        "promotion_eligible": promotion, "preferred_promotion_arm": preferred,
++        "train_gate_pass": bool(preferred is not None), "failure_diagnosis": diag,
++        "monotone_frozen_winner_contract_valid": True,
++    }
++
++
++def _extract_plan_and_ego_params(plan_cfg_path: Path, ego_cfg_path: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
++    plan_cfg = yaml.safe_load(plan_cfg_path.read_text()); ego_cfg = yaml.safe_load(ego_cfg_path.read_text())
++    def sc(cfg): return cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"]
++    p = sc(plan_cfg); e = sc(ego_cfg)
++    plan = {
++        "names": list(p["post_selection_future_response_observable_names"]),
++        "scales": [float(x) for x in p["post_selection_future_response_scales"]],
++        "weights": [float(x) for x in p["post_selection_future_response_weights"]],
++    }
++    ego = {
++        "names": list(e["post_selection_future_response_observable_names"]),
++        "scales": [float(x) for x in e["post_selection_future_response_scales"]],
++        "weights": [float(x) for x in e["post_selection_future_response_weights"]],
++    }
++    if plan["names"] != ["fsfr_plan_1d_occupancy_cost"] or ego["names"] != ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"]:
++        raise RuntimeError("V48 ENGINEERING STOP: V47 PLAN/EGOREF config schemas changed")
++    return plan_cfg, plan, ego
++
++
++def _decorate(base_cfg: dict[str, Any], plan: dict[str, Any], ego: dict[str, Any], risk: dict[str, Any], tau: float, out: Path, arm: str) -> None:
++    cfg = yaml.safe_load(yaml.safe_dump(base_cfg, sort_keys=False))
++    ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    sc = ic["selection_conditioned_intervention_recovery"]
++    sc["post_selection_value_mode"] = "endpoint_potential_quality_operator_conditioned_risk_retention"
++    sc["selected_policy_risk_plan_response_names"] = list(plan["names"])
++    sc["selected_policy_risk_plan_response_scales"] = list(plan["scales"])
++    sc["selected_policy_risk_plan_response_weights"] = list(plan["weights"])
++    sc["selected_policy_risk_ego_reference_names"] = list(ego["names"])
++    sc["selected_policy_risk_ego_reference_scales"] = list(ego["scales"])
++    sc["selected_policy_risk_ego_reference_weights"] = list(ego["weights"])
++    sc["operator_conditioned_risk_retention"] = {
++        "feature_names": list(OCRR_STATE_NAMES), "aggregation": "sign_only",
++        "use_extremal_multiplicity": bool(risk["use_extremal_multiplicity"]),
++        "components": {"sign_risk": risk}, "retention_threshold": float(tau),
++        "threshold_calibration": "TRAIN_selected_positive_split_conformal_from_frozen_capture_tolerance_no_sweep",
++    }
++    sc["post_selection_selected_bias"] = 0.0
++    sc["post_selection_value_training"] = "selected_RSMR_pairwise_sign_risk_fixed_lambda_1_plus_operator_multiplicity_ablation"
++    sc["post_selection_operator"] = "freeze_RSMR_winner_then_OCRR_veto_only_same_winner_or_incumbent_no_rerank_no_fallback"
++    cfg.setdefault("metadata", {})["algorithm_version"] = f"V64.3.48-EAF-ICER-OCRR-{arm.upper()}"
++    cfg.setdefault("provenance", {})["algorithm_version"] = f"V64.3.48-EAF-ICER-OCRR-{arm.upper()}"
++    cfg.setdefault("experiment", {})["name"] = f"v64_3_48_eaf_icer_ocrr_{arm}"
++    cfg["experiment"]["algorithm"] = f"V64.3.48-EAF-ICER-OCRR-{arm.upper()}"
++    out.write_text(yaml.safe_dump(cfg, sort_keys=False))
++
++
++def _final_model(rows: list[dict[str, Any]], use_mult: bool, alpha: float) -> tuple[dict[str, Any], float, dict[str, Any]]:
++    # Keep one deterministic calibration fold out of the selected-risk fit so
++    # final fresh deployment retains calibration independence.
++    fit = [r for r in rows if int(r["outer_test_fold"]) != 0]
++    cal = [r for r in rows if int(r["outer_test_fold"]) == 0]
++    model = _fit_sign_ranker(fit, use_mult)
++    tau, info = _conformal_threshold(cal, model, alpha)
++    info["final_fit_folds"] = [1, 2, 3, 4]; info["final_calibration_fold"] = 0
++    return model, tau, info
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--v47-fit-report", required=True); ap.add_argument("--v47-scene-audit", required=True)
++    ap.add_argument("--v47-plan-config", required=True); ap.add_argument("--v47-ego-ref-config", required=True)
++    ap.add_argument("--output-sign-nomult-config", required=True); ap.add_argument("--output-sign-mult-config", required=True)
++    ap.add_argument("--output-report", required=True); ap.add_argument("--output-scene-audit", required=True)
++    a = ap.parse_args()
++
++    v47 = _check_v47(Path(a.v47_fit_report)); rows = _read_audit(Path(a.v47_scene_audit))
++    nested = _nested(rows, v47, Path(a.output_scene_audit))
++    # Hard replay: this layer must not alter historical policies before OCRR.
++    for key, expkey in [("rsmr_rank_aggregate", "rsmr_rank_aggregate"), ("v45_plan_control_aggregate", "v45_plan_control_aggregate"), ("v47_ego_reference_aggregate", "ego_reference_aggregate")]:
++        got = _sig(nested[key]); exp = V47_EXPECTED[expkey]
++        if any(got[i] != exp[i] for i in range(4)) or abs(got[4] - exp[4]) > 1.0e-9:
++            raise RuntimeError(f"V48 ENGINEERING STOP: historical replay changed {key}: {got}")
++
++    plan_cfg, plan, ego = _extract_plan_and_ego_params(Path(a.v47_plan_config), Path(a.v47_ego_ref_config))
++    alpha = float(nested["retention_alpha"])
++    m0, t0, i0 = _final_model(rows, False, alpha); m1, t1, i1 = _final_model(rows, True, alpha)
++    _decorate(plan_cfg, plan, ego, m0, t0, Path(a.output_sign_nomult_config), "sign-nomult")
++    _decorate(plan_cfg, plan, ego, m1, t1, Path(a.output_sign_mult_config), "sign-mult")
++
++    report = {
++        "audit": "v64_3_48_eaf_icer_ocrr_fit",
++        "scientific_role": "TRAIN_only_operator_functional_after_V47_preregistered_representation_stop",
++        "mechanism_hypothesis": "The absolute outcome law of a frozen extremal RSMR proposal is post-selection shifted by admissible challenger multiplicity. Use already validated QUALITY/PLAN/EGOREF consequence coordinates only as fixed context, learn selected-policy sign risk rather than an all-edge signed mean, and calibrate a veto-only retention threshold from the existing capture tolerance.",
++        "nested_crossfit": nested, "train_gate_pass": nested["train_gate_pass"],
++        "final_runtime_fit": {"sign_nomult": i0, "sign_mult": i1},
++        "train_gate_contract": {
++            "V47_failure_signature_is_exact_hard_gate": True,
++            "representation_expansion_after_V47_is_forbidden": True,
++            "RSMR_is_sole_challenger_selector": True,
++            "same_winner_veto_only_no_rerank_no_fallback": True,
++            "candidate_bank_and_candidate_count_are_not_changed_or_swept": True,
++            "multiplicity_is_only_the_observed_size_of_the_existing_admissible_challenger_set": True,
++            "no_new_future_state_observable": True,
++            "no_catastrophe_classifier": True,
++            "no_selected_translation_or_free_threshold_sweep": True,
++            "retention_threshold_is_split_conformal_and_derived_from_existing_capture_tolerance": True,
++            "lambda": RIDGE_LAMBDA, "capture_tolerance": CAPTURE_TOL,
++            "noop_reduction_min": NOOP_REDUCTION_MIN, "catastrophe_reduction_min": CATASTROPHE_REDUCTION_MIN,
++        },
++    }
++    Path(a.output_report).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
++    print(json.dumps({"pass": nested["train_gate_pass"], "preferred_promotion_arm": nested["preferred_promotion_arm"], "failure_diagnosis": nested["failure_diagnosis"]}, sort_keys=True))
++    if not nested["train_gate_pass"]:
++        raise SystemExit(f"V64.3.48 OCRR nested TRAIN gate failed ({nested['failure_diagnosis']}); STOP before fresh selection")
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null	2026-08-26 08:51:41.597450187 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/bdse/tools/check_v64_3_48_eaf_icer_ocrr_split.py	2026-08-26 09:36:49.381931997 +0000
+@@ -0,0 +1,31 @@
++from __future__ import annotations
++import argparse, json, math
++from pathlib import Path
++from bdse.tools.check_v64_3_39_eaf_icer_cfsr_split import (
++    EPS, _containment, _f, _icer_edge_diag, _load_rows, _mechanism_gate,
++    _metric_pack, _query_diag, _replacement_tail_diag, _selected_policy_diag, _structural,
++)
++
++TAGS=['raw','v20','preserve','rsmr','quality','plan_control','ego_ref','sign_nomult','sign_mult']
++VALUE_TAGS=['quality','plan_control','ego_ref','sign_nomult','sign_mult']
++
++
++def main():
++    ap=argparse.ArgumentParser();ap.add_argument('--split-name',required=True);ap.add_argument('--preferred-arm',required=True,choices=['sign_nomult','sign_mult'])
++    for t in TAGS:
++        x=t.replace('_','-');ap.add_argument(f'--{x}-metrics',dest=t+'_metrics',required=True);ap.add_argument(f'--{x}-rows',dest=t+'_rows',required=True)
++        if t!='raw': ap.add_argument(f'--{x}-edges',dest=t+'_edges',required=True)
++    ap.add_argument('--output',required=True);a=ap.parse_args()
++    metrics={t:json.load(open(getattr(a,t+'_metrics'))) for t in TAGS};rows={t:_load_rows(getattr(a,t+'_rows')) for t in TAGS};toks=set(rows['raw'])
++    if len(toks)!=500 or any(set(rows[t])!=toks for t in TAGS[1:]): raise SystemExit('STOP DATA: V48 arms must contain exact paired 500 scenes')
++    flagged={t for t in toks if _f(rows['raw'][t],'all_actions_safety_flagged_rate',0)>=.5};safe=toks-flagged
++    q={t:_query_diag(rows['v20'],rows[t],toks) for t in TAGS[2:]};struct={t:_structural(rows[t],rows['raw'],flagged) for t in ['v20']+TAGS[2:]};cont={t:_containment(rows['rsmr'],rows[t],safe) for t in VALUE_TAGS}
++    eng=(all(v['all_query_counts_exact_scene_parity'] for v in q.values()) and all((not flagged) or (struct[t]['final_identity_vs_raw']==1.0 and struct[t]['icer_structural_delegation_rate']==1.0) for t in TAGS[2:]) and all(x['monotone_selected_policy_containment_valid'] for x in cont.values()))
++    edge={t:_icer_edge_diag(Path(getattr(a,t+'_edges')),safe) for t in TAGS if t!='raw'};policy={t:_selected_policy_diag(getattr(a,t+'_edges'),safe) for t in ['rsmr']+VALUE_TAGS};g={t:_mechanism_gate(policy[t],policy['rsmr']) for t in VALUE_TAGS};M={t:_metric_pack(metrics[t]) for t in TAGS};tail={t:_replacement_tail_diag(rows['raw'],rows[t],getattr(a,t+'_edges'),safe) for t in TAGS if t!='raw'}
++    arm=a.preferred_arm;pc=float(edge['preserve']['direct_incumbent_opportunity_capture_rate']);mc=float(edge[arm]['direct_incumbent_opportunity_capture_rate']);coverage=math.isfinite(pc) and math.isfinite(mc) and mc>=pc+.03-EPS
++    endpoint=(M[arm]['match']>=M['preserve']['match']-.002 and M[arm]['regret']<=M['preserve']['regret']*1.005 and M[arm]['match']>=M['v20']['match']-.002 and M[arm]['regret']<=M['v20']['regret']*1.005)
++    full=bool(eng and g[arm]['pass'] and coverage and endpoint)
++    rep={'audit':'v64_3_48_eaf_icer_ocrr_split','split_name':a.split_name,'preferred_arm':arm,'full_split_pass':full,'engineering_valid':eng,'mechanism_gates':g,'preferred_capture_gain_over_preserve':mc-pc if math.isfinite(mc) and math.isfinite(pc) else float('nan'),'endpoint_noninferior':endpoint,'query_parity':q,'structural':struct,'containment':cont,'edge_diagnostics':edge,'selected_policy_diagnostics':policy,'direct_selected_path_tail':tail,'metrics':M,'frozen_contract':{'RSMR_winner_frozen':True,'V42_QUALITY_frozen':True,'V44_ungated_occupancy_support_not_expanded':True,'V45_longitudinal_response_mean_not_expanded':True,'V47_future_state_representation_not_expanded':True,'OCRR_changes_selected_policy_functional_only':True,'multiplicity_observes_existing_admissible_set_without_changing_candidate_bank':True,'same_winner_veto_only':True,'no_selected_translation_or_free_threshold_sweep':True,'no_second_best_fallback':True,'no_AB_pooling':True}}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n');print(json.dumps(rep,indent=2,sort_keys=True))
++
++if __name__=='__main__': main()
+--- /dev/null	2026-08-26 08:51:41.597450187 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/bdse/tools/check_v64_3_48_eaf_icer_ocrr_screen.py	2026-08-26 09:36:49.382592877 +0000
+@@ -0,0 +1,10 @@
++from __future__ import annotations
++import argparse,json
++from pathlib import Path
++
++def main():
++    ap=argparse.ArgumentParser();ap.add_argument('--split-a',required=True);ap.add_argument('--split-b',required=True);ap.add_argument('--fit-report',required=True);ap.add_argument('--output',required=True);a=ap.parse_args()
++    A=json.load(open(a.split_a));B=json.load(open(a.split_b));F=json.load(open(a.fit_report));pa=bool(A.get('full_split_pass'));pb=bool(B.get('full_split_pass'));same=A.get('preferred_arm')==B.get('preferred_arm')==F.get('nested_crossfit',{}).get('preferred_promotion_arm');ok=bool(pa and pb and same and F.get('train_gate_pass'))
++    rep={'audit':'v64_3_48_eaf_icer_ocrr_double_fresh','pass':ok,'split_A_pass':pa,'split_B_pass':pb,'preferred_arm':F.get('nested_crossfit',{}).get('preferred_promotion_arm'),'same_preregistered_arm_on_both_splits':same,'next_action':'freeze_V48_and_run_full_validation_plus_official_closed_loop' if ok else 'STOP_no_promotion_do_not_pool_A_B_or_tune'}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n');print(json.dumps(rep,indent=2,sort_keys=True))
++if __name__=='__main__': main()
+--- /dev/null	2026-08-26 08:51:41.597450187 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/bdse/tests/test_v64_3_48_eaf_icer_ocrr.py	2026-08-26 09:41:59.277312611 +0000
+@@ -0,0 +1,182 @@
++import math
++
++import numpy as np
++import pytest
++
++from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES
++from bdse.planner.operator_conditioned_risk_retention import (
++    OCRR_STATE_NAMES,
++    operator_state,
++    runtime_certificate,
++)
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
++from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
++from bdse.tools.fit_v64_3_48_eaf_icer_ocrr import (
++    _conformal_threshold,
++    _fit_sign_ranker,
++    _retention_alpha,
++    _state,
++)
++
++
++def _risk_model(mult_weight=1.0):
++    return {
++        "model": "zero_bias_pairwise_selected_sign_risk",
++        "feature_names": list(OCRR_STATE_NAMES),
++        "feature_mean": [0.0] * 4,
++        "feature_std": [1.0] * 4,
++        "weights": [0.0, 0.0, 0.0, float(mult_weight)],
++        "bias": 0.0,
++        "lambda": 1.0,
++        "use_extremal_multiplicity": True,
++        "fit_positive_score_mean": 0.0,
++        "fit_positive_score_std": 1.0,
++    }
++
++
++def test_v48_operator_state_factorizes_existing_values_and_multiplicity():
++    z = operator_state(1.0, 2.5, 2.0, 4)
++    assert z.tolist()[:3] == pytest.approx([1.0, 1.5, -0.5])
++    assert z[3] == pytest.approx(math.log(4.0))
++
++
++def test_v48_no_multiplicity_ablation_changes_only_operator_coordinate():
++    row = {
++        "quality_value": 0.2,
++        "plan_control_value": 0.5,
++        "ego_ref_value": 0.4,
++        "candidate_count": 9,
++        "scenario_token": "x",
++    }
++    a = _state(row, False)
++    b = _state(row, True)
++    assert np.allclose(a[:3], b[:3], atol=0.0, rtol=0.0)
++    assert a[3] == 0.0
++    assert b[3] == pytest.approx(math.log(9.0))
++
++
++def test_v48_runtime_risk_is_veto_only_more_competition_can_reduce_certificate():
++    cfg = {
++        "aggregation": "sign_only",
++        "components": {"sign_risk": _risk_model(1.0)},
++        "retention_threshold": 2.0,
++    }
++    c2, r2, _ = runtime_certificate(operator_state(0, 0, 0, 2), cfg)
++    c20, r20, _ = runtime_certificate(operator_state(0, 0, 0, 20), cfg)
++    assert r20 > r2
++    assert c20 < c2
++
++
++def test_v48_pairwise_selected_sign_ranker_identifies_multiplicity_signal():
++    rows = []
++    for i in range(40):
++        rows.append({
++            "rsm_selected_action": 1,
++            "rsm_selected_teacher_improvement": 1.0,
++            "quality_value": 0.0,
++            "plan_control_value": 0.0,
++            "ego_ref_value": 0.0,
++            "candidate_count": 2 + (i % 2),
++            "scenario_token": f"g{i}",
++        })
++    for i in range(40):
++        rows.append({
++            "rsm_selected_action": 1,
++            "rsm_selected_teacher_improvement": -1.0,
++            "quality_value": 0.0,
++            "plan_control_value": 0.0,
++            "ego_ref_value": 0.0,
++            "candidate_count": 16 + (i % 2),
++            "scenario_token": f"b{i}",
++        })
++    m = _fit_sign_ranker(rows, True)
++    assert m["bias"] == 0.0
++    assert m["weights"][3] > 0.0
++    assert m["objective_final"] < m["objective_at_zero"]
++
++
++def test_v48_capture_budget_maps_existing_absolute_tolerance_to_conditional_retention():
++    alpha = _retention_alpha({"positive_capture_rate": 0.38501742160278746})
++    assert alpha == pytest.approx(0.03 / 0.38501742160278746)
++    assert 0.07 < alpha < 0.08
++
++
++def test_v48_split_calibration_threshold_uses_only_frozen_policy_positives():
++    model = _risk_model(1.0)
++    cal = []
++    for k in range(1, 21):
++        cal.append({
++            "rsm_selected_action": 1,
++            "rsm_selected_teacher_improvement": 1.0,
++            "quality_value": 0.0,
++            "plan_control_value": 0.0,
++            "ego_ref_value": 0.0,
++            "candidate_count": k,
++            "scenario_token": f"p{k}",
++        })
++    # A negative selected sample must not alter the positive-retention quantile.
++    cal.append({**cal[-1], "scenario_token": "neg", "rsm_selected_teacher_improvement": -1.0, "candidate_count": 1000})
++    tau, info = _conformal_threshold(cal, model, alpha=0.1)
++    rank = math.ceil((20 + 1) * 0.9)
++    assert info["positive_calibration_count"] == 20
++    assert info["conformal_rank"] == rank
++    assert tau == pytest.approx(math.log(rank))
++
++
++def test_v48_tournament_consumes_operator_risk_without_reranking():
++    raw_names = list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    feature_names = [f"delta::{n}" for n in raw_names] + ["delta::support_logit"]
++    obs_names = VALUE_OBSERVABLE_NAMES + FSFR_OBSERVABLE_NAMES
++    pnames = ["fsfr_plan_1d_occupancy_cost"]
++    enames = ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"]
++    risk = _risk_model(1.0)
++    sc = {
++        "feature_names": feature_names,
++        "feature_mean": [0.0] * 19,
++        "feature_std": [1.0] * 19,
++        "weights": [0.0] * 19,
++        "bias": 0.0,
++        "base_feature_names": raw_names,
++        "post_selection_value_enabled": True,
++        "post_selection_value_mode": "endpoint_potential_quality_operator_conditioned_risk_retention",
++        "post_selection_endpoint_feature_names": EPV_NAMES,
++        "post_selection_endpoint_feature_scale": [1.0] * 38,
++        "post_selection_endpoint_weights": [0.0] * 38,
++        "post_selection_endpoint_bias": 0.0,
++        "post_selection_observable_names": obs_names,
++        "post_selection_quality_observable_names": ["route_deviation_cost", "progress_deficit_cost", "global_comfort_cost"],
++        "post_selection_quality_observable_scale": [1.0] * 3,
++        "post_selection_quality_observable_weights": [0.0] * 3,
++        "selected_policy_risk_plan_response_names": pnames,
++        "selected_policy_risk_plan_response_scales": [1.0],
++        "selected_policy_risk_plan_response_weights": [0.0],
++        "selected_policy_risk_ego_reference_names": enames,
++        "selected_policy_risk_ego_reference_scales": [1.0, 1.0],
++        "selected_policy_risk_ego_reference_weights": [0.0, 0.0],
++        "operator_conditioned_risk_retention": {
++            "feature_names": list(OCRR_STATE_NAMES),
++            "aggregation": "sign_only",
++            "use_extremal_multiplicity": True,
++            "components": {"sign_risk": risk},
++            "retention_threshold": 2.0,
++        },
++    }
++    raw = np.zeros((2, len(raw_names)))
++    sup = np.zeros(2)
++    X = np.zeros((2, 19))
++    mu = np.zeros(2)
++    obs = np.zeros((2, len(obs_names)))
++    v2, _, _ = _icer_post_selection_value(
++        1, mu, X, feature_names, sc,
++        raw_feat=raw, raw_feature_names=raw_names, support_logits=sup, legacy_action=0,
++        value_observable_matrix=obs, value_observable_names=obs_names, selection_multiplicity=2,
++    )
++    v20, _, _ = _icer_post_selection_value(
++        1, mu, X, feature_names, sc,
++        raw_feat=raw, raw_feature_names=raw_names, support_logits=sup, legacy_action=0,
++        value_observable_matrix=obs, value_observable_names=obs_names, selection_multiplicity=20,
++    )
++    assert v2 == pytest.approx(2.0 - math.log(2.0))
++    assert v20 == pytest.approx(2.0 - math.log(20.0))
++    assert v2 > 0.0 > v20
+--- /dev/null	2026-08-26 08:51:41.597450187 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/RUN_V64_3_48_EAF_ICER_OCRR_SCREEN_2GPU.sh	2026-08-26 09:43:31.072328327 +0000
+@@ -0,0 +1,152 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export V44_ROOT="${V44_ROOT:-outputs_v64_3_44_eaf_icer_pcor_screen_2gpu_v1}"
++export V47_ROOT="${V47_ROOT:-outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_48_eaf_icer_ocrr_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_32_design_exclude_v64_3_30_3_screen_tokens.txt}"
++export FROZEN_TRAIN_TOKENS="${FROZEN_TRAIN_TOKENS:-bdse/configs/v64_3_29_frozen_v28_train_3000_tokens.txt}"
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.48-eaf-icer-ocrr-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"
++V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++V44_PRESERVE="$V44_ROOT/provenance/v64_3_44_preserve.yaml"
++V47_FIT="$V47_ROOT/provenance/v64_3_47_fsfr_fit.json"
++V47_AUDIT="$V47_ROOT/provenance/v64_3_47_fsfr_train_scene_audit.csv"
++V47_PLAN="$V47_ROOT/provenance/v64_3_47_plan_control.yaml"
++V47_EGO="$V47_ROOT/provenance/v64_3_47_ego_ref.yaml"
++
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++TIMING="$OUT_ROOT/provenance/v64_3_48_stage_timing.tsv"; :>"$TIMING"; ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
++stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >>"$TIMING"; }
++
++for f in "$RAW_CONFIG" "$V20_CONFIG" "$V44_PRESERVE" "$V47_FIT" "$V47_AUDIT" "$V47_PLAN" "$V47_EGO" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" V64_3_48_SOURCE_MANIFEST.sha256; do
++  [[ -s "$f" ]] || { echo "STOP V48 missing $f" >&2; exit 2; }
++done
++[[ -d "$BDSE_VAL_CACHE" ]] || { echo 'STOP V48 missing val cache' >&2; exit 2; }
++
++stage_start source_and_v47_provenance_gate
++sha256sum -c V64_3_48_SOURCE_MANIFEST.sha256 | tee "$OUT_ROOT/logs/v64_3_48_source_manifest.out"
++python - "$V47_FIT" "$V47_AUDIT" "$V47_PLAN" "$V47_EGO" "$V47_ROOT" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import hashlib,json,sys
++from pathlib import Path
++fit,audit,plan,ego,root,train=map(Path,sys.argv[1:])
++expected={
++ fit:'1bf6cee0cbfd0c1b5e9c6445a68509e6b9cad7945f81cffdd4831d9f48f64be2',
++ audit:'0335316e9e8dcd1cf411f2bab172ddc29bb67c3f6483fdb0f016c1df63bb06ce',
++ plan:'0587928a3baa8c0cdd6134ee54d3fb91145757adb3a49b4d425484306a5879c1',
++ ego:'c4b32850637604cd8c2dafd464f44bafd8a81a19cb1173549fd673baf5c29ae5',
++}
++for p,h in expected.items():
++ g=hashlib.sha256(p.read_bytes()).hexdigest()
++ if g!=h: raise SystemExit(f'STOP V48: V47 prerequisite byte identity changed: {p} {g}')
++r=json.loads(fit.read_text());n=r.get('nested_crossfit',{})
++exp={
++ 'rsmr_rank_aggregate':(502,221,107,28,43.29405361274824),
++ 'quality_control_aggregate':(205,129,30,13,43.905547394411805),
++ 'v45_plan_control_aggregate':(217,121,38,9,56.55117310290402),
++ 'agent_2d_aggregate':(213,118,36,10,52.305649566059444),
++ 'ego_reference_aggregate':(251,136,45,9,59.53269591505746),
++ 'fsfr_joint_aggregate':(249,135,42,9,57.004928000622115),
++}
++for k,x in exp.items():
++ d=n.get(k,{});g=(d.get('selected_count'),d.get('selected_positive_count'),d.get('no_positive_opportunity_false_intervention_count'),d.get('catastrophic_count'),float(d.get('teacher_improvement_sum',float('nan'))))
++ if any(g[i]!=x[i] for i in range(4)) or abs(g[4]-x[4])>1e-9: raise SystemExit(f'STOP V48: V47 signature changed {k}: {g}')
++if r.get('train_gate_pass') is not False or n.get('train_gate_pass') is not False:
++ raise SystemExit('STOP V48: V47 unexpectedly passed TRAIN gate')
++ident=n.get('future_state_identification',{})
++if not bool(ident.get('agent_2d_response_identified',False)) or not bool(ident.get('ego_reference_identified',False)):
++ raise SystemExit('STOP V48: V47 nuisance identification changed')
++if n.get('failure_diagnosis')!='future_state_nuisances_are_identifiable_but_absolute_zero_requires_selected_deployment_decision_functional_or_more_general_future_state':
++ raise SystemExit('STOP V48: V47 scientific-stop signature changed')
++tr=[x.strip() for x in train.read_text().splitlines() if x.strip()]
++if len(tr)!=3000 or len(set(tr))!=3000 or hashlib.sha256(train.read_bytes()).hexdigest()!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4':
++ raise SystemExit('STOP V48: frozen TRAIN changed')
++spent=[root/'provenance/val_screen_fresh1000_tokens.txt',root/'provenance/val_screen_fresh_A_tokens.txt',root/'provenance/val_screen_fresh_B_tokens.txt']
++if any(p.exists() and p.stat().st_size>0 for p in spent): raise SystemExit('STOP V48: V47 fresh was consumed')
++print('PASS V48 prerequisite: exact V47 bytes, preregistered representation-stop, and fresh-unspent state reproduced')
++PY
++cp V64_3_48_SOURCE_MANIFEST.sha256 "$OUT_ROOT/provenance/"
++stage_end
++
++stage_start prerequisites_and_regression
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_48_OCRR --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_48.json" > "$OUT_ROOT/logs/v64_3_13_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_48.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False): raise SystemExit('STOP V48 prerequisites')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"; fi
++export EAF_CKPT; [[ -s "$EAF_CKPT" ]] || { echo 'STOP V48 missing EAF checkpoint' >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q bdse/tests/test_v64_3_{13_eaf_dmvr,14_eaf_ocfi,15_eaf_eair,16_eaf_raer,17_eaf_daler,18_eaf_dacer,19_eaf_icer,20_eaf_icer_dc,21_eaf_icer_mcr,22_eaf_icer_tcr,23_eaf_icer_rcr,24_eaf_icer_arc,25_eaf_icer_drc,26_eaf_icer_sarc,27_eaf_icer_trcc,28_eaf_icer_ptmc,29_eaf_icer_fcr,30_2_eaf_icer_fbic_pure,30_3_eaf_icer_fbic_pure_auditfix,30_eaf_icer_fbic,31_eaf_icer_scir,32_1_eaf_icer_ssir_weightfix,32_eaf_icer_ssir,33_eaf_icer_spcr,34_eaf_icer_rsmr,35_eaf_icer_fbcsr,36_eaf_icer_sgrr,37_eaf_icer_pvr,38_eaf_icer_davr,39_eaf_icer_cfsr,40_eaf_icer_sdfr,41_eaf_icer_epvr,42_eaf_icer_ovdr,43_eaf_icer_cfrv,44_eaf_icer_pcor,45_eaf_icer_pirf,46_eaf_icer_dirp,47_eaf_icer_fsfr,48_eaf_icer_ocrr}.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++stage_end
++
++stage_start nested_train_operator_gate
++NOMULT_CONFIG="$OUT_ROOT/provenance/v64_3_48_sign_nomult.yaml"
++MULT_CONFIG="$OUT_ROOT/provenance/v64_3_48_sign_mult.yaml"
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_48_ocrr_fit.json"
++SCENE_AUDIT="$OUT_ROOT/provenance/v64_3_48_ocrr_train_scene_audit.csv"
++set +e
++python -m bdse.tools.fit_v64_3_48_eaf_icer_ocrr \
++  --v47-fit-report "$V47_FIT" --v47-scene-audit "$V47_AUDIT" \
++  --v47-plan-config "$V47_PLAN" --v47-ego-ref-config "$V47_EGO" \
++  --output-sign-nomult-config "$NOMULT_CONFIG" --output-sign-mult-config "$MULT_CONFIG" \
++  --output-report "$FIT_REPORT" --output-scene-audit "$SCENE_AUDIT" 2>&1 | tee "$OUT_ROOT/logs/v64_3_48_ocrr_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}; set -e; stage_end; [[ $FIT_STATUS -eq 0 ]] || exit "$FIT_STATUS"
++
++PREFERRED=$(python - "$FIT_REPORT" <<'PY'
++import json,sys
++print(json.load(open(sys.argv[1]))['nested_crossfit']['preferred_promotion_arm'] or '')
++PY
++)
++[[ "$PREFERRED" =~ ^(sign_nomult|sign_mult)$ ]] || { echo 'STOP V48 no preregistered preferred arm' >&2; exit 2; }
++
++stage_start double_fresh_selection
++TOK1000="$OUT_ROOT/provenance/val_screen_fresh1000_tokens.txt"; TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"; TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"; EX="$OUT_ROOT/provenance/v64_3_48_selection_exclude.txt"
++cat "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" | awk 'NF&&!seen[$0]++' > "$EX"
++python -m bdse.tools.select_fresh_preprocessed_tokens --preprocessed-dir "$BDSE_VAL_CACHE" --split val --exclude-tokens "$EX" --count 1000 --hash-seed "$FRESH_HASH_SEED" --output "$TOK1000" --audit-output "$OUT_ROOT/provenance/v64_3_48_fresh1000_selection_audit.json" > "$OUT_ROOT/logs/fresh_selection.out"
++head -n500 "$TOK1000">"$TOKA"; tail -n500 "$TOK1000">"$TOKB"
++python - "$TOKA" "$TOKB" "$EX" <<'PY'
++import sys
++A=[x.strip() for x in open(sys.argv[1]) if x.strip()];B=[x.strip() for x in open(sys.argv[2]) if x.strip()];E={x.strip() for x in open(sys.argv[3]) if x.strip()}
++if len(A)!=500 or len(B)!=500 or len(set(A))!=500 or len(set(B))!=500 or set(A)&set(B) or (set(A)|set(B))&E: raise SystemExit('STOP V48 fresh independence')
++print('PASS V48 independent A500+B500 selection')
++PY
++stage_end
++
++run_eval(){ local gpu="$1" cfg="$2" tok="$3" tag="$4"; CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop --config "$cfg" --checkpoint "$EAF_CKPT" --split val --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios 500 --scenario-token-file "$tok" --require-all-scenario-tokens --output "$OUT_ROOT/provenance/${tag}_metrics.json" --per-sample-output "$OUT_ROOT/provenance/${tag}_rows.jsonl" --frontier-edge-output "$OUT_ROOT/provenance/${tag}_edges.jsonl" --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${tag}.out" 2>&1; }
++RSMR_CONFIG="$V47_ROOT/provenance/v64_3_47_rsmr.yaml"; QUALITY_CONFIG="$V47_ROOT/provenance/v64_3_47_quality.yaml"
++for sp in A B; do
++ tok="$TOKA"; [[ "$sp" == B ]] && tok="$TOKB"
++ tags=(raw v20 preserve rsmr quality plan_control ego_ref sign_nomult sign_mult)
++ cfgs=("$RAW_CONFIG" "$V20_CONFIG" "$V44_PRESERVE" "$RSMR_CONFIG" "$QUALITY_CONFIG" "$V47_PLAN" "$V47_EGO" "$NOMULT_CONFIG" "$MULT_CONFIG")
++ for ((i=0;i<9;i+=2)); do
++  stage_start "fresh_${sp}_wave_$i"; s=0
++  run_eval "$GPU0" "${cfgs[$i]}" "$tok" "${sp}_${tags[$i]}" & p0=$!
++  if ((i+1<9)); then run_eval "$GPU1" "${cfgs[$((i+1))]}" "$tok" "${sp}_${tags[$((i+1))]}" & p1=$!; else p1=''; fi
++  wait "$p0" || s=1; if [[ -n "$p1" ]]; then wait "$p1" || s=1; fi
++  [[ $s -eq 0 ]] || exit 2; stage_end
++ done
++done
++
++stage_start double_fresh_screen
++for sp in A B; do
++ args=()
++ for tag in raw v20 preserve rsmr quality plan_control ego_ref sign_nomult sign_mult; do
++  x=${tag//_/-}; args+=("--${x}-metrics" "$OUT_ROOT/provenance/${sp}_${tag}_metrics.json" "--${x}-rows" "$OUT_ROOT/provenance/${sp}_${tag}_rows.jsonl")
++  [[ "$tag" == raw ]] || args+=("--${x}-edges" "$OUT_ROOT/provenance/${sp}_${tag}_edges.jsonl")
++ done
++ python -m bdse.tools.check_v64_3_48_eaf_icer_ocrr_split --split-name "$sp" --preferred-arm "$PREFERRED" "${args[@]}" --output "$OUT_ROOT/provenance/v64_3_48_split_${sp}_screen.json" | tee "$OUT_ROOT/logs/v64_3_48_split_${sp}.out"
++done
++python -m bdse.tools.check_v64_3_48_eaf_icer_ocrr_screen --split-a "$OUT_ROOT/provenance/v64_3_48_split_A_screen.json" --split-b "$OUT_ROOT/provenance/v64_3_48_split_B_screen.json" --fit-report "$FIT_REPORT" --output "$OUT_ROOT/provenance/v64_3_48_eaf_icer_ocrr_double_fresh_screen.json" | tee "$OUT_ROOT/logs/v64_3_48_screen.out"
++stage_end
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >>"$TIMING"
+--- /mnt/data/_v47_code/bdse_v64_3_47_eaf_icer_fsfr/ALGORITHM_CHANGELOG.md	2026-08-26 05:07:45.000000000 +0000
++++ /mnt/data/bdse_v64_3_48_eaf_icer_ocrr/ALGORITHM_CHANGELOG.md	2026-08-26 09:51:30.757067919 +0000
+@@ -11680,3 +11680,259 @@
+ A/B remain strictly unpooled.
+ 
+ Candidate paper mechanism, conditional on untouched validation and frozen closed-loop evidence: **Selection–Valuation–Future-State Sufficiency under a bounded auditable planner interface**. Ordinal extremal selection and absolute execution valuation require different sufficient statistics; the latter can require separately identifiable future agent response geometry and ego-reference consequences. Logged future is TRAIN-only supervision for nuisance prediction, never runtime information. Causal interaction claims still require later frozen interventional/closed-loop evaluation.
++
++# V64.3.47 uploaded TRAIN result audit -> V64.3.48 EAF-ICER-OCRR
++
++## V47 reliability decision
++
++The uploaded V47 code archive SHA256 is exactly the preregistered delivery:
++
++`104c336c3b54bea59d123f53edc31a6433b1909e4ed9138e24010c290a5614a4`.
++
++The uploaded V47 result archive SHA256 is:
++
++`68b59adacce4c3547c8cac560d49c09cd3bb09d87f986f1f089b5aad16cc51ed`.
++
++The result contains 3000 frozen TRAIN scenes, 782/782 unique direct scientific scenes, 5/5 nested outer folds, exact V45 PLAN occupancy replay (`max_abs=0`), no deployment logged future, no rerank/second-best/fallback, and no fresh A500/B500 manifests. The fit terminates at the preregistered TRAIN scientific stop before fresh selection.
++
++Server targeted regression reports **227/227 PASS**. Re-running the exact uploaded V47 code package locally collects **225/225 PASS**, matching the V47 engineering-validation file. The two-test collection-count discrepancy is treated as a **non-blocking provenance-hygiene warning**, not as a functional failure: both suites pass and all scientific hard signatures replay exactly. However, V47 does not provide a server-source manifest, so server worktree byte identity cannot be proven from the result archive alone. V48 fixes this permanently by hard-checking a package-wide source SHA256 manifest before any scientific computation.
++
++Decision: **V47 is engineering-valid for TRAIN-level attribution; no V47.1 algorithm hotfix is required.** The provenance warning prevents treating the run as final paper evidence, but it does not invalidate the internally consistent preregistered TRAIN mechanism test.
++
++## V47 preregistered verdict: promotion failure
++
++Frozen RSMR remains:
++
++- selected `502`;
++- selected positive `221`;
++- capture `38.5017%`;
++- teacher sum `+43.2941`;
++- catastrophe `28`;
++- no-positive-opportunity false intervention `107`;
++- negative RMS `0.355688`.
++
++The unchanged capture floor is:
++
++`38.5017% - 3pp = 35.5017%`.
++
++V47 TRAIN aggregates:
++
++| arm | selected | positive | capture | sum ΔT | catastrophe | no-op false | NegRMS |
++|---|---:|---:|---:|---:|---:|---:|---:|
++| RSMR | 502 | 221 | 38.5017% | +43.2941 | 28 | 107 | 0.355688 |
++| QUALITY | 205 | 129 | 22.4739% | +43.9055 | 13 | 30 | 0.312658 |
++| PLAN-CONTROL | 217 | 121 | 21.0801% | +56.5512 | 9 | 38 | 0.240173 |
++| AGENT-2D | 213 | 118 | 20.5575% | +52.3056 | 10 | 36 | 0.256374 |
++| EGO-REF | 251 | 136 | 23.6934% | +59.5327 | 9 | 45 | 0.223314 |
++| FSFR-JOINT | 249 | 135 | 23.5192% | +57.0049 | 9 | 42 | 0.229206 |
++
++Every V47 value arm passes tail, population and 5/5 nonnegative-fold-sum sub-gates but fails the preregistered existence/capture gate. Therefore **V47 has no promotion arm** and the launcher correctly stops before fresh selection.
++
++## V47 nuisance identification: both families are learnable
++
++### Lateral agent response
++
++Honest OOF MSE:
++
++`zero drift 0.190161 -> LOCAL 0.184763 -> PLAN 0.184742`.
++
++LOCAL beats zero in 5/5 folds and PLAN beats LOCAL in 5/5 folds, so the formal nuisance gate is true. But the candidate-conditioned lateral increment is extremely small: the aggregate LOCAL->PLAN relative MSE gain is only about `0.0109%`. Thus the data support a weak conditional lateral signal, not a first-order deployment mechanism.
++
++### Runtime-predictable ego reference
++
++Honest OOF MSE:
++
++`current-CV proxy 13.1037 -> predicted reference 4.16159`, with improvement in **5/5 folds** (about 68.2% aggregate reduction).
++
++This is a strong nuisance-identification result. The future non-agent/reference consequence is not absent from the runtime-available state and is not intrinsically unlearnable.
++
++## V47 mechanism attribution
++
++### AGENT-2D is closed
++
++PLAN-CONTROL -> AGENT-2D selected-set rotation:
++
++- common: 207 scenes, `+53.5290`, 9 catastrophes;
++- PLAN-only: 10 scenes, `+3.0222`, 2 material positives, 0 catastrophes;
++- **AGENT-2D-only: 6 scenes, `-1.2234`, 0 material positives, 1 catastrophe**.
++
++AGENT-2D also worsens selected-value RMSE/Pearson relative to PLAN (`0.6478/0.4171 -> 0.6584/0.3887`). Therefore the low-order constant local-normal drift family is **identifiable but deployment-harmful**. Do not enlarge it, tune it, or carry it into the V48 main mechanism.
++
++### EGO-REF is a real supporting mediator, but not deployment-sufficient
++
++PLAN-CONTROL -> EGO-REF rotation:
++
++- common: 211 scenes, `+56.5520`, 35 material positives, 9 catastrophes;
++- PLAN-only: 6 scenes, approximately `-0.0008`, 0 material positives, 0 catastrophes;
++- **EGO-REF-only: 40 scenes, `+2.9807`, 20 positives, 2 material positives totaling `+2.9604`, 0 catastrophes**;
++- neither: 245 scenes, `-16.2378`, including 13 missed material positives totaling `+12.8356` and 19 catastrophes.
++
++EGO-REF raises material-positive recovery from `35/50` to `37/50`, total accepted material value from `+66.94` to `+69.90`, leaves catastrophes at 9, and lowers NegRMS to `0.2233`. Its ordinary selected-value diagnostics also improve modestly over PLAN (RMSE `0.6478 -> 0.6434`, Pearson `0.4171 -> 0.4235`, positive AUC `0.6146 -> 0.6298`).
++
++Hence EGO-REF is retained as a **supporting validated consequence coordinate**, not as the headline deployment mechanism. It carries useful information but the signed-mean zero boundary still discards too many RSMR positives.
++
++### JOINT does not rescue AGENT-2D
++
++EGO-REF -> FSFR-JOINT adds 8 joint-only scenes with net `-1.2256` and one catastrophe. The joint arm is worse than EGO-REF in sum, capture and NegRMS. No interaction synergy justifies retaining the lateral branch.
++
++## The V47 stopping condition is now satisfied
++
++V46 preregistered V47 as the final future-representation falsification before changing the deployment operator. V47 has now shown all of the required conditions:
++
++1. both future-state nuisance families pass honest OOF identification;
++2. EGO-REF provides additional predictive and selected-set information;
++3. all deployment arms still fail the unchanged capture gate;
++4. AGENT-2D expansion is harmful;
++5. fresh evidence remains unspent.
++
++Therefore **future-state representation expansion is now formally stopped**. There must be no V48 third future-state block, larger trajectory network, temporal-statistic extension, variance resurrection, or generic value-capacity increase before testing the selected-policy operator.
++
++## Dominant bottleneck after V47
++
++Primary bottleneck:
++
++> **operator-conditioned selected-policy zero/tail functional for the already frozen extremal RSMR proposal.**
++
++The key remaining problem is no longer “which future feature is missing?” but “what conditional law is appropriate after an extremal proposal has already been selected?” The deployed decision is a different operator from ordinary all-edge signed-mean prediction.
++
++A structural count makes the constraint explicit. RSMR contains 221 true-positive selected proposals. To remain within the 3pp absolute capture tolerance, a veto layer must retain at least 204/221 of them (about 92.3%) while simultaneously reducing no-op false interventions from 107 to at most 85 and catastrophes from 28 to at most 21. The task is therefore **selective post-selection veto with near-complete useful-winner retention**, not stronger blanket abstention.
++
++## Historical closure check: why V48 is not a resurrection of V40
++
++V40 SDFR already falsified sign/magnitude factorization on the **pure 19-D selected-value evidence route**. That closure remains permanent.
++
++V48 is allowed only because V41-V47 subsequently established new, physically interpretable consequence coordinates that were absent from V40: endpoint/current consequence, full-horizon ungated occupancy support, agent-local longitudinal response, and runtime-predictable ego-reference consequence. V48 therefore:
++
++- does **not** reopen a 19-D selected head;
++- does **not** fit another all-edge value model;
++- does **not** enlarge an MLP or learn sign/magnitude components on raw EAF deltas;
++- uses only the already validated low-dimensional consequence decomposition of the frozen proposal;
++- changes the post-selection functional and tests one explicit property of the extremal operator.
++
++# V64.3.48 EAF-ICER-OCRR
++
++Full name: **Operator-Conditioned Risk Retention**.
++
++## Core hypothesis: post-selection law depends on the extremal selection event
++
++RSMR first freezes exactly one proposal `b_hat`. V48 never changes that proposal identity.
++
++For the frozen proposal, define three already validated value coordinates:
++
++- `Q`: V42/V43 QUALITY consequence value;
++- `P`: V45 PLAN-CONTROL value using the validated prospective ungated support + longitudinal response mean;
++- `E`: V47 EGO-REF value.
++
++The V48 operator state is deliberately four-dimensional:
++
++`z = [ Q, P-Q, E-P, log K ]`,
++
++where `K` is the **observed size of the existing deployment-admissible challenger set** from which the RSMR extremal proposal is chosen. V48 does not change, sweep or top-K truncate the candidate bank. `K` is a conditioning variable of the already existing selection operator.
++
++The use of `log K` is not a hand safety penalty and its learned coefficient is not sign-constrained. The hypothesis is that the post-selection outcome law changes with selection multiplicity; the data determine the direction after conditioning on the consequence coordinates.
++
++## Selected-policy sign-risk objective
++
++On frozen RSMR selected proposals only, V48 fits a zero-bias linear pairwise risk ranker. For a harmful/nonpositive selected outcome `y^- <= 0` and a beneficial selected outcome `y^+ > 0`, optimize
++
++`log(1 + exp(-(r(z^-)-r(z^+)))) + (lambda/2)||w||^2`,
++
++with fixed `lambda=1` and `r(z)=w^T standardize(z)`.
++
++This objective learns only the ordering “which already-selected proposal is more likely to be unsafe/non-beneficial to retain?” It does not regress teacher magnitude and does not participate in challenger argmax.
++
++## Retention boundary: capture-budget split calibration, not threshold tuning
++
++The existing value gate permits at most `CAPTURE_TOL=0.03` absolute capture loss relative to frozen RSMR. The corresponding conditional false-veto budget among RSMR true-positive proposals is fixed as
++
++`alpha_ret = 0.03 / 0.38501742160278746 = 0.0779185520`.
++
++Within every nested outer fold, the risk ranker excludes both outer-test and calibration folds. The retention threshold is then the fixed split-calibration `(1-alpha_ret)` quantile of risk on the held-out calibration-fold **RSMR true positives**. No threshold, class weight, temperature, translation, catastrophe cutoff or hyperparameter sweep is performed.
++
++At runtime:
++
++- if selected risk `<= tau`, retain the exact RSMR winner;
++- otherwise return to the incumbent.
++
++No rerank, no second best and no fallback are possible.
++
++## V48 causal arms
++
++V48 has only two scientific arms:
++
++1. **SIGN-NOMULT** — selected-policy sign-risk on `[Q, P-Q, E-P]`; the multiplicity coordinate is identically zero.
++2. **SIGN-MULT / OCRR-MAIN** — the identical model, loss, calibration rule and proposal population, with only `log K` restored.
++
++This makes extremal multiplicity the only mechanism difference.
++
++Independent risk-identification gate: selected nonpositive-risk AUC must exceed the strongest directly preceding frozen EGO-REF signed-value baseline in aggregate and in at least 4/5 outer folds. Promotion still additionally requires the unchanged deployment gate.
++
++## V48 design-only nested replay on already consumed TRAIN
++
++This replay is **mechanism-design evidence only, not independent promotion evidence**. It is recorded to preregister V48 before A/B are consumed.
++
++SIGN-NOMULT:
++
++- selected `411`;
++- positive `187`;
++- capture `32.5784%` -> **FAIL**;
++- sum `+53.4956`;
++- catastrophe `18`;
++- no-op false `78`;
++- NegRMS `0.270655`;
++- nonpositive-risk AUC `0.613919` vs EGO-REF baseline `0.629829`, only `3/5` folds better -> **not identified**.
++
++SIGN-MULT:
++
++- selected `439`;
++- positive `204`;
++- capture `35.5401%` -> **PASS** against `35.5017%` floor;
++- sum `+62.6341`;
++- catastrophe `14` -> **PASS**;
++- no-op false `74` -> **PASS**;
++- NegRMS `0.229885` -> **PASS**;
++- 5/5 outer-fold sums nonnegative;
++- selected/nonpositive risk AUC `0.637413` vs EGO-REF `0.629829`, **4/5 folds better**.
++
++The ablation therefore supports the preregistered V48 hypothesis strongly enough to justify untouched validation: **the selected-policy functional without the selection-multiplicity state fails, while the otherwise identical operator-conditioned arm closes the TRAIN gate.** This is not yet a paper claim until both untouched A500 and B500 independently pass.
++
++## V48 preregistered branch and stopping rule
++
++- If SIGN-NOMULT independently passes TRAIN/fresh first, multiplicity is unnecessary; keep the simpler selected-policy functional.
++- If SIGN-NOMULT fails and SIGN-MULT passes identification + deployment gates, support **extremal selection-multiplicity-conditioned risk retention**.
++- If both fail on exact rerun or either A/B fresh split fails, STOP. Do not tune `K`, transform, threshold, pairwise loss, lambda, class weights, or add operator features from the failed fresh data.
++- A500 and B500 are evaluated independently and never pooled.
++- Only if both fresh splits pass may V48 be frozen for full validation and official closed-loop/interventional evaluation.
++
++New label-free fresh seed:
++
++`v64.3.48-eaf-icer-ocrr-double-fresh-v1`.
++
++## V48 source-provenance hard gate
++
++Before prerequisites, tests, fitting, or fresh selection, the launcher runs:
++
++`sha256sum -c V64_3_48_SOURCE_MANIFEST.sha256`.
++
++This closes the V47 server-worktree provenance gap: any source/test/config byte drift in the delivered V48 runtime package causes an ENGINEERING STOP before scientific attribution.
++
++## V48 additional no-repeat constraints
++
++All prior constraints remain. In particular:
++
++- do not alter RSMR, B16/M24, acquisition, admissibility, candidate bank or proposal ordering;
++- do not interpret `K` as permission to sweep candidate count/top-K; it is observation-only;
++- do not add runner-up/fallback/re-ranking behavior;
++- do not resurrect V40 pure-19D SDFR or generic selected MLP/classifier heads;
++- do not add a standalone catastrophe classifier/binary safety veto;
++- do not tune selected translation, zero threshold, CVaR, temporal weights, variance scale or response modes;
++- do not carry V47 AGENT-2D into OCRR-MAIN;
++- do not append another future-state observable if V48 fails;
++- do not use logged future or teacher quantities at deployment;
++- do not pool A/B or tune anything from one fresh split to rescue the other.
++
++Candidate paper mechanism, conditional on untouched A/B and frozen closed-loop validation:
++
++> **Selection–Valuation–Operator Sufficiency under a Bounded Auditable Planner Interface.**
++>
++> Bounded EAF evidence can be sufficient for ordinal extremal selection, while absolute incumbent-exit valuation requires consequence-specific statistics and an explicit conditioning on the extremal selection operator. Prediction sufficiency, representation identifiability, and post-selection decision sufficiency are empirically distinct.

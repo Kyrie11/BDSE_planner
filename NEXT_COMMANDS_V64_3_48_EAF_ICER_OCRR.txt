@@ -1,0 +1,24 @@
+# V64.3.48 EAF-ICER-OCRR
+# Default server layout:
+cd bdse_v64_3_48_eaf_icer_ocrr
+bash RUN_V64_3_48_EAF_ICER_OCRR_SCREEN_2GPU.sh
+
+# If historical roots / cache are elsewhere:
+cd bdse_v64_3_48_eaf_icer_ocrr
+V47_ROOT=/path/to/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+V44_ROOT=/path/to/outputs_v64_3_44_eaf_icer_pcor_screen_2gpu_v1 \
+EAF_V64_3_13_ROOT=/path/to/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+BDSE_VAL_CACHE=/path/to/bdse_val_v2 \
+bash RUN_V64_3_48_EAF_ICER_OCRR_SCREEN_2GPU.sh
+
+# If checkpoint cannot be auto-resolved:
+export EAF_CKPT=/path/to/checkpoint.pt
+
+# Scientific protocol:
+# - source SHA manifest must pass before any science;
+# - exact V47 preregistered STOP + key artifact SHA must pass;
+# - nested TRAIN OCRR must pass before fresh selection;
+# - fresh seed is v64.3.48-eaf-icer-ocrr-double-fresh-v1;
+# - A500 and B500 are independent and must never be pooled;
+# - if either fresh split fails, STOP and do not tune from fresh evidence;
+# - do NOT run official closed-loop before double-fresh passes.

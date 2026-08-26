@@ -12,6 +12,7 @@ import numpy as np
 from bdse.planner.pair_screen import build_rival_sets_from_base, SAFE_LIKE_MANEUVER_IDS, PROGRESSIVE_MANEUVER_IDS
 from bdse.model.potential_projection import project_pair_residual_to_action_potential_numpy
 from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, full_interface_margin, margin_normalization_scale
+from bdse.planner.operator_conditioned_risk_retention import operator_state as _ocrr_operator_state, runtime_certificate as _ocrr_runtime_certificate
 from bdse.utils import softmin_np
 
 
@@ -2582,6 +2583,7 @@ def _icer_post_selection_value(
     legacy_action: int | None = None,
     value_observable_matrix: np.ndarray | None = None,
     value_observable_names: list[str] | np.ndarray | None = None,
+    selection_multiplicity: int | None = None,
 ) -> tuple[float, np.ndarray, list[str]]:
     """Absolute value readout for an already frozen RSMR proposal.
 
@@ -2602,7 +2604,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2627,7 +2629,7 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention"}:
         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
@@ -2662,7 +2664,7 @@ def _icer_post_selection_value(
         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
         value_feature = phi
         value_names = [f"post_value::{n}" for n in runtime_value_names]
-        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention"}:
             if value_observable_matrix is None or value_observable_names is None:
                 raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
             om = np.asarray(value_observable_matrix, dtype=np.float64)
@@ -2682,7 +2684,42 @@ def _icer_post_selection_value(
             qobs = delta_obs[np.asarray(qidx, dtype=np.int64)]
             qres = float((qobs / np.maximum(qscale, 1.0e-6)) @ qw)
             value = float(np.clip(value + qres, -40.0, 40.0))
-            if mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+            if mode == "endpoint_potential_quality_operator_conditioned_risk_retention":
+                if selection_multiplicity is None or int(selection_multiplicity) < 1:
+                    raise ValueError("EAF-ICER V48 OCRR requires observed admissible-challenger multiplicity")
+                # Reconstruct the two already-frozen V47 value views.  V48 does
+                # not learn another future-state residual: it only changes the
+                # selected-policy functional and conditions it on the size of
+                # the existing extremal competition set.
+                pnames = [str(x) for x in scir_cfg.get("selected_policy_risk_plan_response_names", [])]
+                pscale = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_scales", []), dtype=np.float64).reshape(-1)
+                pw = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_weights", []), dtype=np.float64).reshape(-1)
+                enames = [str(x) for x in scir_cfg.get("selected_policy_risk_ego_reference_names", [])]
+                escale = np.asarray(scir_cfg.get("selected_policy_risk_ego_reference_scales", []), dtype=np.float64).reshape(-1)
+                ew = np.asarray(scir_cfg.get("selected_policy_risk_ego_reference_weights", []), dtype=np.float64).reshape(-1)
+                if not pnames or any(n not in on for n in pnames) or not enames or any(n not in on for n in enames):
+                    raise ValueError("EAF-ICER V48 OCRR frozen PLAN/EGOREF observable schema missing")
+                if pscale.size != len(pnames) or pw.size != len(pnames) or escale.size != len(enames) or ew.size != len(enames):
+                    raise ValueError("EAF-ICER V48 OCRR frozen PLAN/EGOREF parameter size mismatch")
+                if np.any(pscale <= 0.0) or np.any(escale <= 0.0) or np.any(~np.isfinite(pscale)) or np.any(~np.isfinite(escale)) or np.any(~np.isfinite(pw)) or np.any(~np.isfinite(ew)):
+                    raise ValueError("EAF-ICER V48 OCRR frozen PLAN/EGOREF parameters invalid")
+                quality_value = float(value)
+                pobs = delta_obs[np.asarray([on.index(n) for n in pnames], dtype=np.int64)]
+                eobs = delta_obs[np.asarray([on.index(n) for n in enames], dtype=np.int64)]
+                plan_value = float(np.clip(quality_value + (pobs / np.maximum(pscale, 1.0e-6)) @ pw, -40.0, 40.0))
+                ego_value = float(np.clip(quality_value + (eobs / np.maximum(escale, 1.0e-6)) @ ew, -40.0, 40.0))
+                rcfg = scir_cfg.get("operator_conditioned_risk_retention", {})
+                zocr = _ocrr_operator_state(quality_value, plan_value, ego_value, int(selection_multiplicity))
+                if not bool(rcfg.get("use_extremal_multiplicity", True)):
+                    zocr = zocr.copy(); zocr[3] = 0.0
+                cert, rrisk, rparts = _ocrr_runtime_certificate(zocr, rcfg)
+                value = float(np.clip(cert, -40.0, 40.0))
+                value_feature = np.concatenate([phi, qobs, zocr, np.asarray([rrisk], dtype=np.float64)])
+                value_names = ([f"post_value::{n}" for n in runtime_value_names]
+                               + [f"observable_improvement::{n}" for n in qnames]
+                               + [f"ocrr_state::{n}" for n in rcfg.get("feature_names", [])]
+                               + ["ocrr_risk"])
+            elif mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
                 rnames = [str(x) for x in scir_cfg.get("post_selection_future_response_observable_names", [])]
                 if not rnames or any(n not in on for n in rnames):
                     raise ValueError("EAF-ICER V46 response-profile observable schema missing")
@@ -3310,7 +3347,8 @@ def _apply_decisive_frontier_icer(
                         scir_post_selection_value, scir_post_selection_value_feature, scir_post_selection_value_feature_names = _icer_post_selection_value(
                             best, scir_raw_predicted_improvement, scir_feature_matrix, scir_feature_names, scir_cfg,
                             raw_feat=feat, raw_feature_names=names, support_logits=support_logits, legacy_action=legacy,
-                            value_observable_matrix=value_observable_matrix, value_observable_names=value_observable_names
+                            value_observable_matrix=value_observable_matrix, value_observable_names=value_observable_names,
+                            selection_multiplicity=int(np.sum(alternative))
                         )
                         # For diagnostics, replace only the frozen proposal's
                         # absolute intervention value.  All non-proposal scores
