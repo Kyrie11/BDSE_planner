@@ -1,0 +1,14 @@
+# Preferred when historical output roots are visible from the new code directory:
+cd bdse_v64_3_32_1_eaf_icer_ssir_weightfix
+bash RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh
+
+# If historical outputs live elsewhere, point the launcher at them explicitly:
+cd bdse_v64_3_32_1_eaf_icer_ssir_weightfix
+V30_2_ROOT=/path/to/outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1 \
+V30_3_ROOT=/path/to/outputs_v64_3_30_3_eaf_icer_fbic_pure_auditfix_screen_2gpu_v1 \
+V31_ROOT=/path/to/outputs_v64_3_31_eaf_icer_scir_screen_2gpu_v1 \
+V32_ROOT=/path/to/outputs_v64_3_32_eaf_icer_ssir_screen_2gpu_v1 \
+bash RUN_V64_3_32_1_EAF_ICER_SSIR_WEIGHTFIX_SCREEN_2GPU.sh
+
+# Do not change FRESH_HASH_SEED. Original V32 stopped before fresh selection.
+# The launcher will STOP if it detects any nonempty V32 CAL/A/B token manifest.

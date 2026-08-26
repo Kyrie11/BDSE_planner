@@ -11132,3 +11132,85 @@ V42 spent no fresh data. Permanent design exclusion remains **10700 tokens**. Ne
 `v64.3.43-eaf-icer-cfrv-cal500-double-fresh-v1`
 
 Paper-level candidate mechanism if independently reproduced: **selection--valuation observability separation** — bounded EAF evidence can be sufficient for ordinal extremal challenger selection while absolute deployment valuation of the frozen proposal requires a distinct prospective response-conditioned consequence distribution. This claim remains provisional until TRAIN + double fresh + frozen full validation + official closed loop.
+
+# V64.3.43 uploaded TRAIN result audit -> V64.3.44 EAF-ICER-PCOR
+
+## V64.3.43 result validity
+
+- Uploaded V43 code SHA256 is `a9266f271b17c77944deca4bd4c518b6cc7a803f7560ce2eca7208fb773c4e7c`, exactly matching the preregistered package.
+- Frozen 3000-TRAIN replay and 782/782 unique direct-scene audit completed; five outer folds and calibration proposal counts `97/100/98/86/110` are complete.
+- Server and independent re-run targeted regression: `201/201 PASS`.
+- RSMR winner identity, V42 QUALITY control and monotone same-winner containment are preserved. Runtime response modes are built with `label_future=None`; logged mode is excluded/fail-closed.
+- TRAIN gate stopped scientifically and no CAL500/A500/B500 manifest was created.
+- Conclusion: **engineering-valid TRAIN-level mechanism attribution; no V43.1 hotfix required**.
+
+## V64.3.43 mechanism result
+
+Frozen RSMR remains `502 selected / 221 positive / 38.50% capture / +43.2941 / 28 catastrophe / 107 no-op / NegRMS 0.3557`.
+
+- V42 QUALITY control: `205/129`, capture `22.47%`, sum `+43.9055`, cat `13`, no-op `30`, NegRMS `0.3127`.
+- FUTURE-MEAN: `231/134`, capture `23.34%`, sum `+44.8915`, cat `13`, no-op `42`, NegRMS `0.2941`, 5/5 fold sums nonnegative.
+- FUTURE-ROBUST-RAW: `228/131`, capture `22.82%`, sum `+45.9189`, cat `13`, no-op `42`, NegRMS `0.2961`, 5/5 nonnegative.
+- CFRV-MAIN: `347/162`, capture `28.22%`, sum `+54.9780`, cat `13`, no-op `69`, NegRMS `0.2581`, 5/5 nonnegative.
+
+All future arms pass tail/population/fold gates but fail the unchanged `35.50%` capture floor. Therefore V43 is **substantial partial mechanism success + promotion failure**.
+
+Prospective horizon is a real mediator: FUTURE-MEAN improves teacher correlation (`0.2383 -> 0.3450` vs QUALITY), non-cat AUC (`0.4916 -> 0.5353`) and NegRMS. However fixed mean+CVaR is not independently supported: mean and robust share 225 accepted proposals and differ on only 9/502 proposals; mean/robust observable correlation is `0.923` and CVaR/robust correlation is `0.963`.
+
+CFRV-MAIN recovers material opportunities (QUALITY material-positive misses `20 -> 9`) and has large aggregate value, but its mostly-positive fold translations also add many mild harms and still miss capture. Do not tune the zero translation.
+
+Support audit on the frozen 502 proposals:
+
+- V42 current RISK all-zero: `17/28` catastrophes and `21/50` material positives.
+- V43 future mean/CVaR/robust all-zero: `11/28` catastrophes, `18/50` material positives, `249/502` total proposals.
+- both current RISK and V43 future all-zero: `8/28` catastrophes and `14/50` material positives.
+
+Nonzero future signal can also have the wrong sign (e.g. `c70954fab4a650c7`, true `-1.233`, receives strongly positive future-response improvement). Code inspection identifies the structural cause: V43 response trajectories/probabilities are generated from current agent state and are **candidate-independent**; candidate ego plans change interaction cost against each mode but not `P(mode)`. In addition, hard/soft/TTC severities are finite-envelope/gated and can remain exactly zero before a future interaction enters the safety envelope.
+
+Updated dominant bottleneck:
+
+> **plan-conditioned prospective interaction consequence observability and support for the frozen RSMR proposal at the absolute incumbent-exit boundary.**
+
+## V43-specific no-repeat constraints
+
+Keep all historical closures. Additionally:
+
+- do not tune V43 response probabilities, CVaR alpha, CVaR mixture weight or selected translation;
+- do not add more fixed kinematic modes as the first-order solution;
+- do not enlarge the value MLP/head while future observable support is exactly zero for a large decisive subset;
+- do not add another thresholded static/current-risk feature block;
+- do not relax capture because CFRV-MAIN aggregate sum is large;
+- do not add binary catastrophe veto, second-best fallback, or modify RSMR ordering;
+- do not use logged/teacher future at deployment;
+- if logged future is used for TRAIN-only behavior supervision, keep it outer-fold isolated and prohibit teacher-improvement labels;
+- do not sweep occupancy distance thresholds/kernel bandwidths, mode subsets, top-K agents, candidate count, evidence capacity or B/M.
+
+# V64.3.44 EAF-ICER-PCOR
+
+Full name: **Plan-Conditioned Occupancy Response**.
+
+V44 freezes RSMR, EPV, V42 QUALITY and the V43 five-mode runtime response basis. It factorizes V43's two remaining structural deficiencies instead of adding value-head capacity.
+
+### TRAIN-only response posterior
+
+On frozen TRAIN only, logged agent future assigns a response-mode target (`cv/ca/brake/yield/nonyield`) by nearest-mode mean displacement over the existing soft-check horizon. The target contains no teacher improvement/value. A scene-equal multiclass ridge-score model (`lambda=1`) learns a plan-conditioned response posterior from the logged ego plan's current/candidate interaction features. Each outer test fold and its value-calibration fold are excluded from the corresponding behavior fit. Deployment uses only the fitted model plus current scene/candidate; logged future is absent.
+
+### Ungated occupancy support
+
+For the same five modes, V44 exposes a full-candidate-horizon bounded occupancy potential `1/(1+normalized_separation^2)` using the already-frozen soft box/radius scale. It has no hard distance cutoff, no new bandwidth and no veto semantics. Its role is to preserve weak prospective interaction evidence before V43 hard/soft/TTC severity turns on.
+
+### Preregistered causal arms
+
+1. `V43-FUTURE-MEAN CONTROL`: exact historical prospective-horizon control.
+2. `PC-REWEIGHT`: candidate-conditioned mode posterior + existing gated mode cost; isolates action-conditioned response likelihood.
+3. `PC-OCC-MEAN`: candidate-conditioned posterior + ungated occupancy mean; isolates support/cutoff insufficiency.
+4. `PC-OCC-ROBUST`: same occupancy support + frozen mean/CVaR functional; tests tail value only after conditioning/support are corrected.
+5. `PCOR-MAIN`: PC-OCC-ROBUST + independent CAL500 unit-slope translation only.
+
+Interpretation is fail-closed: reweight-only success -> action-conditioned mode probability was missing; occupancy-mean incremental success -> finite-envelope support was missing; robust incremental success -> tail functional matters only after correct conditioning/support; behavior accuracy near majority plus arm failure -> close the discrete mode basis and move to a continuous plan-conditioned occupancy/trajectory predictor; behavior predictive but value arms fail -> discrete trajectories/scalar occupancy are not decision-sufficient, again move to a continuous interactive-response representation.
+
+The promotion gate is unchanged: >=20% no-op reduction, capture within 3pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate and 5/5 fold sums, selected>=64, positive>=32 and exact frozen-winner containment.
+
+V44 hard engineering replay must exactly reproduce V43 RSMR, QUALITY, FUTURE-MEAN and FUTURE-ROBUST-RAW signatures before any scientific interpretation. V43 spent no fresh data. Permanent exclusion remains 10700 tokens. New seed: `v64.3.44-eaf-icer-pcor-cal500-double-fresh-v1`.
+
+Candidate paper mechanism, conditional on independent validation: **Selection–Valuation–Response Sufficiency** — ordinal extremal selection can be decision-sufficient under bounded EAF evidence while absolute incumbent-exit valuation requires a distinct plan-conditioned prospective response consequence distribution/support.

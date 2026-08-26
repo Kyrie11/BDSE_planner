@@ -1,0 +1,16 @@
+ALGORITHM_CHANGELOG.md
+V64_3_43_RESULT_POSTMORTEM_AND_V64_3_44_PCOR_DESIGN.md
+V64_3_43_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_44.json
+V64_3_43_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_44.csv
+bdse/planner/response_value_observables.py
+bdse/planner/value_observables.py
+bdse/planner/tournament.py
+bdse/tools/build_v64_3_44_behavior_supervision.py
+bdse/tools/fit_v64_3_44_eaf_icer_pcor.py
+bdse/tools/calibrate_v64_3_44_eaf_icer_pcor.py
+bdse/tools/check_v64_3_44_eaf_icer_pcor_split.py
+bdse/tools/check_v64_3_44_eaf_icer_pcor_screen.py
+bdse/tests/test_v64_3_44_eaf_icer_pcor.py
+RUN_V64_3_44_EAF_ICER_PCOR_SCREEN_2GPU.sh
+NEXT_COMMANDS_V64_3_44_EAF_ICER_PCOR.txt
+V64_3_44_ENGINEERING_VALIDATION.txt

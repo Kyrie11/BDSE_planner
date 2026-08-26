@@ -1,0 +1,1058 @@
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -11027,3 +11027,108 @@
+ - Added `RUN_V64_3_42_DIAGNOSTIC_NUPLAN_CL20.sh`, which selects 20 scenarios label-free from the already permanent-design-excluded validation population and compares `V20 / PRESERVE / RSMR / EPV-RAW / OVDR-RAW`.
+ - This CL20 is explicitly **diagnostic-only**: it may test whether open-loop near-zero capture misses affect progress and whether open-loop catastrophes correspond to collision/TTC/drivable degradation, but it must not tune V42 or replace TRAIN/double-fresh gates.
+ - Official paper-facing closed-loop should follow double-fresh plus one frozen full-validation reproduction.
++
++# V64.3.42 uploaded TRAIN result audit -> V64.3.43 EAF-ICER-CFRV
++
++## V64.3.42 result validity
++
++- Uploaded V42 code archive SHA256 is `d29e14c0d30833d42ca1b8f70afc6f08a71183cad8b05c6e63a990acfaf216b7`, identical to the preregistered V42 package.
++- Frozen 3000-TRAIN observable replay completed; direct scene audit is `782/782` unique.
++- Five nested outer folds completed; independent value-calibration proposal counts are `97/100/98/86/110`.
++- Server targeted regression is `198/198 PASS` with two historical Transformer warnings.
++- V42 scene-level RSMR winner/action and V41 EPV-RAW value path replay exactly; maximum teacher-improvement floating mismatch is about `4.44e-16`.
++- Frozen-winner monotone containment is valid; no reranking, second-best or fallback rescue.
++- TRAIN gate stopped scientifically with `train_gate_pass=false`; no non-empty CAL500/A500/B500 fresh manifests exist.
++- Conclusion: **engineering-valid for TRAIN-level mechanism attribution; no V42.1 hotfix is required**.
++
++## V64.3.42 mechanism result
++
++Frozen RSMR remains `502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophe / 107 no-op false / NegRMS 0.3557`.
++
++- EPV-RAW: `203 / 118 / capture 20.56% / +25.9689 / 15 cat / 39 no-op / NegRMS 0.4543`.
++- **EPV+QUALITY**: `205 / 129 / precision 62.93% / capture 22.47% / +43.9055 / 13 cat / 30 no-op / NegRMS 0.3127 / 5/5 nonnegative folds`.
++- EPV+RISK: `205 / 122 / capture 21.25% / +43.3001 / 11 cat / 40 no-op / NegRMS 0.3901`.
++- EPV+JOINT: `186 / 109 / capture 18.99% / +40.7775 / 11 cat / 37 no-op / NegRMS 0.4244`.
++- OVDR-MAIN: `285 / 129 / capture 22.47% / +41.2464 / 16 cat / 63 no-op / NegRMS 0.3894`.
++
++Preregistered capture floor remains `35.50%`; therefore no V42 arm is promotable. V42 is **substantial partial mechanism success + promotion failure**, not a null result.
++
++QUALITY is the strongest V42 submechanism. Relative to EPV at essentially equal coverage, QUALITY-only contains 22 proposals with teacher sum `+9.3538`, while EPV-only contains 20 proposals with sum `-8.5828`. Thus current trajectory-quality consequence rotates the selected set selectively rather than obtaining safety through blanket abstention.
++
++RISK also has an independent rotation: RISK-only versus EPV is 17 proposals with `+12.6479` and zero catastrophes, while EPV-only is 15 proposals with `-4.6833` and four catastrophes. However RISK NegRMS is worse than RSMR, so current physical-risk geometry does not close negative magnitude.
++
++QUALITY misses 92 of RSMR's 221 true-positive proposals. `71/92` are near-zero positives (`0<Delta_T<=0.01`) with total only `+0.04064`, but **20/92 are material positives (`Delta_T>0.2`) totaling `+23.34784`**. The capture failure therefore mixes zero-boundary count ambiguity with real material-opportunity misses; the capture gate must not be relaxed.
++
++Most importantly, on the frozen 502 RSMR proposals:
++
++- **17/28 catastrophes have all six current V42 RISK deltas exactly zero**;
++- **21/50 material positives have all six current V42 RISK deltas exactly zero**.
++
++This is a representation-support result: many decisive outcomes are invisible to the current-map/current-agent deterministic risk observable. Tuning its head/threshold cannot recover absent information.
++
++Updated dominant bottleneck:
++
++> **prospective response-conditioned consequence observability for the frozen RSMR proposal at the absolute incumbent-exit boundary.**
++
++## V42-specific no-repeat constraints
++
++Keep all historical constraints. Additionally:
++
++- do not enlarge the current 6-D RISK block or fit a nonlinear static-risk head as the first-order rescue;
++- do not combine QUALITY/RISK with tuned weights or thresholds after observing V42;
++- do not tune OVDR selected translation; its behavior is another coverage-tail Pareto movement;
++- do not discard capture because QUALITY aggregate sum exceeds RSMR;
++- do not add a binary catastrophe veto;
++- do not use logged future/teacher future in deployment observables;
++- do not alter RSMR ordering or add second-best fallback.
++
++# V64.3.43 EAF-ICER-CFRV
++
++Full name: **Counterfactual Future-Response Valuation**.
++
++V43 freezes the strongest mature/partial layers: RSMR remains the sole challenger selector; EPV remains the endpoint latent-value base; V42 QUALITY remains the current trajectory-consequence cardinal core. V43 does not add a larger value model. It introduces a new deployment-available **prospective response distribution observable** motivated directly by V42's zero-support result.
++
++For each already generated candidate trajectory, roll current agents using the frozen runtime response family `cv / ca / brake / yield / nonyield`. The `logged` mode is structurally excluded by constructing modes with `label_future=None` and failing closed if any response reports `uses_label_future=true`.
++
++For every response mode compute continuous box-aware interaction severity using the existing runtime-safety semantics (hard proximity, soft proximity and TTC) and form a lower-is-better per-mode agent-interaction cost distribution. Expose three fixed functionals:
++
++1. response mean cost;
++2. response `CVaR_alpha` cost;
++3. frozen teacher-style `(1-eta)*mean + eta*CVaR_alpha` cost.
++
++Response probabilities, `alpha` and `eta` use existing frozen response/teacher defaults/config and are not swept. Counterfactual value input is always `cost(incumbent)-cost(candidate)`.
++
++Causal topology:
++
++`RSMR -> frozen winner -> EPV -> frozen V42 QUALITY residual -> one future-response scalar residual -> same winner or incumbent`.
++
++All residual fitting remains scene-total-one, zero-bias, fixed `lambda=1`; no new neural evidence query is added.
++
++Preregistered V43 arms:
++
++- **QUALITY-CONTROL**: exact V42 QUALITY mechanism;
++- **QUALITY+FUTURE-MEAN**: tests whether prospective horizon observability alone is sufficient;
++- **QUALITY+FUTURE-ROBUST**: tests whether tail-sensitive response uncertainty (frozen mean+CVaR) is required;
++- **CFRV-MAIN**: FUTURE-ROBUST plus independent CAL500 unit-slope translation only.
++
++V43 engineering hard gate requires the new 12-D instrumentation to reproduce exact historical TRAIN signatures before scientific attribution:
++
++- RSMR: `502 / 221 / 107 no-op / 28 cat / +43.29405361274824 / capture 0.38501742160278746`;
++- V42 QUALITY: `205 / 129 / 30 no-op / 13 cat / +43.905547394411805 / capture 0.22473867595818817 / NegRMS 0.3126575113037135`.
++
++Any mismatch is an **engineering STOP**.
++
++TRAIN promotion gate remains unchanged: >=20% no-op reduction, capture within 3 pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate, 5/5 nonnegative fold sums, selected>=64, positive>=32 and exact frozen-winner containment.
++
++Preregistered interpretation branches:
++
++- FUTURE-MEAN passes while FUTURE-ROBUST fails -> prospective horizon is the missing source but frozen mean/CVaR functional is not sufficient; retain mean and do not tune CVaR.
++- FUTURE-ROBUST adds independent tail/non-catastrophe signal but gate still fails -> response distribution is real but handcrafted kinematic modes are behaviorally insufficient; next layer must be a **plan-conditioned learned behavior/occupancy response observable**, not a larger value head.
++- neither future arm adds independent gain -> close simple kinematic response-mode valuation and move directly to learned interactive response support.
++- CFRV-MAIN passes TRAIN -> only then select independent CAL500+A500+B500; if double fresh also passes, freeze CFRV and run one frozen full-validation reproduction plus official nuPlan closed loop.
++
++V42 spent no fresh data. Permanent design exclusion remains **10700 tokens**. New label-free seed:
++
++`v64.3.43-eaf-icer-cfrv-cal500-double-fresh-v1`
++
++Paper-level candidate mechanism if independently reproduced: **selection--valuation observability separation** — bounded EAF evidence can be sufficient for ordinal extremal challenger selection while absolute deployment valuation of the frozen proposal requires a distinct prospective response-conditioned consequence distribution. This claim remains provisional until TRAIN + double fresh + frozen full validation + official closed loop.
+--- a/bdse/planner/response_value_observables.py
++++ b/bdse/planner/response_value_observables.py
+@@ -0,0 +1,208 @@
++from __future__ import annotations
++
++"""Runtime-only prospective response observables for V64.3.43 CFRV.
++
++The V42 current-agent risk block extrapolates every tracked agent with a single
++constant-velocity envelope.  V43 explicitly represents *future response
++uncertainty* without using logged future labels: current agent states are rolled
++under the frozen teacher response hypotheses {cv, ca, brake, yield, nonyield}.
++For every candidate trajectory we evaluate the same continuous box-aware
++interaction semantics under each response mode and expose three lower-is-better
++functionals of the induced cost distribution:
++
++  mean, CVaR_alpha, and the frozen teacher-style mean/CVaR mixture.
++
++The logged response mode is impossible when label_future=None and is therefore
++excluded by construction.  No neural evidence query, teacher label, or future
++log is consumed at deployment.
++"""
++
++from typing import Any
++
++import numpy as np
++
++from bdse.data.cache_schema import CandidateBank, RuntimeFeatures
++from bdse.planner.response_modes import build_response_modes
++from bdse.planner.robust_teacher import weighted_cvar
++
++FUTURE_RESPONSE_OBSERVABLE_NAMES = [
++    "future_response_mean_agent_cost",
++    "future_response_cvar_agent_cost",
++    "future_response_robust_agent_cost",
++]
++
++
++def _finite(x: np.ndarray, limit: float = 1.0e6) -> np.ndarray:
++    return np.clip(np.nan_to_num(np.asarray(x, dtype=np.float64), nan=limit, posinf=limit, neginf=0.0), 0.0, limit)
++
++
++def _candidate_times(traj: np.ndarray, dt: float) -> np.ndarray:
++    K, T = int(traj.shape[0]), int(traj.shape[1])
++    if traj.shape[2] > 4:
++        t = np.asarray(traj[:, :, 4], dtype=np.float64)
++        if np.all(np.isfinite(t)) and np.all(t >= -1.0e-6):
++            return t
++    return np.broadcast_to((np.arange(T, dtype=np.float64) + 1.0)[None, :] * dt, (K, T)).copy()
++
++
++def _future_agent_envelope(
++    traj: np.ndarray,
++    times: np.ndarray,
++    agent_future: np.ndarray,
++    current_agent: np.ndarray,
++    cfg: dict[str, Any],
++) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
++    """Continuous K-vector hard/soft/TTC severities against one future agent.
++
++    This is the future-trajectory analogue of fallback._agent_envelope_metrics:
++    the geometry is box-aware when dimensions are available and uses the same
++    frozen runtime-safety clearances/weights.  It does not discretize to a hard
++    veto; the output remains a smooth lower-is-better consequence observable.
++    """
++
++    arr = np.asarray(traj, dtype=np.float64)
++    fut = np.asarray(agent_future, dtype=np.float64)
++    cur = np.asarray(current_agent, dtype=np.float64).reshape(-1)
++    K, T = int(arr.shape[0]), int(arr.shape[1])
++    Te = min(T, int(fut.shape[0]))
++    if Te <= 0:
++        z = np.zeros((K,), dtype=np.float64)
++        return z, z.copy(), z.copy()
++    arr = arr[:, :Te]
++    fut = fut[:Te]
++    tt = times[:, :Te]
++    rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
++
++    ax = fut[:, 0][None, :]
++    ay = fut[:, 1][None, :]
++    ayaw = fut[:, 2][None, :] if fut.shape[1] > 2 else np.zeros((1, Te), dtype=np.float64)
++    av = fut[:, 3][None, :] if fut.shape[1] > 3 else np.zeros((1, Te), dtype=np.float64)
++    dx = arr[:, :, 0] - ax
++    dy = arr[:, :, 1] - ay
++    dist = np.sqrt(np.maximum(dx * dx + dy * dy, 1.0e-8))
++
++    ev = arr[:, :, 3] if arr.shape[2] > 3 else np.zeros((K, Te), dtype=np.float64)
++    eyaw = arr[:, :, 2] if arr.shape[2] > 2 else np.zeros((K, Te), dtype=np.float64)
++    evx, evy = ev * np.cos(eyaw), ev * np.sin(eyaw)
++    avx, avy = av * np.cos(ayaw), av * np.sin(ayaw)
++    rel_vx, rel_vy = evx - avx, evy - avy
++    closing = np.maximum(-(dx * rel_vx + dy * rel_vy) / np.maximum(dist, 1.0e-4), 0.0)
++    ttc = np.where(closing > 1.0e-3, dist / np.maximum(closing, 1.0e-3), np.inf)
++
++    # Keep the same horizon semantics as runtime risk, but derive the mask from
++    # candidate clock time so the prospective modes do not add a new horizon knob.
++    base_hard = float(rsc.get("hard_check_horizon_s", float("inf")))
++    base_soft = float(rsc.get("soft_check_horizon_s", float("inf")))
++    hard_mask = np.isfinite(tt) & (tt <= base_hard + 1.0e-6)
++    soft_mask = np.isfinite(tt) & (tt <= base_soft + 1.0e-6)
++    if bool(rsc.get("speed_adaptive_horizon", False)) and arr.shape[2] > 3:
++        speed = np.maximum(np.nanmax(np.maximum(arr[:, :, 3], 0.0), axis=1), 0.0)
++        reaction = max(float(rsc.get("reaction_time_s", 0.7)), 0.0)
++        decel = max(float(rsc.get("comfortable_emergency_decel_mps2", 5.0)), 0.5)
++        margin = max(float(rsc.get("stopping_horizon_margin_s", 0.35)), 0.0)
++        min_h = float(rsc.get("min_hard_horizon_s", base_hard))
++        max_h = float(rsc.get("max_hard_horizon_s", max(base_soft, base_hard)))
++        hh = np.clip(reaction + speed / decel + margin, min_h, max_h)
++        soft_extra = max(float(rsc.get("soft_horizon_extra_s", 1.5)), 0.0)
++        max_soft = float(rsc.get("max_soft_horizon_s", max(base_soft, max_h)))
++        sh = np.minimum(np.maximum(np.full((K,), base_soft), hh + soft_extra), max_soft)
++        hard_mask = np.isfinite(tt) & (tt <= hh[:, None] + 1.0e-6)
++        soft_mask = np.isfinite(tt) & (tt <= sh[:, None] + 1.0e-6)
++    if Te:
++        hard_mask[:, 0] = True
++        soft_mask[:, 0] = True
++
++    has_dims = cur.size > 8 and float(cur[7]) > 0.0 and float(cur[8]) > 0.0
++    if bool(rsc.get("use_box_agent_risk", False)) and has_dims:
++        ego_l = max(float(rsc.get("ego_length_m", 4.8)), 0.5)
++        ego_w = max(float(rsc.get("ego_width_m", 2.0)), 0.3)
++        agent_l = max(float(cur[7]), 0.3)
++        agent_w = max(float(cur[8]), 0.2)
++        c, s = np.cos(ayaw), np.sin(ayaw)
++        longitudinal = c * dx + s * dy
++        lateral = -s * dx + c * dy
++        closing_buffer = np.minimum(
++            closing * max(float(rsc.get("closing_speed_buffer_s", 0.22)), 0.0),
++            max(float(rsc.get("max_closing_buffer_m", 3.0)), 0.0),
++        )
++        hard_l = 0.5 * (ego_l + agent_l) + float(rsc.get("hard_longitudinal_clearance_m", 0.20)) + closing_buffer
++        hard_w = 0.5 * (ego_w + agent_w) + float(rsc.get("hard_lateral_clearance_m", 0.15))
++        soft_l = hard_l + float(rsc.get("soft_longitudinal_extra_m", 1.00))
++        soft_w = hard_w + float(rsc.get("soft_lateral_extra_m", 0.65))
++        hard_norm = np.sqrt((longitudinal / np.maximum(hard_l, 0.1)) ** 2 + (lateral / max(hard_w, 0.1)) ** 2)
++        soft_norm = np.sqrt((longitudinal / np.maximum(soft_l, 0.1)) ** 2 + (lateral / max(soft_w, 0.1)) ** 2)
++        hard_def = np.where(hard_mask, np.maximum(1.0 - hard_norm, 0.0), 0.0).max(axis=1)
++        soft_def = np.where(soft_mask, np.maximum(1.0 - soft_norm, 0.0), 0.0).max(axis=1)
++        ttc_gate = soft_norm <= float(rsc.get("ttc_envelope_gate", 1.35))
++    else:
++        hard_r = max(float(rsc.get("hard_agent_radius_m", 0.85)), 1.0e-3)
++        soft_r = max(float(rsc.get("soft_agent_radius_m", 1.5)), hard_r)
++        hard_def = np.where(hard_mask, np.maximum(hard_r - dist, 0.0) / hard_r, 0.0).max(axis=1)
++        soft_def = np.where(soft_mask, np.maximum(soft_r - dist, 0.0) / soft_r, 0.0).max(axis=1)
++        ttc_gate = dist <= soft_r * float(rsc.get("ttc_envelope_gate", 1.35))
++
++    ttc_eval = np.where(soft_mask & ttc_gate, ttc, np.inf)
++    min_ttc = np.min(ttc_eval, axis=1)
++    safe_ttc = max(float(rsc.get("agent_ttc_safe_s", 3.0)), 1.0e-3)
++    ttc_risk = np.maximum((safe_ttc - min_ttc) / safe_ttc, 0.0)
++    ttc_risk = np.where(np.isfinite(ttc_risk), ttc_risk, 0.0)
++    return _finite(hard_def), _finite(soft_def), _finite(ttc_risk)
++
++
++def runtime_future_response_observable_costs(
++    runtime: RuntimeFeatures,
++    candidates: CandidateBank,
++    cfg: dict[str, Any],
++) -> tuple[np.ndarray, list[str]]:
++    """Return K x 3 label-free prospective response-distribution costs."""
++
++    K = int(candidates.K)
++    if K <= 0:
++        return np.zeros((0, 3), dtype=np.float64), list(FUTURE_RESPONSE_OBSERVABLE_NAMES)
++    traj = np.nan_to_num(np.asarray(candidates.trajectories, dtype=np.float64), nan=0.0, posinf=1.0e6, neginf=-1.0e6)
++    dt = float(cfg.get("candidate", {}).get("step_s", 0.1)) if isinstance(cfg, dict) else 0.1
++    times = _candidate_times(traj, dt)
++    modes = build_response_modes(runtime, None, cfg)
++    if not modes or any(bool(m.metadata.get("uses_label_future", False)) or str(m.name) == "logged" for m in modes):
++        raise ValueError("V43 future-response observable must be runtime-only and exclude logged future mode")
++    valid_agents = np.asarray(runtime.agent_valid, dtype=bool).reshape(-1)
++    cur_agents = np.asarray(runtime.current_agents, dtype=np.float64)
++    rsc = cfg.get("runtime_safety", {}) if isinstance(cfg, dict) else {}
++    wh = float(rsc.get("risk_hard_agent_weight", 6.0))
++    ws = float(rsc.get("risk_soft_agent_weight", 1.2))
++    wt = float(rsc.get("risk_hard_ttc_weight", 2.5)) + float(rsc.get("risk_soft_ttc_weight", 1.0))
++
++    mode_costs = []
++    probs = []
++    for mode in modes:
++        hard = np.zeros((K,), dtype=np.float64)
++        soft = np.zeros((K,), dtype=np.float64)
++        ttc = np.zeros((K,), dtype=np.float64)
++        futures = np.asarray(mode.agent_futures, dtype=np.float64)
++        n = min(len(valid_agents), len(cur_agents), int(futures.shape[0]) if futures.ndim >= 3 else 0)
++        for j in range(n):
++            if not bool(valid_agents[j]):
++                continue
++            hj, sj, tj = _future_agent_envelope(traj, times, futures[j], cur_agents[j], cfg)
++            hard = np.maximum(hard, hj)
++            soft = np.maximum(soft, sj)
++            ttc = np.maximum(ttc, tj)
++        mode_costs.append(_finite(wh * hard + ws * soft + wt * ttc))
++        probs.append(float(mode.probability))
++
++    stack = np.stack(mode_costs, axis=0) if mode_costs else np.zeros((1, K), dtype=np.float64)
++    p = np.asarray(probs if probs else [1.0], dtype=np.float64)
++    p = p / max(float(p.sum()), 1.0e-12)
++    mean = np.tensordot(p, stack, axes=(0, 0)).astype(np.float64)
++    rcfg = cfg.get("teacher", {}).get("risk_aggregation", {}) if isinstance(cfg, dict) else {}
++    alpha = float(rcfg.get("cvar_alpha", cfg.get("teacher", {}).get("cvar_alpha", 0.9) if isinstance(cfg, dict) else 0.9))
++    mix = float(rcfg.get("cvar_weight", cfg.get("teacher", {}).get("cvar_weight", 0.4) if isinstance(cfg, dict) else 0.4))
++    cvar = np.asarray(weighted_cvar(stack.astype(np.float32), p.astype(np.float32), alpha), dtype=np.float64)
++    robust = (1.0 - mix) * mean + mix * cvar
++    out = np.stack([_finite(mean), _finite(cvar), _finite(robust)], axis=1)
++    valid = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)[:K]
++    # Invalid actions cannot be selected; keep finite values for instrumentation.
++    out[~valid] = np.maximum(out[~valid], 0.0)
++    if out.shape != (K, 3) or not np.all(np.isfinite(out)):
++        raise ValueError("V43 future-response observable matrix malformed or non-finite")
++    return out.astype(np.float64), list(FUTURE_RESPONSE_OBSERVABLE_NAMES)
+--- a/bdse/planner/value_observables.py
++++ b/bdse/planner/value_observables.py
+@@ -122,6 +122,15 @@
+         axis=1,
+     )
+     out = np.concatenate([quality, risk], axis=1).astype(np.float64)
+-    if out.shape != (K, len(VALUE_OBSERVABLE_NAMES)) or not np.all(np.isfinite(out)):
+-        raise ValueError("V42 deployment value-observable matrix is malformed or non-finite")
+-    return out, list(VALUE_OBSERVABLE_NAMES)
++    names = list(VALUE_OBSERVABLE_NAMES)
++    ic = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {}) if isinstance(cfg, dict) else {}
++    if bool(ic.get("instrument_future_response_observables", False)):
++        from bdse.planner.response_value_observables import FUTURE_RESPONSE_OBSERVABLE_NAMES, runtime_future_response_observable_costs
++        future, fn = runtime_future_response_observable_costs(runtime, candidates, cfg)
++        if fn != FUTURE_RESPONSE_OBSERVABLE_NAMES or future.shape != (K, len(FUTURE_RESPONSE_OBSERVABLE_NAMES)):
++            raise ValueError("V43 future-response observable schema mismatch")
++        out = np.concatenate([out, future], axis=1)
++        names.extend(fn)
++    if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
++        raise ValueError("deployment value-observable matrix is malformed or non-finite")
++    return out, names
+--- a/bdse/planner/nuplan_planner.py
++++ b/bdse/planner/nuplan_planner.py
+@@ -688,11 +688,14 @@
+             _ic = (((stage_cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {})
+             _scir = (_ic.get("selection_conditioned_intervention_recovery", {}) or {})
+             _vmode = str(_scir.get("post_selection_value_mode", "")).strip().lower()
+-            _need_vobs = bool(_ic.get("instrument_value_observables", False)) or _vmode in {
++            _need_vobs = bool(_ic.get("instrument_value_observables", False)) or bool(_ic.get("instrument_future_response_observables", False)) or _vmode in {
+                 "endpoint_potential_quality_observable",
+                 "endpoint_potential_risk_observable",
+                 "endpoint_potential_joint_observable",
+                 "endpoint_potential_joint_observable_shift",
++                "endpoint_potential_quality_future_response_mean",
++                "endpoint_potential_quality_future_response_robust",
++                "endpoint_potential_quality_future_response_robust_shift",
+             }
+             if _need_vobs:
+                 from bdse.planner.value_observables import runtime_value_observable_costs
+--- a/bdse/planner/tournament.py
++++ b/bdse/planner/tournament.py
+@@ -2602,7 +2602,7 @@
+     if bool(scir_cfg.get("scene_reservation_enabled", False)):
+         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
+     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
+-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}
++    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift"}
+     if mode not in allowed:
+         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
+     b = int(proposal_action)
+@@ -2627,7 +2627,7 @@
+     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
+         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
+ 
+-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}:
++    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift"}:
+         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
+             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
+         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
+@@ -2662,7 +2662,45 @@
+         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
+         value_feature = phi
+         value_names = [f"post_value::{n}" for n in runtime_value_names]
+-        if mode in {"endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}:
++        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift"}:
++            if value_observable_matrix is None or value_observable_names is None:
++                raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
++            om = np.asarray(value_observable_matrix, dtype=np.float64)
++            on = [str(x) for x in value_observable_names]
++            if om.ndim != 2 or om.shape[0] != X.shape[0] or not (0 <= legacy < om.shape[0]) or not (0 <= b < om.shape[0]):
++                raise ValueError("EAF-ICER V43 observable runtime matrix shape mismatch")
++            stored_obs = [str(x) for x in scir_cfg.get("post_selection_observable_names", [])]
++            if on != stored_obs:
++                raise ValueError("EAF-ICER V43 observable schema mismatch")
++            delta_obs = om[legacy] - om[b]
++            qnames = [str(x) for x in scir_cfg.get("post_selection_quality_observable_names", [])]
++            qidx = [on.index(n) for n in qnames] if qnames and all(n in on for n in qnames) else []
++            qscale = np.asarray(scir_cfg.get("post_selection_quality_observable_scale", []), dtype=np.float64).reshape(-1)
++            qw = np.asarray(scir_cfg.get("post_selection_quality_observable_weights", []), dtype=np.float64).reshape(-1)
++            if len(qidx) != 3 or qscale.size != len(qidx) or qw.size != len(qidx):
++                raise ValueError("EAF-ICER V43 frozen QUALITY residual schema mismatch")
++            qobs = delta_obs[np.asarray(qidx, dtype=np.int64)]
++            qres = float((qobs / np.maximum(qscale, 1.0e-6)) @ qw)
++            value = float(np.clip(value + qres, -40.0, 40.0))
++            rname = str(scir_cfg.get("post_selection_future_response_observable_name", ""))
++            if rname not in on:
++                raise ValueError("EAF-ICER V43 selected future-response observable missing")
++            ridx = on.index(rname)
++            rscale = float(scir_cfg.get("post_selection_future_response_scale", float("nan")))
++            rw = float(scir_cfg.get("post_selection_future_response_weight", float("nan")))
++            if not math.isfinite(rscale) or rscale <= 0.0 or not math.isfinite(rw):
++                raise ValueError("EAF-ICER V43 future-response residual parameters invalid")
++            robs = float(delta_obs[ridx])
++            rres = float((robs / max(rscale, 1.0e-6)) * rw)
++            value = float(np.clip(value + rres, -40.0, 40.0))
++            value_feature = np.concatenate([phi, qobs, np.asarray([robs], dtype=np.float64)])
++            value_names = [f"post_value::{n}" for n in runtime_value_names] + [f"observable_improvement::{n}" for n in qnames] + [f"future_response_improvement::{rname}"]
++            if mode == "endpoint_potential_quality_future_response_robust_shift":
++                shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
++                if not math.isfinite(shift):
++                    raise ValueError("EAF-ICER V43 selected translation bias invalid")
++                value = float(np.clip(value + shift, -40.0, 40.0))
++        elif mode in {"endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift"}:
+             if value_observable_matrix is None or value_observable_names is None:
+                 raise ValueError("EAF-ICER V42 observable value mode requires deployment value-observable matrix")
+             om = np.asarray(value_observable_matrix, dtype=np.float64)
+--- a/bdse/tools/fit_v64_3_43_eaf_icer_cfrv.py
++++ b/bdse/tools/fit_v64_3_43_eaf_icer_cfrv.py
+@@ -0,0 +1,310 @@
++from __future__ import annotations
++
++import argparse
++import csv
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.planner.value_observables import QUALITY_NAMES, VALUE_OBSERVABLE_NAMES
++from bdse.planner.response_value_observables import FUTURE_RESPONSE_OBSERVABLE_NAMES
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import FOLDS, RIDGE_LAMBDA, _finite, _fold, _read_edges, _select
++from bdse.tools.fit_v64_3_34_eaf_icer_rsmr import _extended_diag, _fit_regret_structured_margin, _structured_scores
++from bdse.tools.fit_v64_3_38_eaf_icer_davr import (
++    CAPTURE_TOL, CATASTROPHE_REDUCTION_MIN, MIN_VALUE_CAL_PROPOSALS,
++    NOOP_REDUCTION_MIN, _value_diag, _write_rsmr,
++)
++from bdse.tools.fit_v64_3_39_eaf_icer_cfsr import _fit_translation
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import _base_cfg, _endpoint_scene, _fit_zero_ridge, _pred as _epv_pred
++
++EPS = 1.0e-12
++ALL_OBSERVABLE_NAMES = list(VALUE_OBSERVABLE_NAMES) + list(FUTURE_RESPONSE_OBSERVABLE_NAMES)
++FUTURE_MEAN_NAME = "future_response_mean_agent_cost"
++FUTURE_ROBUST_NAME = "future_response_robust_agent_cost"
++
++
++def _scene(groups: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
++    base = _endpoint_scene(groups)
++    keys = [f"icer_value_observable_{n}" for n in ALL_OBSERVABLE_NAMES]
++    out: dict[str, list[dict[str, Any]]] = {}
++    for tok, ss in base.items():
++        rows = groups[tok]
++        inc = int(rows[0].get("raw_top_action", -1))
++        byact = {int(r.get("challenger_action", -2)): r for r in rows}
++        ir = byact.get(inc)
++        if ir is None:
++            continue
++        oi = np.asarray([_finite(ir, k) for k in keys], dtype=np.float64)
++        if oi.size != len(keys) or not np.all(np.isfinite(oi)):
++            raise RuntimeError(f"V43 incumbent observable schema invalid for scene {tok}")
++        rr = []
++        for a in ss:
++            row = byact.get(int(a["action"]))
++            if row is None:
++                raise RuntimeError(f"V43 observable replay missing candidate row for scene {tok}")
++            ob = np.asarray([_finite(row, k) for k in keys], dtype=np.float64)
++            if ob.size != len(keys) or not np.all(np.isfinite(ob)):
++                raise RuntimeError(f"V43 candidate observable schema invalid for scene {tok}")
++            b = dict(a)
++            b["observable_inc"] = oi.copy()
++            b["observable_cand"] = ob
++            b["observable_improvement"] = oi - ob
++            rr.append(b)
++        out[tok] = rr
++    return out
++
++
++def _fit_weighted_zero_ridge(scene, tokens, target_fn, feature_fn, names):
++    X, y, w = [], [], []
++    for tok in tokens:
++        ss = scene[tok]
++        n = len(ss)
++        if n <= 0:
++            continue
++        for a in ss:
++            X.append(np.asarray(feature_fn(a), dtype=np.float64).reshape(-1))
++            y.append(float(target_fn(a)))
++            w.append(1.0 / n)
++    if not X:
++        raise ValueError("V43 residual fit has no samples")
++    X = np.stack(X)
++    y = np.asarray(y, dtype=np.float64)
++    w = np.asarray(w, dtype=np.float64)
++    pm = w / max(float(w.sum()), EPS)
++    scale = np.sqrt(np.sum((X * X) * pm[:, None], axis=0))
++    scale = np.maximum(scale, 1.0e-6)
++    Z = X / scale[None, :]
++    root = np.sqrt(w)[:, None]
++    Zw = Z * root
++    yw = y * root[:, 0]
++    coef = np.linalg.solve(Zw.T @ Zw + np.eye(Z.shape[1]) * RIDGE_LAMBDA, Zw.T @ yw)
++    return {"names": list(names), "scale": scale, "weights": coef, "bias": 0.0, "sample_count": int(len(y)), "scene_weight_sum": float(w.sum())}
++
++
++def _quality_x(a):
++    x = np.asarray(a["observable_improvement"], dtype=np.float64)
++    return x[:len(QUALITY_NAMES)]
++
++
++def _future_x(a, name):
++    x = np.asarray(a["observable_improvement"], dtype=np.float64)
++    return np.asarray([x[ALL_OBSERVABLE_NAMES.index(name)]], dtype=np.float64)
++
++
++def _lin(a, m, x):
++    xx = np.asarray(x, dtype=np.float64).reshape(-1)
++    return float((xx / np.maximum(np.asarray(m["scale"], dtype=np.float64), 1.0e-6)) @ np.asarray(m["weights"], dtype=np.float64))
++
++
++def _quality_value(a, epv, q):
++    return float(np.clip(_epv_pred(a, epv) + _lin(a, q, _quality_x(a)), -40.0, 40.0))
++
++
++def _future_value(a, epv, q, r):
++    name = str(r["names"][0])
++    return float(np.clip(_quality_value(a, epv, q) + _lin(a, r, _future_x(a, name)), -40.0, 40.0))
++
++
++def _metrics(vals, captured, opp, noop_selected, opp_selected, noop_scenes):
++    return _extended_diag(vals, captured, opp, noop_selected, opp_selected, noop_scenes)
++
++
++def _gate(m, r, folds, key):
++    existence = (
++        m["no_positive_opportunity_false_intervention_count"] <= (1.0 - NOOP_REDUCTION_MIN) * r["no_positive_opportunity_false_intervention_count"] + EPS
++        and m["positive_capture_rate"] >= r["positive_capture_rate"] - CAPTURE_TOL - EPS
++    )
++    tail = (
++        m["catastrophic_count"] <= (1.0 - CATASTROPHE_REDUCTION_MIN) * r["catastrophic_count"] + EPS
++        and m["teacher_negative_rms"] <= r["teacher_negative_rms"] + EPS
++        and m["teacher_improvement_sum"] >= -EPS
++    )
++    all_folds = all(float(f[key]["teacher_improvement_sum"]) >= -EPS for f in folds)
++    population = m["selected_count"] >= 64 and m["selected_positive_count"] >= 32
++    return {"existence_and_capture": bool(existence), "tail": bool(tail), "all_folds_sum_nonnegative": bool(all_folds), "population": bool(population), "pass": bool(existence and tail and all_folds and population)}
++
++
++def _eval(ss, rsm, epv, q, mean, robust, shift):
++    score = _structured_scores(ss, rsm)
++    idx = _select(ss, score)
++    names = ["rsmr", "epv_raw", "quality", "future_mean", "future_robust_raw", "future_robust_main"]
++    if idx is None:
++        return {n: (None, float("nan")) for n in names}
++    a = ss[idx]
++    ev = float(_epv_pred(a, epv))
++    qv = _quality_value(a, epv, q)
++    mv = _future_value(a, epv, q, mean)
++    rv = _future_value(a, epv, q, robust)
++    main = float(np.clip(rv + float(shift), -40.0, 40.0))
++    return {
++        "rsmr": (idx, float(score[idx])),
++        "epv_raw": (idx if ev > 0 else None, ev),
++        "quality": (idx if qv > 0 else None, qv),
++        "future_mean": (idx if mv > 0 else None, mv),
++        "future_robust_raw": (idx if rv > 0 else None, rv),
++        "future_robust_main": (idx if main > 0 else None, main),
++    }
++
++
++def _nested(groups, audit_csv: Path):
++    scene = _scene(groups)
++    names = ["rsmr", "epv_raw", "quality", "future_mean", "future_robust_raw", "future_robust_main"]
++    agg = {n: [] for n in names}; caps = {n: 0 for n in names}; noops = {n: 0 for n in names}; oppsels = {n: 0 for n in names}
++    total_opp = total_noop = 0; folds = []; audits = []; vy = []; vp = {n: [] for n in names}
++    for k in range(FOLDS):
++        test = [t for t in scene if _fold(t) == k]
++        cf = (k + 1) % FOLDS
++        cal = [t for t in scene if _fold(t) == cf]
++        fit = [t for t in scene if _fold(t) not in {k, cf}]
++        rsm = _fit_regret_structured_margin(scene, fit)
++        epv = _fit_zero_ridge(scene, fit, "epv")
++        q = _fit_weighted_zero_ridge(scene, fit, lambda a: float(a["y"]) - _epv_pred(a, epv), _quality_x, QUALITY_NAMES)
++        mean = _fit_weighted_zero_ridge(scene, fit, lambda a: float(a["y"]) - _quality_value(a, epv, q), lambda a: _future_x(a, FUTURE_MEAN_NAME), [FUTURE_MEAN_NAME])
++        robust = _fit_weighted_zero_ridge(scene, fit, lambda a: float(a["y"]) - _quality_value(a, epv, q), lambda a: _future_x(a, FUTURE_ROBUST_NAME), [FUTURE_ROBUST_NAME])
++        cy, cp, used = [], [], []
++        for t in cal:
++            ss = scene[t]; idx = _select(ss, _structured_scores(ss, rsm))
++            if idx is None: continue
++            cy.append(float(ss[idx]["y"])); cp.append(_future_value(ss[idx], epv, q, robust)); used.append(t)
++        if len(used) < MIN_VALUE_CAL_PROPOSALS:
++            raise ValueError(f"V43 calibration proposals {len(used)} < {MIN_VALUE_CAL_PROPOSALS}")
++        shift_fit = _fit_translation(np.asarray(cp), np.asarray(cy), "quality_plus_runtime_future_response_robust")
++        shift = float(shift_fit["selected_policy_bias"])
++
++        fv = {n: [] for n in names}; fc = {n: 0 for n in names}; fn = {n: 0 for n in names}; fo = {n: 0 for n in names}
++        opp = noopsc = 0; subset = identity = True
++        for t in test:
++            ss = scene[t]; yy = np.asarray([float(a["y"]) for a in ss]); has = bool(np.any(yy > 0.0)); opp += int(has); noopsc += int(not has)
++            ev = _eval(ss, rsm, epv, q, mean, robust, shift); ridx = ev["rsmr"][0]
++            if ridx is not None:
++                vy.append(float(yy[ridx]))
++                for n in names: vp[n].append(float(ev[n][1]))
++            chosen = {n: ev[n][0] for n in names}
++            subset = subset and all(chosen[n] is None or ridx is not None for n in names if n != "rsmr")
++            identity = identity and all(chosen[n] is None or chosen[n] == ridx for n in names if n != "rsmr")
++            for n, idx in chosen.items():
++                if idx is None: continue
++                val = float(yy[idx]); fv[n].append(val); fc[n] += int(has and val > 0); fn[n] += int(not has); fo[n] += int(has)
++            audits.append({
++                "scenario_token": t, "outer_test_fold": k, "calibration_fold": cf, "candidate_count": len(ss), "positive_opportunity": int(has),
++                "rsm_selected_action": -1 if ridx is None else int(ss[ridx]["action"]), "rsm_selected_score": float(ev["rsmr"][1]),
++                "rsm_selected_teacher_improvement": float("nan") if ridx is None else float(yy[ridx]),
++                **{f"{n}_selected_action": -1 if chosen[n] is None else int(ss[chosen[n]]["action"]) for n in names if n != "rsmr"},
++                **{f"{n}_value": float(ev[n][1]) for n in names if n != "rsmr"},
++            })
++        total_opp += opp; total_noop += noopsc; fd = {}
++        for n in names:
++            fd[n] = _metrics(fv[n], fc[n], opp, fn[n], fo[n], noopsc); agg[n] += fv[n]; caps[n] += fc[n]; noops[n] += fn[n]; oppsels[n] += fo[n]
++        folds.append({
++            "fold": k, "fit_scenes": len(fit), "value_calibration_scenes": len(cal), "test_scenes": len(test), "value_calibration_proposal_count": len(used),
++            "selected_translation_fit": shift_fit,
++            "quality_fit": {"sample_count": q["sample_count"], "scene_weight_sum": q["scene_weight_sum"]},
++            "future_mean_fit": {"sample_count": mean["sample_count"], "scene_weight_sum": mean["scene_weight_sum"]},
++            "future_robust_fit": {"sample_count": robust["sample_count"], "scene_weight_sum": robust["scene_weight_sum"]},
++            **{n: fd[n] for n in names}, "monotone_subset_valid": subset, "frozen_winner_identity_valid": identity,
++        })
++    audit_csv.parent.mkdir(parents=True, exist_ok=True)
++    with audit_csv.open("w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=list(audits[0])); w.writeheader(); w.writerows(audits)
++    A = {n: _metrics(agg[n], caps[n], total_opp, noops[n], oppsels[n], total_noop) for n in names}
++    vd = {n: _value_diag(vy, vp[n]) for n in names}
++    gates = {n: _gate(A[n], A["rsmr"], folds, n) for n in names if n != "rsmr"}
++    contracts = all(f["monotone_subset_valid"] and f["frozen_winner_identity_valid"] for f in folds)
++    passed = bool(contracts and gates["future_robust_main"]["pass"])
++    if passed:
++        diag = "runtime_counterfactual_response_distribution_closes_selected_absolute_value_boundary"
++    elif gates["future_mean"]["pass"] and not gates["future_robust_raw"]["pass"]:
++        diag = "prospective_response_horizon_is_sufficient_but_teacher_style_tail_functional_is_not"
++    elif vd["future_robust_raw"].get("noncatastrophe_auc", -9) > vd["quality"].get("noncatastrophe_auc", -9) + 0.03 and vd["future_robust_raw"].get("positive_auc", -9) >= vd["quality"].get("positive_auc", -9) - 0.02:
++        diag = "runtime_response_distribution_adds_downside_signal_but_zero_boundary_or_behavior_model_remains"
++    elif vd["future_mean"].get("positive_auc", -9) > vd["quality"].get("positive_auc", -9) + 0.03:
++        diag = "future_response_horizon_adds_cardinal_signal_without_tail_closure"
++    else:
++        diag = "hand_constructed_runtime_response_modes_insufficient_require_plan_conditioned_behavior_or_occupancy_observable"
++    return {
++        "folds": folds, "scene_audit_csv": str(audit_csv), "rsmr_rank_aggregate": A["rsmr"], "endpoint_potential_raw_aggregate": A["epv_raw"],
++        "quality_control_aggregate": A["quality"], "future_response_mean_aggregate": A["future_mean"], "future_response_robust_raw_aggregate": A["future_robust_raw"],
++        "future_response_robust_main_aggregate": A["future_robust_main"], "selected_proposal_value_prediction_diagnostics": vd,
++        "gates": gates, "monotone_frozen_winner_contract_valid": contracts, "train_gate_pass": passed, "failure_diagnosis": diag,
++    }
++
++
++def _decorate(rsm_cfg, epv, q, response, mode, path, version, selected_bias=0.0):
++    cfg = yaml.safe_load(yaml.safe_dump(rsm_cfg, sort_keys=False))
++    ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    ic["instrument_value_observables"] = True
++    ic["instrument_future_response_observables"] = True
++    sc = ic["selection_conditioned_intervention_recovery"]
++    sc.update({
++        "post_selection_value_enabled": True, "post_selection_value_mode": mode,
++        "post_selection_endpoint_feature_names": list(epv["names"]), "post_selection_endpoint_feature_scale": [float(x) for x in epv["scale"]],
++        "post_selection_endpoint_weights": [float(x) for x in epv["weights"]], "post_selection_endpoint_bias": 0.0,
++        "post_selection_observable_names": list(ALL_OBSERVABLE_NAMES),
++        "post_selection_quality_observable_names": list(QUALITY_NAMES), "post_selection_quality_observable_scale": [float(x) for x in q["scale"]],
++        "post_selection_quality_observable_weights": [float(x) for x in q["weights"]],
++        "post_selection_future_response_observable_name": str(response["names"][0]), "post_selection_future_response_scale": float(response["scale"][0]),
++        "post_selection_future_response_weight": float(response["weights"][0]), "post_selection_selected_bias": float(selected_bias),
++        "post_selection_value_training": "scene_equal_all_edge_EPV_plus_frozen_QUALITY_plus_runtime_future_response_residual_fixed_lambda_1",
++        "post_selection_operator": "freeze_RSMR_winner_then_counterfactual_response_distribution_value_accept_same_winner_iff_positive_else_incumbent_no_rerank_no_fallback",
++    })
++    cfg.setdefault("metadata", {})["algorithm_version"] = version; cfg.setdefault("provenance", {})["algorithm_version"] = version
++    cfg.setdefault("experiment", {})["name"] = version.lower().replace(".", "_").replace("-", "_"); cfg["experiment"]["algorithm"] = version
++    Path(path).write_text(yaml.safe_dump(cfg, sort_keys=False)); return cfg
++
++
++def _write_quality_control(rsm_cfg, epv, q, path):
++    # Reuse historical V42 runtime mode, but keep the observable schema exactly 9D.
++    cfg = yaml.safe_load(yaml.safe_dump(rsm_cfg, sort_keys=False)); ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    ic["instrument_value_observables"] = True; ic["instrument_future_response_observables"] = False; sc = ic["selection_conditioned_intervention_recovery"]
++    sc.update({"post_selection_value_enabled": True, "post_selection_value_mode": "endpoint_potential_quality_observable", "post_selection_endpoint_feature_names": list(epv["names"]),
++               "post_selection_endpoint_feature_scale": [float(x) for x in epv["scale"]], "post_selection_endpoint_weights": [float(x) for x in epv["weights"]], "post_selection_endpoint_bias": 0.0,
++               "post_selection_observable_names": list(VALUE_OBSERVABLE_NAMES), "post_selection_observable_quality_dim": len(QUALITY_NAMES), "post_selection_observable_scale": [float(x) for x in q["scale"]],
++               "post_selection_observable_weights": [float(x) for x in q["weights"]], "post_selection_selected_bias": 0.0})
++    cfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.43-EAF-ICER-QUALITY-CONTROL"; Path(path).write_text(yaml.safe_dump(cfg, sort_keys=False)); return cfg
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--train-frontier-edges", required=True); ap.add_argument("--base-config", required=True)
++    for name in ["preserve", "rsmr", "epv", "quality", "future_mean", "future_robust"]: ap.add_argument(f"--output-{name.replace('_','-')}-config", dest=f"output_{name}_config", required=True)
++    ap.add_argument("--output-report", required=True); ap.add_argument("--output-scene-audit", required=True); a = ap.parse_args()
++    _, groups = _read_edges(Path(a.train_frontier_edges)); nested = _nested(groups, Path(a.output_scene_audit))
++    # V43 engineering gate: new prospective instrumentation must reproduce both
++    # frozen RSMR and V42 QUALITY exactly before any scientific attribution.
++    r = nested["rsmr_rank_aggregate"]; q = nested["quality_control_aggregate"]
++    er = {"selected_count":502,"selected_positive_count":221,"no_positive_opportunity_false_intervention_count":107,"catastrophic_count":28}
++    eq = {"selected_count":205,"selected_positive_count":129,"no_positive_opportunity_false_intervention_count":30,"catastrophic_count":13}
++    bad = any(int(r[k]) != v for k,v in er.items()) or abs(float(r["teacher_improvement_sum"])-43.29405361274824)>1e-9 or abs(float(r["positive_capture_rate"])-0.38501742160278746)>1e-12
++    bad = bad or any(int(q[k]) != v for k,v in eq.items()) or abs(float(q["teacher_improvement_sum"])-43.905547394411805)>1e-9 or abs(float(q["positive_capture_rate"])-0.22473867595818817)>1e-12 or abs(float(q["teacher_negative_rms"])-0.3126575113037135)>1e-12
++    if bad: raise RuntimeError("V43 ENGINEERING STOP: future-response instrumentation changed frozen RSMR/V42 QUALITY TRAIN signatures")
++    report = {
++        "audit":"v64_3_43_eaf_icer_cfrv_fit", "scientific_role":"TRAIN_only_frozen_RSMR_plus_current_quality_plus_runtime_counterfactual_future_response_distribution",
++        "frozen_train_scenes":len(groups), "direct_support_positive_training_scenes":len(_scene(groups)), "ridge_lambda":RIDGE_LAMBDA,
++        "observable_names":ALL_OBSERVABLE_NAMES,
++        "mechanism_hypothesis":"V42 proves current trajectory QUALITY is a real selective cardinal mediator but cannot close capture, while 17/28 catastrophes and 21/50 material positives have zero current RISK delta. V43 therefore keeps RSMR and the V42 QUALITY mechanism frozen, and adds a label-free prospective response distribution built from current-agent CV/CA/brake/yield/nonyield rollouts. Mean tests future horizon; frozen teacher-style mean+CVaR tests whether response-tail uncertainty is the missing deployment functional.",
++        "nested_crossfit":nested, "train_gate_pass":nested["train_gate_pass"],
++        "train_gate_contract":{"RSMR_is_sole_challenger_selector":True,"V42_QUALITY_replay_is_hard_engineering_gate":True,"future_modes_are_runtime_only_no_logged_future":True,"future_mean_vs_mean_CVaR_is_preregistered_ablation":True,"response_modes_and_CVaR_alpha_weight_inherited_from_frozen_teacher_config_no_sweep":True,"scene_equal_all_edge_fixed_lambda_1":True,"selected_policy_calibration_translation_only":True,"noop_false_intervention_reduction_fraction_min":NOOP_REDUCTION_MIN,"capture_tolerance":CAPTURE_TOL,"catastrophe_reduction_fraction_min":CATASTROPHE_REDUCTION_MIN,"all_test_folds_selected_sum_nonnegative":True,"selected_min":64,"positive_min":32,"no_threshold_lambda_alpha_mode_probability_topk_candidate_count_or_capacity_sweep":True}
++    }
++    Path(a.output_report).write_text(json.dumps(report, indent=2, sort_keys=True))
++    # Always emit diagnostic configs; scientific promotion still stops on failed TRAIN gate.
++    scene = _scene(groups); base = _base_cfg(a.base_config)
++    base["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["instrument_value_observables"] = True
++    base["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["instrument_future_response_observables"] = True
++    pcfg = yaml.safe_load(yaml.safe_dump(base, sort_keys=False)); pcfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"] = {"enabled":False}; Path(a.output_preserve_config).write_text(yaml.safe_dump(pcfg, sort_keys=False))
++    rsm = _fit_regret_structured_margin(scene, list(scene)); rsmcfg = _write_rsmr(base, a.output_rsmr_config, rsm); rsmcfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["instrument_future_response_observables"] = True; Path(a.output_rsmr_config).write_text(yaml.safe_dump(rsmcfg, sort_keys=False))
++    epv = _fit_zero_ridge(scene, list(scene), "epv")
++    # EPV config from V41 semantics, with future instrumentation kept off for exact control.
++    epcfg = yaml.safe_load(yaml.safe_dump(rsmcfg, sort_keys=False)); eic=epcfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]; eic["instrument_future_response_observables"]=False; esc=eic["selection_conditioned_intervention_recovery"]; esc.update({"post_selection_value_enabled":True,"post_selection_value_mode":"endpoint_potential_value","post_selection_endpoint_feature_names":list(epv["names"]),"post_selection_endpoint_feature_scale":[float(x) for x in epv["scale"]],"post_selection_endpoint_weights":[float(x) for x in epv["weights"]],"post_selection_endpoint_bias":0.0,"post_selection_selected_bias":0.0}); Path(a.output_epv_config).write_text(yaml.safe_dump(epcfg, sort_keys=False))
++    qfit = _fit_weighted_zero_ridge(scene, list(scene), lambda x:float(x["y"])-_epv_pred(x,epv), _quality_x, QUALITY_NAMES); _write_quality_control(rsmcfg,epv,qfit,a.output_quality_config)
++    mean = _fit_weighted_zero_ridge(scene, list(scene), lambda x:float(x["y"])-_quality_value(x,epv,qfit), lambda x:_future_x(x,FUTURE_MEAN_NAME), [FUTURE_MEAN_NAME])
++    robust = _fit_weighted_zero_ridge(scene, list(scene), lambda x:float(x["y"])-_quality_value(x,epv,qfit), lambda x:_future_x(x,FUTURE_ROBUST_NAME), [FUTURE_ROBUST_NAME])
++    _decorate(rsmcfg,epv,qfit,mean,"endpoint_potential_quality_future_response_mean",a.output_future_mean_config,"V64.3.43-EAF-ICER-CFRV-MEAN")
++    _decorate(rsmcfg,epv,qfit,robust,"endpoint_potential_quality_future_response_robust",a.output_future_robust_config,"V64.3.43-EAF-ICER-CFRV-RAW")
++    if not nested["train_gate_pass"]:
++        print(json.dumps(report, indent=2, sort_keys=True)); raise SystemExit(f"V64.3.43 CFRV nested TRAIN gate failed ({nested['failure_diagnosis']}); STOP before CAL/fresh selection")
++    print(json.dumps({"pass":True,"output_future_robust_config":a.output_future_robust_config}, sort_keys=True))
++
++if __name__ == "__main__": main()
+--- a/bdse/tools/calibrate_v64_3_43_eaf_icer_cfrv.py
++++ b/bdse/tools/calibrate_v64_3_43_eaf_icer_cfrv.py
+@@ -0,0 +1,52 @@
++from __future__ import annotations
++import argparse, hashlib, json
++from pathlib import Path
++import numpy as np
++import yaml
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import FEATURE_NAMES, _select
++from bdse.tools.fit_v64_3_34_eaf_icer_rsmr import _structured_scores
++from bdse.tools.fit_v64_3_38_eaf_icer_davr import MIN_VALUE_CAL_PROPOSALS
++from bdse.tools.fit_v64_3_39_eaf_icer_cfsr import _fit_translation
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import _pred as _epv_pred
++from bdse.tools.fit_v64_3_43_eaf_icer_cfrv import _scene, _quality_x, _future_x, _lin, FUTURE_ROBUST_NAME
++
++EXPECTED_SCENES=500
++
++def _tokens(p): return [str(json.loads(x).get('scenario_token','')) for x in Path(p).read_text().splitlines() if x.strip()]
++
++def main():
++    ap=argparse.ArgumentParser(); ap.add_argument('--calibration-rows',required=True); ap.add_argument('--calibration-edges',required=True); ap.add_argument('--future-robust-config',required=True); ap.add_argument('--output-main-config',required=True); ap.add_argument('--output-report',required=True); a=ap.parse_args()
++    rt=_tokens(a.calibration_rows)
++    if len(rt)!=EXPECTED_SCENES or len(set(rt))!=EXPECTED_SCENES: raise SystemExit('V43 CAL rows must be 500 unique scenes')
++    groups={t:[] for t in rt}; allowed=set(rt)
++    for line in Path(a.calibration_edges).read_text().splitlines():
++        if not line.strip(): continue
++        r=json.loads(line); t=str(r.get('scenario_token',''))
++        if t not in allowed: raise SystemExit('V43 CAL edge outside row set')
++        groups[t].append(r)
++    scene=_scene(groups)
++    cfg=yaml.safe_load(Path(a.future_robust_config).read_text()); sc=cfg['runtime']['decisive_frontier_value']['incumbent_contrastive_extremal_recovery']['selection_conditioned_intervention_recovery']
++    if str(sc.get('post_selection_value_mode',''))!='endpoint_potential_quality_future_response_robust': raise SystemExit('V43 CAL requires raw future-response robust config')
++    rmean=np.asarray(sc['feature_mean'],float); rstd=np.asarray(sc['feature_std'],float); rw=np.asarray(sc['weights'],float)
++    if list(sc.get('feature_names',[]))!=FEATURE_NAMES or rmean.size!=len(FEATURE_NAMES) or rstd.size!=len(FEATURE_NAMES) or rw.size!=len(FEATURE_NAMES) or np.max(np.abs(rmean))>1e-12 or abs(float(sc.get('bias',0.0)))>1e-12: raise SystemExit('V43 CAL frozen RSMR schema invalid')
++    rsm=(rw,rstd,{'source':'frozen_full_TRAIN_RSMR'})
++    epv={'mode':'epv','names':list(sc['post_selection_endpoint_feature_names']),'scale':np.asarray(sc['post_selection_endpoint_feature_scale'],float),'weights':np.asarray(sc['post_selection_endpoint_weights'],float),'bias':0.0}
++    q={'names':list(sc['post_selection_quality_observable_names']),'scale':np.asarray(sc['post_selection_quality_observable_scale'],float),'weights':np.asarray(sc['post_selection_quality_observable_weights'],float),'bias':0.0}
++    response={'names':[str(sc['post_selection_future_response_observable_name'])],'scale':np.asarray([float(sc['post_selection_future_response_scale'])]),'weights':np.asarray([float(sc['post_selection_future_response_weight'])]),'bias':0.0}
++    if response['names'][0]!=FUTURE_ROBUST_NAME: raise SystemExit('V43 CAL robust response name mismatch')
++    ys=[]; pv=[]; used=[]
++    for t in rt:
++        ss=scene.get(t,[])
++        if not ss: continue
++        idx=_select(ss,_structured_scores(ss,rsm))
++        if idx is None: continue
++        x=ss[idx]; pred=float(_epv_pred(x,epv)+_lin(x,q,_quality_x(x))+_lin(x,response,_future_x(x,FUTURE_ROBUST_NAME)))
++        ys.append(float(x['y'])); pv.append(pred); used.append(t)
++    if len(used)<MIN_VALUE_CAL_PROPOSALS: raise SystemExit(f'V43 CAL proposals {len(used)} < {MIN_VALUE_CAL_PROPOSALS}')
++    fit=_fit_translation(np.asarray(pv),np.asarray(ys),'quality_plus_runtime_future_response_robust')
++    sc['post_selection_value_mode']='endpoint_potential_quality_future_response_robust_shift'; sc['post_selection_selected_bias']=float(fit['selected_policy_bias']); sc['post_selection_value_training']='dense_all_TRAIN_quality_plus_runtime_future_response_robust_plus_independent_CAL500_unit_slope_translation'
++    cfg.setdefault('metadata',{})['algorithm_version']='V64.3.43-EAF-ICER-CFRV'; cfg.setdefault('provenance',{})['algorithm_version']='V64.3.43-EAF-ICER-CFRV'; cfg.setdefault('experiment',{})['name']='v64_3_43_eaf_icer_cfrv'; cfg['experiment']['algorithm']='V64.3.43 counterfactual future-response valuation'
++    Path(a.output_main_config).write_text(yaml.safe_dump(cfg,sort_keys=False))
++    rep={'audit':'v64_3_43_cfrv_independent_CAL500_translation','selected_policy_proposal_count':len(used),'selected_policy_proposal_count_min':MIN_VALUE_CAL_PROPOSALS,'calibration_tokens_sha256':hashlib.sha256(('\n'.join(rt)+'\n').encode()).hexdigest(),'selected_policy_tokens_sha256':hashlib.sha256(('\n'.join(used)+'\n').encode()).hexdigest(),'translation_fit':fit,'causal_contract':'RSMR winner and full-TRAIN QUALITY+future-response valuation are frozen; CAL500 learns unit-slope translation only.'}
++    Path(a.output_report).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n'); print(json.dumps({'pass':True,'selected_policy_proposals':len(used),'output':a.output_main_config},sort_keys=True))
++if __name__=='__main__':main()
+--- a/bdse/tools/check_v64_3_43_eaf_icer_cfrv_split.py
++++ b/bdse/tools/check_v64_3_43_eaf_icer_cfrv_split.py
+@@ -0,0 +1,30 @@
++from __future__ import annotations
++import argparse,json,math
++from pathlib import Path
++from bdse.tools.check_v64_3_39_eaf_icer_cfsr_split import EPS,_containment,_f,_icer_edge_diag,_load_rows,_mechanism_gate,_metric_pack,_query_diag,_replacement_tail_diag,_selected_policy_diag,_structural
++
++def main():
++    ap=argparse.ArgumentParser(); tags=['raw','v20','preserve','rsmr','epv_raw','quality','future_mean','future_robust','cfrv']; ap.add_argument('--split-name',required=True)
++    for tag in tags:
++        x=tag.replace('_','-'); ap.add_argument(f'--{x}-metrics',dest=f'{tag}_metrics',required=True); ap.add_argument(f'--{x}-rows',dest=f'{tag}_rows',required=True)
++        if tag!='raw': ap.add_argument(f'--{x}-edges',dest=f'{tag}_edges',required=True)
++    ap.add_argument('--output',required=True); a=ap.parse_args()
++    metrics={t:json.load(open(getattr(a,t+'_metrics'))) for t in tags}; rows={t:_load_rows(getattr(a,t+'_rows')) for t in tags}; toks=set(rows['raw'])
++    if len(toks)!=500 or any(set(rows[t])!=toks for t in tags[1:]): raise SystemExit('STOP DATA: V43 arms must contain exact paired 500 scenes')
++    flagged={t for t in toks if _f(rows['raw'][t],'all_actions_safety_flagged_rate',0)>=.5}; safe=toks-flagged; valtags=tags[2:]
++    q={t:_query_diag(rows['v20'],rows[t],toks) for t in valtags}; structural={t:_structural(rows[t],rows['raw'],flagged) for t in ['v20']+valtags}; cont={t:_containment(rows['rsmr'],rows[t],safe) for t in ['epv_raw','quality','future_mean','future_robust','cfrv']}
++    eng=all(v['all_query_counts_exact_scene_parity'] for v in q.values()) and all((not flagged) or (structural[t]['final_identity_vs_raw']==1.0 and structural[t]['icer_structural_delegation_rate']==1.0) for t in valtags) and all(x['monotone_selected_policy_containment_valid'] for x in cont.values())
++    edge={t:_icer_edge_diag(Path(getattr(a,t+'_edges')),safe) for t in tags if t!='raw'}; policy={t:_selected_policy_diag(getattr(a,t+'_edges'),safe) for t in ['rsmr','epv_raw','quality','future_mean','future_robust','cfrv']}; gates={t:_mechanism_gate(policy[t],policy['rsmr']) for t in ['epv_raw','quality','future_mean','future_robust','cfrv']}; M={t:_metric_pack(metrics[t]) for t in tags}; tail={t:_replacement_tail_diag(rows['raw'],rows[t],getattr(a,t+'_edges'),safe) for t in tags if t!='raw'}
++    pc=float(edge['preserve']['direct_incumbent_opportunity_capture_rate']); mc=float(edge['cfrv']['direct_incumbent_opportunity_capture_rate']); coverage=math.isfinite(pc) and math.isfinite(mc) and mc>=pc+.03-EPS
++    endp=M['cfrv']['match']>=M['preserve']['match']-.002 and M['cfrv']['regret']<=M['preserve']['regret']*1.005 and M['cfrv']['match']>=M['v20']['match']-.002 and M['cfrv']['regret']<=M['v20']['regret']*1.005; full=bool(eng and gates['cfrv']['pass'] and coverage and endp)
++    if not eng:nxt='STOP_fix_V43_engineering_before_scientific_interpretation'
++    elif gates['quality']['pass'] and not gates['future_robust']['pass']:nxt='V42_quality_generalizes_but_runtime_response_model_does_not_discard_CFRV'
++    elif gates['future_mean']['pass'] and not gates['future_robust']['pass']:nxt='future_horizon_signal_is_real_but_mean_CVaR_functional_is_misspecified_keep_mean_branch'
++    elif not gates['cfrv']['existence_and_capture']:nxt='runtime_response_distribution_still_does_not_close_zero_boundary_require_plan_conditioned_behavior_or_occupancy_observable'
++    elif not gates['cfrv']['hard_tail']:nxt='future_response_recovers_capture_but_downside_tail_still_requires_richer_behavior_response_support_not_threshold_tuning'
++    elif not coverage:nxt='CFRV_direct_gate_passes_but_gain_over_preserve_insufficient'
++    elif not endp:nxt='CFRV_direct_gate_passes_but_endpoint_noninferiority_fails'
++    else:nxt='if_second_fresh_block_also_passes_freeze_CFRV_and_run_one_full_validation_plus_official_nuPlan_closed_loop'
++    rep={'audit':'v64_3_43_eaf_icer_cfrv_split','split_name':a.split_name,'full_split_pass':full,'engineering_valid':eng,'mechanism_gates':gates,'cfrv_capture_gain_over_preserve':mc-pc if math.isfinite(mc) and math.isfinite(pc) else float('nan'),'endpoint_noninferior':endp,'next_action':nxt,'query_parity':q,'structural':structural,'containment':cont,'edge_diagnostics':edge,'selected_policy_diagnostics':policy,'direct_selected_path_tail':tail,'metrics':M,'frozen_contract':{'RSMR_winner_frozen':True,'V42_QUALITY_control_frozen':True,'future_response_modes_runtime_only':True,'mean_vs_mean_CVaR_ablation_preregistered':True,'CAL500_translation_unit_slope':True,'no_second_best_fallback':True,'no_AB_pooling':True}}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n'); print(json.dumps(rep,indent=2,sort_keys=True))
++if __name__=='__main__':main()
+--- a/bdse/tools/check_v64_3_43_eaf_icer_cfrv_screen.py
++++ b/bdse/tools/check_v64_3_43_eaf_icer_cfrv_screen.py
+@@ -0,0 +1,10 @@
++from __future__ import annotations
++import argparse,json
++from pathlib import Path
++
++def main():
++    ap=argparse.ArgumentParser(); ap.add_argument('--split-a',required=True); ap.add_argument('--split-b',required=True); ap.add_argument('--value-report',required=True); ap.add_argument('--fit-report',required=True); ap.add_argument('--output',required=True); a=ap.parse_args()
++    A=json.load(open(a.split_a));B=json.load(open(a.split_b));F=json.load(open(a.fit_report));C=json.load(open(a.value_report)); eng=bool(A.get('engineering_valid') and B.get('engineering_valid')); train=bool(F.get('train_gate_pass')); cal=int(C.get('selected_policy_proposal_count',0))>=64; both=bool(A.get('full_split_pass') and B.get('full_split_pass'))
++    rep={'audit':'v64_3_43_eaf_icer_cfrv_double_fresh_screen','engineering_valid_both':eng,'train_nested_counterfactual_future_response_gate_pass':train,'independent_CAL500_translation_fit_valid':cal,'double_fresh_promotion_pass':both,'scientific_conclusion':'CFRV_reproduces_on_double_fresh' if both else ('engineering_invalid_stop' if not eng else 'CFRV_not_promoted_at_least_one_mechanism_or_fresh_block_gate_fails'),'next_action':'freeze_CFRV_and_run_one_independent_full_validation_plus_official_nuPlan_closed_loop' if both else 'STOP_do_not_pool_AB_or_sweep_parameters_use_QUALITY_vs_FUTURE_MEAN_vs_FUTURE_ROBUST_failure_slice_for_next_behavior_observable','split_A':A,'split_B':B,'fit':F,'calibration':C}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n'); print(json.dumps(rep,indent=2,sort_keys=True))
++if __name__=='__main__':main()
+--- a/bdse/tests/test_v64_3_43_eaf_icer_cfrv.py
++++ b/bdse/tests/test_v64_3_43_eaf_icer_cfrv.py
+@@ -0,0 +1,66 @@
++import numpy as np
++import pytest
++
++from bdse.data.cache_schema import CandidateBank, RuntimeFeatures
++from bdse.planner.response_value_observables import FUTURE_RESPONSE_OBSERVABLE_NAMES, runtime_future_response_observable_costs
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
++from bdse.planner.value_observables import QUALITY_NAMES, VALUE_OBSERVABLE_NAMES, runtime_value_observable_costs
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
++
++
++def _bank():
++    T=41; t=np.linspace(0.1,4.1,T,dtype=np.float32)
++    tr=np.zeros((2,T,5),dtype=np.float32)
++    # candidate 0 remains on the interaction centerline; 1 moves laterally away.
++    tr[0,:,0]=4.0*t; tr[0,:,3]=4.0
++    tr[1,:,0]=4.0*t; tr[1,:,1]=3.5; tr[1,:,3]=4.0
++    tr[:,:,4]=t
++    return CandidateBank(trajectories=tr,valid_mask=np.ones(2,dtype=bool),maneuver_ids=np.zeros(2,dtype=np.int64),theta=[{},{}],dynamic_flags=[{},{}],metadata=[{},{}])
++
++
++def _runtime():
++    cur=np.array([[12.0,0.0,0.0,2.0,0.0,2.0,0.0,4.8,2.0,1.0]],dtype=np.float32)
++    return RuntimeFeatures(ego_history=np.zeros((1,5),dtype=np.float32),agent_history=cur[:,None,:].copy(),agent_valid=np.ones(1,dtype=bool),current_agents=cur,traffic_lights=[],map_features={'route_centerline':np.array([[0.,0.],[80.,0.]],dtype=np.float32),'route_corridor_width':4.0,'stop_lines':[],'speed_limit_mps':20.0},route_roadblock_ids=[],mission_goal=None)
++
++
++def _cfg(instrument=True):
++    return {'candidate':{'step_s':0.1,'horizon_s':8.0},'teacher':{'robust_modes':{'logged':{'enabled':True,'prob':.35},'cv':{'enabled':True,'prob':.2},'ca':{'enabled':True,'prob':.1},'brake':{'enabled':True,'prob':.15},'yield':{'enabled':True,'prob':.1},'nonyield':{'enabled':True,'prob':.1}},'risk_aggregation':{'cvar_alpha':.9,'cvar_weight':.4}},'runtime_safety':{'flag_mode':'hard','hard_check_horizon_s':4.0,'soft_check_horizon_s':4.0},'runtime':{'decisive_frontier_value':{'incumbent_contrastive_extremal_recovery':{'instrument_future_response_observables':instrument}}}}
++
++
++def test_future_response_observables_are_finite_runtime_only_and_tail_ge_mean():
++    x,n=runtime_future_response_observable_costs(_runtime(),_bank(),_cfg())
++    assert n==FUTURE_RESPONSE_OBSERVABLE_NAMES
++    assert x.shape==(2,3) and np.all(np.isfinite(x))
++    assert np.all(x[:,1] >= x[:,0]-1e-8)
++    # laterally separated candidate must not be riskier under every response mode.
++    assert x[1,2] <= x[0,2] + 1e-8
++
++
++def test_v43_instrumentation_appends_without_changing_v42_prefix():
++    c0=_cfg(False); c1=_cfg(True)
++    x0,n0=runtime_value_observable_costs(_runtime(),_bank(),c0)
++    x1,n1=runtime_value_observable_costs(_runtime(),_bank(),c1)
++    assert n0==VALUE_OBSERVABLE_NAMES
++    assert n1==VALUE_OBSERVABLE_NAMES+FUTURE_RESPONSE_OBSERVABLE_NAMES
++    assert np.max(np.abs(x0-x1[:,:len(n0)])) < 1e-12
++
++
++def _runtime_cfg(mode, response_name):
++    base=list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES); fn=[f'delta::{n}' for n in base]+['delta::support_logit']
++    names=VALUE_OBSERVABLE_NAMES+FUTURE_RESPONSE_OBSERVABLE_NAMES
++    return {'feature_names':fn,'feature_mean':[0.0]*19,'feature_std':[1.0]*19,'weights':[0.0]*19,'bias':0.0,'base_feature_names':base,
++        'post_selection_value_enabled':True,'post_selection_value_mode':mode,'post_selection_endpoint_feature_names':EPV_NAMES,'post_selection_endpoint_feature_scale':[1.0]*38,'post_selection_endpoint_weights':[0.0]*38,'post_selection_endpoint_bias':0.0,
++        'post_selection_observable_names':names,'post_selection_quality_observable_names':QUALITY_NAMES,'post_selection_quality_observable_scale':[1.0]*3,'post_selection_quality_observable_weights':[1.0]*3,
++        'post_selection_future_response_observable_name':response_name,'post_selection_future_response_scale':1.0,'post_selection_future_response_weight':1.0,'post_selection_selected_bias':0.0}
++
++
++def test_v43_runtime_value_uses_incumbent_minus_candidate_and_never_changes_proposal():
++    raw_names=list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES); raw=np.zeros((2,len(raw_names))); sup=np.zeros(2); X=np.zeros((2,19)); mu=np.zeros(2)
++    names=VALUE_OBSERVABLE_NAMES+FUTURE_RESPONSE_OBSERVABLE_NAMES; obs=np.zeros((2,len(names)))
++    obs[0,:3]=2.0; obs[1,:3]=1.0
++    ridx=names.index('future_response_robust_agent_cost'); obs[0,ridx]=3.0; obs[1,ridx]=1.0
++    c=_runtime_cfg('endpoint_potential_quality_future_response_robust','future_response_robust_agent_cost')
++    v,feat,vn=_icer_post_selection_value(1,mu,X,c['feature_names'],c,raw_feat=raw,raw_feature_names=raw_names,support_logits=sup,legacy_action=0,value_observable_matrix=obs,value_observable_names=names)
++    assert v==pytest.approx(5.0)  # 3 quality improvements + 2 robust-response improvement
++    assert feat.shape[0]==38+3+1
++    assert any('future_response_improvement' in x for x in vn)
+--- a/RUN_V64_3_43_EAF_ICER_CFRV_SCREEN_2GPU.sh
++++ b/RUN_V64_3_43_EAF_ICER_CFRV_SCREEN_2GPU.sh
+@@ -0,0 +1,144 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export V42_ROOT="${V42_ROOT:-outputs_v64_3_42_eaf_icer_ovdr_screen_2gpu_v1}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_43_eaf_icer_cfrv_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_32_design_exclude_v64_3_30_3_screen_tokens.txt}"
++export FROZEN_TRAIN_TOKENS="${FROZEN_TRAIN_TOKENS:-bdse/configs/v64_3_29_frozen_v28_train_3000_tokens.txt}"
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.43-eaf-icer-cfrv-cal500-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"; V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++V42_FIT="$V42_ROOT/provenance/v64_3_42_ovdr_fit.json"; V42_AUDIT="$V42_ROOT/provenance/v64_3_42_ovdr_train_scene_audit.csv"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"; TIMING="$OUT_ROOT/provenance/v64_3_43_stage_timing.tsv"; : > "$TIMING"; ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }; stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >> "$TIMING"; }
++for f in "$RAW_CONFIG" "$V20_CONFIG" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$V42_FIT" "$V42_AUDIT"; do [[ -s "$f" ]] || { echo "STOP: missing $f" >&2; exit 2; }; done
++[[ -d "$BDSE_TRAIN_CACHE" && -d "$BDSE_VAL_CACHE" ]] || { echo 'STOP: missing train/val cache' >&2; exit 2; }
++
++stage_start exact_v42_failure_reproduction_and_fresh_unspent_guard
++python - "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$V42_FIT" "$V42_AUDIT" "$V42_ROOT" <<'PY'
++import csv,hashlib,json,sys
++from pathlib import Path
++ex=[x.strip() for x in open(sys.argv[1]) if x.strip()]; tr=[x.strip() for x in open(sys.argv[2]) if x.strip()]
++if len(ex)!=10700 or len(set(ex))!=10700 or hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()!='041ec824756777576391756ef3721617459bb0c0a45f7f43226b52254d951473': raise SystemExit('STOP DATA: V43 design exclusion changed')
++if len(tr)!=3000 or len(set(tr))!=3000 or hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4': raise SystemExit('STOP DATA: V43 frozen TRAIN changed')
++r=json.load(open(sys.argv[3])); n=r.get('nested_crossfit',{})
++expected={
++ 'rsmr_rank_aggregate':(502,221,107,28,43.29405361274824,.38501742160278746,.3556880321206127),
++ 'endpoint_potential_raw_aggregate':(203,118,39,15,25.968878782061825,.20557491289198607,.45433294346735587),
++ 'quality_observable_aggregate':(205,129,30,13,43.905547394411805,.22473867595818817,.3126575113037135),
++ 'risk_observable_aggregate':(205,122,40,11,43.30007796503766,.21254355400696864,.39012413519033806),
++ 'joint_observable_raw_aggregate':(186,109,37,11,40.77749100539883,.18989547038327526,.4243672786579693),
++ 'joint_observable_main_aggregate':(285,129,63,16,41.24635197337058,.22473867595818817,.38938403580303316),
++}
++checks=[r.get('frozen_train_scenes')==3000,r.get('direct_support_positive_training_scenes')==782,r.get('train_gate_pass') is False,n.get('train_gate_pass') is False,n.get('monotone_frozen_winner_contract_valid') is True]
++for k,(s,p,no,cat,sm,cap,neg) in expected.items():
++ d=n.get(k,{})
++ checks += [d.get('selected_count')==s,d.get('selected_positive_count')==p,d.get('no_positive_opportunity_false_intervention_count')==no,d.get('catastrophic_count')==cat,abs(float(d.get('teacher_improvement_sum',999))-sm)<1e-9,abs(float(d.get('positive_capture_rate',999))-cap)<1e-12,abs(float(d.get('teacher_negative_rms',999))-neg)<1e-9]
++if not all(checks): raise SystemExit('STOP V43: exact V42 TRAIN signature changed')
++rows=list(csv.DictReader(open(sys.argv[4],newline='')))
++if len(rows)!=782 or len({r['scenario_token'] for r in rows})!=782: raise SystemExit('STOP V43: V42 scene audit changed')
++root=Path(sys.argv[5]); spent=[root/'provenance/val_screen_cal500_fresh1500_tokens.txt',root/'provenance/val_screen_calibration_500_tokens.txt',root/'provenance/val_screen_fresh_A_tokens.txt',root/'provenance/val_screen_fresh_B_tokens.txt']
++if any(p.exists() and p.stat().st_size>0 for p in spent): raise SystemExit('STOP V43: V42 spent CAL/fresh')
++print('PASS V43 prerequisite: exact V42 scientific failure reproduced and fresh unspent.')
++PY
++stage_end
++
++stage_start prerequisites_and_regression
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_43_CFRV --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_43.json" > "$OUT_ROOT/logs/v64_3_13_eaf_dmvr_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_43.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False): raise SystemExit('STOP prerequisites')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"; fi; export EAF_CKPT; [[ -s "$EAF_CKPT" ]] || { echo "STOP: missing EAF checkpoint" >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_13_eaf_dmvr.py bdse/tests/test_v64_3_14_eaf_ocfi.py bdse/tests/test_v64_3_15_eaf_eair.py \
++  bdse/tests/test_v64_3_16_eaf_raer.py bdse/tests/test_v64_3_17_eaf_daler.py bdse/tests/test_v64_3_18_eaf_dacer.py \
++  bdse/tests/test_v64_3_19_eaf_icer.py bdse/tests/test_v64_3_20_eaf_icer_dc.py bdse/tests/test_v64_3_21_eaf_icer_mcr.py \
++  bdse/tests/test_v64_3_22_eaf_icer_tcr.py bdse/tests/test_v64_3_23_eaf_icer_rcr.py bdse/tests/test_v64_3_24_eaf_icer_arc.py \
++  bdse/tests/test_v64_3_25_eaf_icer_drc.py bdse/tests/test_v64_3_26_eaf_icer_sarc.py bdse/tests/test_v64_3_27_eaf_icer_trcc.py \
++  bdse/tests/test_v64_3_28_eaf_icer_ptmc.py bdse/tests/test_v64_3_29_eaf_icer_fcr.py bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py \
++  bdse/tests/test_v64_3_30_3_eaf_icer_fbic_pure_auditfix.py bdse/tests/test_v64_3_30_eaf_icer_fbic.py bdse/tests/test_v64_3_31_eaf_icer_scir.py \
++  bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py bdse/tests/test_v64_3_32_eaf_icer_ssir.py bdse/tests/test_v64_3_33_eaf_icer_spcr.py \
++  bdse/tests/test_v64_3_34_eaf_icer_rsmr.py bdse/tests/test_v64_3_35_eaf_icer_fbcsr.py bdse/tests/test_v64_3_36_eaf_icer_sgrr.py \
++  bdse/tests/test_v64_3_37_eaf_icer_pvr.py bdse/tests/test_v64_3_38_eaf_icer_davr.py bdse/tests/test_v64_3_39_eaf_icer_cfsr.py \
++  bdse/tests/test_v64_3_40_eaf_icer_sdfr.py bdse/tests/test_v64_3_41_eaf_icer_epvr.py bdse/tests/test_v64_3_42_eaf_icer_ovdr.py \
++  bdse/tests/test_v64_3_43_eaf_icer_cfrv.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++stage_end
++
++stage_start train_counterfactual_future_response_frontier_replay
++TRAIN_INSTRUMENT_CONFIG="$OUT_ROOT/provenance/v64_3_43_train_instrument_v20.yaml"; TRAIN_EDGES="$OUT_ROOT/provenance/train_v20_counterfactual_future_response_edges.jsonl"; TRAIN_COMPLETE_MARKER="$OUT_ROOT/provenance/v64_3_43_train_counterfactual_future_response_complete.ok"
++python - "$V20_CONFIG" "$TRAIN_INSTRUMENT_CONFIG" <<'PY'
++import sys,yaml
++src,out=sys.argv[1:3]; c=yaml.safe_load(open(src)); ic=c.setdefault('runtime',{}).setdefault('decisive_frontier_value',{}).setdefault('incumbent_contrastive_extremal_recovery',{}); ic['instrument_value_observables']=True; ic['instrument_future_response_observables']=True; c.setdefault('metadata',{})['v64_3_43_train_instrument_only']=True; open(out,'w').write(yaml.safe_dump(c,sort_keys=False))
++PY
++if [[ -n "${V43_TRAIN_EDGES:-}" && -s "${V43_TRAIN_EDGES}" ]]; then TRAIN_EDGES="$V43_TRAIN_EDGES"; printf 'reuse\t%s\n' "$TRAIN_EDGES" > "$OUT_ROOT/provenance/v64_3_43_train_frontier_source.tsv";
++elif [[ -s "$TRAIN_EDGES" && -s "$TRAIN_COMPLETE_MARKER" ]]; then printf 'reuse\t%s\n' "$TRAIN_EDGES" > "$OUT_ROOT/provenance/v64_3_43_train_frontier_source.tsv";
++else
++ printf 'replay\t%s\n' "$TRAIN_EDGES" > "$OUT_ROOT/provenance/v64_3_43_train_frontier_source.tsv"
++ CUDA_VISIBLE_DEVICES="$GPU0" python -m bdse.experiments.evaluate_open_loop --config "$TRAIN_INSTRUMENT_CONFIG" --checkpoint "$EAF_CKPT" --split train --preprocessed-dir "$BDSE_TRAIN_CACHE" --max-scenarios 3000 --scenario-token-file "$FROZEN_TRAIN_TOKENS" --require-all-scenario-tokens --output "$OUT_ROOT/provenance/train_v20_counterfactual_future_response_metrics.json" --frontier-edge-output "$TRAIN_EDGES" --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/train_counterfactual_future_response_frontier_replay.out" 2>&1
++ printf 'complete\n' > "$TRAIN_COMPLETE_MARKER"
++fi
++python - "$TRAIN_EDGES" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import json,sys,math
++from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES
++from bdse.planner.response_value_observables import FUTURE_RESPONSE_OBSERVABLE_NAMES
++names=list(VALUE_OBSERVABLE_NAMES)+list(FUTURE_RESPONSE_OBSERVABLE_NAMES); want={x.strip() for x in open(sys.argv[2]) if x.strip()}; seen=set(); rows=0
++for line in open(sys.argv[1]):
++ if not line.strip(): continue
++ r=json.loads(line); seen.add(str(r.get('scenario_token',''))); rows+=1
++ for n in names:
++  k='icer_value_observable_'+n
++  if k not in r or not math.isfinite(float(r[k])): raise SystemExit(f'STOP V43 TRAIN: missing/nonfinite observable field {k}')
++if seen!=want: raise SystemExit(f'STOP V43 TRAIN: frontier scenes {len(seen)} != frozen tokens {len(want)}')
++print(f'PASS V43 TRAIN prospective-response frontier: {len(seen)} scenes / {rows} edge rows / {len(names)} observables')
++PY
++stage_end
++
++stage_start train_nested_cfrv_gate
++PRESERVE_CONFIG="$OUT_ROOT/provenance/v64_3_43_preserve.yaml"; RSMR_CONFIG="$OUT_ROOT/provenance/v64_3_43_rsmr.yaml"; EPV_CONFIG="$OUT_ROOT/provenance/v64_3_43_epv_raw.yaml"; QUALITY_CONFIG="$OUT_ROOT/provenance/v64_3_43_quality.yaml"; FUTURE_MEAN_CONFIG="$OUT_ROOT/provenance/v64_3_43_future_mean.yaml"; FUTURE_ROBUST_CONFIG="$OUT_ROOT/provenance/v64_3_43_future_robust_raw.yaml"; FIT_REPORT="$OUT_ROOT/provenance/v64_3_43_cfrv_fit.json"; TRAIN_SCENE_AUDIT="$OUT_ROOT/provenance/v64_3_43_cfrv_train_scene_audit.csv"
++set +e
++python -m bdse.tools.fit_v64_3_43_eaf_icer_cfrv --train-frontier-edges "$TRAIN_EDGES" --base-config "$V20_CONFIG" --output-preserve-config "$PRESERVE_CONFIG" --output-rsmr-config "$RSMR_CONFIG" --output-epv-config "$EPV_CONFIG" --output-quality-config "$QUALITY_CONFIG" --output-future-mean-config "$FUTURE_MEAN_CONFIG" --output-future-robust-config "$FUTURE_ROBUST_CONFIG" --output-report "$FIT_REPORT" --output-scene-audit "$TRAIN_SCENE_AUDIT" 2>&1 | tee "$OUT_ROOT/logs/v64_3_43_cfrv_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}; set -e; stage_end; [[ $FIT_STATUS -eq 0 ]] || exit "$FIT_STATUS"
++
++stage_start calibration_and_fresh_selection
++TOK1500="$OUT_ROOT/provenance/val_screen_cal500_fresh1500_tokens.txt"; TOKCAL="$OUT_ROOT/provenance/val_screen_calibration_500_tokens.txt"; TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"; TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"; SELECT_EXCLUDE="$OUT_ROOT/provenance/v64_3_43_selection_exclude.txt"; cat "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" | awk 'NF && !seen[$0]++' > "$SELECT_EXCLUDE"
++python -m bdse.tools.select_fresh_preprocessed_tokens --preprocessed-dir "$BDSE_VAL_CACHE" --split val --exclude-tokens "$SELECT_EXCLUDE" --count 1500 --hash-seed "$FRESH_HASH_SEED" --output "$TOK1500" --audit-output "$OUT_ROOT/provenance/v64_3_43_cal500_fresh1500_selection_audit.json" > "$OUT_ROOT/logs/fresh_token_selection.out"; head -n500 "$TOK1500">"$TOKCAL"; sed -n '501,1000p' "$TOK1500">"$TOKA"; tail -n500 "$TOK1500">"$TOKB"
++python - "$TOK1500" "$TOKCAL" "$TOKA" "$TOKB" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import sys
++allv=[x.strip() for x in open(sys.argv[1]) if x.strip()]; cal=[x.strip() for x in open(sys.argv[2]) if x.strip()]; A=[x.strip() for x in open(sys.argv[3]) if x.strip()]; B=[x.strip() for x in open(sys.argv[4]) if x.strip()]; ex={x.strip() for x in open(sys.argv[5]) if x.strip()}; tr={x.strip() for x in open(sys.argv[6]) if x.strip()}
++if len(allv)!=1500 or len(set(allv))!=1500 or any(len(x)!=500 or len(set(x))!=500 for x in [cal,A,B]): raise SystemExit('STOP DATA: V43 CAL/A/B cardinality')
++if set(cal)&set(A) or set(cal)&set(B) or set(A)&set(B) or set(allv)&ex or set(allv)&tr: raise SystemExit('STOP DATA: V43 CAL/A/B independence')
++print('PASS V43 label-free independent CAL500+A500+B500 selection')
++PY
++stage_end
++run_eval_tok(){ local gpu="$1" cfg="$2" tok="$3" tag="$4"; CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop --config "$cfg" --checkpoint "$EAF_CKPT" --split val --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios 500 --scenario-token-file "$tok" --require-all-scenario-tokens --output "$OUT_ROOT/provenance/${tag}_metrics.json" --per-sample-output "$OUT_ROOT/provenance/${tag}_rows.jsonl" --frontier-edge-output "$OUT_ROOT/provenance/${tag}_edges.jsonl" --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${tag}.out" 2>&1; }
++stage_start independent_CAL500_rsmr_replay; run_eval_tok "$GPU0" "$RSMR_CONFIG" "$TOKCAL" cal_rsmr; stage_end
++stage_start independent_CAL500_translation_fit
++CFRV_CONFIG="$OUT_ROOT/provenance/v64_3_43_cfrv.yaml"; VALUE_REPORT="$OUT_ROOT/provenance/v64_3_43_value_fit.json"; python -m bdse.tools.calibrate_v64_3_43_eaf_icer_cfrv --calibration-rows "$OUT_ROOT/provenance/cal_rsmr_rows.jsonl" --calibration-edges "$OUT_ROOT/provenance/cal_rsmr_edges.jsonl" --future-robust-config "$FUTURE_ROBUST_CONFIG" --output-main-config "$CFRV_CONFIG" --output-report "$VALUE_REPORT" | tee "$OUT_ROOT/logs/v64_3_43_value_fit.out"; stage_end
++for sp in A B; do tok="$TOKA"; [[ "$sp" == B ]] && tok="$TOKB"; declare -a tags=(raw v20 preserve rsmr epv_raw quality future_mean future_robust cfrv); declare -a cfgs=("$RAW_CONFIG" "$V20_CONFIG" "$PRESERVE_CONFIG" "$RSMR_CONFIG" "$EPV_CONFIG" "$QUALITY_CONFIG" "$FUTURE_MEAN_CONFIG" "$FUTURE_ROBUST_CONFIG" "$CFRV_CONFIG"); for i in 0 2 4 6 8; do stage_start "fresh_${sp}_wave_$i"; run_eval_tok "$GPU0" "${cfgs[$i]}" "$tok" "${sp}_${tags[$i]}" & p0=$!; if (( i+1 < 9 )); then run_eval_tok "$GPU1" "${cfgs[$((i+1))]}" "$tok" "${sp}_${tags[$((i+1))]}" & p1=$!; fi; s=0; wait "$p0"||s=1; if (( i+1 < 9 )); then wait "$p1"||s=1; fi; [[ $s -eq 0 ]]||exit 2; stage_end; done; done
++stage_start paired_identity
++python - "$OUT_ROOT/provenance" "$TOKA" "$TOKB" <<'PY'
++import json,sys,pathlib
++root=pathlib.Path(sys.argv[1]); tags=['raw','v20','preserve','rsmr','epv_raw','quality','future_mean','future_robust','cfrv']
++for sp,tf in [('A',sys.argv[2]),('B',sys.argv[3])]:
++ want=[x.strip() for x in open(tf) if x.strip()]; orders=[]
++ for tag in tags:
++  rs=[json.loads(x) for x in open(root/f'{sp}_{tag}_rows.jsonl') if x.strip()]; got=[str(r['scenario_token']) for r in rs]
++  if len(got)!=500 or len(set(got))!=500 or set(got)!=set(want): raise SystemExit(f'STOP DATA: {sp}/{tag} identity mismatch')
++  orders.append(got)
++ if any(x!=orders[0] for x in orders[1:]): raise SystemExit(f'STOP DATA: {sp} row order differs across arms')
++print('PASS V43 paired identity across all A/B arms')
++PY
++stage_end
++stage_start screen
++for sp in A B; do args=(); for tag in raw v20 preserve rsmr epv_raw quality future_mean future_robust cfrv; do x=${tag//_/-}; args+=("--${x}-metrics" "$OUT_ROOT/provenance/${sp}_${tag}_metrics.json" "--${x}-rows" "$OUT_ROOT/provenance/${sp}_${tag}_rows.jsonl"); [[ "$tag" == raw ]] || args+=("--${x}-edges" "$OUT_ROOT/provenance/${sp}_${tag}_edges.jsonl"); done; python -m bdse.tools.check_v64_3_43_eaf_icer_cfrv_split --split-name "$sp" "${args[@]}" --output "$OUT_ROOT/provenance/v64_3_43_split_${sp}_screen.json" | tee "$OUT_ROOT/logs/v64_3_43_split_${sp}.out"; done
++SCREEN="$OUT_ROOT/provenance/v64_3_43_eaf_icer_cfrv_double_fresh_screen.json"; python -m bdse.tools.check_v64_3_43_eaf_icer_cfrv_screen --split-a "$OUT_ROOT/provenance/v64_3_43_split_A_screen.json" --split-b "$OUT_ROOT/provenance/v64_3_43_split_B_screen.json" --value-report "$VALUE_REPORT" --fit-report "$FIT_REPORT" --output "$SCREEN" | tee "$OUT_ROOT/logs/v64_3_43_screen.out"; stage_end
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"

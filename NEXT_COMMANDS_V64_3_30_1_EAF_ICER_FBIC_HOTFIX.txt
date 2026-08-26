@@ -1,0 +1,2 @@
+cd bdse_v64_3_30_1_eaf_icer_fbic_hotfix
+bash RUN_V64_3_30_1_EAF_ICER_FBIC_HOTFIX_SCREEN_2GPU.sh

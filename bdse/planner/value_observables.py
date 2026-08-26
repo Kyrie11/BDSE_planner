@@ -131,6 +131,13 @@ def runtime_value_observable_costs(
             raise ValueError("V43 future-response observable schema mismatch")
         out = np.concatenate([out, future], axis=1)
         names.extend(fn)
+    if bool(ic.get("instrument_plan_conditioned_response_observables", False)):
+        from bdse.planner.response_value_observables import PLAN_CONDITIONED_RESPONSE_ALL_NAMES, runtime_plan_conditioned_response_observable_costs
+        pc, pn = runtime_plan_conditioned_response_observable_costs(runtime, candidates, cfg)
+        if pn != PLAN_CONDITIONED_RESPONSE_ALL_NAMES or pc.shape != (K, len(PLAN_CONDITIONED_RESPONSE_ALL_NAMES)):
+            raise ValueError("V44 plan-conditioned response observable schema mismatch")
+        out = np.concatenate([out, pc], axis=1)
+        names.extend(pn)
     if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
         raise ValueError("deployment value-observable matrix is malformed or non-finite")
     return out, names

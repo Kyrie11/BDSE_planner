@@ -1,0 +1,1402 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/ALGORITHM_CHANGELOG.md /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/ALGORITHM_CHANGELOG.md
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/ALGORITHM_CHANGELOG.md	2026-08-25 02:39:04.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/ALGORITHM_CHANGELOG.md	2026-08-25 04:09:41.854218222 +0000
+@@ -10796,3 +10796,72 @@
+ V38 spent no fresh data. Permanent exclusion stays **10700 tokens**. New seed: `v64.3.39-eaf-icer-cfsr-cal500-double-fresh-v1`. Only after nested TRAIN pass may independent CAL500+A500+B500 be selected; A/B remain unpooled.
+ 
+ Paper-level candidate mechanism: **operator-conditioned ordinal/cardinal/residual factorization with cross-fitted policy-output adaptation** under the bounded auditable EAF planner interface.
++
++# V64.3.39 uploaded TRAIN result audit -> V64.3.40 EAF-ICER-SDFR
++
++## 1. V39 reliability decision
++
++The uploaded V39 code is byte-identical to the preregistered package (SHA256 `73debeb3b9348309b78fe7195fad478818b7b650c5723d91e5a10148331c0edb`). The run completed all five nested outer folds and all inner OOF residual populations. Server targeted regression is **184/184 PASS**; the audit contains **782/782 unique direct scenes**. Value-calibration proposal counts are `97/100/98/86/110`, and inner OOF selected residual populations are `347/318/266/260/285`, all above their frozen minima. CFSR remains an exact same-winner monotone subset of frozen RSMR. The launcher stopped at the preregistered TRAIN scientific failure and did not create non-empty CAL500/A500/B500 manifests. V39 is engineering-valid for TRAIN-level attribution; no V39.1 hotfix is required.
++
++## 2. V39 result and mechanism verdict
++
++Frozen RSMR remains `502 selected / 221 positive / capture 38.50% / sum +43.2941 / 28 catastrophes / 107 no-op false / NegRMS 0.3557`.
++
++DENSE-SHIFT is `376 / 175 / capture 30.49% / sum +28.3339 / 21 catastrophes / 80 no-op false / NegRMS 0.3702` and fails; therefore a selected-policy scalar zero-point translation is insufficient.
++
++CFSR-RAW is `316 / 143 / capture 24.91% / sum +41.8810 / 15 catastrophes / 55 no-op false / NegRMS 0.2872`.
++
++CFSR-MAIN is `354 / 149 / capture 25.96% / sum +43.5752 / 14 catastrophes / 67 no-op false / NegRMS 0.3073` with **5/5 nonnegative outer-fold sums**. It passes the no-op, tail, NegRMS, aggregate-direction, fold-direction and population sub-gates but fails the registered capture floor `>=35.50%`.
++
++On the 502 frozen RSMR proposals, CFSR-MAIN deletes 148 proposals whose true teacher-improvement sum is only `-0.2811`, while deleting 14/28 catastrophes. This is genuine feature-dependent selected-tail signal and is substantially more selective than V36 blanket abstention. However it also deletes 72 positives. Of those, **56 have true improvement <=0.01 and total only +0.0383**, showing that the remaining count-level capture failure is concentrated at the zero boundary, although several material positive misses remain.
++
++Thus V39 falsifies the strong sufficiency claim but supports the residual-existence claim:
++
++`feature-dependent selected-policy residual exists`, but `linear signed-mean residual on the current 19-D evidence is sufficient for zero-crossing reliability` is false.
++
++Updated estimand chain:
++
++`RSMR ordinal ranking != population-edge cardinal mean != operator-conditioned selected outcome distribution`.
++
++Updated dominant bottleneck:
++
++**operator-conditioned selected-outcome distribution at the incumbent zero boundary: signed-mean regression conflates beneficial-event frequency with positive/negative conditional magnitude, allowing excellent aggregate/tail behavior while missing many near-zero positive opportunities.**
++
++## 3. V39-specific no-repeat constraints
++
++Keep all historical prohibitions. Additionally do not enlarge CFSR/OPVR with nonlinear/high-dimensional selected heads; do not relax/redefine the positive/capture gate post hoc; do not refit RSMR while claiming a value-only mechanism; do not let DENSE/value heads rerank; do not add a generic catastrophe classifier/fallback; do not restore unconstrained affine slope reversal; and do not tune lambda, alpha/q, threshold, top-K, candidate count, temperature, or selected-value cutoff.
++
++# V64.3.40 EAF-ICER-SDFR
++
++Full name: **Selection-Distribution Factorized Recovery**.
++
++V40 does not increase selected-policy model dimensionality. It freezes V34 RSMR as the sole challenger selector and retains the same 19-D evidence and fixed `lambda=1` linear family. It changes the unresolved value target from one signed mean to the exact hurdle-distribution identity
++
++`E[Y|X,S] = P(Y>0|X,S) E[Y|Y>0,X,S] - P(Y<=0|X,S) E[-Y|Y<=0,X,S]`.
++
++Using the corrected V32.1 scene-equal all-edge objective, fit three dense population components: beneficial-event probability (Brier ridge), positive conditional magnitude, and non-positive conditional magnitude. These components never participate in argmax; they are read only on the frozen RSMR proposal.
++
++Within each outer three-fit-fold population, inner OOF frozen-RSMR proposals provide honest selected-policy component adaptation. Require >=192 selected outputs and >=64 examples in each sign class. Selected adaptation is scalar only: a logit intercept for beneficial-event probability and nonnegative scalar scales for positive/negative magnitudes. No selected feature head is fitted.
++
++Causal arms:
++
++`RSMR / DENSE / HURDLE / SIGN-SHIFT / SDFR-RAW / SDFR-MAIN`.
++
++- HURDLE tests whether distributional target factorization alone solves the failure.
++- SIGN-SHIFT changes only selected beneficial-event frequency, isolating sign-prior/zero-boundary shift.
++- SDFR-RAW additionally adapts positive/negative magnitude scales.
++- SDFR-MAIN uses only an independent calibration-fold **unit-slope translation**, which cannot reverse the value axis.
++
++Main nested TRAIN gate remains: >=20% no-op reduction, capture within 3 pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, aggregate and 5/5 fold sums nonnegative, selected>=64, positive>=32, exact frozen-winner containment, inner OOF selected>=192, and >=64 selected examples per sign class. No threshold/lambda/feature/temperature sweep.
++
++Mechanistic branches are preregistered:
++
++- HURDLE succeeds -> population distribution target suffices; discard selected adaptation.
++- SIGN-SHIFT succeeds but full SDFR does not -> selected beneficial-event frequency is the primary mediator; discard magnitude adaptation.
++- SDFR succeeds -> distribution factorization closes zero/tail tradeoff without representation expansion.
++- sign/capture improves but tail remains -> next missing layer is value-specific downside representation.
++- all distribution arms fail despite adequate selected sign-class population -> **close the current 19-D selected-value distribution route** and require a value-specific representation/observable rather than another head on the same evidence.
++
++V39 spent no fresh data. Permanent exclusion remains **10700 tokens**. New label-free seed: `v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1`. Only after nested TRAIN pass may independent CAL500+A500+B500 be selected; A/B remain unpooled.
++
++Paper-level candidate mechanism: **operator-conditioned distributional decision sufficiency**, separating ordinal extremal ranking, population outcome distribution, and selected-policy sign/magnitude alignment under deterministic frozen-winner incumbent containment.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/NEXT_COMMANDS_V64_3_40_EAF_ICER_SDFR.txt /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/NEXT_COMMANDS_V64_3_40_EAF_ICER_SDFR.txt
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/NEXT_COMMANDS_V64_3_40_EAF_ICER_SDFR.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/NEXT_COMMANDS_V64_3_40_EAF_ICER_SDFR.txt	2026-08-25 04:09:41.850218190 +0000
+@@ -0,0 +1,22 @@
++# V64.3.40 EAF-ICER-SDFR next server command
++
++cd bdse_v64_3_40_eaf_icer_sdfr
++bash RUN_V64_3_40_EAF_ICER_SDFR_SCREEN_2GPU.sh
++
++# If historical output roots are elsewhere:
++cd bdse_v64_3_40_eaf_icer_sdfr
++V30_2_ROOT=/path/to/outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1 \
++V39_ROOT=/path/to/outputs_v64_3_39_eaf_icer_cfsr_screen_2gpu_v1 \
++bash RUN_V64_3_40_EAF_ICER_SDFR_SCREEN_2GPU.sh
++
++# Frozen for this run:
++# - lambda=1
++# - historical nested fold hash
++# - 19-D candidate-minus-incumbent evidence schema
++# - V34 RSMR as sole challenger selector
++# - no value arm reranking / no second best / incumbent-only fallback
++# - inner OOF selected >=192 and >=64 per sign class
++# - >=20% no-op reduction, capture within 3pp, >=25% catastrophe reduction
++# - 5/5 outer-test selected sums nonnegative
++# - fresh seed v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1
++# - no threshold/lambda/alpha/q/top-K/candidate-count/temperature sweep
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/RUN_V64_3_40_EAF_ICER_SDFR_SCREEN_2GPU.sh /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/RUN_V64_3_40_EAF_ICER_SDFR_SCREEN_2GPU.sh
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/RUN_V64_3_40_EAF_ICER_SDFR_SCREEN_2GPU.sh	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/RUN_V64_3_40_EAF_ICER_SDFR_SCREEN_2GPU.sh	2026-08-25 04:07:00.590319849 +0000
+@@ -0,0 +1,191 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export V30_2_ROOT="${V30_2_ROOT:-outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1}"
++export V39_ROOT="${V39_ROOT:-outputs_v64_3_39_eaf_icer_cfsr_screen_2gpu_v1}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_40_eaf_icer_sdfr_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_32_design_exclude_v64_3_30_3_screen_tokens.txt}"
++export FROZEN_TRAIN_TOKENS="${FROZEN_TRAIN_TOKENS:-bdse/configs/v64_3_29_frozen_v28_train_3000_tokens.txt}"
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"
++V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++TRAIN_EDGES="$V30_2_ROOT/provenance/train_b16_v20_edges.jsonl"
++V39_FIT="$V39_ROOT/provenance/v64_3_39_cfsr_fit.json"
++V39_AUDIT="$V39_ROOT/provenance/v64_3_39_cfsr_train_scene_audit.csv"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++TIMING="$OUT_ROOT/provenance/v64_3_40_stage_timing.tsv"; : > "$TIMING"
++ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
++stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >> "$TIMING"; }
++
++[[ -d "$BDSE_VAL_CACHE" ]] || { echo 'STOP: missing val cache' >&2; exit 2; }
++for f in "$RAW_CONFIG" "$V20_CONFIG" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$TRAIN_EDGES" "$V39_FIT" "$V39_AUDIT"; do [[ -s "$f" ]] || { echo "STOP: missing $f" >&2; exit 2; }; done
++
++stage_start exact_v39_failure_reproduction_and_fresh_unspent_guard
++python - "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$V39_FIT" "$V39_AUDIT" "$V39_ROOT" <<'PY'
++import csv,hashlib,json,sys
++from pathlib import Path
++ex=[x.strip() for x in open(sys.argv[1]) if x.strip()]; tr=[x.strip() for x in open(sys.argv[2]) if x.strip()]
++if len(ex)!=10700 or len(set(ex))!=10700 or hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()!='041ec824756777576391756ef3721617459bb0c0a45f7f43226b52254d951473': raise SystemExit('STOP DATA: V40 design exclusion changed')
++if len(tr)!=3000 or len(set(tr))!=3000 or hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4': raise SystemExit('STOP DATA: V40 frozen TRAIN changed')
++r=json.load(open(sys.argv[3])); n=r.get('nested_crossfit',{}); rr=n.get('rsmr_rank_aggregate',{}); ds=n.get('dense_translation_control_aggregate',{}); cr=n.get('cfsr_raw_aggregate',{}); cm=n.get('cfsr_main_aggregate',{})
++checks=[
++ r.get('frozen_train_scenes')==3000, r.get('direct_support_positive_training_scenes')==782, r.get('train_gate_pass') is False, n.get('train_gate_pass') is False,
++ n.get('failure_diagnosis')=='selection_residual_tail_signal_exists_but_zero_crossing_capture_tradeoff_remains',
++ rr.get('selected_count')==502, rr.get('selected_positive_count')==221, rr.get('no_positive_opportunity_false_intervention_count')==107, rr.get('catastrophic_count')==28, abs(float(rr.get('teacher_improvement_sum',999))-43.29405361274824)<1e-9, abs(float(rr.get('positive_capture_rate',999))-0.38501742160278746)<1e-12,
++ ds.get('selected_count')==376, ds.get('selected_positive_count')==175, ds.get('no_positive_opportunity_false_intervention_count')==80, ds.get('catastrophic_count')==21, abs(float(ds.get('teacher_improvement_sum',999))-28.333925291168256)<1e-9, abs(float(ds.get('positive_capture_rate',999))-0.3048780487804878)<1e-12,
++ cr.get('selected_count')==316, cr.get('selected_positive_count')==143, cr.get('no_positive_opportunity_false_intervention_count')==55, cr.get('catastrophic_count')==15, abs(float(cr.get('teacher_improvement_sum',999))-41.88098278928777)<1e-9, abs(float(cr.get('positive_capture_rate',999))-0.24912891986062718)<1e-12,
++ cm.get('selected_count')==354, cm.get('selected_positive_count')==149, cm.get('no_positive_opportunity_false_intervention_count')==67, cm.get('catastrophic_count')==14, abs(float(cm.get('teacher_improvement_sum',999))-43.57520313171325)<1e-9, abs(float(cm.get('positive_capture_rate',999))-0.259581881533101)<1e-12, abs(float(cm.get('teacher_negative_rms',999))-0.30726333783527343)<1e-12,
++ n.get('translation_control_gate',{}).get('pass') is False, n.get('cfsr_raw_gate',{}).get('tail') is True, n.get('cfsr_raw_gate',{}).get('all_folds_sum_nonnegative') is True, n.get('cfsr_raw_gate',{}).get('existence_and_capture') is False,
++ n.get('cfsr_main_gate',{}).get('pass') is False, n.get('cfsr_main_gate',{}).get('tail') is True, n.get('cfsr_main_gate',{}).get('all_folds_sum_nonnegative') is True, n.get('cfsr_main_gate',{}).get('existence_and_capture') is False,
++ n.get('monotone_frozen_winner_contract_valid') is True
++]
++if not all(checks): raise SystemExit('STOP V40: exact V39 TRAIN failure signature changed')
++rows=list(csv.DictReader(open(sys.argv[4],newline='')))
++if len(rows)!=782 or len({r['scenario_token'] for r in rows})!=782: raise SystemExit('STOP V40: V39 scene audit cardinality/uniqueness changed')
++root=Path(sys.argv[5]); spent=[root/'provenance/val_screen_cal500_fresh1500_tokens.txt',root/'provenance/val_screen_calibration_500_tokens.txt',root/'provenance/val_screen_fresh_A_tokens.txt',root/'provenance/val_screen_fresh_B_tokens.txt']
++if any(p.exists() and p.stat().st_size>0 for p in spent): raise SystemExit('STOP V40: V39 appears to have spent CAL/fresh')
++print('PASS V40 prerequisite: exact V39 TRAIN failure reproduced; CAL/fresh remains unspent.')
++PY
++stage_end
++
++stage_start prerequisites_and_regression
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_40_SDFR --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_40.json" > "$OUT_ROOT/logs/v64_3_13_eaf_dmvr_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_40.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]));
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False): raise SystemExit('STOP prerequisites')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"; fi
++export EAF_CKPT; [[ -s "$EAF_CKPT" ]] || { echo "STOP: missing EAF checkpoint $EAF_CKPT" >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_40_eaf_icer_sdfr.py \
++  bdse/tests/test_v64_3_39_eaf_icer_cfsr.py \
++  bdse/tests/test_v64_3_38_eaf_icer_davr.py \
++  bdse/tests/test_v64_3_37_eaf_icer_pvr.py \
++  bdse/tests/test_v64_3_36_eaf_icer_sgrr.py \
++  bdse/tests/test_v64_3_35_eaf_icer_fbcsr.py \
++  bdse/tests/test_v64_3_34_eaf_icer_rsmr.py \
++  bdse/tests/test_v64_3_33_eaf_icer_spcr.py \
++  bdse/tests/test_v64_3_32_1_eaf_icer_ssir_weightfix.py \
++  bdse/tests/test_v64_3_32_eaf_icer_ssir.py \
++  bdse/tests/test_v64_3_31_eaf_icer_scir.py \
++  bdse/tests/test_v64_3_30_3_eaf_icer_fbic_pure_auditfix.py \
++  bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py \
++  bdse/tests/test_v64_3_30_eaf_icer_fbic.py \
++  bdse/tests/test_v64_3_29_eaf_icer_fcr.py \
++  bdse/tests/test_v64_3_28_eaf_icer_ptmc.py \
++  bdse/tests/test_v64_3_27_eaf_icer_trcc.py \
++  bdse/tests/test_v64_3_26_eaf_icer_sarc.py \
++  bdse/tests/test_v64_3_25_eaf_icer_drc.py \
++  bdse/tests/test_v64_3_24_eaf_icer_arc.py \
++  bdse/tests/test_v64_3_23_eaf_icer_rcr.py \
++  bdse/tests/test_v64_3_22_eaf_icer_tcr.py \
++  bdse/tests/test_v64_3_21_eaf_icer_mcr.py \
++  bdse/tests/test_v64_3_20_eaf_icer_dc.py \
++  bdse/tests/test_v64_3_19_eaf_icer.py \
++  bdse/tests/test_v64_3_18_eaf_dacer.py \
++  bdse/tests/test_v64_3_17_eaf_daler.py \
++  bdse/tests/test_v64_3_16_eaf_raer.py \
++  bdse/tests/test_v64_3_15_eaf_eair.py \
++  bdse/tests/test_v64_3_14_eaf_ocfi.py \
++  bdse/tests/test_v64_3_13_eaf_dmvr.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++stage_end
++
++stage_start train_nested_sdfr_gate
++PRESERVE_CONFIG="$OUT_ROOT/provenance/v64_3_40_preserve_control.yaml"
++RSMR_CONFIG="$OUT_ROOT/provenance/v64_3_40_rsmr_frozen_order.yaml"
++DENSE_CONFIG="$OUT_ROOT/provenance/v64_3_40_dense_signed_mean.yaml"
++HURDLE_CONFIG="$OUT_ROOT/provenance/v64_3_40_hurdle_dense_distribution.yaml"
++SIGN_SHIFT_CONFIG="$OUT_ROOT/provenance/v64_3_40_hurdle_sign_shift.yaml"
++SDFR_RAW_CONFIG="$OUT_ROOT/provenance/v64_3_40_sdfr_raw.yaml"
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_40_sdfr_fit.json"
++TRAIN_SCENE_AUDIT="$OUT_ROOT/provenance/v64_3_40_sdfr_train_scene_audit.csv"
++set +e
++python -m bdse.tools.fit_v64_3_40_eaf_icer_sdfr --train-frontier-edges "$TRAIN_EDGES" --base-config "$V20_CONFIG" \
++  --output-preserve-config "$PRESERVE_CONFIG" --output-rsmr-config "$RSMR_CONFIG" --output-dense-config "$DENSE_CONFIG" \
++  --output-hurdle-config "$HURDLE_CONFIG" --output-sign-shift-config "$SIGN_SHIFT_CONFIG" --output-sdfr-config "$SDFR_RAW_CONFIG" \
++  --output-report "$FIT_REPORT" --output-scene-audit "$TRAIN_SCENE_AUDIT" 2>&1 | tee "$OUT_ROOT/logs/v64_3_40_sdfr_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}; set -e; stage_end; [[ $FIT_STATUS -eq 0 ]] || exit "$FIT_STATUS"
++
++stage_start calibration_and_fresh_selection
++TOK1500="$OUT_ROOT/provenance/val_screen_cal500_fresh1500_tokens.txt"; TOKCAL="$OUT_ROOT/provenance/val_screen_calibration_500_tokens.txt"; TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"; TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"
++SELECT_EXCLUDE="$OUT_ROOT/provenance/v64_3_40_selection_exclude_design_plus_train.txt"; cat "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" | awk 'NF && !seen[$0]++' > "$SELECT_EXCLUDE"
++python -m bdse.tools.select_fresh_preprocessed_tokens --preprocessed-dir "$BDSE_VAL_CACHE" --split val --exclude-tokens "$SELECT_EXCLUDE" --count 1500 --hash-seed "$FRESH_HASH_SEED" --output "$TOK1500" --audit-output "$OUT_ROOT/provenance/v64_3_40_cal500_fresh1500_selection_audit.json" > "$OUT_ROOT/logs/fresh_token_selection.out"
++head -n 500 "$TOK1500" > "$TOKCAL"; sed -n '501,1000p' "$TOK1500" > "$TOKA"; tail -n 500 "$TOK1500" > "$TOKB"
++python - "$TOK1500" "$TOKCAL" "$TOKA" "$TOKB" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import sys
++allv=[x.strip() for x in open(sys.argv[1]) if x.strip()]; cal=[x.strip() for x in open(sys.argv[2]) if x.strip()]; A=[x.strip() for x in open(sys.argv[3]) if x.strip()]; B=[x.strip() for x in open(sys.argv[4]) if x.strip()]; ex={x.strip() for x in open(sys.argv[5]) if x.strip()}; tr={x.strip() for x in open(sys.argv[6]) if x.strip()}
++if len(allv)!=1500 or len(set(allv))!=1500 or any(len(x)!=500 or len(set(x))!=500 for x in [cal,A,B]): raise SystemExit('STOP DATA: V40 CAL/A/B cardinality')
++if set(cal)&set(A) or set(cal)&set(B) or set(A)&set(B) or set(allv)&ex or set(allv)&tr: raise SystemExit('STOP DATA: V40 independence failure')
++print('PASS V40 label-free independent CAL500+A500+B500 selection')
++PY
++stage_end
++
++run_eval_tok(){ local gpu="$1" cfg="$2" tok="$3" maxn="$4" tag="$5"; CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop --config "$cfg" --checkpoint "$EAF_CKPT" --split val --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios "$maxn" --scenario-token-file "$tok" --require-all-scenario-tokens --output "$OUT_ROOT/provenance/${tag}_metrics.json" --per-sample-output "$OUT_ROOT/provenance/${tag}_rows.jsonl" --frontier-edge-output "$OUT_ROOT/provenance/${tag}_edges.jsonl" --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${tag}.out" 2>&1; }
++
++stage_start independent_CAL500_rsmr_replay_for_SDFR
++run_eval_tok "$GPU0" "$RSMR_CONFIG" "$TOKCAL" 500 cal_rsmr
++stage_end
++stage_start independent_CAL500_translation_fit
++SDFR_MAIN_CONFIG="$OUT_ROOT/provenance/v64_3_40_sdfr.yaml"; VALUE_REPORT="$OUT_ROOT/provenance/v64_3_40_value_fit.json"
++python -m bdse.tools.calibrate_v64_3_40_eaf_icer_sdfr --calibration-rows "$OUT_ROOT/provenance/cal_rsmr_rows.jsonl" --calibration-edges "$OUT_ROOT/provenance/cal_rsmr_edges.jsonl" --sdfr-config "$SDFR_RAW_CONFIG" --output-sdfr-main-config "$SDFR_MAIN_CONFIG" --output-report "$VALUE_REPORT" 2>&1 | tee "$OUT_ROOT/logs/v64_3_40_value_fit.out"
++stage_end
++
++for sp in A B; do
++  tok="$TOKA"; [[ "$sp" == B ]] && tok="$TOKB"
++  stage_start "fresh_${sp}_wave1"; run_eval_tok "$GPU0" "$RAW_CONFIG" "$tok" 500 "${sp}_raw" & p0=$!; run_eval_tok "$GPU1" "$V20_CONFIG" "$tok" 500 "${sp}_v20" & p1=$!; s=0; wait "$p0"||s=1; wait "$p1"||s=1; [[ $s -eq 0 ]]||exit 2; stage_end
++  stage_start "fresh_${sp}_wave2"; run_eval_tok "$GPU0" "$PRESERVE_CONFIG" "$tok" 500 "${sp}_preserve" & p0=$!; run_eval_tok "$GPU1" "$RSMR_CONFIG" "$tok" 500 "${sp}_rsmr" & p1=$!; s=0; wait "$p0"||s=1; wait "$p1"||s=1; [[ $s -eq 0 ]]||exit 2; stage_end
++  stage_start "fresh_${sp}_wave3"; run_eval_tok "$GPU0" "$DENSE_CONFIG" "$tok" 500 "${sp}_dense" & p0=$!; run_eval_tok "$GPU1" "$HURDLE_CONFIG" "$tok" 500 "${sp}_hurdle" & p1=$!; s=0; wait "$p0"||s=1; wait "$p1"||s=1; [[ $s -eq 0 ]]||exit 2; stage_end
++  stage_start "fresh_${sp}_wave4"; run_eval_tok "$GPU0" "$SIGN_SHIFT_CONFIG" "$tok" 500 "${sp}_sign_shift" & p0=$!; run_eval_tok "$GPU1" "$SDFR_RAW_CONFIG" "$tok" 500 "${sp}_sdfr_raw" & p1=$!; s=0; wait "$p0"||s=1; wait "$p1"||s=1; [[ $s -eq 0 ]]||exit 2; stage_end
++  stage_start "fresh_${sp}_wave5"; run_eval_tok "$GPU0" "$SDFR_MAIN_CONFIG" "$tok" 500 "${sp}_sdfr"; stage_end
++done
++
++stage_start paired_identity
++python - "$OUT_ROOT/provenance" "$TOKA" "$TOKB" <<'PY'
++import json,sys,pathlib
++root=pathlib.Path(sys.argv[1]); tags=['raw','v20','preserve','rsmr','dense','hurdle','sign_shift','sdfr_raw','sdfr']
++for sp,tf in [('A',sys.argv[2]),('B',sys.argv[3])]:
++ want=[x.strip() for x in open(tf) if x.strip()]; orders=[]
++ for tag in tags:
++  rs=[json.loads(x) for x in open(root/f'{sp}_{tag}_rows.jsonl') if x.strip()]; got=[str(r['scenario_token']) for r in rs]
++  if len(got)!=500 or len(set(got))!=500 or set(got)!=set(want): raise SystemExit(f'STOP DATA: {sp}/{tag} identity mismatch')
++  orders.append(got)
++ if any(x!=orders[0] for x in orders[1:]): raise SystemExit(f'STOP DATA: {sp} row order differs across arms')
++print('PASS V40 paired identity across all 18 untouched A/B arms')
++PY
++stage_end
++
++stage_start screen
++for sp in A B; do
++  python -m bdse.tools.check_v64_3_40_eaf_icer_sdfr_split --split-name "$sp" \
++   --raw-metrics "$OUT_ROOT/provenance/${sp}_raw_metrics.json" --raw-rows "$OUT_ROOT/provenance/${sp}_raw_rows.jsonl" \
++   --v20-metrics "$OUT_ROOT/provenance/${sp}_v20_metrics.json" --v20-rows "$OUT_ROOT/provenance/${sp}_v20_rows.jsonl" --v20-edges "$OUT_ROOT/provenance/${sp}_v20_edges.jsonl" \
++   --preserve-metrics "$OUT_ROOT/provenance/${sp}_preserve_metrics.json" --preserve-rows "$OUT_ROOT/provenance/${sp}_preserve_rows.jsonl" --preserve-edges "$OUT_ROOT/provenance/${sp}_preserve_edges.jsonl" \
++   --rsmr-metrics "$OUT_ROOT/provenance/${sp}_rsmr_metrics.json" --rsmr-rows "$OUT_ROOT/provenance/${sp}_rsmr_rows.jsonl" --rsmr-edges "$OUT_ROOT/provenance/${sp}_rsmr_edges.jsonl" \
++   --dense-metrics "$OUT_ROOT/provenance/${sp}_dense_metrics.json" --dense-rows "$OUT_ROOT/provenance/${sp}_dense_rows.jsonl" --dense-edges "$OUT_ROOT/provenance/${sp}_dense_edges.jsonl" \
++   --hurdle-metrics "$OUT_ROOT/provenance/${sp}_hurdle_metrics.json" --hurdle-rows "$OUT_ROOT/provenance/${sp}_hurdle_rows.jsonl" --hurdle-edges "$OUT_ROOT/provenance/${sp}_hurdle_edges.jsonl" \
++   --sign-shift-metrics "$OUT_ROOT/provenance/${sp}_sign_shift_metrics.json" --sign-shift-rows "$OUT_ROOT/provenance/${sp}_sign_shift_rows.jsonl" --sign-shift-edges "$OUT_ROOT/provenance/${sp}_sign_shift_edges.jsonl" \
++   --sdfr-raw-metrics "$OUT_ROOT/provenance/${sp}_sdfr_raw_metrics.json" --sdfr-raw-rows "$OUT_ROOT/provenance/${sp}_sdfr_raw_rows.jsonl" --sdfr-raw-edges "$OUT_ROOT/provenance/${sp}_sdfr_raw_edges.jsonl" \
++   --sdfr-metrics "$OUT_ROOT/provenance/${sp}_sdfr_metrics.json" --sdfr-rows "$OUT_ROOT/provenance/${sp}_sdfr_rows.jsonl" --sdfr-edges "$OUT_ROOT/provenance/${sp}_sdfr_edges.jsonl" \
++   --output "$OUT_ROOT/provenance/v64_3_40_split_${sp}_screen.json" | tee "$OUT_ROOT/logs/v64_3_40_split_${sp}_screen.out"
++done
++SCREEN="$OUT_ROOT/provenance/v64_3_40_eaf_icer_sdfr_double_fresh_screen.json"
++python -m bdse.tools.check_v64_3_40_eaf_icer_sdfr_screen --split-a "$OUT_ROOT/provenance/v64_3_40_split_A_screen.json" --split-b "$OUT_ROOT/provenance/v64_3_40_split_B_screen.json" --value-report "$VALUE_REPORT" --fit-report "$FIT_REPORT" --output "$SCREEN" | tee "$OUT_ROOT/logs/v64_3_40_double_fresh_screen.out"
++stage_end
++
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"
++(cd "$OUT_ROOT/provenance" && find . -maxdepth 1 -type f ! -name 'v64_3_40_provenance_sha256.txt' -print0 | sort -z | xargs -0 sha256sum > v64_3_40_provenance_sha256.txt)
++python - "$SCREEN" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1])); [print(k,'=',r.get(k)) for k in ['engineering_valid_both','train_nested_distribution_gate_pass','independent_CAL500_translation_fit_valid','double_fresh_promotion_pass','scientific_conclusion','next_action']]
++PY
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/V64_3_39_RESULT_POSTMORTEM_AND_V64_3_40_SDFR_DESIGN.md /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/V64_3_39_RESULT_POSTMORTEM_AND_V64_3_40_SDFR_DESIGN.md
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/V64_3_39_RESULT_POSTMORTEM_AND_V64_3_40_SDFR_DESIGN.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/V64_3_39_RESULT_POSTMORTEM_AND_V64_3_40_SDFR_DESIGN.md	2026-08-25 04:09:41.845783810 +0000
+@@ -0,0 +1,242 @@
++# V64.3.39 result postmortem and V64.3.40 SDFR design
++
++## Executive decision
++
++The uploaded V64.3.39 code is byte-identical to the preregistered package (SHA256 `73debeb3b9348309b78fe7195fad478818b7b650c5723d91e5a10148331c0edb`). The run completed all five nested outer folds, all inner OOF residual populations, and all independent value-calibration folds. Server targeted regression is **184/184 PASS**; the TRAIN scene audit contains **782/782 unique direct scenes**. The frozen-RSMR action identity/monotone-subset contract is valid. V39 stopped at its preregistered TRAIN scientific gate and created no non-empty CAL500/A500/B500 manifests. Therefore V39 is engineering-valid for TRAIN-level algorithm attribution and no V39.1 hotfix is required.
++
++V39 is **not promotable**, but it is a meaningful partial mechanism success. `CFSR-MAIN` halves catastrophes (`28 -> 14`), reduces no-positive-opportunity false interventions (`107 -> 67`), improves NegRMS (`0.3557 -> 0.3073`), preserves nonnegative selected sum on all five folds, and slightly improves aggregate selected teacher sum (`+43.2941 -> +43.5752`). However useful positive-opportunity capture falls from `38.50%` to `25.96%`, far below the preregistered floor `35.50%`. The failure is therefore **zero-crossing/capture**, not absence of selected-tail signal.
++
++## 1. Reliability/completeness audit
++
++- Code ZIP SHA256: `73debeb3b9348309b78fe7195fad478818b7b650c5723d91e5a10148331c0edb`.
++- Result ZIP SHA256: `d80f30706e7f676a96d1f61b37a6497230e314491092ffc9d26331b4e3c74a6a`.
++- Server targeted regression: **184/184 PASS** (two historical transformer warnings only).
++- TRAIN audit: **782 rows / 782 unique scene tokens**, all five outer test folds present.
++- Selected-policy calibration proposal counts: `97 / 100 / 98 / 86 / 110`, all >=64.
++- Inner OOF selected residual populations: `347 / 318 / 266 / 260 / 285`, all >=192.
++- For every inner holdout, the RSMR/DENSE models producing the proposal/residual are fitted on the other two outer-fit folds; held-out scenes are not used to fit those models.
++- Final CFSR residual model uses TRAIN fit folds only; outer-test scenes remain untouched.
++- Residual heads are orthogonal to the removed RSMR/DENSE span (maximum absolute cosine around numerical zero in all folds).
++- DENSE/DENSE-SHIFT/CFSR-RAW/CFSR-MAIN can only accept the exact frozen RSMR winner or return incumbent. No reranking, second-best, or proposal creation is possible.
++- Stage timing terminates at `train_nested_cfsr_gate`; no CAL500/A500/B500 token files were generated.
++
++Conclusion: **PASS for TRAIN-level causal/mechanistic attribution.**
++
++## 2. V39 preregistered result
++
++| TRAIN cross-fit | RSMR | DENSE-SHIFT | CFSR-RAW | CFSR-MAIN |
++|---|---:|---:|---:|---:|
++| selected | 502 | 376 | 316 | 354 |
++| positive | 221 | 175 | 143 | 149 |
++| useful capture | **38.50%** | 30.49% | 24.91% | **25.96%** |
++| selected teacher sum | +43.2941 | +28.3339 | +41.8810 | **+43.5752** |
++| catastrophe <= -0.5 | 28 | 21 | 15 | **14** |
++| no-op false intervention | 107 | 80 | **55** | 67 |
++| NegRMS | 0.3557 | 0.3702 | **0.2872** | 0.3073 |
++| 5/5 fold selected sum >=0 | yes | no | **yes** | **yes** |
++
++The main preregistered gate requires all of:
++
++- >=20% no-op false reduction vs RSMR: **PASS** (`107 -> 67`, 37.4% reduction).
++- useful capture >= RSMR - 3 pp: **FAIL** (`25.96% < 35.50%`).
++- >=25% catastrophe reduction: **PASS** (`28 -> 14`, 50% reduction).
++- NegRMS not worse: **PASS**.
++- aggregate sum nonnegative: **PASS**.
++- 5/5 outer-test sums nonnegative: **PASS**.
++- selected >=64 and positive >=32: **PASS**.
++- exact frozen-winner containment: **PASS**.
++
++So V39 is a **scientific promotion failure with a real selected-tail mechanism gain**.
++
++## 3. What DENSE-SHIFT says
++
++`DENSE-SHIFT` fails the same capture/tail contract and even has a negative selected-sum outer fold. Therefore a scalar unit-slope selected-policy zero-point translation is not sufficient. V38's ordinary edge cardinal signal cannot be repaired by a single selected-policy offset.
++
++This closes the minimal explanation:
++
++> population-edge cardinal value is correct up to only a selected-policy intercept shift.
++
++## 4. What CFSR says
++
++CFSR's inner OOF residual fit is not empty or purely overfit. In every outer fit, honest inner-OOF dense residual MSE decreases after the feature-dependent correction:
++
++- fold 0: `0.6929 -> 0.5678`
++- fold 1: `0.7144 -> 0.5912`
++- fold 2: `0.5833 -> 0.4852`
++- fold 3: `0.6002 -> 0.4215`
++- fold 4: `0.4894 -> 0.4310`
++
++Outer-test behavior also shows consistent tail signal: CFSR-RAW reaches 15 catastrophes and NegRMS 0.2872; CFSR-MAIN reaches 14 catastrophes with all five fold sums nonnegative.
++
++The most informative transition is on the 502 frozen RSMR proposals. CFSR-MAIN deletes 148 proposals, but the **true teacher-improvement sum of those deleted proposals is only -0.2811**. In other words, it almost perfectly preserves aggregate value while removing 14/28 catastrophes. This is qualitatively more selective than the blanket-abstention behavior seen in V36.
++
++Therefore the V39 hypothesis must be split:
++
++1. **Feature-dependent operator-conditioned selection residual exists:** supported.
++2. **A linear signed-mean residual on the current 19-D evidence is sufficient to solve the incumbent-exit zero crossing:** falsified.
++
++## 5. Why capture still fails
++
++CFSR-MAIN deletes 72 true-positive RSMR proposals. But the count-level failure is strongly concentrated near the zero boundary:
++
++- 47/72 have true improvement <=0.001, total teacher gain only `+0.0133`.
++- 56/72 have true improvement <=0.01, total only `+0.0383`.
++- 58/72 have true improvement <=0.2, total only `+0.2849`.
++
++Thus a squared-error/signed-mean objective can achieve excellent aggregate value and tail behavior while still failing the promotion capture metric, because a tiny positive and a large positive are very different in MSE but equally count as one captured positive opportunity.
++
++A small number of material false abstentions remain, so this is not only a metric artifact. Representative missed high-value RSMR winners include:
++
++- `de3c0c52e7815332`: true `+3.1496`, CFSR-MAIN value `-2.9823`.
++- `bbc08519add25675`: true `+2.2840`, value `-0.0306`.
++- `c4b429aa06c65c18`: true `+2.0200`, value `-0.7538`.
++- `3a223e65af13545c`: true `+1.6617`, value `-0.6497`.
++
++CFSR also still accepts 14 catastrophes, including `2b32a9f406845f75` (true `-3.8065`, selected value `+0.0006`) and `c70954fab4a650c7` (true `-1.2330`, value `+1.6182`). So zero-boundary/tail identification is still not mature.
++
++## 6. Evidence chain V32.1 -> V39
++
++- **V32.1:** corrected scene-equal pointwise mean has real intervention signal, but using it as an extremal selector creates no-op errors and heavy selected tail.
++- **V33:** explicit incumbent/null action is structurally necessary; all-rivals pair averaging suppresses no-op errors but destroys opportunity capture through abstention/dilution.
++- **V34:** scene-level regret alignment produces the strongest challenger ordering signal to date: 5/5 positive fold sums, aggregate `+43.29`, capture `38.50%`; however incumbent-exit/no-op discrimination remains weak.
++- **V35:** loss factorization alone fails; absolute incumbent basepoint has weak consistent signal but is not a first-order mediator.
++- **V36:** frozen-order basepoint/selection-geometry reservation reduces tail mainly by blanket abstention; neither is the dominant solution.
++- **V37:** post-selection value is the correct unresolved layer; sparse selected-only 18-D residual has tail signal but unstable cardinal generalization.
++- **V38:** dense all-edge supervision proves the same 19-D evidence contains ordinary edge cardinal sign information (positive AUC/sign accuracy improve), but this pointwise value reverses on the extremal selected tail.
++- **V39:** honest cross-fitted selected residual populations prove that feature-dependent selection distortion is real, not merely selected-sample scarcity. CFSR nearly preserves aggregate value while halving catastrophe, yet still loses count-level capture around zero.
++
++The mechanism stack is therefore now better represented as:
++
++`ordinal challenger ranking != population-edge cardinal mean != operator-conditioned selected outcome distribution`.
++
++## 7. Current layer status
++
++Mature/frozen:
++
++- bounded B16/M24 evidence/query interface;
++- EAF complete frontier and exact action-local attribution;
++- support/admissibility and structural delegation;
++- incumbent default/no fallback;
++- V34 RSMR as the current best ordinal challenger selector.
++
++Partially mature:
++
++- ordinary population-edge cardinal sign/value (V38 signal exists);
++- feature-dependent selected-policy residual/tail correction (V39 signal exists).
++
++Still immature / current bottleneck:
++
++- **selected-policy zero crossing**, especially sign-frequency identification near zero;
++- joint control of near-zero positive recovery and negative/catastrophic magnitude;
++- a deployment-relevant selected outcome distribution, not just a signed conditional mean.
++
++Updated dominant bottleneck:
++
++> **operator-conditioned selected-outcome distribution at the incumbent boundary: the current signed-mean objective conflates beneficial-event frequency with positive/negative conditional magnitude, so it can optimize aggregate value/tail while misclassifying many near-zero positive opportunities.**
++
++## 8. Directions to stop
++
++Continue all prior prohibitions: acquisition/coreset/beam/swap, B/M broad sweep, capacity-only, FCR/DRC/KNN/PTMC revisits, candidate-count gate, support/score threshold rescue, action blacklist, basepoint/geometry expansion, conformal alpha/q tuning, and A/B pooling.
++
++New V39-specific prohibitions:
++
++- do not enlarge CFSR/OPVR with an MLP or nonlinear/high-dimensional selected head;
++- do not tune the capture threshold or redefine `positive` post hoc to hide near-zero misses;
++- do not relax the 3 pp capture gate because CFSR aggregate sum looks good;
++- do not re-fit or alter RSMR while claiming a value-layer test;
++- do not let DENSE/hurdle/value heads rerank challengers;
++- do not add a generic catastrophe classifier as a separate fallback/veto module;
++- do not restore an unconstrained affine selected calibration that can reverse the value axis;
++- do not tune lambda, alpha, q, top-K, candidate count, temperature, or value threshold.
++
++## 9. V64.3.40 SDFR: Selection-Distribution Factorized Recovery
++
++V40 does **not** enlarge the selected-policy residual model. It keeps the same 19-D evidence, fixed linear/ridge family, fixed `lambda=1`, and frozen RSMR winner. It changes the target from one signed conditional mean to a factorized outcome distribution.
++
++For selected outcome `Y = Delta_T(bhat;i)`, use the exact identity
++
++`E[Y|X,S] = pi(X,S) m_plus(X,S) - (1-pi(X,S)) m_minus(X,S)`
++
++where
++
++- `pi = P(Y>0 | X,S)`;
++- `m_plus = E[Y | Y>0, X,S]`;
++- `m_minus = E[-Y | Y<=0, X,S]`.
++
++There is no tuned loss trade-off coefficient in this identity.
++
++### 9.1 Dense population distribution base
++
++Using the repaired V32.1 scene-equal objective and all fit candidate edges, fit three fixed-lambda linear heads:
++
++1. Brier-ridge beneficial-event probability target `1[Y>0]`;
++2. positive conditional magnitude on positive edges, target `Y`;
++3. non-positive conditional magnitude on `Y<=0`, target `-Y`.
++
++The HURDLE arm reconstructs the expected intervention value from these three dense population components, but it is evaluated only on the already frozen RSMR winner.
++
++### 9.2 Honest selected-policy scalar component adaptation
++
++Within each outer three-fit-fold population, perform inner OOF frozen-RSMR selection exactly as V39. For the OOF selected proposals, require:
++
++- total selected >=192;
++- positive selected >=64;
++- non-positive selected >=64.
++
++Fit only scalar selected-policy adaptation:
++
++- a logit intercept shift for `pi`, preserving probability ordering;
++- a nonnegative scalar scale for positive magnitude;
++- a nonnegative scalar scale for negative magnitude.
++
++No selected-policy feature vector/head is fitted.
++
++### 9.3 Causal arms
++
++- `RSMR`: frozen ordinal ranker.
++- `DENSE`: V38 signed-mean control.
++- `HURDLE`: dense factorized distribution without selected adaptation.
++- `SIGN-SHIFT`: only selected beneficial-event logit intercept shift; magnitude components remain unchanged.
++- `SDFR-RAW`: sign shift plus nonnegative positive/negative magnitude scalar adaptation.
++- `SDFR-MAIN`: same SDFR-RAW output plus independent calibration-fold **unit-slope translation only**.
++
++This factorization makes the next result mechanistically interpretable:
++
++- HURDLE succeeds -> population distribution target is sufficient; discard selected adaptation.
++- SIGN-SHIFT succeeds but full SDFR does not -> beneficial-event frequency shift is the primary mediator; discard magnitude adaptation.
++- SDFR succeeds -> selected sign/magnitude factorization closes the zero/tail tradeoff without representation expansion.
++- Sign/capture improves but tail remains -> next missing information is value-specific downside representation, not another target factorization.
++- All arms fail despite adequate selected sign classes -> **close the current 19-D selected-value distribution route**; next work must introduce a value-specific representation/observable, not a larger head on the same evidence.
++
++## 10. V40 gate and fresh protocol
++
++Use the unchanged historical nested split: `3 fit + 1 independent value calibration + 1 test`.
++
++SDFR-MAIN must satisfy before any fresh population is selected:
++
++- exact frozen-winner subset/identity containment;
++- >=20% no-op false reduction vs RSMR;
++- useful capture no more than 3 pp below RSMR;
++- >=25% catastrophe reduction;
++- NegRMS not worse;
++- aggregate selected sum >=0 and 5/5 fold sums >=0;
++- selected >=64 and positive >=32;
++- inner OOF selected >=192 and each selected sign class >=64.
++
++No threshold/lambda/alpha/q/feature/candidate-count/temperature sweep.
++
++V39 spent no fresh data. Permanent exclusion remains **10700 tokens**. New seed:
++
++`v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1`.
++
++Only after nested TRAIN pass may V40 select independent `CAL500+A500+B500`. A/B remain strictly unpooled. Fresh arms are:
++
++`RAW / V20 / PRESERVE / RSMR / DENSE / HURDLE / SIGN-SHIFT / SDFR-RAW / SDFR-MAIN`.
++
++## 11. Paper-level implication
++
++If V40 is supported by double fresh and later frozen full-validation/closed-loop reproduction, the contribution is not “three heads.” The mechanism is:
++
++> **operator-conditioned distributional decision sufficiency:** ordinal extremal ranking, population cardinal outcome decomposition, and selected-policy sign/magnitude alignment are distinct estimands/supervision units under a deterministic frozen-winner containment contract.
++
++The immediate falsifiable paper claim is that the remaining incumbent-exit failure is not solved by increasing model capacity, but by representing the selected outcome distribution rather than collapsing sign frequency and magnitude into one mean-regression target.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/V64_3_40_ENGINEERING_VALIDATION.txt /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/V64_3_40_ENGINEERING_VALIDATION.txt
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/V64_3_40_ENGINEERING_VALIDATION.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/V64_3_40_ENGINEERING_VALIDATION.txt	2026-08-25 04:13:13.087841766 +0000
+@@ -0,0 +1,59 @@
++V64.3.40 EAF-ICER-SDFR engineering validation
++===============================================
++
++Scientific purpose
++------------------
++Freeze V34 RSMR challenger ordering and test operator-conditioned selected-outcome distribution factorization without adding a high-dimensional selected-policy head or tuning thresholds.
++
++Static validation
++-----------------
++Python compileall: PASS
++launcher bash -n: PASS
++
++Focused regression
++------------------
++bdse/tests/test_v64_3_40_eaf_icer_sdfr.py: 6/6 PASS
++
++Historical targeted regression V13 -> V40
++-----------------------------------------
++190/190 PASS
++Warnings: 2 historical torch TransformerEncoder warnings; no new warning class.
++
++Full repository regression
++--------------------------
++115 unique test_*.py files, partitioned into four mutually exclusive/exhaustive deterministic round-robin file groups.
++Group 0: 142/142 PASS, 6 warnings
++Group 1: 127/127 PASS, 16 warnings
++Group 2: 123/123 PASS, 11 warnings
++Group 3: 128/128 PASS, 3 warnings
++TOTAL: 520/520 PASS
++Warnings: 36 historical warnings, 0 new warning class.
++
++V40-specific contracts covered
++------------------------------
++- hurdle identity reconstructs signed expected value from positive-event probability and positive/negative conditional magnitudes;
++- selected distribution fit uses scalar logit shift and nonnegative magnitude scales only;
++- runtime distribution modes evaluate only the already frozen RSMR proposal;
++- SIGN-SHIFT changes only selected positive-event probability and cannot use magnitude scales;
++- selected adaptation/final unit-slope translation cannot rerank or create a second-best proposal;
++- malformed selected distribution parameters fail closed;
++- RSMR replay is required before any post-selection distribution readout;
++- V39 frozen-winner containment behavior remains covered by historical regression.
++
++Frozen scientific settings
++--------------------------
++- fixed ridge lambda = 1;
++- unchanged historical nested fold hash;
++- unchanged 19-D candidate-minus-incumbent evidence schema;
++- V34 RSMR remains sole challenger selector;
++- no value/distribution arm can rerank, create proposal, or second-best fallback;
++- inner OOF selected distribution population >=192 and each sign class >=64;
++- no-op false-intervention reduction >=20%;
++- positive capture no worse than RSMR by >3 pp;
++- catastrophe reduction >=25%;
++- NegRMS non-worse;
++- aggregate and all five outer-fold selected sums nonnegative;
++- independent CAL uses unit-slope translation only;
++- no threshold/lambda/alpha/q/top-K/candidate-count/temperature sweep;
++- A/B never pooled;
++- fresh seed v64.3.40-eaf-icer-sdfr-cal500-double-fresh-v1.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/planner/tournament.py /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/planner/tournament.py
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/planner/tournament.py	2026-08-25 02:34:10.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/planner/tournament.py	2026-08-25 04:12:35.439551735 +0000
+@@ -2582,14 +2582,11 @@
+     V37 modes remain supported:
+       score_affine, orthogonal_proposal_value.
+ 
+-    V38 adds rank/value factorization modes:
+-      dense_edge_value:
+-        a corrected V32.1 scene-equal absolute teacher-improvement ridge is
+-        trained on *all fit candidate edges* but evaluated only after RSMR has
+-        frozen one proposal;
+-      dense_edge_affine:
+-        the same dense value followed by a one-dimensional selected-policy
+-        affine recalibration fitted on an independent calibration population.
++    V38 adds rank/value factorization modes based on an all-edge signed mean.
++    V39 adds cross-fitted selected-residual modes.
++    V40 adds distribution-factorized modes that reconstruct the already frozen
++    proposal value from beneficial-event probability and positive/negative
++    conditional magnitudes; selected-policy adaptation is scalar-only.
+ 
+     Every mode can only accept the exact frozen RSMR proposal or veto it to the
+     incumbent.  None can score a second-best action after proposal freezing.
+@@ -2599,7 +2596,7 @@
+     if bool(scir_cfg.get("scene_reservation_enabled", False)):
+         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
+     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
+-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}
++    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}
+     if mode not in allowed:
+         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
+     b = int(proposal_action)
+@@ -2624,7 +2621,50 @@
+     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
+         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
+ 
+-    if mode in {"dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}:
++    if mode in {"dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}:
++        def _hurdle_linear(prefix: str) -> float:
++            hm = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_feature_mean", []), dtype=np.float64).reshape(-1)
++            hs = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_feature_std", []), dtype=np.float64).reshape(-1)
++            hw = np.asarray(scir_cfg.get(f"post_selection_hurdle_{prefix}_weights", []), dtype=np.float64).reshape(-1)
++            hb = float(scir_cfg.get(f"post_selection_hurdle_{prefix}_bias", float("nan")))
++            if len(hm) != X.shape[1] or len(hs) != X.shape[1] or len(hw) != X.shape[1] or not math.isfinite(hb):
++                raise ValueError(f"EAF-ICER V40 hurdle {prefix} parameter schema is inconsistent")
++            hz = (X[b] - hm) / np.maximum(hs, 1.0e-6)
++            vv = float(hz @ hw + hb)
++            if not math.isfinite(vv):
++                raise ValueError(f"EAF-ICER V40 hurdle {prefix} output is non-finite")
++            return vv
++
++        peps = float(scir_cfg.get("post_selection_hurdle_probability_clip", 1.0e-4))
++        peps = min(max(peps, 1.0e-8), 0.1)
++        ppos = float(np.clip(_hurdle_linear("sign"), peps, 1.0 - peps))
++        mpos = float(np.clip(_hurdle_linear("positive_magnitude"), 0.0, 40.0))
++        mneg = float(np.clip(_hurdle_linear("negative_magnitude"), 0.0, 40.0))
++        if mode != "dense_edge_hurdle":
++            logit_shift = float(scir_cfg.get("post_selection_hurdle_selected_logit_shift", float("nan")))
++            if not math.isfinite(logit_shift):
++                raise ValueError("EAF-ICER V40 selected hurdle logit shift is invalid")
++            logit = math.log(ppos / max(1.0 - ppos, 1.0e-12)) + logit_shift
++            if logit >= 0.0:
++                ee = math.exp(-min(logit, 60.0)); ppos = 1.0 / (1.0 + ee)
++            else:
++                ee = math.exp(max(logit, -60.0)); ppos = ee / (1.0 + ee)
++            if mode in {"dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift"}:
++                sp = float(scir_cfg.get("post_selection_hurdle_selected_positive_magnitude_scale", float("nan")))
++                sn = float(scir_cfg.get("post_selection_hurdle_selected_negative_magnitude_scale", float("nan")))
++                if not math.isfinite(sp) or not math.isfinite(sn) or sp < 0.0 or sn < 0.0:
++                    raise ValueError("EAF-ICER V40 selected hurdle magnitude scales are invalid")
++                mpos *= sp
++                mneg *= sn
++        value = ppos * mpos - (1.0 - ppos) * mneg
++        if mode == "dense_edge_hurdle_selected_shift":
++            shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
++            if not math.isfinite(shift):
++                raise ValueError("EAF-ICER V40 SDFR translation bias is invalid")
++            value += shift
++        value_feature = np.asarray([ppos, mpos, mneg], dtype=np.float64)
++        value_names = ["post_value::selected_positive_probability", "post_value::selected_positive_magnitude", "post_value::selected_negative_magnitude"]
++    elif mode in {"dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift"}:
+         dmean = np.asarray(scir_cfg.get("post_selection_dense_feature_mean", []), dtype=np.float64).reshape(-1)
+         dstd = np.asarray(scir_cfg.get("post_selection_dense_feature_std", []), dtype=np.float64).reshape(-1)
+         dw = np.asarray(scir_cfg.get("post_selection_dense_weights", []), dtype=np.float64).reshape(-1)
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tests/test_v64_3_40_eaf_icer_sdfr.py /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tests/test_v64_3_40_eaf_icer_sdfr.py
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tests/test_v64_3_40_eaf_icer_sdfr.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tests/test_v64_3_40_eaf_icer_sdfr.py	2026-08-25 04:03:21.695385348 +0000
+@@ -0,0 +1,84 @@
++from __future__ import annotations
++
++import numpy as np
++import pytest
++
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
++from bdse.tools.fit_v64_3_40_eaf_icer_sdfr import _fit_selected_distribution, _hurdle_value
++
++
++def _names():
++    return [f"delta::{n}" for n in _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES] + ["delta::support_logit"]
++
++
++def _base_cfg(d: int, mode: str):
++    rw=np.zeros(d); rw[0]=1.0
++    cfg={"post_selection_value_enabled":True,"post_selection_value_mode":mode,"scene_reservation_enabled":False,
++         "feature_names":_names(),"feature_mean":[0.0]*d,"feature_std":[1.0]*d,"weights":rw.tolist(),"bias":0.0,
++         "post_selection_hurdle_probability_clip":1e-4,"post_selection_value_max_abs":40.0}
++    # sign p = x1 + .5; positive magnitude = x2; negative magnitude = x3
++    specs={"sign":(1,1.0,0.5),"positive_magnitude":(2,1.0,0.0),"negative_magnitude":(3,1.0,0.0)}
++    for name,(j,w,b) in specs.items():
++        ww=np.zeros(d); ww[j]=w
++        cfg[f"post_selection_hurdle_{name}_feature_mean"]=[0.0]*d
++        cfg[f"post_selection_hurdle_{name}_feature_std"]=[1.0]*d
++        cfg[f"post_selection_hurdle_{name}_weights"]=ww.tolist()
++        cfg[f"post_selection_hurdle_{name}_bias"]=b
++    return cfg
++
++
++def test_hurdle_identity_reconstructs_signed_expected_value():
++    assert _hurdle_value(0.75,2.0,1.0)==pytest.approx(1.25)
++    assert _hurdle_value(0.25,2.0,1.0)==pytest.approx(-0.25)
++
++
++def test_selected_distribution_fit_recovers_sign_and_magnitude_shifts_without_high_dimensional_head():
++    rows=[]
++    # balanced enough for the preregistered per-sign minimum. Base p=.5. Selected policy is 2:1 positive.
++    for i in range(240):
++        pos=(i%3)!=0
++        rows.append({"p":0.5,"mp":1.0,"mn":1.0,"y":2.0 if pos else -3.0})
++    m=_fit_selected_distribution(rows)
++    assert m["sample_count"]==240 and m["positive_count"]==160 and m["nonpositive_count"]==80
++    assert m["selected_logit_shift"]==pytest.approx(np.log(2.0),abs=1e-8)
++    assert m["selected_positive_magnitude_scale"]==pytest.approx(2.0)
++    assert m["selected_negative_magnitude_scale"]==pytest.approx(3.0)
++
++
++def test_v40_runtime_distribution_modes_only_value_the_frozen_proposal():
++    names=_names(); d=len(names); X=np.zeros((3,d)); X[1,0]=2.0; X[1,1]=0.25; X[1,2]=2.0; X[1,3]=1.0
++    mu=np.array([0.0,2.0,1.0])
++    cfg=_base_cfg(d,"dense_edge_hurdle")
++    v,feat,fn=_icer_post_selection_value(1,mu,X,names,cfg)
++    # p=.75, m+=2, m-=1 => 1.25
++    assert v==pytest.approx(1.25)
++    assert feat.tolist()==pytest.approx([0.75,2.0,1.0])
++    assert fn==["post_value::selected_positive_probability","post_value::selected_positive_magnitude","post_value::selected_negative_magnitude"]
++
++
++def test_v40_selected_component_adaptation_is_scalar_and_translation_preserves_final_order():
++    names=_names(); d=len(names); X=np.zeros((2,d)); X[1,0]=1.0; X[1,1]=0.0; X[1,2]=2.0; X[1,3]=1.0
++    mu=np.array([0.0,1.0]); cfg=_base_cfg(d,"dense_edge_hurdle_selected")
++    cfg.update({"post_selection_hurdle_selected_logit_shift":0.0,"post_selection_hurdle_selected_positive_magnitude_scale":2.0,"post_selection_hurdle_selected_negative_magnitude_scale":0.5})
++    v,_,_=_icer_post_selection_value(1,mu,X,names,cfg)
++    # p=.5, scaled m+=4, m-=.5 => 1.75
++    assert v==pytest.approx(1.75)
++    cfg["post_selection_value_mode"]="dense_edge_hurdle_selected_shift"; cfg["post_selection_selected_bias"]=-0.25
++    v2,_,_=_icer_post_selection_value(1,mu,X,names,cfg)
++    assert v2==pytest.approx(1.5)
++
++
++def test_v40_sign_shift_ablation_changes_only_positive_probability_component():
++    names=_names(); d=len(names); X=np.zeros((2,d)); X[1,0]=1.0; X[1,1]=0.0; X[1,2]=2.0; X[1,3]=1.0
++    mu=np.array([0.0,1.0]); cfg=_base_cfg(d,"dense_edge_hurdle_sign_shift")
++    cfg.update({"post_selection_hurdle_selected_logit_shift":np.log(3.0),"post_selection_hurdle_selected_positive_magnitude_scale":9.0,"post_selection_hurdle_selected_negative_magnitude_scale":9.0})
++    v,feat,_=_icer_post_selection_value(1,mu,X,names,cfg)
++    # p=.5 -> .75 after odds*3. Sign-only mode must ignore stored magnitude scales.
++    assert feat.tolist()==pytest.approx([0.75,2.0,1.0])
++    assert v==pytest.approx(1.25)
++
++
++def test_v40_runtime_fails_closed_on_missing_distribution_parameters():
++    names=_names(); d=len(names); X=np.zeros((2,d)); X[1,0]=1.0; mu=np.array([0.0,1.0]); cfg=_base_cfg(d,"dense_edge_hurdle_selected")
++    with pytest.raises(ValueError):
++        _icer_post_selection_value(1,mu,X,names,cfg)
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/calibrate_v64_3_40_eaf_icer_sdfr.py /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/calibrate_v64_3_40_eaf_icer_sdfr.py
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/calibrate_v64_3_40_eaf_icer_sdfr.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/calibrate_v64_3_40_eaf_icer_sdfr.py	2026-08-25 04:02:52.991163847 +0000
+@@ -0,0 +1,103 @@
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import FEATURE_NAMES, _scene_samples, _select
++from bdse.tools.fit_v64_3_34_eaf_icer_rsmr import _structured_scores
++from bdse.tools.fit_v64_3_38_eaf_icer_davr import MIN_VALUE_CAL_PROPOSALS
++from bdse.tools.fit_v64_3_39_eaf_icer_cfsr import _fit_translation
++
++EXPECTED_SCENES = 500
++PROB_EPS = 1.0e-4
++
++
++def _tokens(path: Path) -> list[str]:
++    return [str(json.loads(x).get("scenario_token", "")) for x in path.read_text().splitlines() if x.strip()]
++
++
++def _linear(x: np.ndarray, sc: dict[str, Any], prefix: str) -> float:
++    mean=np.asarray(sc.get(f"post_selection_hurdle_{prefix}_feature_mean",[]),dtype=np.float64)
++    std=np.asarray(sc.get(f"post_selection_hurdle_{prefix}_feature_std",[]),dtype=np.float64)
++    w=np.asarray(sc.get(f"post_selection_hurdle_{prefix}_weights",[]),dtype=np.float64)
++    b=float(sc.get(f"post_selection_hurdle_{prefix}_bias",float("nan")))
++    if any(v.size!=len(FEATURE_NAMES) for v in [mean,std,w]) or not math.isfinite(b): raise SystemExit(f"V40 CAL malformed hurdle {prefix}")
++    z=(np.asarray(x,dtype=np.float64)-mean)/np.maximum(std,1.0e-6)
++    return float(z@w+b)
++
++
++def _sigmoid(x: float) -> float:
++    if x>=0.0:
++        e=math.exp(-min(x,60.0)); return 1.0/(1.0+e)
++    e=math.exp(max(x,-60.0)); return e/(1.0+e)
++
++
++def _sdfr_value(x: np.ndarray, sc: dict[str, Any]) -> float:
++    p=float(np.clip(_linear(x,sc,"sign"),PROB_EPS,1.0-PROB_EPS))
++    mp=float(np.clip(_linear(x,sc,"positive_magnitude"),0.0,40.0)); mn=float(np.clip(_linear(x,sc,"negative_magnitude"),0.0,40.0))
++    shift=float(sc.get("post_selection_hurdle_selected_logit_shift",float("nan")))
++    sp=float(sc.get("post_selection_hurdle_selected_positive_magnitude_scale",float("nan")))
++    sn=float(sc.get("post_selection_hurdle_selected_negative_magnitude_scale",float("nan")))
++    if not all(math.isfinite(v) for v in [shift,sp,sn]) or sp<0.0 or sn<0.0: raise SystemExit("V40 CAL malformed selected hurdle adaptation")
++    l=math.log(p/max(1.0-p,1.0e-12))+shift; ps=_sigmoid(l)
++    return float(np.clip(ps*(sp*mp)-(1.0-ps)*(sn*mn),-40.0,40.0))
++
++
++def _parts(cfg: dict[str, Any]):
++    sc=cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"]
++    if not bool(sc.get("enabled")) or str(sc.get("post_selection_value_mode",""))!="dense_edge_hurdle_selected": raise SystemExit("V40 CAL requires raw SDFR config")
++    if list(sc.get("feature_names",[]))!=FEATURE_NAMES: raise SystemExit("V40 CAL RSMR feature schema mismatch")
++    rmean=np.asarray(sc.get("feature_mean",[]),dtype=np.float64); rstd=np.asarray(sc.get("feature_std",[]),dtype=np.float64); rw=np.asarray(sc.get("weights",[]),dtype=np.float64)
++    if any(v.size!=len(FEATURE_NAMES) for v in [rmean,rstd,rw]) or np.max(np.abs(rmean))>1e-12 or abs(float(sc.get("bias",0.0)))>1e-12: raise SystemExit("V40 CAL frozen RSMR malformed")
++    return sc,(rw,rstd)
++
++
++def _decorate_main(cfg: dict[str, Any], bias: float) -> dict[str, Any]:
++    out=yaml.safe_load(yaml.safe_dump(cfg,sort_keys=False)); sc=out["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"]
++    sc.update({"post_selection_value_mode":"dense_edge_hurdle_selected_shift","post_selection_selected_bias":float(bias),"post_selection_value_training":"all_edge_hurdle_distribution_plus_cross_fitted_selected_component_adaptation_plus_independent_CAL500_unit_slope_translation","post_selection_operator":"freeze_RSMR_winner_then_selected_distribution_expected_value_plus_translation_accept_same_winner_iff_positive_else_incumbent"})
++    out.setdefault("metadata",{})["algorithm_version"]="V64.3.40-EAF-ICER-SDFR"; out.setdefault("provenance",{})["algorithm_version"]="V64.3.40-EAF-ICER-SDFR"; out.setdefault("experiment",{})["name"]="v64_3_40_eaf_icer_sdfr"; out["experiment"]["algorithm"]="V64.3.40 selection-distribution factorized recovery"
++    return out
++
++
++def main()->None:
++    ap=argparse.ArgumentParser(description="V64.3.40 independent CAL500 unit-slope translation")
++    ap.add_argument("--calibration-rows",required=True); ap.add_argument("--calibration-edges",required=True); ap.add_argument("--sdfr-config",required=True); ap.add_argument("--output-sdfr-main-config",required=True); ap.add_argument("--output-report",required=True); a=ap.parse_args()
++    rt=_tokens(Path(a.calibration_rows))
++    if len(rt)!=EXPECTED_SCENES or len(set(rt))!=EXPECTED_SCENES: raise SystemExit("V40 CAL rows must be exactly 500 unique scenes")
++    groups={t:[] for t in rt}; allowed=set(rt)
++    for line in Path(a.calibration_edges).read_text().splitlines():
++        if not line.strip(): continue
++        r=json.loads(line); t=str(r.get("scenario_token",""))
++        if t not in allowed: raise SystemExit(f"V40 CAL edge token outside rows: {t}")
++        groups[t].append(r)
++    cfg=yaml.safe_load(Path(a.sdfr_config).read_text()); sc,rsm=_parts(cfg); rw,rstd=rsm
++    ys=[]; vals=[]; used=[]; replay_max=0.0
++    for t in rt:
++        ss=_scene_samples(groups[t])
++        if not ss: continue
++        score=_structured_scores(ss,(rw,rstd,{})); idx=_select(ss,score)
++        if idx is None: continue
++        x=np.asarray(ss[idx]["x"],dtype=np.float64); v=_sdfr_value(x,sc)
++        rr=next((r for r in groups[t] if int(r.get("challenger_action",-2))==int(ss[idx]["action"])),None)
++        if rr is None: raise SystemExit("V40 CAL selected action missing from edge replay")
++        try: logged=float(rr.get("icer_scir_raw_predicted_improvement",rr.get("icer_scir_predicted_improvement",float("nan"))))
++        except (TypeError,ValueError): logged=float("nan")
++        if math.isfinite(logged): replay_max=max(replay_max,abs(logged-float(score[idx])))
++        ys.append(float(ss[idx]["y"])); vals.append(v); used.append(t)
++    if len(used)<MIN_VALUE_CAL_PROPOSALS: raise SystemExit(f"V40 CAL selected proposals {len(used)} < {MIN_VALUE_CAL_PROPOSALS}")
++    if replay_max>1.0e-5: raise SystemExit(f"V40 CAL frozen RSMR replay mismatch {replay_max}")
++    y=np.asarray(ys); v=np.asarray(vals); fit=_fit_translation(v,y,"selected_distribution_factorized_value")
++    pred=v+float(fit["selected_policy_bias"])
++    Path(a.output_sdfr_main_config).write_text(yaml.safe_dump(_decorate_main(cfg,fit["selected_policy_bias"]),sort_keys=False))
++    rep={"audit":"v64_3_40_eaf_icer_sdfr_independent_CAL500_translation_fit","calibration_total_scene_count":EXPECTED_SCENES,"selected_policy_proposal_count":len(used),"selected_policy_proposal_count_min":MIN_VALUE_CAL_PROPOSALS,"calibration_tokens_sha256":hashlib.sha256(("\n".join(rt)+"\n").encode()).hexdigest(),"selected_policy_tokens_sha256":hashlib.sha256(("\n".join(used)+"\n").encode()).hexdigest(),"frozen_rsmr_score_replay_max_abs":float(replay_max),"proposal_teacher_improvement_sum":float(y.sum()),"proposal_precision":float(np.mean(y>0.0)),"proposal_worst":float(y.min()),"sdfr_translation_fit":fit,"sdfr_translation_sign_accuracy":float(np.mean((pred>0.0)==(y>0.0)))}
++    Path(a.output_report).write_text(json.dumps(rep,indent=2,sort_keys=True)+"\n"); print(json.dumps({"pass":True,"selected_policy_proposals":len(used),"sdfr_main_config":a.output_sdfr_main_config},sort_keys=True))
++
++
++if __name__=="__main__": main()
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_screen.py /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_screen.py
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_screen.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_screen.py	2026-08-25 04:04:03.166179203 +0000
+@@ -0,0 +1,15 @@
++from __future__ import annotations
++import argparse,json
++from pathlib import Path
++
++
++def main():
++    ap=argparse.ArgumentParser(); ap.add_argument('--split-a',required=True); ap.add_argument('--split-b',required=True); ap.add_argument('--value-report',required=True); ap.add_argument('--fit-report',required=True); ap.add_argument('--output',required=True); a=ap.parse_args()
++    A=json.load(open(a.split_a)); B=json.load(open(a.split_b)); C=json.load(open(a.value_report)); F=json.load(open(a.fit_report))
++    eng=bool(A.get('engineering_valid') and B.get('engineering_valid')); train=bool(F.get('train_gate_pass')); cal=bool(C.get('calibration_total_scene_count')==500 and int(C.get('selected_policy_proposal_count',0))>=64 and float(C.get('frozen_rsmr_score_replay_max_abs',1.0))<=1e-5)
++    both=bool(eng and train and cal and A.get('full_split_pass') and B.get('full_split_pass'))
++    rep={'audit':'v64_3_40_eaf_icer_sdfr_double_fresh_screen','engineering_valid_both':eng,'train_nested_distribution_gate_pass':train,'independent_CAL500_translation_fit_valid':cal,'double_fresh_promotion_pass':both,'scientific_conclusion':'SDFR_reproduces_on_double_fresh' if both else ('engineering_invalid_stop' if not eng else 'SDFR_not_promoted_current_distribution_factorization_fails_at_least_one_independent_gate_or_block'),'next_action':'freeze_SDFR_and_run_one_independent_full_validation_reproduction' if both else 'STOP_do_not_pool_AB_or_sweep_thresholds_use_hurdle_vs_sign_shift_vs_SDFR_failure_slice_for_next_mechanism','train_fit':F,'independent_value_fit':C,'split_A':A,'split_B':B,'protocol':'Exact V39 TRAIN failure prerequisite -> frozen V34 RSMR ordering -> same 19-D all-edge hurdle distribution P(positive), positive conditional magnitude, negative conditional magnitude -> inner OOF selected-policy scalar component adaptation -> independent CAL500 unit-slope translation -> untouched A500/B500. No distribution arm can rerank, create a proposal, or use second-best fallback.'}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n'); print(json.dumps({'pass':both,'engineering':eng,'train':train,'calibration':cal,'conclusion':rep['scientific_conclusion']},sort_keys=True))
++
++
++if __name__=='__main__': main()
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_split.py /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_split.py
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_split.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/check_v64_3_40_eaf_icer_sdfr_split.py	2026-08-25 04:04:03.158217516 +0000
+@@ -0,0 +1,45 @@
++from __future__ import annotations
++import argparse,json,math
++from pathlib import Path
++
++from bdse.tools.fit_v64_3_38_eaf_icer_davr import CAPTURE_TOL, CAT, NOOP_REDUCTION_MIN
++from bdse.tools.check_v64_3_39_eaf_icer_cfsr_split import (
++    EPS,_containment,_f,_icer_edge_diag,_load_rows,_mechanism_gate,_metric_pack,_query_diag,_replacement_tail_diag,_selected_policy_diag,_structural,
++)
++
++
++def main():
++    ap=argparse.ArgumentParser(description="Audit one V64.3.40 SDFR fresh block")
++    tags=["raw","v20","preserve","rsmr","dense","hurdle","sign_shift","sdfr_raw","sdfr"]
++    ap.add_argument("--split-name",required=True)
++    for tag in tags:
++        ap.add_argument(f"--{tag.replace('_','-')}-metrics",dest=f"{tag}_metrics",required=True); ap.add_argument(f"--{tag.replace('_','-')}-rows",dest=f"{tag}_rows",required=True)
++        if tag!="raw": ap.add_argument(f"--{tag.replace('_','-')}-edges",dest=f"{tag}_edges",required=True)
++    ap.add_argument("--output",required=True); a=ap.parse_args()
++    metrics={t:json.load(open(getattr(a,t+"_metrics"))) for t in tags}; rows={t:_load_rows(getattr(a,t+"_rows")) for t in tags}; toks=set(rows["raw"])
++    if len(toks)!=500 or any(set(rows[t])!=toks for t in tags[1:]): raise SystemExit("STOP DATA: V40 nine arms must contain exact paired 500 scenes")
++    flagged={t for t in toks if _f(rows["raw"][t],"all_actions_safety_flagged_rate",0.0)>=0.5}; safe=toks-flagged
++    valtags=["preserve","rsmr","dense","hurdle","sign_shift","sdfr_raw","sdfr"]
++    q={t:_query_diag(rows["v20"],rows[t],toks) for t in valtags}; query_ok=all(v["all_query_counts_exact_scene_parity"] for v in q.values())
++    structural={t:_structural(rows[t],rows["raw"],flagged) for t in ["v20"]+valtags}; struct_ok=all((not flagged) or (structural[t]["final_identity_vs_raw"]==1.0 and structural[t]["icer_structural_delegation_rate"]==1.0) for t in valtags)
++    cont={t:_containment(rows["rsmr"],rows[t],safe) for t in ["dense","hurdle","sign_shift","sdfr_raw","sdfr"]}; contain_ok=all(x["monotone_selected_policy_containment_valid"] for x in cont.values())
++    edge={t:_icer_edge_diag(Path(getattr(a,t+"_edges")),safe) for t in tags if t!="raw"}; tail={t:_replacement_tail_diag(rows["raw"],rows[t],getattr(a,t+"_edges"),safe) for t in tags if t!="raw"}
++    policy={t:_selected_policy_diag(getattr(a,t+"_edges"),safe) for t in ["rsmr","dense","hurdle","sign_shift","sdfr_raw","sdfr"]}; M={t:_metric_pack(metrics[t]) for t in tags}
++    gates={t:_mechanism_gate(policy[t],policy["rsmr"]) for t in ["dense","hurdle","sign_shift","sdfr_raw","sdfr"]}
++    preserve_cap=float(edge["preserve"]["direct_incumbent_opportunity_capture_rate"]); main_cap=float(edge["sdfr"]["direct_incumbent_opportunity_capture_rate"])
++    coverage=bool(math.isfinite(main_cap) and math.isfinite(preserve_cap) and main_cap>=preserve_cap+0.03-EPS)
++    endp=bool(M["sdfr"]["match"]>=M["preserve"]["match"]-0.002 and M["sdfr"]["regret"]<=M["preserve"]["regret"]*1.005 and M["sdfr"]["match"]>=M["v20"]["match"]-0.002 and M["sdfr"]["regret"]<=M["v20"]["regret"]*1.005)
++    eng=bool(query_ok and struct_ok and contain_ok); full=bool(eng and gates["sdfr"]["pass"] and coverage and endp)
++    if not eng: nxt="STOP_fix_V40_engineering_or_frozen_winner_containment_before_scientific_interpretation"
++    elif gates["hurdle"]["pass"] and not gates["sdfr"]["pass"]: nxt="population_distribution_factorization_suffices_selected_component_adaptation_unnecessary_or_harmful"
++    elif gates["sign_shift"]["pass"] and not gates["sdfr"]["pass"]: nxt="selected_sign_frequency_shift_is_sufficient_simplify_discard_magnitude_adaptation"
++    elif not gates["sdfr"]["existence_and_capture"]: nxt="distribution_factorization_does_not_close_capture_stop_current_19D_selected_value_distribution_route"
++    elif not gates["sdfr"]["hard_tail"]: nxt="distribution_factorization_preserves_recovery_but_hard_tail_remains_next_requires_value_specific_representation_not_more_target_factorization"
++    elif not coverage: nxt="SDFR_direct_mechanism_passes_but_useful_recovery_gain_over_preserve_insufficient"
++    elif not endp: nxt="SDFR_direct_mechanism_passes_but_endpoint_does_not_convert_audit_runtime_path_composition"
++    else: nxt="if_second_fresh_block_also_passes_freeze_SDFR_and_run_one_independent_full_validation_reproduction"
++    rep={"audit":"v64_3_40_eaf_icer_sdfr_split","split_name":a.split_name,"full_split_pass":full,"engineering_valid":eng,"mechanism_gates":gates,"sdfr_capture_gain_over_preserve":main_cap-preserve_cap if math.isfinite(main_cap) and math.isfinite(preserve_cap) else float("nan"),"sdfr_meaningful_coverage":coverage,"endpoint_noninferior":endp,"next_action":nxt,"query_parity":q,"structural":structural,"containment":cont,"edge_diagnostics":edge,"selected_policy_diagnostics":policy,"direct_selected_path_tail":tail,"metrics":M,"frozen_contract":{"catastrophic_threshold":CAT,"noop_reduction_fraction_min":NOOP_REDUCTION_MIN,"capture_tolerance":CAPTURE_TOL,"promotion_capture_gain_over_preserve_min":0.03,"no_AB_pooling":True,"RSMR_winner_frozen_before_any_distribution_readout":True,"distribution_heads_never_rerank":True,"selected_distribution_adaptation_scalar_only":True,"CAL500_translation_unit_slope":True,"no_second_best_fallback":True,"no_runtime_threshold_lambda_alpha_feature_candidate_count_or_temperature_sweep":True}}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+"\n"); print(json.dumps(rep,indent=2,sort_keys=True))
++
++
++if __name__=="__main__": main()
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_39_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_40.csv' '--exclude=V64_3_39_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_40.json' '--exclude=V64_3_40_EAF_ICER_SDFR.patch' '--exclude=V64_3_40_EAF_ICER_SDFR_CHANGED_FILES.txt' /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/fit_v64_3_40_eaf_icer_sdfr.py /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/fit_v64_3_40_eaf_icer_sdfr.py
+--- /mnt/data/work_v39_analysis/code/bdse_v64_3_39_eaf_icer_cfsr/bdse/tools/fit_v64_3_40_eaf_icer_sdfr.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_40_eaf_icer_sdfr/bdse/tools/fit_v64_3_40_eaf_icer_sdfr.py	2026-08-25 04:05:29.065807769 +0000
+@@ -0,0 +1,445 @@
++from __future__ import annotations
++
++import argparse
++import csv
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.tools.fit_v64_3_32_1_eaf_icer_ssir_weightfix import _fit_ridge as _fit_scene_equal_ridge
++from bdse.tools.fit_v64_3_32_1_eaf_icer_ssir_weightfix import _predict as _predict_scene_equal_ridge
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import FOLDS, RIDGE_LAMBDA, _fold, _read_edges, _scene_samples, _select
++from bdse.tools.fit_v64_3_34_eaf_icer_rsmr import _extended_diag, _fit_regret_structured_margin, _structured_scores
++from bdse.tools.fit_v64_3_38_eaf_icer_davr import (
++    CAT,
++    CAPTURE_TOL,
++    CATASTROPHE_REDUCTION_MIN,
++    MIN_VALUE_CAL_PROPOSALS,
++    NOOP_REDUCTION_MIN,
++    _build,
++    _fit_dense_value_ridge,
++    _value_diag,
++    _write_dense,
++    _write_rsmr,
++)
++from bdse.tools.fit_v64_3_39_eaf_icer_cfsr import _fit_translation
++
++EPS = 1.0e-12
++MIN_INNER_SELECTED = 3 * MIN_VALUE_CAL_PROPOSALS
++MIN_SELECTED_SIGN_CLASS = 64
++PROB_EPS = 1.0e-4
++
++
++def _retarget(samples: list[dict[str, Any]], target) -> list[dict[str, Any]]:
++    out: list[dict[str, Any]] = []
++    for a in samples:
++        b = dict(a)
++        b["y"] = float(target(float(a["y"])))
++        out.append(b)
++    return out
++
++
++def _fit_hurdle_base(samples: list[dict[str, Any]]) -> dict[str, Any]:
++    if not samples:
++        raise ValueError("V64.3.40 hurdle base has no samples")
++    sign = _fit_scene_equal_ridge(_retarget(samples, lambda y: 1.0 if y > 0.0 else 0.0))
++    pos_src = [a for a in samples if float(a["y"]) > 0.0]
++    neg_src = [a for a in samples if float(a["y"]) <= 0.0]
++    if not pos_src or not neg_src:
++        raise ValueError("V64.3.40 hurdle base needs both positive and non-positive training edges")
++    pos = _fit_scene_equal_ridge(_retarget(pos_src, lambda y: y))
++    neg = _fit_scene_equal_ridge(_retarget(neg_src, lambda y: -y))
++    return {"sign": sign, "positive_magnitude": pos, "negative_magnitude": neg}
++
++
++def _predict_one(ss: list[dict[str, Any]], model, idx: int) -> float:
++    mu, _ = _predict_scene_equal_ridge(ss, model)
++    if not (0 <= idx < len(mu)):
++        raise RuntimeError("V64.3.40 selected index out of range")
++    return float(mu[idx])
++
++
++def _hurdle_components(ss: list[dict[str, Any]], model: dict[str, Any], idx: int) -> tuple[float, float, float]:
++    p = float(np.clip(_predict_one(ss, model["sign"], idx), PROB_EPS, 1.0 - PROB_EPS))
++    mp = float(np.clip(_predict_one(ss, model["positive_magnitude"], idx), 0.0, 40.0))
++    mn = float(np.clip(_predict_one(ss, model["negative_magnitude"], idx), 0.0, 40.0))
++    return p, mp, mn
++
++
++def _hurdle_value(p: float, mp: float, mn: float) -> float:
++    return float(np.clip(float(p) * float(mp) - (1.0 - float(p)) * float(mn), -40.0, 40.0))
++
++
++def _logit(p: float) -> float:
++    q = min(max(float(p), PROB_EPS), 1.0 - PROB_EPS)
++    return math.log(q / (1.0 - q))
++
++
++def _sigmoid(x: float) -> float:
++    if x >= 0.0:
++        e = math.exp(-min(x, 60.0)); return 1.0 / (1.0 + e)
++    e = math.exp(max(x, -60.0)); return e / (1.0 + e)
++
++
++def _fit_logit_offset(base_p: np.ndarray, labels: np.ndarray) -> float:
++    p = np.clip(np.asarray(base_p, dtype=np.float64).reshape(-1), PROB_EPS, 1.0 - PROB_EPS)
++    y = np.asarray(labels, dtype=np.float64).reshape(-1)
++    if p.size != y.size or p.size < MIN_INNER_SELECTED or np.any(~np.isfinite(p)) or np.any(~np.isfinite(y)):
++        raise ValueError("V64.3.40 selected sign calibration population malformed")
++    off = np.log(p / (1.0 - p))
++    c = 0.0
++    for _ in range(80):
++        z = np.clip(off + c, -60.0, 60.0)
++        pr = 1.0 / (1.0 + np.exp(-z))
++        g = float(np.sum(pr - y))
++        h = float(np.sum(pr * (1.0 - pr)))
++        step = g / max(h, 1.0e-9)
++        c -= step
++        if abs(step) < 1.0e-12:
++            break
++    return float(c)
++
++
++def _fit_nonnegative_scale(pred: np.ndarray, target: np.ndarray, min_n: int) -> float:
++    x = np.asarray(pred, dtype=np.float64).reshape(-1)
++    y = np.asarray(target, dtype=np.float64).reshape(-1)
++    if x.size != y.size or x.size < min_n or np.any(~np.isfinite(x)) or np.any(~np.isfinite(y)):
++        raise ValueError("V64.3.40 selected magnitude calibration population malformed or too small")
++    den = float(np.dot(x, x)) + EPS
++    return float(max(0.0, np.dot(x, y) / den))
++
++
++def _fit_selected_distribution(rows: list[dict[str, Any]]) -> dict[str, Any]:
++    if len(rows) < MIN_INNER_SELECTED:
++        raise ValueError(f"V64.3.40 inner OOF selected population {len(rows)} < {MIN_INNER_SELECTED}")
++    p = np.asarray([r["p"] for r in rows], dtype=np.float64)
++    y = np.asarray([r["y"] for r in rows], dtype=np.float64)
++    mp = np.asarray([r["mp"] for r in rows], dtype=np.float64)
++    mn = np.asarray([r["mn"] for r in rows], dtype=np.float64)
++    pos = y > 0.0
++    neg = ~pos
++    if int(pos.sum()) < MIN_SELECTED_SIGN_CLASS or int(neg.sum()) < MIN_SELECTED_SIGN_CLASS:
++        raise ValueError(
++            f"V64.3.40 selected sign classes too small pos={int(pos.sum())} neg={int(neg.sum())} < {MIN_SELECTED_SIGN_CLASS}"
++        )
++    logit_shift = _fit_logit_offset(p, pos.astype(np.float64))
++    pos_scale = _fit_nonnegative_scale(mp[pos], y[pos], MIN_SELECTED_SIGN_CLASS)
++    neg_scale = _fit_nonnegative_scale(mn[neg], -y[neg], MIN_SELECTED_SIGN_CLASS)
++    ps = np.asarray([_sigmoid(_logit(v) + logit_shift) for v in p], dtype=np.float64)
++    raw = p * mp - (1.0 - p) * mn
++    sign_only = ps * mp - (1.0 - ps) * mn
++    full = ps * (pos_scale * mp) - (1.0 - ps) * (neg_scale * mn)
++    return {
++        "sample_count": int(len(rows)),
++        "positive_count": int(pos.sum()),
++        "nonpositive_count": int(neg.sum()),
++        "selected_logit_shift": float(logit_shift),
++        "selected_positive_magnitude_scale": float(pos_scale),
++        "selected_negative_magnitude_scale": float(neg_scale),
++        "raw_hurdle_mse": float(np.mean((raw - y) ** 2)),
++        "sign_shift_only_mse": float(np.mean((sign_only - y) ** 2)),
++        "selected_distribution_mse": float(np.mean((full - y) ** 2)),
++        "operator": "cross_fitted_selected_policy_hurdle_distribution_scalar_adaptation",
++        "identity": "E[Y|selected,X]=P(Y>0|selected,X)E[Y|Y>0,selected,X]-P(Y<=0|selected,X)E[-Y|Y<=0,selected,X]",
++    }
++
++
++def _apply_selected_distribution(p: float, mp: float, mn: float, adapt: dict[str, Any], sign_only: bool = False) -> tuple[float, float, float, float]:
++    ps = _sigmoid(_logit(p) + float(adapt["selected_logit_shift"]))
++    if sign_only:
++        pms, nms = mp, mn
++    else:
++        pms = float(adapt["selected_positive_magnitude_scale"]) * mp
++        nms = float(adapt["selected_negative_magnitude_scale"]) * mn
++    return _hurdle_value(ps, pms, nms), ps, float(pms), float(nms)
++
++
++def _inner_oof_selected(scene: dict[str, list[dict[str, Any]]], fit_tokens: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
++    fold_ids = sorted({_fold(t) for t in fit_tokens})
++    if len(fold_ids) != 3:
++        raise ValueError(f"V64.3.40 expected exactly 3 outer-fit folds, got {fold_ids}")
++    rows: list[dict[str, Any]] = []
++    reports: list[dict[str, Any]] = []
++    for h in fold_ids:
++        held = [t for t in fit_tokens if _fold(t) == h]
++        train = [t for t in fit_tokens if _fold(t) != h]
++        rsm = _fit_regret_structured_margin(scene, train)
++        samples = [a for t in train for a in scene[t]]
++        hurdle = _fit_hurdle_base(samples)
++        n = 0
++        for t in held:
++            ss = scene[t]
++            score = _structured_scores(ss, rsm)
++            idx = _select(ss, score)
++            if idx is None:
++                continue
++            p, mp, mn = _hurdle_components(ss, hurdle, idx)
++            rows.append({"token": t, "inner_holdout_fold": int(h), "y": float(ss[idx]["y"]), "p": p, "mp": mp, "mn": mn})
++            n += 1
++        reports.append({"inner_holdout_fold": int(h), "train_scene_count": len(train), "heldout_scene_count": len(held), "selected_proposal_count": n})
++    if len({r["token"] for r in rows}) != len(rows):
++        raise RuntimeError("V64.3.40 inner OOF selected tokens are not unique")
++    return rows, {"inner_fold_reports": reports, "selected_proposal_count": len(rows), "fit_fold_ids": fold_ids}
++
++
++def _dense_value(ss: list[dict[str, Any]], dense_model, idx: int) -> float:
++    return _predict_one(ss, dense_model, idx)
++
++
++def _cal_population(scene, tokens, rsm, dense, hurdle, adapt):
++    y: list[float] = []; raw: list[float] = []; used: list[str] = []
++    for t in tokens:
++        ss = scene.get(t, [])
++        if not ss: continue
++        score = _structured_scores(ss, rsm); idx = _select(ss, score)
++        if idx is None: continue
++        p, mp, mn = _hurdle_components(ss, hurdle, idx)
++        sv, _, _, _ = _apply_selected_distribution(p, mp, mn, adapt, sign_only=False)
++        y.append(float(ss[idx]["y"])); raw.append(sv); used.append(t)
++    return np.asarray(y, dtype=np.float64), np.asarray(raw, dtype=np.float64), used
++
++
++def _evaluate(ss, rsm, dense, hurdle, adapt, main_bias: float):
++    score = _structured_scores(ss, rsm); idx = _select(ss, score)
++    names = ["rsmr", "dense", "hurdle", "sign_shift", "sdfr_raw", "sdfr_main"]
++    if idx is None:
++        return {n: (None, float("nan")) for n in names}, {}
++    u = float(score[idx]); dv = _dense_value(ss, dense, idx)
++    p, mp, mn = _hurdle_components(ss, hurdle, idx)
++    hv = _hurdle_value(p, mp, mn)
++    sv, ps, _, _ = _apply_selected_distribution(p, mp, mn, adapt, sign_only=True)
++    fv, ps2, mps, mns = _apply_selected_distribution(p, mp, mn, adapt, sign_only=False)
++    mv = float(np.clip(fv + float(main_bias), -40.0, 40.0))
++    ev = {
++        "rsmr": (idx, u),
++        "dense": (idx if dv > 0.0 else None, dv),
++        "hurdle": (idx if hv > 0.0 else None, hv),
++        "sign_shift": (idx if sv > 0.0 else None, sv),
++        "sdfr_raw": (idx if fv > 0.0 else None, fv),
++        "sdfr_main": (idx if mv > 0.0 else None, mv),
++    }
++    dist = {"base_positive_probability": p, "selected_positive_probability": ps2, "base_positive_magnitude": mp, "base_negative_magnitude": mn, "selected_positive_magnitude": mps, "selected_negative_magnitude": mns}
++    return ev, dist
++
++
++def _metrics(vals, captured, opp, noop_selected, opp_selected, noop_scenes):
++    return _extended_diag(vals, captured, opp, noop_selected, opp_selected, noop_scenes)
++
++
++def _gate(m: dict[str, Any], r: dict[str, Any], folds: list[dict[str, Any]], key: str) -> dict[str, bool]:
++    noop_target = (1.0 - NOOP_REDUCTION_MIN) * float(r["no_positive_opportunity_false_intervention_count"])
++    cat_target = (1.0 - CATASTROPHE_REDUCTION_MIN) * float(r["catastrophic_count"])
++    existence = bool(m["no_positive_opportunity_false_intervention_count"] <= noop_target + EPS and m["positive_capture_rate"] >= r["positive_capture_rate"] - CAPTURE_TOL - EPS)
++    tail = bool(m["catastrophic_count"] <= cat_target + EPS and m["teacher_negative_rms"] <= r["teacher_negative_rms"] + EPS and m["teacher_improvement_sum"] >= -EPS)
++    fold_direction = all(float(f[key]["teacher_improvement_sum"]) >= -EPS for f in folds)
++    population = bool(m["selected_count"] >= 64 and m["selected_positive_count"] >= 32)
++    return {"existence_and_capture": existence, "tail": tail, "all_folds_sum_nonnegative": fold_direction, "population": population, "pass": bool(existence and tail and fold_direction and population)}
++
++
++def _distribution_diag(y: list[float], prob: list[float], posmag: list[float], negmag: list[float]) -> dict[str, Any]:
++    yy = np.asarray(y, dtype=np.float64); pp = np.asarray(prob, dtype=np.float64); pm = np.asarray(posmag, dtype=np.float64); nm = np.asarray(negmag, dtype=np.float64)
++    if yy.size == 0: return {"sample_count": 0}
++    pos = yy > 0.0; neg = ~pos
++    brier = float(np.mean((pp - pos.astype(np.float64)) ** 2))
++    def auc(labels, score):
++        from bdse.tools.fit_v64_3_38_eaf_icer_davr import _auc
++        return _auc(labels, score)
++    out = {"sample_count": int(yy.size), "positive_probability_brier": brier, "positive_probability_auc": auc(pos, pp)}
++    if np.any(pos): out["positive_magnitude_mse_on_positive"] = float(np.mean((pm[pos] - yy[pos]) ** 2))
++    if np.any(neg): out["negative_magnitude_mse_on_nonpositive"] = float(np.mean((nm[neg] - (-yy[neg])) ** 2))
++    if np.any(yy <= CAT): out["negative_magnitude_mean_on_catastrophe"] = float(np.mean(nm[yy <= CAT]))
++    return out
++
++
++def _nested(groups: dict[str, list[dict[str, Any]]], audit_csv: Path) -> dict[str, Any]:
++    scene = _build(groups)
++    names = ["rsmr", "dense", "hurdle", "sign_shift", "sdfr_raw", "sdfr_main"]
++    agg = {n: [] for n in names}; caps = {n: 0 for n in names}; noops = {n: 0 for n in names}; oppsels = {n: 0 for n in names}
++    value_y: list[float] = []; value_pred = {n: [] for n in names}
++    dist_y: list[float] = []; dist_p: list[float] = []; dist_pm: list[float] = []; dist_nm: list[float] = []
++    folds: list[dict[str, Any]] = []; audits: list[dict[str, Any]] = []
++    total_opp = 0; total_noop = 0
++
++    for k in range(FOLDS):
++        test = [t for t in scene if _fold(t) == k]; cal_fold = (k + 1) % FOLDS
++        cal = [t for t in scene if _fold(t) == cal_fold]; fit = [t for t in scene if _fold(t) not in {k, cal_fold}]
++        rsm = _fit_regret_structured_margin(scene, fit)
++        samples = [a for t in fit for a in scene[t]]
++        dense = _fit_dense_value_ridge(samples)
++        hurdle = _fit_hurdle_base(samples)
++        oof_rows, oof_info = _inner_oof_selected(scene, fit)
++        adapt = _fit_selected_distribution(oof_rows)
++        ycal, rawcal, used = _cal_population(scene, cal, rsm, dense, hurdle, adapt)
++        if len(used) < MIN_VALUE_CAL_PROPOSALS:
++            raise ValueError(f"V64.3.40 selected-policy calibration has {len(used)} proposals < {MIN_VALUE_CAL_PROPOSALS}")
++        shift = _fit_translation(rawcal, ycal, "cross_fitted_selected_distribution_value")
++
++        fv = {n: [] for n in names}; fc = {n: 0 for n in names}; fn = {n: 0 for n in names}; fo = {n: 0 for n in names}
++        fold_value_y: list[float] = []; fold_value_pred = {n: [] for n in names}
++        fy: list[float] = []; fp: list[float] = []; fpm: list[float] = []; fnm: list[float] = []
++        opp = 0; noop_scenes = 0; subset_ok = True; identity_ok = True
++        for t in test:
++            ss = scene[t]; yy = np.asarray([float(a["y"]) for a in ss], dtype=np.float64)
++            has_opp = bool(np.any(yy > 0.0)); opp += int(has_opp); noop_scenes += int(not has_opp)
++            ev, dd = _evaluate(ss, rsm, dense, hurdle, adapt, shift["selected_policy_bias"])
++            r_idx, _ = ev["rsmr"]
++            if r_idx is not None:
++                true = float(yy[r_idx]); fold_value_y.append(true); value_y.append(true)
++                for n in names: fold_value_pred[n].append(float(ev[n][1])); value_pred[n].append(float(ev[n][1]))
++                fy.append(true); fp.append(float(dd["selected_positive_probability"])); fpm.append(float(dd["selected_positive_magnitude"])); fnm.append(float(dd["selected_negative_magnitude"]))
++                dist_y.append(true); dist_p.append(float(dd["selected_positive_probability"])); dist_pm.append(float(dd["selected_positive_magnitude"])); dist_nm.append(float(dd["selected_negative_magnitude"]))
++            chosen = {n: ev[n][0] for n in names}
++            subset_ok = subset_ok and all(chosen[n] is None or r_idx is not None for n in names if n != "rsmr")
++            identity_ok = identity_ok and all(chosen[n] is None or chosen[n] == r_idx for n in names if n != "rsmr")
++            for n, idx in chosen.items():
++                if idx is None: continue
++                val = float(yy[idx]); fv[n].append(val); fc[n] += int(has_opp and val > 0.0); fn[n] += int(not has_opp); fo[n] += int(has_opp)
++            audits.append({
++                "scenario_token": t, "outer_test_fold": k, "calibration_fold": cal_fold, "candidate_count": len(ss), "positive_opportunity": int(has_opp),
++                "rsm_selected_action": -1 if r_idx is None else int(ss[r_idx]["action"]), "rsm_selected_score": float(ev["rsmr"][1]), "rsm_selected_teacher_improvement": float("nan") if r_idx is None else float(yy[r_idx]),
++                "dense_selected_action": -1 if chosen["dense"] is None else int(ss[chosen["dense"]]["action"]), "dense_value": float(ev["dense"][1]),
++                "hurdle_selected_action": -1 if chosen["hurdle"] is None else int(ss[chosen["hurdle"]]["action"]), "hurdle_value": float(ev["hurdle"][1]),
++                "sign_shift_selected_action": -1 if chosen["sign_shift"] is None else int(ss[chosen["sign_shift"]]["action"]), "sign_shift_value": float(ev["sign_shift"][1]),
++                "sdfr_raw_selected_action": -1 if chosen["sdfr_raw"] is None else int(ss[chosen["sdfr_raw"]]["action"]), "sdfr_raw_value": float(ev["sdfr_raw"][1]),
++                "sdfr_main_selected_action": -1 if chosen["sdfr_main"] is None else int(ss[chosen["sdfr_main"]]["action"]), "sdfr_main_value": float(ev["sdfr_main"][1]),
++                "selected_positive_probability": float(dd.get("selected_positive_probability", float("nan"))), "selected_positive_magnitude": float(dd.get("selected_positive_magnitude", float("nan"))), "selected_negative_magnitude": float(dd.get("selected_negative_magnitude", float("nan"))),
++            })
++        total_opp += opp; total_noop += noop_scenes
++        fd: dict[str, Any] = {}
++        for n in names:
++            fd[n] = _metrics(fv[n], fc[n], opp, fn[n], fo[n], noop_scenes); agg[n].extend(fv[n]); caps[n] += fc[n]; noops[n] += fn[n]; oppsels[n] += fo[n]
++        folds.append({
++            "fold": k, "fit_scenes": len(fit), "value_calibration_scenes": len(cal), "test_scenes": len(test), "value_calibration_proposal_count": len(used),
++            "inner_oof_selected_distribution_population": oof_info, "selected_distribution_fit": adapt, "sdfr_translation_fit": shift,
++            "rsmr_rank": fd["rsmr"], "dense_signed_mean": fd["dense"], "hurdle_dense_distribution": fd["hurdle"], "hurdle_sign_shift_only": fd["sign_shift"], "sdfr_raw": fd["sdfr_raw"], "sdfr_main": fd["sdfr_main"],
++            "value_prediction_diagnostics": {n: _value_diag(fold_value_y, fold_value_pred[n]) for n in names}, "distribution_diagnostics": _distribution_diag(fy, fp, fpm, fnm),
++            "monotone_subset_valid": subset_ok, "frozen_winner_identity_valid": identity_ok,
++        })
++
++    audit_csv.parent.mkdir(parents=True, exist_ok=True)
++    fields = list(audits[0]) if audits else []
++    with audit_csv.open("w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(audits)
++    A = {n: _metrics(agg[n], caps[n], total_opp, noops[n], oppsels[n], total_noop) for n in names}; r = A["rsmr"]
++    contracts = all(
++        f["monotone_subset_valid"] and f["frozen_winner_identity_valid"] and f["value_calibration_proposal_count"] >= MIN_VALUE_CAL_PROPOSALS
++        and f["inner_oof_selected_distribution_population"]["selected_proposal_count"] >= MIN_INNER_SELECTED
++        and int(f["selected_distribution_fit"]["positive_count"]) >= MIN_SELECTED_SIGN_CLASS and int(f["selected_distribution_fit"]["nonpositive_count"]) >= MIN_SELECTED_SIGN_CLASS
++        for f in folds
++    )
++    gates = {
++        "dense": _gate(A["dense"], r, folds, "dense_signed_mean"),
++        "hurdle": _gate(A["hurdle"], r, folds, "hurdle_dense_distribution"),
++        "sign_shift": _gate(A["sign_shift"], r, folds, "hurdle_sign_shift_only"),
++        "sdfr_raw": _gate(A["sdfr_raw"], r, folds, "sdfr_raw"),
++        "sdfr_main": _gate(A["sdfr_main"], r, folds, "sdfr_main"),
++    }
++    value_diag = {n: _value_diag(value_y, value_pred[n]) for n in names}
++    dist_diag = _distribution_diag(dist_y, dist_p, dist_pm, dist_nm)
++    train_pass = bool(contracts and gates["sdfr_main"]["pass"])
++    if not contracts:
++        diagnosis = "selected_distribution_crossfit_contract_or_class_population_invalid"
++    elif gates["hurdle"]["pass"] and not gates["sdfr_main"]["pass"]:
++        diagnosis = "population_hurdle_factorization_suffices_selected_adaptation_unnecessary_or_harmful"
++    elif gates["sdfr_main"]["pass"]:
++        diagnosis = "full_nested_train_pass_selected_distribution_factorization_closes_zero_crossing_tail_tradeoff"
++    elif gates["sign_shift"]["existence_and_capture"] and not gates["sdfr_raw"]["existence_and_capture"]:
++        diagnosis = "selected_sign_frequency_is_primary_mediator_magnitude_adaptation_degrades_recovery"
++    elif value_diag["hurdle"].get("positive_auc", -math.inf) > value_diag["dense"].get("positive_auc", -math.inf) + 0.03:
++        diagnosis = "distributional_target_improves_selected_sign_identification_but_selected_policy_adaptation_or_tail_remains"
++    elif value_diag["sdfr_raw"].get("noncatastrophe_auc", -math.inf) > value_diag["hurdle"].get("noncatastrophe_auc", -math.inf) + 0.05:
++        diagnosis = "selected_distribution_adaptation_adds_tail_signal_but_zero_crossing_capture_tradeoff_remains"
++    else:
++        diagnosis = "current_19D_selected_value_representation_remains_insufficient_after_distribution_factorization"
++    return {
++        "folds": folds, "scene_audit_csv": str(audit_csv), "rsmr_rank_aggregate": A["rsmr"], "dense_signed_mean_aggregate": A["dense"], "hurdle_dense_distribution_aggregate": A["hurdle"],
++        "hurdle_sign_shift_only_aggregate": A["sign_shift"], "sdfr_raw_aggregate": A["sdfr_raw"], "sdfr_main_aggregate": A["sdfr_main"],
++        "selected_proposal_value_prediction_diagnostics": value_diag, "selected_distribution_diagnostics": dist_diag, "gates": gates,
++        "monotone_frozen_winner_contract_valid": contracts, "train_gate_pass": train_pass, "failure_diagnosis": diagnosis,
++        "inner_oof_selected_min": MIN_INNER_SELECTED, "selected_sign_class_min": MIN_SELECTED_SIGN_CLASS,
++        "noop_reduction_fraction_min": NOOP_REDUCTION_MIN, "capture_tolerance": CAPTURE_TOL, "catastrophe_reduction_fraction_min": CATASTROPHE_REDUCTION_MIN,
++    }
++
++
++def _base_cfg(path: str) -> dict[str, Any]:
++    cfg = yaml.safe_load(Path(path).read_text())
++    ic = cfg.setdefault("runtime", {}).setdefault("decisive_frontier_value", {}).setdefault("incumbent_contrastive_extremal_recovery", {})
++    ic["incumbent_retention_policy"] = "preserve_admissible_incumbent"; ic["regret_risk_enabled"] = False; ic["retention_regret_risk_enabled"] = False; ic["replacement_regret_risk_enabled"] = False
++    return cfg
++
++
++def _model_fields(model) -> dict[str, Any]:
++    w, b, mean, std, _ = model
++    return {"feature_mean": [float(x) for x in mean], "feature_std": [float(x) for x in std], "weights": [float(x) for x in w], "bias": float(b)}
++
++
++def _decorate_hurdle(rsm_cfg: dict[str, Any], hurdle: dict[str, Any], adapt: dict[str, Any] | None, mode: str, path: str, version: str) -> None:
++    cfg = yaml.safe_load(yaml.safe_dump(rsm_cfg, sort_keys=False)); sc = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"]
++    sc.update({"post_selection_value_enabled": True, "post_selection_value_mode": mode, "post_selection_value_max_abs": 40.0, "post_selection_hurdle_probability_clip": PROB_EPS,
++               "post_selection_hurdle_training": "scene_equal_all_edge_hurdle_distribution_fixed_lambda_1_frozen_RSMR_winner_only",
++               "post_selection_operator": "freeze_RSMR_winner_then_reconstruct_selected_expected_intervention_value_from_sign_probability_and_conditional_positive_negative_magnitudes_no_rerank_no_fallback"})
++    for prefix, key in [("sign", "sign"), ("positive_magnitude", "positive_magnitude"), ("negative_magnitude", "negative_magnitude")]:
++        f = _model_fields(hurdle[key])
++        for kk, vv in f.items(): sc[f"post_selection_hurdle_{prefix}_{kk}"] = vv
++    if adapt is not None:
++        sc.update({"post_selection_hurdle_selected_logit_shift": float(adapt["selected_logit_shift"]), "post_selection_hurdle_selected_positive_magnitude_scale": float(adapt["selected_positive_magnitude_scale"]), "post_selection_hurdle_selected_negative_magnitude_scale": float(adapt["selected_negative_magnitude_scale"]),
++                   "post_selection_hurdle_selected_training": "cross_fitted_frozen_RSMR_policy_outputs_from_TRAIN_only_scalar_component_adaptation", "post_selection_hurdle_selected_sample_count": int(adapt["sample_count"])})
++    cfg.setdefault("metadata", {})["algorithm_version"] = version; cfg.setdefault("provenance", {})["algorithm_version"] = version
++    cfg.setdefault("experiment", {})["name"] = version.lower().replace(".", "_").replace("-", "_"); cfg["experiment"]["algorithm"] = version
++    Path(path).write_text(yaml.safe_dump(cfg, sort_keys=False))
++
++
++def _full_selected_distribution(scene, full_hurdle) -> dict[str, Any]:
++    rows: list[dict[str, Any]] = []; per: list[dict[str, Any]] = []; toks = list(scene)
++    for h in range(FOLDS):
++        held = [t for t in toks if _fold(t) == h]; train = [t for t in toks if _fold(t) != h]
++        rsm = _fit_regret_structured_margin(scene, train); hurdle = _fit_hurdle_base([a for t in train for a in scene[t]])
++        n = 0
++        for t in held:
++            ss = scene[t]; score = _structured_scores(ss, rsm); idx = _select(ss, score)
++            if idx is None: continue
++            p, mp, mn = _hurdle_components(ss, hurdle, idx); rows.append({"token": t, "y": float(ss[idx]["y"]), "p": p, "mp": mp, "mn": mn}); n += 1
++        per.append({"holdout_fold": h, "selected_proposal_count": n})
++    model = _fit_selected_distribution(rows); model["full_train_oof_fold_reports"] = per
++    return model
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="V64.3.40 selected-distribution factorized recovery")
++    ap.add_argument("--train-frontier-edges", required=True); ap.add_argument("--base-config", required=True)
++    ap.add_argument("--output-preserve-config", required=True); ap.add_argument("--output-rsmr-config", required=True); ap.add_argument("--output-dense-config", required=True)
++    ap.add_argument("--output-hurdle-config", required=True); ap.add_argument("--output-sign-shift-config", required=True); ap.add_argument("--output-sdfr-config", required=True)
++    ap.add_argument("--output-report", required=True); ap.add_argument("--output-scene-audit", required=True)
++    a = ap.parse_args(); _, groups = _read_edges(Path(a.train_frontier_edges)); nested = _nested(groups, Path(a.output_scene_audit))
++    report = {
++        "audit": "v64_3_40_eaf_icer_sdfr_fit", "scientific_role": "TRAIN_only_frozen_RSMR_plus_distribution_factorized_selected_value_recovery",
++        "frozen_train_scenes": len(groups), "direct_support_positive_training_scenes": len(_build(groups)), "ridge_lambda": RIDGE_LAMBDA,
++        "mechanism_hypothesis": "V39 proves cross-fitted selected residual contains real tail signal but signed-mean zero crossing loses many near-zero positives. Test the same 19-D representation with an exact hurdle distribution identity separating beneficial-event probability from conditional positive and negative magnitudes. Use dense all-edge scene-equal supervision for each component and only scalar cross-fitted selected-policy component adaptation; no nonlinear or higher-dimensional selected head is added.",
++        "nested_crossfit": nested, "train_gate_pass": nested["train_gate_pass"],
++        "train_gate_contract": {"RSMR_is_sole_challenger_selector": True, "all_value_arms_are_same_winner_subsets": True, "distribution_identity_has_no_tuned_tradeoff_weight": True, "dense_component_heads_use_fixed_lambda_1_scene_equal_objectives": True,
++            "selected_policy_adaptation_is_scalar_per_distribution_component": True, "selected_probability_uses_logit_intercept_only": True, "selected_magnitude_adaptation_uses_nonnegative_scale_only": True,
++            "inner_oof_selected_min": MIN_INNER_SELECTED, "selected_sign_class_min": MIN_SELECTED_SIGN_CLASS, "noop_false_intervention_reduction_fraction_min": NOOP_REDUCTION_MIN, "capture_tolerance": CAPTURE_TOL,
++            "catastrophe_reduction_fraction_min": CATASTROPHE_REDUCTION_MIN, "all_test_folds_selected_sum_nonnegative": True, "selected_min": 64, "positive_min": 32,
++            "no_threshold_lambda_alpha_feature_candidate_count_or_temperature_sweep": True},
++    }
++    rp = Path(a.output_report); rp.parent.mkdir(parents=True, exist_ok=True); rp.write_text(json.dumps(report, indent=2, sort_keys=True))
++    if not report["train_gate_pass"]:
++        print(json.dumps(report, indent=2, sort_keys=True)); raise SystemExit(f"V64.3.40 SDFR nested TRAIN gate failed ({nested['failure_diagnosis']}); STOP before CAL/fresh selection")
++    scene = _build(groups); base = _base_cfg(a.base_config)
++    pcfg = yaml.safe_load(yaml.safe_dump(base, sort_keys=False)); pcfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"] = {"enabled": False}
++    pcfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.40-PRESERVE-CONTROL"; pcfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.40-PRESERVE-CONTROL"; Path(a.output_preserve_config).write_text(yaml.safe_dump(pcfg, sort_keys=False))
++    full_rsm = _fit_regret_structured_margin(scene, list(scene)); rsm_cfg = _write_rsmr(base, a.output_rsmr_config, full_rsm)
++    samples = [a for ss in scene.values() for a in ss]; full_dense = _fit_dense_value_ridge(samples); _write_dense(rsm_cfg, a.output_dense_config, full_dense)
++    full_hurdle = _fit_hurdle_base(samples); full_adapt = _full_selected_distribution(scene, full_hurdle)
++    _decorate_hurdle(rsm_cfg, full_hurdle, None, "dense_edge_hurdle", a.output_hurdle_config, "V64.3.40-EAF-ICER-HURDLE-DENSE")
++    _decorate_hurdle(rsm_cfg, full_hurdle, full_adapt, "dense_edge_hurdle_sign_shift", a.output_sign_shift_config, "V64.3.40-EAF-ICER-HURDLE-SIGN-SHIFT")
++    _decorate_hurdle(rsm_cfg, full_hurdle, full_adapt, "dense_edge_hurdle_selected", a.output_sdfr_config, "V64.3.40-EAF-ICER-SDFR-RAW")
++    print(json.dumps({"pass": True, "output_rsmr_config": a.output_rsmr_config, "output_hurdle_config": a.output_hurdle_config, "output_sdfr_config": a.output_sdfr_config, "full_train_oof_selected": full_adapt["sample_count"]}, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()

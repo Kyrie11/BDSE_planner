@@ -1,0 +1,43 @@
+V64.3.44 EAF-ICER-PCOR engineering validation
+================================================
+
+Base package: exact preregistered V64.3.43 code (uploaded SHA256 a9266f271b17c77944deca4bd4c518b6cc7a803f7560ce2eca7208fb773c4e7c)
+
+Static checks
+-------------
+python -m compileall -q bdse: PASS
+bash -n RUN_V64_3_44_EAF_ICER_PCOR_SCREEN_2GPU.sh: PASS
+
+Focused regression
+------------------
+V43 + V44 focused tests: 9/9 PASS
+
+Targeted historical regression
+------------------------------
+V13 -> V44 targeted test set: 207/207 PASS
+Warnings: 2 historical PyTorch Transformer nested-tensor warnings; no new warning class observed.
+
+Full repository regression
+--------------------------
+119 test files were partitioned into four mutually exclusive, exhaustive fixed file groups and run separately to fit the execution window:
+  partition 0: 148/148 PASS
+  partition 1: 132/132 PASS
+  partition 2: 126/126 PASS
+  partition 3: 131/131 PASS
+Total: 537/537 PASS
+Test files covered: 119/119
+Warnings observed are historical PyTorch Transformer warnings only.
+
+New V44 contracts covered by tests
+----------------------------------
+- V43 observable prefix is bitwise/numerically unchanged when V44 instrumentation is enabled.
+- Full-horizon ungated occupancy support can remain nonzero when the V43 finite-horizon gated interaction cost is zero.
+- Plan-conditioned response posterior is candidate-specific and normalized.
+- TRAIN-only behavior supervision maps logged agent future to the frozen runtime-only response basis and contains no teacher-improvement label.
+- Fixed-lambda multiclass behavior ridge can learn nontrivial response signal.
+- Runtime tournament accepts the new plan-conditioned response observable only after the proposal is frozen; no reranking path is introduced.
+- V44 launcher hard-gates historical V43 signatures before scientific interpretation and exits before fresh selection on TRAIN failure.
+
+Important server-side hard gates
+--------------------------------
+The local environment does not contain the user's full nuPlan train/val caches or EAF checkpoint, so the 3000-scene V44 instrumentation replay and nested TRAIN scientific result cannot be precomputed here. The launcher must run these server-side. Any mismatch in frozen V43 RSMR / QUALITY / FUTURE-MEAN / FUTURE-ROBUST-RAW signatures is an ENGINEERING STOP before fresh selection.

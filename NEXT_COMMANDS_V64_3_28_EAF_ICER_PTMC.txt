@@ -1,0 +1,29 @@
+V64.3.28 EAF-ICER-PTMC next command
+====================================
+
+Preferred command when the completed V27 TRAIN frontier is available at the standard sibling output path:
+
+  cd bdse_v64_3_28_eaf_icer_ptmc
+  bash RUN_V64_3_28_EAF_ICER_PTMC_SCREEN_2GPU.sh
+
+Recommended explicit reuse command if the V27 result lives elsewhere:
+
+  cd bdse_v64_3_28_eaf_icer_ptmc
+  V28_TRAIN_EDGES=/ABSOLUTE/PATH/outputs_v64_3_27_eaf_icer_trcc_screen_2gpu_v1/provenance/train_v20_type_resolved_frontier_edges.jsonl \
+    bash RUN_V64_3_28_EAF_ICER_PTMC_SCREEN_2GPU.sh
+
+The uploaded V27 frontier is already the required 12-type 3000-TRAIN instrumentation. Reuse it to avoid an unnecessary GPU replay. The V28 fitter hard-checks the frozen TRAIN token SHA, exactly 75,133 frontier rows, 1,455 replacement edges, and 310 replacement scenes before allowing fresh.
+
+Fail-closed rules
+-----------------
+1. If the V28 TRAIN design/implementation gate fails: STOP. Do not run fresh.
+2. If either fresh A or fresh B fails: STOP. Do not pooled-rescue.
+3. Do not tune catastrophic label threshold (-0.5), positive-proposal coverage (0.95), K={32,64}, downside multiplier=1, zero boundary, support threshold, scalar-dominance threshold, type weights, or group weights on validation.
+4. Do not reintroduce V24 sorted attribution spectrum, V26 flat family concatenation, V27 local type-KNN confirmation, transition geometry, signed-profile ranking, or mean-SE/DRC mixing.
+5. PTMC may only veto the exact V25 aggregate-DRC proposal. No fallback/reselection is a hard engineering invariant.
+6. V26 and V27 consumed no fresh validation scenes; V28 design exclusion remains exactly 6700 unique inspected validation tokens.
+7. Only if both untouched 500-scene blocks pass is one frozen independent full-val reproduction allowed. Test/closed-loop remain forbidden until that reproduction succeeds.
+
+Scientific interpretation
+-------------------------
+V28 TRAIN was designed after inspecting V27 TRAIN. Therefore a V28 TRAIN PASS is not paper evidence. The new untouched A/B result is the first independent test of the proposal-conditioned tail-mode hypothesis.

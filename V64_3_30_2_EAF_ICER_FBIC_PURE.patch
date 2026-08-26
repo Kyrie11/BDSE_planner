@@ -1,0 +1,1780 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/ALGORITHM_CHANGELOG.md /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/ALGORITHM_CHANGELOG.md
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/ALGORITHM_CHANGELOG.md	2026-08-23 03:05:12.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/ALGORITHM_CHANGELOG.md	2026-08-23 08:24:12.508353363 +0000
+@@ -9367,3 +9367,134 @@
+ - warnings: **36**, all existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
+ 
+ Because the uploaded invalid run stopped before fresh-token selection, rerun **the same scientific V30 experiment and the same fresh hash seed**. Do not create V31 and do not change B, DRC, selector, threshold, or fresh population until the repaired V30 capacity diagnostic completes.
++
++
++# V64.3.30.1 repaired execution -> V64.3.30.2 pure-capacity mediator completion
++
++## Status of the uploaded repaired V30.1 result
++
++The repaired V30.1 execution is **engineering-valid through paired B16/B24 frozen TRAIN and B24 DRC fitting**, but it is **scientifically incomplete for the central capacity-mediator question** because the launcher correctly stops on a B24 DRC TRAIN fold-safety failure before untouched token selection.
++
++This result supersedes the previous engineering-invalid V30 attempt without changing its scientific design. Do **not** record V30.1 as a fresh failure and do **not** spend a new fresh seed.
++
++### Engineering/capacity contract reproduced
++
++- exact paired TRAIN scenes: 3000/3000;
++- complete frontier rows: 75,133 in both arms;
++- upstream evidence/selector budget: 16 in both arms;
++- queried decision bank: M=24 in both arms;
++- B24 retained-interface ceiling: 24 only after the frozen B16 selector;
++- safe-domain baseline selected count mean 15.9496 -> final/reference 23.7560;
++- mean added already-queried atoms 7.8064; mean removed B16 atoms 0;
++- all-flagged structural scenes 262; FBIC application rate in that domain 0;
++- exact per-scene query-count parity for action-atom, proposal-candidate-atom, and effective-query counts;
++- retained-interface budget-pass rate 1.0; no-new-query rate 1.0.
++
++Historical B16 V25 provenance is exactly reproduced: `3000 / 75,133 / 1,455 / 310 / 5-of-5 / 71 / +5.527642`.
++
++### B24 DRC TRAIN failure is algorithmic, not engineering
++
++Opening the retained interface changes the eligible edge population:
++
++- eligible direct replacement edges `1455 -> 3821`;
++- replacement scenes `310 -> 483`;
++- teacher-positive edge fraction `62.13% -> 40.23%`;
++- population teacher-improvement sum `-52.589 -> -590.668`;
++- unchanged aggregate-downside DRC fixed-fold safety `5/5 -> 4/5`.
++
++The failing B24 fold is fold 2: 22 selected, sum `-0.041637`, worst `-1.051350`, NegRMS `0.306225`. The overall B24 selected sum remains `+9.308571`, but the pre-registered rule requires all five scene folds non-harmful. Therefore the B24 DRC must remain fail-closed; **do not tune K, threshold, downside multiplier, support/scalar boundaries, or run B24 DRC on fresh data**.
++
++### Development-only capacity signal
++
++B24 materially improves evidence transmission on frozen TRAIN:
++
++- selected decisive-atom recall `0.5305 -> 0.7158`;
++- effective decisive recall `0.7580 -> 0.9433`;
++- interaction decisive recall `0.4823 -> 0.6904`;
++- soft-interaction decisive recall `0.6332 -> 0.9068`;
++- evidence certificate fraction `0.8753 -> 0.9823`;
++- scalar-positive opportunity scenes `248 -> 327`;
++- support+scalar-positive opportunity scenes `229 -> 305`.
++
++But the frozen pure V20 consumer worsens:
++
++- selected positive recovery `206/803 = 25.65% -> 141/787 = 17.92%`;
++- teacher action match `22.47% -> 20.57%`;
++- mean teacher regret `15405.18 -> 16323.01`;
++- 742 safe-domain action changes have `B16 regret - B24 regret` sum `-2,753,490.91` (337 B24-beneficial, 403 B24-harmful, 2 equal).
++
++This is strong **TRAIN-only directional evidence** that more evidence visibility and better evidence coverage are not being converted into reliable interventions. It shifts the working hypothesis toward downstream selection/recovery semantics, but cannot be promoted to independent evidence that B16 retained capacity is irrelevant.
++
++## V30.2: complete the missing untouched pure-capacity control
++
++The original V30 launcher placed the B24 DRC TRAIN gate before fresh selection. That is correct for preventing an unsafe DRC arm from spending fresh data, but it also prevents the scientifically necessary pure B24-V20 control from answering the primary capacity-mediator question. V30.2 fixes **only this orchestration**.
++
++Frozen constraints:
++
++- same frozen 3000 TRAIN;
++- same 8700-token exclusion manifest;
++- same still-untouched V30 hash seed `v64.3.30-eaf-icer-fbic-double-fresh-v1`;
++- upstream B=16 remains unchanged and is an **operating point only**, not the paper thesis;
++- M=24 and exact query counts remain fixed;
++- post-selector B24 is a diagnostic capacity ceiling, not a proposed production budget;
++- B24 DRC TRAIN failure must reproduce and remains fail-closed;
++- no B24 DRC fresh arm;
++- fresh arms are exactly `raw / B16-V20 / B24-V20` on A/B=500/500.
++
++V30.2 adds paired diagnostics that cannot be rescued by a changed opportunity denominator:
++
++1. direct positive-opportunity capture gain, with the original +3 pp signal threshold;
++2. paired teacher-regret effect over every safe scene where B24 changes the B16 action;
++3. paired teacher-regret effect on the **B16-defined** positive-opportunity scene set;
++4. endpoint non-inferiority, structural no-op, capacity-superset accounting, and exact query parity.
++
++Branch interpretation is pre-registered:
++
++- pure B24 useful/non-harmful on both A/B -> retained capacity is a real mediator, but unchanged DRC is already TRAIN-falsified; next mechanism must be a selection-aware candidate-conditioned consumer, not a B24 thesis;
++- pure capture increases but paired/endpoint effects are harmful -> evidence is exposed but the downstream operator converts it unsafely; consumer/operator is dominant;
++- pure capacity fails to reproducibly improve both A/B -> capacity-only transmission is not the first-order missing mediator; terminate B sweeps/same-bank selector/rebinding and redesign intervention-conditioned counterfactual/extremal recovery semantics.
++
++No pooled rescue.
++
++## Paper-mainline update after repaired V30.1
++
++Do not promote literal B=16 or B=24. The candidate paper thesis is now:
++
++> **Intervention-conditioned decision sufficiency under a bounded auditable planner interface: evidence should be judged by whether it supports or rejects a concrete deployment-admissible incumbent-to-challenger intervention under extremal selection, not by world reconstruction, global frontier fidelity, or retained cardinality alone.**
++
++Candidate core mechanism novelty (still requiring independent validation):
++
++> **Evidence-attributed, deployment-admissible incumbent-contrastive recovery with monotone/incumbent-default intervention containment, where reliability is defined at the selected intervention boundary.**
++
++Stable components to preserve: bounded/auditable interface; EAF/exact attribution; deployment-admissible domain separation; incumbent-contrastive direct recovery; asymmetric admissible-incumbent preservation; all-flagged structural delegation; no-fallback/incumbent-default monotonicity; independent fail-closed evaluation.
++
++Do not headline PTMC, FCR, DRC/KNN/Gaussian, a threshold, or a particular budget count.
++
++## Provisional dominant bottleneck
++
++Until V30.2 resolves the capacity mediator, the tightest supported statement is:
++
++> **selection-conditioned counterfactual reliability at the direct incumbent-replacement boundary: the model lacks a stable mechanism that converts candidate-specific evidence into high-coverage extremal replacements without cross-population tail failure.**
++
++For fixed-budget closed-loop SOTA, the remaining gap is not just evidence recall; it is safe useful-recovery coverage under extremal selection, while preserving structural/incumbent behavior and closed-loop endpoint quality.
++
++## New no-repeat constraints
++
++In addition to all prior prohibitions, do not:
++
++- interpret repaired V30.1 as an untouched/fresh capacity result;
++- lower the failed B24 DRC 5-fold TRAIN safety gate;
++- run a B24 DRC fresh arm;
++- spend a new fresh seed before the original V30 pure-capacity mediator is completed;
++- begin a broad B sweep or treat B24 as the method;
++- infer that higher decisive-evidence recall alone establishes decision sufficiency;
++- begin V31 selector/classifier/operator tuning before the pure-capacity A/B branch is known.
++
++## V30.2 engineering validation
++
++- Python compile: PASS;
++- V30.2 launcher shell syntax: PASS;
++- V30.2/FBIC focused tests: 16/16 PASS;
++- V13--V30.2 targeted: **123/123 PASS**;
++- repository full tests: **453/453 PASS**;
++- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/NEXT_COMMANDS_V64_3_30_2_EAF_ICER_FBIC_PURE.txt /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/NEXT_COMMANDS_V64_3_30_2_EAF_ICER_FBIC_PURE.txt
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/NEXT_COMMANDS_V64_3_30_2_EAF_ICER_FBIC_PURE.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/NEXT_COMMANDS_V64_3_30_2_EAF_ICER_FBIC_PURE.txt	2026-08-23 08:24:12.508413343 +0000
+@@ -0,0 +1,9 @@
++V64.3.30.2 EAF-ICER-FBIC pure-capacity mediator completion
++
++Run exactly:
++
++cd bdse_v64_3_30_2_eaf_icer_fbic_pure
++bash RUN_V64_3_30_2_EAF_ICER_FBIC_PURE_SCREEN_2GPU.sh
++
++Do not change B/M, K, DRC threshold/downside multiplier, support/scalar boundaries, exclusion manifest, or fresh hash seed.
++The B24 DRC TRAIN failure is expected to reproduce and remains fail-closed; V30.2 spends untouched data only on raw/B16-V20/B24-V20 pure-capacity arms.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/RUN_V64_3_30_2_EAF_ICER_FBIC_PURE_SCREEN_2GPU.sh /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/RUN_V64_3_30_2_EAF_ICER_FBIC_PURE_SCREEN_2GPU.sh
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/RUN_V64_3_30_2_EAF_ICER_FBIC_PURE_SCREEN_2GPU.sh	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/RUN_V64_3_30_2_EAF_ICER_FBIC_PURE_SCREEN_2GPU.sh	2026-08-23 08:20:05.329558549 +0000
+@@ -0,0 +1,240 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++
++export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_30_2_eaf_icer_fbic_pure_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_30_design_exclude_v64_3_29_screen_tokens.txt}"
++export FROZEN_TRAIN_TOKENS="${FROZEN_TRAIN_TOKENS:-bdse/configs/v64_3_29_frozen_v28_train_3000_tokens.txt}"
++# V30.1 stopped before fresh-token selection. Keep the exact V30 seed so this is
++# the untouched pure-capacity test that the original five-arm launcher never reached.
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.30-eaf-icer-fbic-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"
++B16_V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++B24_V20_CONFIG="bdse/configs/v64_3_30_eaf_icer_fbic_v20.yaml"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++TIMING="$OUT_ROOT/provenance/v64_3_30_2_stage_timing.tsv"; : > "$TIMING"
++ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
++stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >> "$TIMING"; }
++
++[[ -d "$BDSE_TRAIN_CACHE" && -d "$BDSE_VAL_CACHE" ]] || { echo 'STOP: missing train/val cache' >&2; exit 2; }
++for f in "$RAW_CONFIG" "$B16_V20_CONFIG" "$B24_V20_CONFIG" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS"; do
++  [[ -s "$f" ]] || { echo "STOP: missing $f" >&2; exit 2; }
++done
++python - "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import hashlib,sys
++ex=[x.strip() for x in open(sys.argv[1]) if x.strip()]
++tr=[x.strip() for x in open(sys.argv[2]) if x.strip()]
++if len(ex)!=8700 or len(set(ex))!=8700:
++    raise SystemExit(f'STOP DATA: V30.2 design exclusion must remain exactly 8700 unique inspected validation tokens, got rows={len(ex)} unique={len(set(ex))}')
++if len(tr)!=3000 or len(set(tr))!=3000:
++    raise SystemExit(f'STOP DATA: frozen TRAIN manifest must be exactly 3000 unique tokens, got rows={len(tr)} unique={len(set(tr))}')
++sha=hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()
++if sha!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4':
++    raise SystemExit('STOP DATA: frozen 3000 TRAIN token SHA changed: '+sha)
++print('PASS V30.2 identity contracts: 8700 design exclusion + frozen 3000 TRAIN SHA')
++PY
++
++stage_start prerequisites
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen \
++  --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_30_2 \
++  --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit.json" \
++  > "$OUT_ROOT/logs/v64_3_13_eaf_dmvr_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False):
++    raise SystemExit('STOP prerequisites')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then
++  EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"
++fi
++export EAF_CKPT
++[[ -s "$EAF_CKPT" ]] || { echo "STOP: missing EAF checkpoint $EAF_CKPT" >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py \
++  bdse/tests/test_v64_3_30_eaf_icer_fbic.py \
++  bdse/tests/test_v64_3_29_eaf_icer_fcr.py \
++  bdse/tests/test_v64_3_28_eaf_icer_ptmc.py \
++  bdse/tests/test_v64_3_27_eaf_icer_trcc.py \
++  bdse/tests/test_v64_3_26_eaf_icer_sarc.py \
++  bdse/tests/test_v64_3_25_eaf_icer_drc.py \
++  bdse/tests/test_v64_3_24_eaf_icer_arc.py \
++  bdse/tests/test_v64_3_23_eaf_icer_rcr.py \
++  bdse/tests/test_v64_3_22_eaf_icer_tcr.py \
++  bdse/tests/test_v64_3_21_eaf_icer_mcr.py \
++  bdse/tests/test_v64_3_20_eaf_icer_dc.py \
++  bdse/tests/test_v64_3_19_eaf_icer.py \
++  bdse/tests/test_v64_3_18_eaf_dacer.py \
++  bdse/tests/test_v64_3_17_eaf_daler.py \
++  bdse/tests/test_v64_3_16_eaf_raer.py \
++  bdse/tests/test_v64_3_15_eaf_eair.py \
++  bdse/tests/test_v64_3_14_eaf_ocfi.py \
++  bdse/tests/test_v64_3_13_eaf_dmvr.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++python -m bdse.tools.check_v64_3_30_eaf_icer_fbic_contract \
++  --config "$B24_V20_CONFIG" --frozen-v20-config "$B16_V20_CONFIG" \
++  --output "$OUT_ROOT/provenance/v64_3_30_2_fbic_contract.json" \
++  > "$OUT_ROOT/logs/v64_3_30_2_fbic_contract.out"
++stage_end
++
++train_eval(){
++  local gpu="$1" cfg="$2" tag="$3"
++  CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop \
++    --config "$cfg" --checkpoint "$EAF_CKPT" --split train \
++    --preprocessed-dir "$BDSE_TRAIN_CACHE" --max-scenarios 3000 \
++    --scenario-token-file "$FROZEN_TRAIN_TOKENS" --require-all-scenario-tokens \
++    --output "$OUT_ROOT/provenance/train_${tag}_metrics.json" \
++    --per-sample-output "$OUT_ROOT/provenance/train_${tag}_rows.jsonl" \
++    --frontier-edge-output "$OUT_ROOT/provenance/train_${tag}_edges.jsonl" \
++    --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/train_${tag}.out" 2>&1
++}
++
++stage_start paired_train_replay
++train_eval "$GPU0" "$B16_V20_CONFIG" b16_v20 & p0=$!
++train_eval "$GPU1" "$B24_V20_CONFIG" b24_v20 & p1=$!
++s=0; wait "$p0" || s=1; wait "$p1" || s=1; [[ $s -eq 0 ]] || { echo 'STOP TRAIN replay failure' >&2; exit 2; }
++python - "$OUT_ROOT/provenance/train_b16_v20_rows.jsonl" "$OUT_ROOT/provenance/train_b24_v20_rows.jsonl" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import json,sys
++want={x.strip() for x in open(sys.argv[3]) if x.strip()}; orders=[]
++for p in sys.argv[1:3]:
++    rows=[json.loads(x) for x in open(p) if x.strip()]
++    got=[str(r['scenario_token']) for r in rows]
++    if len(got)!=3000 or len(set(got))!=3000 or set(got)!=want:
++        raise SystemExit(f'STOP DATA: paired TRAIN identity mismatch {p}')
++    orders.append(got)
++if orders[0]!=orders[1]: raise SystemExit('STOP DATA: paired TRAIN emitted row order differs')
++print('PASS V30.2 paired TRAIN identity')
++PY
++BASE_FIT_DIR="$OUT_ROOT/configs/baseline_v25_b16"; FBIC_FIT_DIR="$OUT_ROOT/configs/fbic_b24_diagnostic_only"
++mkdir -p "$BASE_FIT_DIR" "$FBIC_FIT_DIR"
++python -m bdse.tools.fit_v64_3_25_eaf_icer_drc \
++  --train-frontier-edges "$OUT_ROOT/provenance/train_b16_v20_edges.jsonl" \
++  --base-v20-dual-config "$B16_V20_CONFIG" \
++  --output-dir "$BASE_FIT_DIR" \
++  --output-train-token-file "$OUT_ROOT/provenance/v64_3_30_2_baseline_train_tokens.txt" \
++  --output-report "$OUT_ROOT/provenance/v64_3_30_2_baseline_v25_train_fit.json" \
++  > "$OUT_ROOT/logs/v64_3_30_2_baseline_v25_fit.out" 2>&1
++# Expected development failure: write the B24 report, preserve the non-zero exit,
++# and explicitly continue only when the failure is the frozen fold-safety gate.
++set +e
++python -m bdse.tools.fit_v64_3_30_eaf_icer_fbic \
++  --train-frontier-edges "$OUT_ROOT/provenance/train_b24_v20_edges.jsonl" \
++  --base-fbic-v20-config "$B24_V20_CONFIG" \
++  --output-dir "$FBIC_FIT_DIR" \
++  --output-train-token-file "$OUT_ROOT/provenance/v64_3_30_2_fbic_train_tokens.txt" \
++  --output-report "$OUT_ROOT/provenance/v64_3_30_2_fbic_train_fit.json" \
++  > "$OUT_ROOT/logs/v64_3_30_2_fbic_fit.out" 2>&1
++FBIC_FIT_STATUS=$?
++set -e
++[[ $FBIC_FIT_STATUS -ne 0 && -s "$OUT_ROOT/provenance/v64_3_30_2_fbic_train_fit.json" ]] || { echo 'STOP V30.2: expected auditable B24 DRC TRAIN gate failure did not reproduce' >&2; exit 2; }
++python -m bdse.tools.audit_v64_3_30_1_fbic_train \
++  --b16-metrics "$OUT_ROOT/provenance/train_b16_v20_metrics.json" \
++  --b16-rows "$OUT_ROOT/provenance/train_b16_v20_rows.jsonl" \
++  --b24-metrics "$OUT_ROOT/provenance/train_b24_v20_metrics.json" \
++  --b24-rows "$OUT_ROOT/provenance/train_b24_v20_rows.jsonl" \
++  --b16-fit-report "$OUT_ROOT/provenance/v64_3_30_2_baseline_v25_train_fit.json" \
++  --b24-fit-report "$OUT_ROOT/provenance/v64_3_30_2_fbic_train_fit.json" \
++  --output "$OUT_ROOT/provenance/v64_3_30_1_repaired_train_audit.json" \
++  | tee "$OUT_ROOT/logs/v64_3_30_1_repaired_train_audit.out"
++stage_end
++
++# The repaired V30.1 result proved the unchanged B24 DRC is not 5/5 fold-safe.
++# Fresh causal arms are exactly raw/B16-V20/B24-V20.
++# V30.2 intentionally does NOT lower that gate and does NOT evaluate B24 DRC on fresh data.
++# It now executes the missing independent pure capacity control only.
++stage_start fresh_selection
++TOK1000="$OUT_ROOT/provenance/val_screen_fresh_1000_tokens.txt"
++TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"
++TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"
++python -m bdse.tools.select_fresh_preprocessed_tokens \
++  --preprocessed-dir "$BDSE_VAL_CACHE" --split val \
++  --exclude-tokens "$DESIGN_EXCLUDE_TOKENS" --count 1000 \
++  --hash-seed "$FRESH_HASH_SEED" --output "$TOK1000" \
++  --audit-output "$OUT_ROOT/provenance/v64_3_30_2_fresh_1000_audit.json" \
++  > "$OUT_ROOT/logs/fresh_token_selection.out"
++head -n 500 "$TOK1000" > "$TOKA"; tail -n 500 "$TOK1000" > "$TOKB"
++python - "$TOK1000" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import sys
++fr={x.strip() for x in open(sys.argv[1]) if x.strip()}; ex={x.strip() for x in open(sys.argv[2]) if x.strip()}; tr={x.strip() for x in open(sys.argv[3]) if x.strip()}
++if len(fr)!=1000 or len(ex)!=8700 or len(tr)!=3000 or fr&ex or fr&tr:
++    raise SystemExit(f'STOP DATA: V30.2 fresh isolation failure fresh={len(fr)} fresh_ex={len(fr&ex)} fresh_train={len(fr&tr)}')
++print('PASS V30.2 untouched fresh isolation')
++PY
++stage_end
++
++run_eval(){
++  local gpu="$1" cfg="$2" sp="$3" tag="$4"; local tok="$TOKA"; [[ "$sp" == B ]] && tok="$TOKB"
++  CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop \
++    --config "$cfg" --checkpoint "$EAF_CKPT" --split val \
++    --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios 500 \
++    --scenario-token-file "$tok" --require-all-scenario-tokens \
++    --output "$OUT_ROOT/provenance/${sp}_${tag}_metrics.json" \
++    --per-sample-output "$OUT_ROOT/provenance/${sp}_${tag}_rows.jsonl" \
++    --frontier-edge-output "$OUT_ROOT/provenance/${sp}_${tag}_edges.jsonl" \
++    --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${sp}_${tag}.out" 2>&1
++}
++
++for sp in A B; do
++  stage_start "fresh_${sp}_wave1"
++  run_eval "$GPU0" "$RAW_CONFIG" "$sp" raw & p0=$!
++  run_eval "$GPU1" "$B16_V20_CONFIG" "$sp" b16_v20 & p1=$!
++  s=0; wait "$p0" || s=1; wait "$p1" || s=1; [[ $s -eq 0 ]] || exit 2
++  stage_end
++
++  stage_start "fresh_${sp}_wave2"
++  run_eval "$GPU0" "$B24_V20_CONFIG" "$sp" b24_v20
++  stage_end
++done
++
++stage_start paired_identity
++python - "$OUT_ROOT/provenance" "$TOKA" "$TOKB" <<'PY'
++import json,sys,pathlib
++root=pathlib.Path(sys.argv[1]); tags=['raw','b16_v20','b24_v20']
++for sp,tf in [('A',sys.argv[2]),('B',sys.argv[3])]:
++    want={x.strip() for x in open(tf) if x.strip()}; orders=[]
++    if len(want)!=500: raise SystemExit(f'STOP DATA: {sp} manifest !=500 unique')
++    for tag in tags:
++        rs=[json.loads(x) for x in open(root/f'{sp}_{tag}_rows.jsonl') if x.strip()]
++        got=[str(r['scenario_token']) for r in rs]
++        if len(got)!=500 or len(set(got))!=500 or set(got)!=want:
++            raise SystemExit(f'STOP DATA: {sp}/{tag} identity mismatch')
++        orders.append(got)
++        m=json.load(open(root/f'{sp}_{tag}_metrics.json'))
++        if not m.get('scenario_token_prefilter_active',False): raise SystemExit(f'STOP DATA/SPEED: {sp}/{tag} token prefilter inactive')
++    if any(x!=orders[0] for x in orders[1:]): raise SystemExit(f'STOP DATA: {sp} row order differs across arms')
++print('PASS V30.2 paired identity across all 6 fresh arms')
++PY
++stage_end
++
++stage_start screen
++for sp in A B; do
++  python -m bdse.tools.check_v64_3_30_2_eaf_icer_fbic_pure_split --split-name "$sp" \
++    --raw-metrics "$OUT_ROOT/provenance/${sp}_raw_metrics.json" --raw-rows "$OUT_ROOT/provenance/${sp}_raw_rows.jsonl" \
++    --b16-v20-metrics "$OUT_ROOT/provenance/${sp}_b16_v20_metrics.json" --b16-v20-rows "$OUT_ROOT/provenance/${sp}_b16_v20_rows.jsonl" --b16-v20-edges "$OUT_ROOT/provenance/${sp}_b16_v20_edges.jsonl" \
++    --b24-v20-metrics "$OUT_ROOT/provenance/${sp}_b24_v20_metrics.json" --b24-v20-rows "$OUT_ROOT/provenance/${sp}_b24_v20_rows.jsonl" --b24-v20-edges "$OUT_ROOT/provenance/${sp}_b24_v20_edges.jsonl" \
++    --output "$OUT_ROOT/provenance/v64_3_30_2_split_${sp}_screen.json" | tee "$OUT_ROOT/logs/v64_3_30_2_split_${sp}_screen.out"
++done
++SCREEN="$OUT_ROOT/provenance/v64_3_30_2_eaf_icer_fbic_pure_double_fresh_screen.json"
++python -m bdse.tools.check_v64_3_30_2_eaf_icer_fbic_pure_screen \
++  --split-a-report "$OUT_ROOT/provenance/v64_3_30_2_split_A_screen.json" \
++  --split-b-report "$OUT_ROOT/provenance/v64_3_30_2_split_B_screen.json" \
++  --train-audit "$OUT_ROOT/provenance/v64_3_30_1_repaired_train_audit.json" \
++  --output "$SCREEN" | tee "$OUT_ROOT/logs/v64_3_30_2_double_fresh_screen.out"
++stage_end
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))" >> "$TIMING"
++python - "$SCREEN" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++for k in ['engineering_valid','pure_capacity_capture_signal_both','capacity_action_switch_nonharmful_both','capacity_common_B16_opportunity_nonharmful_both','endpoint_noninferior_both','scientific_conclusion','next_action']:
++    print(k,'=',r.get(k))
++print('V30.2 completes the missing pure-capacity causal test. B=16 remains an operating-point control, not the paper thesis.')
++PY
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/V64_3_30_1_REPAIRED_RESULT_POSTMORTEM_AND_V64_3_30_2_PURE_CAPACITY.md /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/V64_3_30_1_REPAIRED_RESULT_POSTMORTEM_AND_V64_3_30_2_PURE_CAPACITY.md
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/V64_3_30_1_REPAIRED_RESULT_POSTMORTEM_AND_V64_3_30_2_PURE_CAPACITY.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/V64_3_30_1_REPAIRED_RESULT_POSTMORTEM_AND_V64_3_30_2_PURE_CAPACITY.md	2026-08-23 08:24:12.508353363 +0000
+@@ -0,0 +1,175 @@
++# V64.3.30.1 Repaired Result Postmortem and V64.3.30.2 Pure-FBIC Design
++
++## Executive conclusion
++
++The repaired V64.3.30.1 run is **engineering-valid through the paired B16/B24 TRAIN capacity experiment and the B24 DRC TRAIN fit**. The previous B24 attribution-spectrum crash is fixed: both capacity arms complete all 3000 frozen TRAIN scenes, paired identity/query accounting is exact, and the FBIC capacity-only contract holds. The run then stops **by design** because the unchanged B24 aggregate-downside DRC recipe is only 4/5 fold-safe. That stop is an algorithmic/development gate, not a runtime error.
++
++However, this run is **scientifically incomplete for the central V30 mediator question**. The launcher places the B24 DRC TRAIN gate before fresh selection, so the valid DRC failure also prevents the pure `raw / B16-V20 / B24-V20` untouched A/B capacity control from running. Therefore V30.1 can support TRAIN-side development attribution, but it cannot yet establish on independent data whether B=16 retained capacity is a first-order missing mediator.
++
++V64.3.30.2 corrects only this experimental orchestration: it preserves the failed B24 DRC gate and never evaluates B24 DRC on fresh data, while allowing the pure capacity control to spend the still-untouched original V30 seed.
++
++## 1. Engineering validity of the repaired V30.1 run
++
++The repaired run satisfies all capacity-isolation contracts:
++
++- B16 and B24 arms contain the exact same 3000 frozen TRAIN scenes.
++- Upstream configured evidence/selector budget remains B=16.
++- The queried decision bank remains M=24.
++- FBIC is post-selector only: the safe-domain final retained interface is a strict superset of the B16 set, with no removed baseline atom.
++- Safe-domain mean retained count grows from 15.9496 to 23.7560; mean added atoms = 7.8064.
++- All-flagged structural scenes = 262; FBIC application rate there = 0.
++- Per-scene `action_atom_query_count`, `proposal_candidate_atom_count`, and `effective_query_action_count` are exactly identical between B16 and B24.
++- `upstream_configured_decision_budget_atom_count=16`, retained-interface ceiling=24, retained-budget pass rate=1, and no-new-query rate=1.
++- Historical B16 V25 fit is exactly reproduced: 75,133 frontier rows / 1,455 eligible edges / 310 replacement scenes / 5-of-5 fold-safe / 71 selected / +5.527642 teacher-improvement sum.
++
++No second runtime/shape/accounting blocker is present in the uploaded repaired execution.
++
++## 2. What stopped the run
++
++The B24 DRC fit is a real frozen-TRAIN algorithmic failure:
++
++- eligible edges: 1,455 -> 3,821;
++- replacement scenes: 310 -> 483;
++- teacher-positive edge fraction: 62.13% -> 40.23%;
++- eligible-population teacher-improvement sum: -52.589 -> -590.668;
++- aggregate-downside selected count: 71 -> 84;
++- aggregate-downside fold safety: 5/5 -> 4/5.
++
++The failing fold is fold 2: 22 selected proposals, teacher-improvement sum -0.041637, worst -1.051350, NegRMS 0.306225. The global selected sum remains positive (+9.308571), but the pre-registered contract requires every fixed scene fold to be selected-path non-harmful. The launcher therefore correctly stops and must not lower K, the DRC threshold, the downside multiplier, or any support/scalar boundary.
++
++This is valuable development evidence: opening the retained interface substantially changes the eligible replacement distribution, and the frozen edge-local aggregate consumer no longer satisfies the same cross-fold safety contract.
++
++## 3. What TRAIN says about the capacity-vs-consumer question
++
++The evidence-transmission side clearly improves under B24:
++
++| Diagnostic | B16 | B24 |
++|---|---:|---:|
++| selected decisive-atom recall | 0.5305 | 0.7158 |
++| effective selected decisive-atom recall | 0.7580 | 0.9433 |
++| selected interaction-decisive recall | 0.4823 | 0.6904 |
++| selected soft-interaction decisive recall | 0.6332 | 0.9068 |
++| evidence-certificate fraction | 0.8753 | 0.9823 |
++| budget-vs-full action match | 0.2137 | 0.2453 |
++
++The same TRAIN population also shows more downstream preconditions becoming positive:
++
++- B16 positive direct opportunities: `803 -> support 552 -> scalar 248 -> support+scalar 229 -> selected-positive 206` (25.65% capture).
++- B24 positive direct opportunities: `787 -> support 551 -> scalar 327 -> support+scalar 305 -> selected-positive 141` (17.92% capture).
++
++Thus B24 does not fail because it simply “sees nothing new.” It transmits substantially more decisive/interaction evidence and creates many more scalar/support+scalar-positive opportunities. The break occurs when those newly exposed signals are converted into the final extremal recovery action.
++
++The pure V20 endpoint moves in the wrong direction on frozen TRAIN:
++
++- teacher action match: 22.47% -> 20.57%;
++- mean teacher regret: 15,405.18 -> 16,323.01;
++- beneficial rate: 7.07% -> 4.93%;
++- direct positive-opportunity capture: 25.65% -> 17.92%.
++
++There are 742 safe-domain scenes where B24 changes the final action relative to B16. On exactly these paired action changes, `B16 teacher regret - B24 teacher regret` sums to -2,753,490.91: 337 changes are beneficial for B24, 403 harmful, 2 equal. The largest B24 regret increase is 270,855.33.
++
++This is strong **development-direction** evidence for a downstream semantics/operator mismatch: more useful evidence is visible, yet the frozen intervention operator converts it into worse decisions, and the DRC reliability population becomes much less favorable. But these 3000 scenes are the frozen development population. They cannot resolve the publication-level causal question by themselves.
++
++## 4. Why the central V30 question remains unresolved
++
++The scientific V30 question is:
++
++> Is useful candidate-specific signal missing because B=16 discards already-queried M=24 evidence, or is sufficient signal already available while the downstream recovery semantics/operator cannot use it stably?
++
++V30.1 stops before untouched token selection. Therefore there is no independent paired `B16-V20 vs B24-V20` evidence. The correct current statement is:
++
++> TRAIN strongly shifts the hypothesis toward downstream consumer/operator mismatch, but B=16 retained capacity has not yet been independently ruled in or ruled out as a first-order mediator.
++
++It would be a protocol error to promote the TRAIN direction into the final paper claim or to begin V31 before this mediator test is completed.
++
++## 5. V29 -> V30.1 evidence chain
++
++1. Earlier acquisition/coreset/teacher-shaped selector work became exhausted; repeated same-bank selector tuning was demoted.
++2. EAF showed that complete action-local instrumentation and exact evidence attribution are useful for diagnosis.
++3. V24 showed that richer attribution geometry can destroy local reliability neighborhoods; more representation is not automatically a better risk geometry.
++4. V25 aggregate DRC recovered useful direct actions but left severe split-dependent catastrophic tails.
++5. V26/V27 semantic/local confirmation variants did not provide stable high-retention reliability.
++6. V28 PTMC was strong on TRAIN but had zero fresh harmful-veto specificity and removed beneficial proposals; classifier/threshold rescue was falsified.
++7. V29 FCR improved its full-frontier compression proxy on ~73% of fresh scenes but produced almost no pure recovery gain and destabilized DRC/catastrophic behavior. Therefore global frontier fidelity is not decision sufficiency.
++8. V30.1 now shows on frozen TRAIN that opening the retained interface from the B16 operating point to the complete already-queried M24 bank materially increases decisive-evidence transmission, yet the pure endpoint worsens and unchanged DRC loses cross-fold safety.
++
++The cumulative evidence has therefore narrowed the main unresolved variable from “which selector/classifier?” to “is retained capacity itself a causal mediator on untouched data, or is the remaining bottleneck the intervention consumer?”
++
++## 6. Paper thesis after V30.1
++
++`B=16` must remain an **operating point/control variable**, not a novelty. B=24 is also not a proposed paper operating point. The paper problem should be expressed over a bounded/fixed auditable planner interface.
++
++The strongest current thesis is:
++
++> **Intervention-conditioned decision sufficiency under a bounded auditable planner interface:** evidence is sufficient not when it reconstructs the world or the complete frontier faithfully, but when it provides stable support for accepting or rejecting a concrete deployment-admissible incumbent-to-challenger intervention under extremal selection.
++
++A candidate mechanism-level novelty is:
++
++> **Evidence-attributed, deployment-admissible incumbent-contrastive recovery with monotone intervention containment, where evidence sufficiency and reliability are defined at the selected intervention boundary rather than by global reconstruction or edge-average prediction.**
++
++The pieces supported by the history and worth freezing are: bounded/auditable interface; EAF instrumentation and exact attribution; deployment-admissible domain separation; incumbent-contrastive direct recovery; asymmetric admissible-incumbent preservation; all-flagged structural delegation; incumbent-default/no-fallback containment; fail-closed independent evaluation.
++
++Do not make PTMC, FCR, a particular KNN/Gaussian/DRC, a literal evidence count, or a threshold the novelty headline.
++
++This is a plausible CCF-A-level research direction only if a concrete final mechanism subsequently survives double-fresh, independent full validation, strong planning baselines/ablations, budget sensitivity, and closed-loop evaluation. No design can guarantee venue acceptance from theory alone.
++
++## 7. Provisional dominant bottleneck
++
++The dominant bottleneck can be tightened provisionally to:
++
++> **selection-conditioned counterfactual reliability at the direct incumbent-replacement boundary: converting candidate-specific evidence into a high-coverage action replacement that remains stable after extremal selection and catastrophic-tail constraints.**
++
++The word “provisionally” matters until V30.2. If untouched B24 pure capacity produces a reproducible safe gain, retained capacity is also a real mediator and the final consumer should be built to exploit a capacity-complete signal. If it does not, capacity/same-bank allocation can be terminally demoted and the operator mismatch becomes the first-order bottleneck.
++
++For under-fixed-budget closed-loop SOTA, the current gap is no longer merely evidence recall. It is **useful recovery coverage under reliability**: recover materially more teacher-positive/closed-loop-improving direct alternatives while preserving incumbent/structural behavior and keeping the selected catastrophic tail controlled across independent populations.
++
++## 8. V64.3.30.2: complete the missing pure-capacity causal test
++
++V30.2 is intentionally not V31 and introduces no new planning algorithm. It fixes experiment orchestration only.
++
++TRAIN:
++
++- replay B16-V20 and B24-V20 with the exact frozen 3000 scenes;
++- exactly reproduce historical B16 V25 fit;
++- rerun the B24 V30 DRC fitter and **require** its non-zero fold-safety failure to reproduce;
++- never lower or tune that gate;
++- run a lightweight paired TRAIN audit to verify capacity isolation and failure identity.
++
++Untouched A/B:
++
++- use the same original V30 seed `v64.3.30-eaf-icer-fbic-double-fresh-v1`, because V30.1 stopped before fresh-token selection;
++- evaluate exactly `raw / B16-V20 / B24-V20` on each 500-scene split;
++- do not run any B24 DRC fresh arm.
++
++The pure-capacity checker measures three different causal views:
++
++1. direct positive-opportunity capture gain (pre-registered signal threshold +3 percentage points);
++2. all safe-domain scenes where B24 actually changes the action, with paired teacher-regret net effect;
++3. the **same B16-defined positive-opportunity scenes**, comparing B16 and B24 final teacher regret, so a B24-induced change in anchor/admissible population cannot manufacture a favorable denominator.
++
++It additionally requires exact query parity, capacity superset accounting, structural no-op, and endpoint non-inferiority.
++
++### Branches
++
++**A. Both fresh blocks show useful, non-harmful pure B24 signal.** Retained capacity is a real mediator. Because B24 DRC is already TRAIN-falsified, do not make B24 the method and do not restore DRC. The next algorithm should be a selection-aware candidate-conditioned consumer, followed only later by an adaptive bounded completion mechanism if needed.
++
++**B. Capture rises but paired action/opportunity effects or endpoint are harmful.** More evidence exposes opportunity but the frozen action operator converts it unsafely. The consumer/operator is the dominant bottleneck; stop capacity tuning and redesign selection-conditioned counterfactual reliability.
++
++**C. Pure B24 does not reproducibly improve both blocks.** Capacity-only transmission is not a first-order solution under the frozen consumer. Stop B sweeps and all same-bank selector/rebinding work; focus directly on intervention-conditioned recovery semantics/operator mismatch on the bounded interface.
++
++No pooled rescue is allowed.
++
++## 9. Historical routes that remain prohibited
++
++Do not repeat: learned/teacher-shaped acquisition objectives; DACC/beam/swap/same-bank coreset rescue; FCR/global frontier compression tuning; transition/signed-profile/full-attribution KNN geometry; semantic-family/type-KNN thresholds or weights; KNN-radius/OOD rescue; mean-SE/DRC mixing or DRC K/threshold/downside sweeps; support/scalar threshold rescue; action blacklists; PTMC/classifier v2/v3; failed-view AND stacking; naive aggregate+type concat; learned admissible-incumbent-to-anchor veto; broad B sweeps before the single capacity mediator is resolved.
++
++## 10. Engineering validation of V30.2
++
++Local validation after adding the pure-capacity orchestration and paired audit tools:
++
++- Python compile: PASS;
++- V30.2 launcher `bash -n`: PASS;
++- new V30.2 + FBIC focused tests: 16/16 PASS;
++- V13--V30.2 targeted regression: **123/123 PASS**;
++- repository full regression: **453/453 PASS**;
++- warnings: **36**, all pre-existing PyTorch Transformer `nested_tensor/norm_first`; no new warning class.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/V64_3_30_1_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_30_2.json /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/V64_3_30_1_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_30_2.json
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/V64_3_30_1_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_30_2.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/V64_3_30_1_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_30_2.json	2026-08-23 08:24:12.508285282 +0000
+@@ -0,0 +1,631 @@
++{
++  "B16_DRC_fit_report": {
++    "aggregate_feature_coverage": 1.0,
++    "algorithm": "V64.3.25 EAF-ICER-DRC",
++    "audit": "v64_3_25_eaf_icer_drc_train_fit",
++    "configs": {
++      "aggregate_downside": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_downside.yaml",
++      "aggregate_meanse": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_meanse.yaml"
++    },
++    "crossfit": {
++      "aggregate_downside": {
++        "all_folds_path_safe": true,
++        "certificate": "downside_rms",
++        "fold_pass_count": 5,
++        "folds": [
++          {
++            "capture": 0.25925925925925924,
++            "count": 22,
++            "fold": 0,
++            "hold_scenes": 74,
++            "mean": 0.0451508547719307,
++            "negative_rms": 0.0001551360978898107,
++            "opportunities": 54,
++            "path_safe": true,
++            "precision": 0.6363636363636364,
++            "scene_count": 74,
++            "selected_token_count": 22,
++            "sum": 0.9933188049824753,
++            "worst": -0.0005360335323967291
++          },
++          {
++            "capture": 0.19642857142857142,
++            "count": 14,
++            "fold": 1,
++            "hold_scenes": 69,
++            "mean": 0.18625076332235688,
++            "negative_rms": 0.14588327053655137,
++            "opportunities": 56,
++            "path_safe": true,
++            "precision": 0.7857142857142857,
++            "scene_count": 69,
++            "selected_token_count": 14,
++            "sum": 2.6075106865129962,
++            "worst": -0.5457565672151744
++          },
++          {
++            "capture": 0.25,
++            "count": 12,
++            "fold": 2,
++            "hold_scenes": 55,
++            "mean": 0.08290484493122606,
++            "negative_rms": 0.00012233677714800558,
++            "opportunities": 40,
++            "path_safe": true,
++            "precision": 0.8333333333333334,
++            "scene_count": 55,
++            "selected_token_count": 12,
++            "sum": 0.9948581391747128,
++            "worst": -0.00040563892025979875
++          },
++          {
++            "capture": 0.1891891891891892,
++            "count": 10,
++            "fold": 3,
++            "hold_scenes": 51,
++            "mean": 0.09315482863772254,
++            "negative_rms": 0.0002018776954041964,
++            "opportunities": 37,
++            "path_safe": true,
++            "precision": 0.7,
++            "scene_count": 51,
++            "selected_token_count": 10,
++            "sum": 0.9315482863772254,
++            "worst": -0.00045463804826173515
++          },
++          {
++            "capture": 0.16,
++            "count": 13,
++            "fold": 4,
++            "hold_scenes": 61,
++            "mean": 3.1262208179146413e-05,
++            "negative_rms": 0.0010657026487146167,
++            "opportunities": 50,
++            "path_safe": true,
++            "precision": 0.6153846153846154,
++            "scene_count": 61,
++            "selected_token_count": 13,
++            "sum": 0.0004064087063289034,
++            "worst": -0.0038308846880124037
++          }
++        ],
++        "mean_capture": 0.21097540397540399,
++        "mean_precision": 0.7141591741591742,
++        "mode": "aggregate_evidence_only",
++        "selected_count": 71,
++        "teacher_improvement_sum": 5.527642325753739
++      },
++      "aggregate_meanse": {
++        "all_folds_path_safe": false,
++        "certificate": "mean_se",
++        "fold_pass_count": 4,
++        "folds": [
++          {
++            "capture": 0.3148148148148148,
++            "count": 24,
++            "fold": 0,
++            "hold_scenes": 74,
++            "mean": 0.08278284310743761,
++            "negative_rms": 0.0004959404908629087,
++            "opportunities": 54,
++            "path_safe": true,
++            "precision": 0.7083333333333334,
++            "scene_count": 74,
++            "selected_token_count": 24,
++            "sum": 1.9867882345785026,
++            "worst": -0.002361465603113011
++          },
++          {
++            "capture": 0.3392857142857143,
++            "count": 24,
++            "fold": 1,
++            "hold_scenes": 69,
++            "mean": 0.1774442994639082,
++            "negative_rms": 0.00018936995719155643,
++            "opportunities": 56,
++            "path_safe": true,
++            "precision": 0.7916666666666666,
++            "scene_count": 69,
++            "selected_token_count": 24,
++            "sum": 4.258663187133797,
++            "worst": -0.0008613491043445443
++          },
++          {
++            "capture": 0.35,
++            "count": 18,
++            "fold": 2,
++            "hold_scenes": 55,
++            "mean": -0.038627204301830094,
++            "negative_rms": 0.40131064296102337,
++            "opportunities": 40,
++            "path_safe": false,
++            "precision": 0.7777777777777778,
++            "scene_count": 55,
++            "selected_token_count": 18,
++            "sum": -0.6952896774329417,
++            "worst": -1.7026166456802834
++          },
++          {
++            "capture": 0.35135135135135137,
++            "count": 22,
++            "fold": 3,
++            "hold_scenes": 51,
++            "mean": 0.12729676600614204,
++            "negative_rms": 0.21033804148798033,
++            "opportunities": 37,
++            "path_safe": true,
++            "precision": 0.5909090909090909,
++            "scene_count": 51,
++            "selected_token_count": 22,
++            "sum": 2.800528852135125,
++            "worst": -0.9865714945818296
++          },
++          {
++            "capture": 0.32,
++            "count": 23,
++            "fold": 4,
++            "hold_scenes": 61,
++            "mean": 0.032432133245042453,
++            "negative_rms": 0.05320291585587993,
++            "opportunities": 50,
++            "path_safe": true,
++            "precision": 0.6956521739130435,
++            "scene_count": 61,
++            "selected_token_count": 23,
++            "sum": 0.7459390646359765,
++            "worst": -0.25515214426409427
++          }
++        ],
++        "mean_capture": 0.33509037609037606,
++        "mean_precision": 0.7128678085199824,
++        "mode": "aggregate_evidence_only",
++        "selected_count": 111,
++        "teacher_improvement_sum": 9.09662966105046
++      }
++    },
++    "decision_boundary": 0.0,
++    "diagnostic_note": "V24 attribution-resolved variants are intentionally not carried forward: the pre-registered V24 TRAIN branch selected aggregate-downside. This fitter writes the full TRAIN report before any fail-closed exit so a legitimate STOP remains auditable.",
++    "downside_multiplier": 1.0,
++    "fold_seed": "v64.3.23-eaf-icer-rcr-scene-crossfit-v1",
++    "fresh_validation_used": false,
++    "frontier_row_count": 75133,
++    "gate_contract": {
++      "all_5_scene_folds_selected_path_nonharmful": true,
++      "fresh_validation_must_not_be_used_on_train_gate_fail": true,
++      "main": "aggregate_downside",
++      "selected_count_min": 64,
++      "teacher_improvement_sum_min": 0.0
++    },
++    "input_frontier": {
++      "bytes": 804471628,
++      "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/provenance/train_b16_v20_edges.jsonl",
++      "sha256": "b922fd60d6f38ede6eef434921ebbe00d7de63b80f580f30b5b607839b861653"
++    },
++    "memories": {
++      "aggregate_downside": {
++        "certificate": "downside_rms",
++        "feature_count": 18,
++        "mode": "evidence_only",
++        "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_downside_memory.npz",
++        "row_count": 1455,
++        "sha256": "748d34cb0563cb9450d1ddb66c75b4fb37bd70e42923ee1e307fb4fa41935a58"
++      },
++      "aggregate_meanse": {
++        "certificate": "mean_se",
++        "feature_count": 18,
++        "mode": "evidence_only",
++        "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/configs/baseline_v25_b16/v64_3_25_aggregate_meanse_memory.npz",
++        "row_count": 1455,
++        "sha256": "b46ca30a254d882233cc8d2c7c8a13f47204c2ed9fe96ff77ffd55e387f28fe5"
++      }
++    },
++    "neighbor_k_values": [
++      32,
++      64
++    ],
++    "population_teacher_improvement_mean": -0.03614354435930589,
++    "population_teacher_improvement_sum": -52.58885704279007,
++    "population_teacher_improvement_worst": -9.839625339961703,
++    "population_teacher_positive_fraction": 0.6213058419243986,
++    "replacement_edges": 1455,
++    "replacement_scenes": 310,
++    "train_gate_pass": true,
++    "train_scene_count": 3000,
++    "train_token_manifest": {
++      "count": 3000,
++      "path": "outputs_v64_3_30_eaf_icer_fbic_screen_2gpu_hotfix_v1/provenance/v64_3_30_baseline_train_tokens.txt",
++      "sha256": "b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4"
++    }
++  },
++  "B16_metrics": {
++    "beneficial": 0.07066666666666667,
++    "flip": 0.339,
++    "guard_block": 0.019,
++    "harmful": 0.017,
++    "match": 0.22466666666666665,
++    "regret": 15405.179467154674
++  },
++  "B16_vs_B24_DRC_population_shift": {
++    "B16": {
++      "downside_crossfit_fold_pass_count": 5,
++      "downside_selected_count": 71,
++      "downside_selected_teacher_improvement_sum": 5.527642325753739,
++      "eligible_replacement_edges": 1455,
++      "population_teacher_improvement_sum": -52.588857,
++      "replacement_scenes": 310,
++      "teacher_positive_edge_fraction": 0.6213058419
++    },
++    "B24": {
++      "downside_crossfit_fold_pass_count": 4,
++      "downside_selected_count": 84,
++      "downside_selected_teacher_improvement_sum": 9.308571438081039,
++      "eligible_replacement_edges": 3821,
++      "failing_fold": {
++        "capture": 0.2542372881355932,
++        "count": 22,
++        "fold": 2,
++        "negative_rms": 0.3062245086423807,
++        "precision": 0.6818181818181818,
++        "teacher_improvement_sum": -0.04163708599843341,
++        "worst": -1.0513503789288543
++      },
++      "population_teacher_improvement_sum": -590.66844057,
++      "population_worst_teacher_improvement": -9.83962534,
++      "replacement_scenes": 483,
++      "teacher_positive_edge_fraction": 0.4022507197
++    }
++  },
++  "B24_DRC_fail_is_selected_path_fold_safety_failure_not_runtime_error": true,
++  "B24_DRC_fit_report": {
++    "algorithm": "V64.3.30 EAF-ICER-FBIC with unchanged V25 DRC recipe",
++    "audit": "v64_3_30_eaf_icer_fbic_train_fit",
++    "causal_contract": {
++      "DRC_estimator_family_changed": false,
++      "K_changed": false,
++      "only_selected_evidence_distribution_changed_by_FBIC": true,
++      "teacher_feature_added": false,
++      "threshold_changed": false
++    },
++    "configs": {},
++    "crossfit": {
++      "aggregate_downside": {
++        "all_folds_path_safe": false,
++        "certificate": "downside_rms",
++        "fold_pass_count": 4,
++        "folds": [
++          {
++            "capture": 0.2222222222222222,
++            "count": 20,
++            "fold": 0,
++            "hold_scenes": 107,
++            "mean": 0.11020258705328509,
++            "negative_rms": 0.22151260613240606,
++            "opportunities": 63,
++            "path_safe": true,
++            "precision": 0.7,
++            "scene_count": 107,
++            "selected_token_count": 20,
++            "sum": 2.204051741065702,
++            "worst": -0.9906337633781135
++          },
++          {
++            "capture": 0.1095890410958904,
++            "count": 10,
++            "fold": 1,
++            "hold_scenes": 96,
++            "mean": 0.41409593479315865,
++            "negative_rms": 0.0011544165898838205,
++            "opportunities": 73,
++            "path_safe": true,
++            "precision": 0.8,
++            "scene_count": 96,
++            "selected_token_count": 10,
++            "sum": 4.140959347931586,
++            "worst": -0.0036505828193214257
++          },
++          {
++            "capture": 0.2542372881355932,
++            "count": 22,
++            "fold": 2,
++            "hold_scenes": 93,
++            "mean": -0.0018925948181106095,
++            "negative_rms": 0.3062245086423807,
++            "opportunities": 59,
++            "path_safe": false,
++            "precision": 0.6818181818181818,
++            "scene_count": 93,
++            "selected_token_count": 22,
++            "sum": -0.04163708599843341,
++            "worst": -1.0513503789288543
++          },
++          {
++            "capture": 0.16666666666666666,
++            "count": 16,
++            "fold": 3,
++            "hold_scenes": 88,
++            "mean": 0.1265546491720164,
++            "negative_rms": 0.0001971479673444711,
++            "opportunities": 54,
++            "path_safe": true,
++            "precision": 0.5625,
++            "scene_count": 88,
++            "selected_token_count": 16,
++            "sum": 2.0248743867522623,
++            "worst": -0.0006010863602163852
++          },
++          {
++            "capture": 0.13432835820895522,
++            "count": 16,
++            "fold": 4,
++            "hold_scenes": 99,
++            "mean": 0.061270190520620126,
++            "negative_rms": 0.06282198201644483,
++            "opportunities": 67,
++            "path_safe": true,
++            "precision": 0.5625,
++            "scene_count": 99,
++            "selected_token_count": 16,
++            "sum": 0.980323048329922,
++            "worst": -0.25128463695537295
++          }
++        ],
++        "mean_capture": 0.17740871526586552,
++        "mean_precision": 0.6613636363636364,
++        "mode": "aggregate_evidence_only",
++        "selected_count": 84,
++        "teacher_improvement_sum": 9.308571438081039
++      },
++      "aggregate_meanse": {
++        "all_folds_path_safe": false,
++        "certificate": "mean_se",
++        "fold_pass_count": 4,
++        "folds": [
++          {
++            "capture": 0.25396825396825395,
++            "count": 24,
++            "fold": 0,
++            "hold_scenes": 107,
++            "mean": 0.12353615638641297,
++            "negative_rms": 0.0003281537487945448,
++            "opportunities": 63,
++            "path_safe": true,
++            "precision": 0.6666666666666666,
++            "scene_count": 107,
++            "selected_token_count": 24,
++            "sum": 2.964867753273911,
++            "worst": -0.0012010433740918813
++          },
++          {
++            "capture": 0.3013698630136986,
++            "count": 28,
++            "fold": 1,
++            "hold_scenes": 96,
++            "mean": 0.3791704461773477,
++            "negative_rms": 0.0015782559316423873,
++            "opportunities": 73,
++            "path_safe": true,
++            "precision": 0.7857142857142857,
++            "scene_count": 96,
++            "selected_token_count": 28,
++            "sum": 10.616772492965735,
++            "worst": -0.007495092636533585
++          },
++          {
++            "capture": 0.2711864406779661,
++            "count": 23,
++            "fold": 2,
++            "hold_scenes": 93,
++            "mean": 0.10883333211136821,
++            "negative_rms": 0.409484413885407,
++            "opportunities": 59,
++            "path_safe": true,
++            "precision": 0.6956521739130435,
++            "scene_count": 93,
++            "selected_token_count": 23,
++            "sum": 2.503166638561469,
++            "worst": -1.7026166456802834
++          },
++          {
++            "capture": 0.24074074074074073,
++            "count": 23,
++            "fold": 3,
++            "hold_scenes": 88,
++            "mean": 0.1585982983237328,
++            "negative_rms": 0.0003980505305355323,
++            "opportunities": 54,
++            "path_safe": true,
++            "precision": 0.5652173913043478,
++            "scene_count": 88,
++            "selected_token_count": 23,
++            "sum": 3.647760861445854,
++            "worst": -0.0016910766631363927
++          },
++          {
++            "capture": 0.1791044776119403,
++            "count": 26,
++            "fold": 4,
++            "hold_scenes": 99,
++            "mean": -0.06859237206072683,
++            "negative_rms": 0.4416501913875288,
++            "opportunities": 67,
++            "path_safe": false,
++            "precision": 0.46153846153846156,
++            "scene_count": 99,
++            "selected_token_count": 26,
++            "sum": -1.7834016735788973,
++            "worst": -2.0229625809788705
++          }
++        ],
++        "mean_capture": 0.24927395520251996,
++        "mean_precision": 0.634957795827361,
++        "mode": "aggregate_evidence_only",
++        "selected_count": 124,
++        "teacher_improvement_sum": 17.94916607266807
++      }
++    },
++    "decision_boundary": 0.0,
++    "fold_seed": "v64.3.23-eaf-icer-rcr-scene-crossfit-v1",
++    "fresh_validation_used": false,
++    "frontier_row_count": 75133,
++    "memories": {},
++    "neighbor_k_values": [
++      32,
++      64
++    ],
++    "population_teacher_improvement_sum": -590.6684405696607,
++    "population_teacher_improvement_worst": -9.839625339961703,
++    "population_teacher_positive_fraction": 0.40225071970688303,
++    "replacement_edges": 3821,
++    "replacement_scenes": 483,
++    "train_gate_pass": false,
++    "train_scene_count": 3000
++  },
++  "B24_DRC_train_gate_pass": false,
++  "B24_metrics": {
++    "beneficial": 0.04933333333333333,
++    "flip": 0.317,
++    "guard_block": 0.019,
++    "harmful": 0.012,
++    "match": 0.20566666666666666,
++    "regret": 16323.009768831782
++  },
++  "V64_3_30_2_design": {
++    "B16_is_operating_point_not_novelty": true,
++    "M_fixed": 24,
++    "additional_evidence_queries": 0,
++    "fresh_DRC_arms_allowed": false,
++    "fresh_arms_per_split": [
++      "raw",
++      "B16-V20",
++      "B24-V20"
++    ],
++    "fresh_seed": "v64.3.30-eaf-icer-fbic-double-fresh-v1",
++    "paired_diagnostics": [
++      "direct positive-opportunity capture",
++      "all changed-action teacher-regret effect",
++      "fixed-B16-positive-opportunity paired teacher-regret effect",
++      "endpoint noninferiority",
++      "structural no-op",
++      "query parity"
++    ],
++    "post_selector_retained_ceiling_capacity_probe": 24,
++    "purpose": "complete the missing untouched pure-capacity mediator test without lowering the failed B24 DRC gate",
++    "same_original_V30_fresh_seed": true,
++    "upstream_selector_budget_fixed": 16
++  },
++  "additional_evidence_transmission_metrics": {
++    "budget_vs_full_action_match": {
++      "B16": 0.213667,
++      "B24": 0.245333
++    },
++    "effective_selected_decisive_atom_recall": {
++      "B16": 0.75795,
++      "B24": 0.94325
++    },
++    "selected_interaction_decisive_recall": {
++      "B16": 0.48225,
++      "B24": 0.69035
++    },
++    "selected_soft_interaction_decisive_recall": {
++      "B16": 0.63318,
++      "B24": 0.90684
++    }
++  },
++  "all_flagged_scene_count": 262,
++  "audit": "v64_3_30_1_repaired_fbic_train_result",
++  "capacity_action_switch": {
++    "B16_minus_B24_teacher_regret_mean_on_changed_actions": -3710.904184678252,
++    "B16_minus_B24_teacher_regret_sum_on_changed_actions": -2753490.905031263,
++    "B24_beneficial_change_count": 337,
++    "B24_best_regret_reduction_on_changed_actions": 209157.4161164984,
++    "B24_equal_change_count": 2,
++    "B24_harmful_change_count": 403,
++    "B24_worst_regret_increase_on_changed_actions": 270855.3306287527,
++    "safe_action_change_count": 742
++  },
++  "causal_status": {
++    "algorithmic_result": "B24 unchanged DRC recipe fails pre-registered TRAIN fold-safety gate (4/5); this is valid development evidence",
++    "central_capacity_question": "UNRESOLVED because launcher stopped before untouched pure B16-V20 vs B24-V20 A/B",
++    "engineering_result": "VALID through paired B16/B24 TRAIN and B24 DRC fit; no runtime or accounting blocker found",
++    "posterior_direction_only": "TRAIN strongly favors downstream consumer/operator mismatch over simple retained-capacity loss, but this must not be promoted to an independent/final claim without untouched pure-capacity A/B."
++  },
++  "development_interpretation": "FBIC materially increases evidence transmission/coverage, but on frozen TRAIN the pure downstream endpoint worsens and the unchanged DRC loses fold safety. This is directional evidence for downstream operator/reliability mismatch, not independent evidence that B16 capacity is irrelevant.",
++  "engineering_contract_valid": true,
++  "evidence_certificate_fraction": {
++    "B16": 0.8753333333333333,
++    "B24": 0.9823333333333333
++  },
++  "fbic_diagnostics": {
++    "enabled_rate": 1.0,
++    "no_new_query_rate": 1.0,
++    "reason_code_counts": {
++      "0": 2691,
++      "1": 262,
++      "6": 47
++    },
++    "retained_interface_budget_pass_rate": 1.0,
++    "retained_interface_configured_budget_mean": 24.0,
++    "safe_added_atom_count_mean": 7.806428049671293,
++    "safe_applied_rate": 0.9828341855368883,
++    "safe_baseline_count_mean": 15.949598246895544,
++    "safe_final_count_mean": 23.756026296566837,
++    "safe_reference_count_mean": 23.756026296566837,
++    "safe_removed_atom_count_mean": 0.0,
++    "scene_count": 3000,
++    "structural_applied_rate": 0.0,
++    "upstream_configured_budget_mean": 16.0
++  },
++  "fresh_capacity_question_resolved": false,
++  "fresh_validation_used": false,
++  "historical_B16_V25_reproduced": true,
++  "next_experiment": "untouched double-fresh raw/B16-V20/B24-V20 pure-capacity screen; B24 DRC remains fail-closed",
++  "pure_v20_train_gate_decomposition": {
++    "B16": {
++      "positive_opportunity_capture_rate": 0.25653798256537985,
++      "scalar_positive_opportunity_scenes": 248,
++      "selected_teacher_positive_recovery_scenes": 206,
++      "support_and_scalar_positive_opportunity_scenes": 229,
++      "support_positive_opportunity_scenes": 552,
++      "teacher_positive_direct_admissible_opportunities": 803
++    },
++    "B24": {
++      "positive_opportunity_capture_rate": 0.17916137229987295,
++      "scalar_positive_opportunity_scenes": 327,
++      "selected_teacher_positive_recovery_scenes": 141,
++      "support_and_scalar_positive_opportunity_scenes": 305,
++      "support_positive_opportunity_scenes": 551,
++      "teacher_positive_direct_admissible_opportunities": 787
++    }
++  },
++  "query_accounting": {
++    "action_atom_query_count": {
++      "b16_mean": 619.5873333333333,
++      "b24_mean": 619.5873333333333,
++      "exact_scene_parity": true
++    },
++    "all_query_counts_exact_scene_parity": true,
++    "effective_query_action_count": {
++      "b16_mean": 26.044333333333334,
++      "b24_mean": 26.044333333333334,
++      "exact_scene_parity": true
++    },
++    "proposal_candidate_atom_count": {
++      "b16_mean": 23.776666666666667,
++      "b24_mean": 23.776666666666667,
++      "exact_scene_parity": true
++    }
++  },
++  "safe_scene_count": 2738,
++  "scientific_scope": "development-only; untouched A/B pure-capacity evaluation remains required",
++  "selected_decisive_atom_recall": {
++    "B16": 0.5304979546063938,
++    "B24": 0.7157990088958471
++  },
++  "uploaded_artifact_sha256": {
++    "code_zip": "43edc801711b42092ff2ba4bf6d382a5615e54c21fd986b0453f79f853e29b9e",
++    "configs_zip": "80cbb0487af4ba9956dfa98a2100145c6b19e4e5b4b435bb29b515221c132295",
++    "logs_zip": "5de838d1e861d9ef3caa2930a77ab40a2eb60186c3355a28323207293a2be73a",
++    "provenance_part1_zip": "e40f2c6984710150c2ebf330985f6af27f12d4c117491009aa6aedaa579617bf",
++    "provenance_part2_zip": "7b60f93f45e58638b04f5709dbaf42bc499c2e42579bfbd80c9642c2df77ee66"
++  }
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/V64_3_30_2_ENGINEERING_VALIDATION.txt /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/V64_3_30_2_ENGINEERING_VALIDATION.txt
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/V64_3_30_2_ENGINEERING_VALIDATION.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/V64_3_30_2_ENGINEERING_VALIDATION.txt	2026-08-23 08:24:12.508438510 +0000
+@@ -0,0 +1,39 @@
++V64.3.30.2 EAF-ICER-FBIC PURE — ENGINEERING VALIDATION
++
++Purpose
++-------
++Complete the missing untouched pure-capacity mediator test after repaired V30.1 validly showed the unchanged B24 DRC recipe is not 5/5 TRAIN fold-safe. No new planning algorithm, budget sweep, or DRC rescue is introduced.
++
++Scientific isolation
++--------------------
++- upstream evidence/selector operating point: B=16 (unchanged)
++- queried bank: M=24 (unchanged)
++- post-selector diagnostic retained ceiling: 24
++- additional evidence queries: 0
++- B24 set must be a superset of B16; removal/reallocation is forbidden
++- all-flagged structural domain: FBIC no-op
++- B24 DRC TRAIN failure: required to reproduce; no fresh DRC arm
++- untouched seed: v64.3.30-eaf-icer-fbic-double-fresh-v1 (same still-unspent V30 seed)
++- fresh arms: raw / B16-V20 / B24-V20 only, A/B independently
++
++Validation
++----------
++Python compile: PASS
++V30.2 launcher bash -n: PASS
++V30.2 + FBIC focused tests: 16/16 PASS
++V13--V30.2 targeted regression: 123/123 PASS
++Repository full regression: 453/453 PASS
++Warnings: 36; all are pre-existing PyTorch Transformer nested_tensor/norm_first warnings; no new warning class.
++
++Uploaded repaired V30.1 provenance audit
++----------------------------------------
++engineering_contract_valid: true
++historical_B16_V25_reproduced: true
++B24_DRC_train_gate_pass: false
++B24 DRC failure type: selected-path fixed-fold safety failure, not runtime/shape/accounting error
++fresh_validation_used: false
++central capacity question resolved: false
++
++Current development signal
++--------------------------
++B24 increases decisive-evidence transmission and evidence-certificate coverage, but pure TRAIN endpoint/capture worsen and unchanged DRC loses fold safety. This is development-only directional evidence for a downstream consumer/operator mismatch; V30.2 untouched pure-capacity A/B is required before promotion.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tests/test_v64_3_30_2_eaf_icer_fbic_pure.py	2026-08-23 08:17:41.585809972 +0000
+@@ -0,0 +1,81 @@
++from __future__ import annotations
++
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++from bdse.tools.check_v64_3_30_2_eaf_icer_fbic_pure_split import (
++    _b16_common_opportunity_diag,
++    _capacity_switch_diag,
++)
++
++
++def test_capacity_switch_diag_uses_teacher_regret_direction() -> None:
++    base = {
++        'a': {'bdse_action': 1, 'teacher_regret': 10.0},
++        'b': {'bdse_action': 2, 'teacher_regret': 5.0},
++        'c': {'bdse_action': 3, 'teacher_regret': 7.0},
++    }
++    cap = {
++        'a': {'bdse_action': 4, 'teacher_regret': 4.0},   # beneficial +6
++        'b': {'bdse_action': 5, 'teacher_regret': 8.0},   # harmful -3
++        'c': {'bdse_action': 3, 'teacher_regret': 1.0},   # same action ignored
++    }
++    d = _capacity_switch_diag(base, cap, set(base))
++    assert d['changed_action_count'] == 2
++    assert d['beneficial_change_count'] == 1
++    assert d['harmful_change_count'] == 1
++    assert d['B16_minus_B24_teacher_regret_sum'] == 3.0
++    assert d['net_nonharmful'] is True
++
++
++def test_common_B16_opportunity_is_paired_on_fixed_B16_definition(tmp_path: Path) -> None:
++    p = tmp_path / 'edges.jsonl'
++    rows = [
++        {'scenario_token': 's', 'anchor_action': 0, 'raw_top_action': 1, 'challenger_action': 0, 'icer_admissible': 1.0, 'teacher_margin': 0.0},
++        {'scenario_token': 's', 'anchor_action': 0, 'raw_top_action': 1, 'challenger_action': 1, 'icer_admissible': 1.0, 'teacher_margin': 0.2},
++        {'scenario_token': 's', 'anchor_action': 0, 'raw_top_action': 1, 'challenger_action': 2, 'icer_admissible': 1.0, 'teacher_margin': 0.5},
++    ]
++    p.write_text('\n'.join(json.dumps(x) for x in rows) + '\n')
++    b16 = {'s': {'teacher_regret': 10.0}}
++    b24 = {'s': {'teacher_regret': 8.0}}
++    d = _b16_common_opportunity_diag(str(p), b16, b24, {'s'})
++    assert d['B16_defined_positive_opportunity_scene_count'] == 1
++    assert d['B24_better_final_action_count_on_B16_opportunities'] == 1
++    assert d['paired_nonharmful_on_B16_opportunities'] is True
++
++
++def test_double_screen_branching(tmp_path: Path) -> None:
++    train = {
++        'engineering_contract_valid': True,
++        'historical_B16_V25_reproduced': True,
++        'B24_DRC_fail_is_selected_path_fold_safety_failure_not_runtime_error': True,
++    }
++    split = {
++        'fbic_contract_valid': True,
++        'structural_preservation_valid': True,
++        'pure_capacity_capture_signal': False,
++        'capacity_action_switch_nonharmful': True,
++        'capacity_common_B16_opportunity_nonharmful': True,
++        'endpoint_noninferior': True,
++    }
++    pa, pb, pt, po = [tmp_path / x for x in ['A.json','B.json','T.json','O.json']]
++    pa.write_text(json.dumps(split)); pb.write_text(json.dumps(split)); pt.write_text(json.dumps(train))
++    subprocess.run([
++        sys.executable, '-m', 'bdse.tools.check_v64_3_30_2_eaf_icer_fbic_pure_screen',
++        '--split-a-report', str(pa), '--split-b-report', str(pb), '--train-audit', str(pt), '--output', str(po)
++    ], check=True, capture_output=True, text=True)
++    out = json.loads(po.read_text())
++    assert out['engineering_valid'] is True
++    assert out['pure_capacity_capture_signal_both'] is False
++    assert out['scientific_conclusion'] == 'retained_capacity_is_not_the_reproducible_first_order_missing_mediator_under_current_frozen_consumer'
++
++
++def test_v30_2_launcher_keeps_same_fresh_seed_and_has_no_B24_DRC_fresh_arm() -> None:
++    root = Path(__file__).resolve().parents[2]
++    text = (root / 'RUN_V64_3_30_2_EAF_ICER_FBIC_PURE_SCREEN_2GPU.sh').read_text()
++    assert 'v64.3.30-eaf-icer-fbic-double-fresh-v1' in text
++    assert 'B24_DRC=' not in text
++    assert 'b24_drc' not in text
++    assert 'raw/B16-V20/B24-V20' in text
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tools/audit_v64_3_30_1_fbic_train.py /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tools/audit_v64_3_30_1_fbic_train.py
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tools/audit_v64_3_30_1_fbic_train.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tools/audit_v64_3_30_1_fbic_train.py	2026-08-23 08:19:49.094915218 +0000
+@@ -0,0 +1,144 @@
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from bdse.tools.check_v64_3_19_eaf_icer_screen import _f, _metric_pack
++from bdse.tools.check_v64_3_21_eaf_icer_mcr_split import _load_rows
++from bdse.tools.check_v64_3_30_eaf_icer_fbic_split import _fbic_diag, _query_diag
++
++
++def _write(path: Path, obj: dict[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def _switch_diag(b16_rows: dict[str, dict[str, Any]], b24_rows: dict[str, dict[str, Any]], safe: set[str]) -> dict[str, Any]:
++    gains: list[float] = []
++    beneficial = harmful = equal = 0
++    for t in sorted(safe):
++        a = int(round(_f(b16_rows[t], "bdse_action", -999.0)))
++        b = int(round(_f(b24_rows[t], "bdse_action", -999.0)))
++        if a == b:
++            continue
++        gain = _f(b16_rows[t], "teacher_regret") - _f(b24_rows[t], "teacher_regret")
++        gains.append(gain)
++        if gain > 1e-12:
++            beneficial += 1
++        elif gain < -1e-12:
++            harmful += 1
++        else:
++            equal += 1
++    return {
++        "safe_action_change_count": len(gains),
++        "B24_beneficial_change_count": beneficial,
++        "B24_harmful_change_count": harmful,
++        "B24_equal_change_count": equal,
++        "B16_minus_B24_teacher_regret_sum_on_changed_actions": float(sum(gains)),
++        "B16_minus_B24_teacher_regret_mean_on_changed_actions": float(np.mean(gains)) if gains else float("nan"),
++        "B24_worst_regret_increase_on_changed_actions": float(-min(gains)) if gains else float("nan"),
++        "B24_best_regret_reduction_on_changed_actions": float(max(gains)) if gains else float("nan"),
++    }
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="Lightweight audit of repaired V30.1 paired TRAIN result; consumes fitted reports instead of rescanning ~1.6 GB edge logs.")
++    ap.add_argument("--b16-metrics", required=True)
++    ap.add_argument("--b16-rows", required=True)
++    ap.add_argument("--b24-metrics", required=True)
++    ap.add_argument("--b24-rows", required=True)
++    ap.add_argument("--b16-fit-report", required=True)
++    ap.add_argument("--b24-fit-report", required=True)
++    ap.add_argument("--output", required=True)
++    a = ap.parse_args()
++
++    b16_rows = _load_rows(a.b16_rows)
++    b24_rows = _load_rows(a.b24_rows)
++    if len(b16_rows) != 3000 or len(b24_rows) != 3000 or set(b16_rows) != set(b24_rows):
++        raise SystemExit("STOP DATA: repaired V30.1 TRAIN arms must contain the exact same 3000 scenes")
++    all_flagged = {t for t in b16_rows if _f(b16_rows[t], "all_actions_safety_flagged_rate", 0.0) >= 0.5}
++    safe = set(b16_rows) - all_flagged
++    fbic = _fbic_diag(b24_rows, safe, all_flagged)
++    query = _query_diag(b16_rows, b24_rows, set(b16_rows))
++    M16_raw = json.load(open(a.b16_metrics, encoding="utf-8"))
++    M24_raw = json.load(open(a.b24_metrics, encoding="utf-8"))
++    M16 = _metric_pack(M16_raw)
++    M24 = _metric_pack(M24_raw)
++    F16 = json.load(open(a.b16_fit_report, encoding="utf-8"))
++    F24 = json.load(open(a.b24_fit_report, encoding="utf-8"))
++    switch = _switch_diag(b16_rows, b24_rows, safe)
++
++    contract = bool(
++        fbic["enabled_rate"] == 1.0
++        and fbic["safe_applied_rate"] >= 0.90
++        and (not all_flagged or fbic["structural_applied_rate"] == 0.0)
++        and fbic["safe_final_count_mean"] >= fbic["safe_baseline_count_mean"] + 4.0
++        and abs(fbic["safe_removed_atom_count_mean"]) <= 1e-12
++        and abs(fbic["upstream_configured_budget_mean"] - 16.0) <= 1e-12
++        and abs(fbic["retained_interface_configured_budget_mean"] - 24.0) <= 1e-12
++        and fbic["retained_interface_budget_pass_rate"] == 1.0
++        and fbic["no_new_query_rate"] == 1.0
++        and query["all_query_counts_exact_scene_parity"]
++    )
++    cf16 = F16.get("crossfit", {}).get("aggregate_downside", {})
++    cf24 = F24.get("crossfit", {}).get("aggregate_downside", {})
++    baseline_reproduced = bool(
++        F16.get("train_gate_pass")
++        and int(F16.get("replacement_edges", -1)) == 1455
++        and int(F16.get("replacement_scenes", -1)) == 310
++        and int(cf16.get("fold_pass_count", -1)) == 5
++        and int(cf16.get("selected_count", -1)) == 71
++        and abs(float(cf16.get("teacher_improvement_sum", float("nan"))) - 5.527642325753739) <= 1e-9
++    )
++    b24_drc_fail_is_algorithmic = bool(
++        (not F24.get("train_gate_pass", False))
++        and int(cf24.get("fold_pass_count", -1)) < 5
++        and int(cf24.get("selected_count", 0)) >= 64
++        and float(cf24.get("teacher_improvement_sum", -1.0)) >= 0.0
++    )
++
++    out = {
++        "audit": "v64_3_30_1_repaired_fbic_train_result",
++        "engineering_contract_valid": contract,
++        "historical_B16_V25_reproduced": baseline_reproduced,
++        "B24_DRC_train_gate_pass": bool(F24.get("train_gate_pass", False)),
++        "B24_DRC_fail_is_selected_path_fold_safety_failure_not_runtime_error": b24_drc_fail_is_algorithmic,
++        "fresh_validation_used": False,
++        "fresh_capacity_question_resolved": False,
++        "scientific_scope": "development-only; untouched A/B pure-capacity evaluation remains required",
++        "safe_scene_count": len(safe),
++        "all_flagged_scene_count": len(all_flagged),
++        "fbic_diagnostics": fbic,
++        "query_accounting": query,
++        "B16_metrics": M16,
++        "B24_metrics": M24,
++        "selected_decisive_atom_recall": {"B16": M16_raw.get("selected_decisive_atom_recall"), "B24": M24_raw.get("selected_decisive_atom_recall")},
++        "evidence_certificate_fraction": {"B16": M16_raw.get("evidence_certificate_fraction"), "B24": M24_raw.get("evidence_certificate_fraction")},
++        "capacity_action_switch": switch,
++        "B16_DRC_fit_report": F16,
++        "B24_DRC_fit_report": F24,
++        "development_interpretation": (
++            "FBIC materially increases evidence transmission/coverage, but on frozen TRAIN the pure downstream endpoint worsens and the unchanged DRC loses fold safety. "
++            "This is directional evidence for downstream operator/reliability mismatch, not independent evidence that B16 capacity is irrelevant."
++        ),
++        "next_experiment": "untouched double-fresh raw/B16-V20/B24-V20 pure-capacity screen; B24 DRC remains fail-closed",
++    }
++    _write(Path(a.output), out)
++    print(json.dumps({
++        "engineering_contract_valid": contract,
++        "historical_B16_V25_reproduced": baseline_reproduced,
++        "B24_DRC_train_gate_pass": bool(F24.get("train_gate_pass", False)),
++        "B16_match": M16.get("match"), "B24_match": M24.get("match"),
++        "B16_regret": M16.get("regret"), "B24_regret": M24.get("regret"),
++        "B24_changed_action_regret_gain_sum": switch["B16_minus_B24_teacher_regret_sum_on_changed_actions"],
++    }, indent=2))
++    if not contract or not baseline_reproduced or not b24_drc_fail_is_algorithmic:
++        raise SystemExit("STOP V30.2 TRAIN AUDIT: repaired V30.1 branch identity/contract did not reproduce")
++
++
++if __name__ == "__main__":
++    main()
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_screen.py /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_screen.py
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_screen.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_screen.py	2026-08-23 08:16:46.467067990 +0000
+@@ -0,0 +1,72 @@
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description='Combine two untouched V64.3.30.2 pure-capacity blocks.')
++    ap.add_argument('--split-a-report', required=True)
++    ap.add_argument('--split-b-report', required=True)
++    ap.add_argument('--train-audit', required=True)
++    ap.add_argument('--output', required=True)
++    a = ap.parse_args()
++    A = json.load(open(a.split_a_report, encoding='utf-8'))
++    B = json.load(open(a.split_b_report, encoding='utf-8'))
++    T = json.load(open(a.train_audit, encoding='utf-8'))
++
++    engineering = bool(
++        T.get('engineering_contract_valid')
++        and T.get('historical_B16_V25_reproduced')
++        and T.get('B24_DRC_fail_is_selected_path_fold_safety_failure_not_runtime_error')
++        and A.get('fbic_contract_valid') and B.get('fbic_contract_valid')
++        and A.get('structural_preservation_valid') and B.get('structural_preservation_valid')
++    )
++    capture_both = bool(A.get('pure_capacity_capture_signal') and B.get('pure_capacity_capture_signal'))
++    switch_both = bool(A.get('capacity_action_switch_nonharmful') and B.get('capacity_action_switch_nonharmful'))
++    common_both = bool(A.get('capacity_common_B16_opportunity_nonharmful') and B.get('capacity_common_B16_opportunity_nonharmful'))
++    endpoint_both = bool(A.get('endpoint_noninferior') and B.get('endpoint_noninferior'))
++
++    if not engineering:
++        conclusion = 'engineering_or_preservation_failure'
++        next_action = 'STOP_fix_contract_do_not_interpret_capacity'
++    elif capture_both and switch_both and common_both and endpoint_both:
++        conclusion = 'B16_retained_capacity_is_a_reproducible_useful_mediator_but_current_DRC_consumer_is_already_TRAIN_falsified_on_B24'
++        next_action = 'freeze_capacity_result_do_not_make_B24_the_thesis_design_candidate_conditioned_selection_aware_recovery_on_the_capacity_signal_then_later_compress_adaptively'
++    elif capture_both:
++        conclusion = 'capacity_exposes_recovery_signal_but_frozen_downstream_operator_is_not_safe_or_endpoint_coherent'
++        next_action = 'stop_budget_and_selector_tuning_redesign_candidate_conditioned_extremal_recovery_semantics_selection_calibration'
++    else:
++        conclusion = 'retained_capacity_is_not_the_reproducible_first_order_missing_mediator_under_current_frozen_consumer'
++        next_action = 'stop_B_sweeps_and_same_bank_rebinding_focus_on_candidate_conditioned_counterfactual_recovery_semantics_and_extremal_selection_operator'
++
++    out = {
++        'audit': 'v64_3_30_2_eaf_icer_fbic_pure_double_fresh',
++        'engineering_valid': engineering,
++        'pure_capacity_capture_signal_both': capture_both,
++        'capacity_action_switch_nonharmful_both': switch_both,
++        'capacity_common_B16_opportunity_nonharmful_both': common_both,
++        'endpoint_noninferior_both': endpoint_both,
++        'scientific_conclusion': conclusion,
++        'next_action': next_action,
++        'split_A': A,
++        'split_B': B,
++        'train_development_audit': T,
++        'interpretation': (
++            'This is the missing pure capacity mediator test. B=16 remains only the controlled baseline operating point. '
++            'No B24 DRC fresh result is produced because the unchanged DRC already failed the frozen TRAIN 5-fold path-safety gate; lowering that gate is forbidden.'
++        ),
++    }
++    p = Path(a.output); p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(json.dumps(out, indent=2, sort_keys=True) + '\n', encoding='utf-8')
++    print(json.dumps({k: out[k] for k in [
++        'engineering_valid', 'pure_capacity_capture_signal_both', 'capacity_action_switch_nonharmful_both',
++        'capacity_common_B16_opportunity_nonharmful_both', 'endpoint_noninferior_both', 'scientific_conclusion', 'next_action'
++    ]}, indent=2))
++    if not engineering:
++        raise SystemExit('STOP V30.2: engineering/preservation contract failed')
++
++
++if __name__ == '__main__':
++    main()
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE.patch' '--exclude=V64_3_30_2_EAF_ICER_FBIC_PURE_CHANGED_FILES.txt' bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_split.py /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_split.py
+--- bdse_v64_3_30_1_eaf_icer_fbic_hotfix/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_split.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_30_2_eaf_icer_fbic_pure/bdse/tools/check_v64_3_30_2_eaf_icer_fbic_pure_split.py	2026-08-23 08:16:46.466396074 +0000
+@@ -0,0 +1,215 @@
++from __future__ import annotations
++
++import argparse
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from bdse.tools.check_v64_3_19_eaf_icer_screen import _f, _icer_edge_diag, _metric_pack
++from bdse.tools.check_v64_3_21_eaf_icer_mcr_split import _identity_rate, _load_rows, _path_diag
++from bdse.tools.check_v64_3_25_eaf_icer_drc_split import _edge_groups
++from bdse.tools.check_v64_3_30_eaf_icer_fbic_split import _fbic_diag, _gate_decomposition, _query_diag
++
++
++def _capacity_switch_diag(base: dict[str, dict[str, Any]], cap: dict[str, dict[str, Any]], tokens: set[str]) -> dict[str, Any]:
++    gains: list[float] = []
++    beneficial = harmful = equal = 0
++    for t in sorted(tokens):
++        a = int(round(_f(base[t], 'bdse_action', -999.0)))
++        b = int(round(_f(cap[t], 'bdse_action', -999.0)))
++        if a == b:
++            continue
++        # Positive gain means capacity arm has lower teacher regret.
++        gain = _f(base[t], 'teacher_regret') - _f(cap[t], 'teacher_regret')
++        gains.append(gain)
++        if gain > 1e-12:
++            beneficial += 1
++        elif gain < -1e-12:
++            harmful += 1
++        else:
++            equal += 1
++    return {
++        'changed_action_count': len(gains),
++        'beneficial_change_count': beneficial,
++        'harmful_change_count': harmful,
++        'equal_change_count': equal,
++        'B16_minus_B24_teacher_regret_sum': float(sum(gains)),
++        'B16_minus_B24_teacher_regret_mean': float(np.mean(gains)) if gains else float('nan'),
++        'B24_worst_regret_increase': float(-min(gains)) if gains else float('nan'),
++        'B24_best_regret_reduction': float(max(gains)) if gains else float('nan'),
++        'net_nonharmful': bool(sum(gains) >= -1e-9),
++    }
++
++
++def _b16_common_opportunity_diag(
++    b16_edge_path: str,
++    b16_rows: dict[str, dict[str, Any]],
++    b24_rows: dict[str, dict[str, Any]],
++    safe: set[str],
++) -> dict[str, Any]:
++    groups = _edge_groups(b16_edge_path, safe)
++    opp: list[str] = []
++    for token, rs in groups.items():
++        if not rs:
++            continue
++        anchor = int(rs[0].get('anchor_action', -1))
++        incumbent = int(rs[0].get('raw_top_action', -1))
++        by = {int(r.get('challenger_action', -999)): r for r in rs}
++        inc = by.get(incumbent)
++        if inc is None or _f(inc, 'icer_admissible', 0.0) < 0.5:
++            continue
++        threshold = max(0.0, _f(inc, 'teacher_margin', 0.0))
++        positive = any(
++            _f(r, 'icer_admissible', 0.0) >= 0.5
++            and int(r.get('challenger_action', -999)) not in {anchor, incumbent}
++            and _f(r, 'teacher_margin', -float('inf')) > threshold
++            for r in rs
++        )
++        if positive:
++            opp.append(token)
++    gains = [_f(b16_rows[t], 'teacher_regret') - _f(b24_rows[t], 'teacher_regret') for t in opp]
++    return {
++        'B16_defined_positive_opportunity_scene_count': len(opp),
++        'B24_better_final_action_count_on_B16_opportunities': int(sum(x > 1e-12 for x in gains)),
++        'B24_worse_final_action_count_on_B16_opportunities': int(sum(x < -1e-12 for x in gains)),
++        'B16_minus_B24_teacher_regret_sum_on_B16_opportunities': float(sum(gains)),
++        'B16_minus_B24_teacher_regret_mean_on_B16_opportunities': float(np.mean(gains)) if gains else float('nan'),
++        'paired_nonharmful_on_B16_opportunities': bool(sum(gains) >= -1e-9),
++    }
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description='One untouched V64.3.30.2 pure FBIC capacity block: raw/B16-V20/B24-V20 only.')
++    ap.add_argument('--split-name', required=True)
++    for name in ['raw', 'b16-v20', 'b24-v20']:
++        ap.add_argument(f'--{name}-metrics', required=True)
++        ap.add_argument(f'--{name}-rows', required=True)
++        if name != 'raw':
++            ap.add_argument(f'--{name}-edges', required=True)
++    ap.add_argument('--output', required=True)
++    a = ap.parse_args()
++
++    cli = ['raw', 'b16-v20', 'b24-v20']
++    tags = [x.replace('-', '_') for x in cli]
++    metrics = {t: json.load(open(getattr(a, t + '_metrics'), encoding='utf-8')) for t in tags}
++    rows = {t: _load_rows(getattr(a, t + '_rows')) for t in tags}
++    tokens = set(rows['raw'])
++    if len(tokens) != 500 or any(set(rows[t]) != tokens for t in tags[1:]):
++        raise SystemExit('STOP DATA: every V30.2 pure-capacity arm must contain the exact same 500 scenes')
++
++    all_flagged = {t for t in tokens if _f(rows['raw'][t], 'all_actions_safety_flagged_rate', 0.0) >= 0.5}
++    safe = tokens - all_flagged
++    b16_edge = getattr(a, 'b16_v20_edges')
++    b24_edge = getattr(a, 'b24_v20_edges')
++    edge16 = _icer_edge_diag(Path(b16_edge), safe)
++    edge24 = _icer_edge_diag(Path(b24_edge), safe)
++    gate16 = _gate_decomposition(b16_edge, safe)
++    gate24 = _gate_decomposition(b24_edge, safe)
++    path16 = _path_diag(rows['raw'], rows['b16_v20'], b16_edge, safe, all_flagged)
++    path24 = _path_diag(rows['raw'], rows['b24_v20'], b24_edge, safe, all_flagged)
++    M = {t: _metric_pack(metrics[t]) for t in tags}
++    fbic = _fbic_diag(rows['b24_v20'], safe, all_flagged)
++    query = _query_diag(rows['b16_v20'], rows['b24_v20'], tokens)
++    switch = _capacity_switch_diag(rows['b16_v20'], rows['b24_v20'], safe)
++    common = _b16_common_opportunity_diag(b16_edge, rows['b16_v20'], rows['b24_v20'], safe)
++
++    fbic_contract = bool(
++        fbic['enabled_rate'] == 1.0
++        and fbic['safe_applied_rate'] >= 0.90
++        and (not all_flagged or fbic['structural_applied_rate'] == 0.0)
++        and fbic['safe_final_count_mean'] >= fbic['safe_baseline_count_mean'] + 4.0
++        and abs(fbic['safe_removed_atom_count_mean']) <= 1e-12
++        and abs(fbic['upstream_configured_budget_mean'] - 16.0) <= 1e-12
++        and abs(fbic['retained_interface_configured_budget_mean'] - 24.0) <= 1e-12
++        and fbic['retained_interface_budget_pass_rate'] == 1.0
++        and fbic['no_new_query_rate'] == 1.0
++        and query['all_query_counts_exact_scene_parity']
++    )
++    structural = {
++        'all_flagged_scene_count': len(all_flagged),
++        'B24_all_flagged_final_identity_vs_raw': _identity_rate(rows['b24_v20'], rows['raw'], all_flagged),
++        'B24_structural_probe_applied_rate': fbic['structural_applied_rate'],
++    }
++    structural_ok = bool(
++        (not all_flagged or structural['B24_all_flagged_final_identity_vs_raw'] == 1.0)
++        and (not all_flagged or structural['B24_structural_probe_applied_rate'] == 0.0)
++    )
++
++    capture16 = float(edge16['direct_incumbent_opportunity_capture_rate'])
++    capture24 = float(edge24['direct_incumbent_opportunity_capture_rate'])
++    pure_gain = capture24 - capture16
++    pure_capture_signal = bool(math.isfinite(pure_gain) and pure_gain >= 0.03)
++    endpoint_noninferior = bool(
++        M['b24_v20']['match'] >= M['b16_v20']['match'] - 0.002
++        and M['b24_v20']['regret'] <= M['b16_v20']['regret'] * 1.005
++    )
++    switch_nonharm = bool(switch['net_nonharmful'])
++    common_nonharm = bool(common['paired_nonharmful_on_B16_opportunities'])
++
++    if not fbic_contract:
++        diagnosis = 'engineering_capacity_contract_failure'
++        next_action = 'STOP_fix_FBIC_contract_before_scientific_interpretation'
++    elif not structural_ok:
++        diagnosis = 'structural_preservation_failure'
++        next_action = 'STOP_capacity_probe_must_be_strict_noop_in_all_flagged_domain'
++    elif pure_capture_signal and switch_nonharm and common_nonharm and endpoint_noninferior:
++        diagnosis = 'B16_retained_capacity_is_a_useful_mediator_if_second_block_agrees'
++        next_action = 'if_second_block_agrees_capacity_signal_exists_but_B24_DRC_ALREADY_failed_TRAIN_so_redesign_candidate_conditioned_consumer_before_any_adaptive_completion'
++    elif pure_capture_signal:
++        diagnosis = 'capacity_exposes_more_direct_recovery_but_current_downstream_operator_converts_it_unsafely'
++        next_action = 'stop_budget_tuning_focus_on_candidate_conditioned_extremal_recovery_semantics_and_selection_calibration'
++    else:
++        diagnosis = 'capacity_only_transmission_does_not_raise_recovery_under_frozen_downstream_semantics'
++        next_action = 'stop_B_sweeps_and_same_bank_selector_work_focus_on_candidate_conditioned_counterfactual_recovery_semantics_operator_mismatch'
++
++    report = {
++        'audit': 'v64_3_30_2_eaf_icer_fbic_pure_split',
++        'split_name': a.split_name,
++        'fbic_contract_valid': fbic_contract,
++        'structural_preservation_valid': structural_ok,
++        'pure_B24_capacity_capture_gain_vs_B16_v20': pure_gain,
++        'pure_capacity_capture_signal': pure_capture_signal,
++        'capacity_action_switch_nonharmful': switch_nonharm,
++        'capacity_common_B16_opportunity_nonharmful': common_nonharm,
++        'endpoint_noninferior': endpoint_noninferior,
++        'diagnosis': diagnosis,
++        'next_action': next_action,
++        'fbic_diagnostics': fbic,
++        'query_accounting': query,
++        'structural': structural,
++        'capacity_action_switch': switch,
++        'common_B16_opportunity_paired_effect': common,
++        'gate_decomposition': {'b16_v20': gate16, 'b24_v20': gate24},
++        'edge_diagnostics': {'b16_v20': edge16, 'b24_v20': edge24},
++        'path_diagnostics': {'b16_v20': path16, 'b24_v20': path24},
++        'metrics': M,
++        'preregistered_thresholds': {
++            'capacity_probe_safe_applied_rate_min': 0.90,
++            'mean_retained_atom_increase_min': 4.0,
++            'removed_baseline_atoms_allowed': 0,
++            'query_count_change_allowed': 0,
++            'upstream_selector_budget_required': 16,
++            'retained_interface_ceiling_required': 24,
++            'pure_v20_capture_gain_min': 0.03,
++            'endpoint_match_tolerance': 0.002,
++            'endpoint_regret_tolerance': 0.005,
++            'changed_action_capacity_effect_required_nonharmful': True,
++            'B16_defined_opportunity_paired_effect_required_nonharmful': True,
++            'capacity_test': 'single ceiling B16->B24 with queried M fixed at 24; no DRC arm because B24 DRC failed the frozen TRAIN fold-safety gate',
++        },
++        'interpretation': (
++            'B=16 is an operating point used to identify the causal mediator, not the paper thesis. '
++            'This pure screen asks only whether transmitting the rest of the already queried M=24 bank through the frozen V20 downstream semantics creates reproducible useful recovery signal. '
++            'It does not claim B=24 is an algorithm or novelty.'
++        ),
++    }
++    out = Path(a.output); out.parent.mkdir(parents=True, exist_ok=True)
++    out.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8')
++    print(json.dumps(report, indent=2, sort_keys=True))
++
++
++if __name__ == '__main__':
++    main()
