@@ -11214,3 +11214,153 @@ The promotion gate is unchanged: >=20% no-op reduction, capture within 3pp of RS
 V44 hard engineering replay must exactly reproduce V43 RSMR, QUALITY, FUTURE-MEAN and FUTURE-ROBUST-RAW signatures before any scientific interpretation. V43 spent no fresh data. Permanent exclusion remains 10700 tokens. New seed: `v64.3.44-eaf-icer-pcor-cal500-double-fresh-v1`.
 
 Candidate paper mechanism, conditional on independent validation: **Selection–Valuation–Response Sufficiency** — ordinal extremal selection can be decision-sufficient under bounded EAF evidence while absolute incumbent-exit valuation requires a distinct plan-conditioned prospective response consequence distribution/support.
+
+# V64.3.44 uploaded TRAIN result audit -> V64.3.45 EAF-ICER-PIRF
+
+## V64.3.44 result validity
+
+- Uploaded V44 code SHA256 is `be8e2da8525f89c369f19027aa48d1bec745261ca0be6ddfe1107e95e5f7c18a`, exactly matching the preregistered V44 package.
+- Uploaded V44 output SHA256 is `03c7e12916b1bd616a5526826209dbefa3dfaa8410069d2c3d86b4ad1279daea`.
+- Frozen TRAIN remains 3000 scenes; direct scientific scene audit is `782/782` unique; five nested folds are complete.
+- Historical V43 controls replay exactly, including RSMR `502/221/107/28/+43.29405361274824`, QUALITY `205/129/30/13/+43.905547394411805`, FUTURE-MEAN `231/134/42/13/+44.89147983003761`, and FUTURE-ROBUST `228/131/42/13/+45.91891311091216`.
+- Server targeted regression is `207/207 PASS`; the uploaded code was independently re-run with the same `207/207 PASS` result before V45 changes.
+- Frozen-winner monotone containment is valid; no reranking, second-best or fallback rescue is present.
+- Logged agent future is used only in TRAIN behavior supervision; deployed PCOR uses current runtime/candidate features and frozen parameters only.
+- V44 stopped at the TRAIN scientific gate. No non-empty CAL500/A500/B500 fresh manifests exist.
+- Conclusion: **engineering-valid TRAIN-level mechanism attribution; no V44.1 hotfix is required**.
+
+## V64.3.44 mechanism result
+
+Frozen RSMR remains `502 selected / 221 positive / 38.50% capture / +43.2941 / 28 catastrophe / 107 no-op / NegRMS 0.3557`.
+
+- V43 FUTURE-MEAN control: `231/134`, capture `23.34%`, sum `+44.8915`, cat `13`, no-op `42`, NegRMS `0.2941`.
+- `PC-REWEIGHT`: `236/139`, capture `24.22%`, sum `+45.8829`, cat `13`, no-op `41`, NegRMS `0.2910`.
+- **PC-OCC-MEAN**: `218/124`, capture `21.60%`, sum `+60.3754`, cat `9`, no-op `41`, NegRMS `0.2408`, all five fold sums positive.
+- **PC-OCC-ROBUST**: `222/125`, capture `21.78%`, sum `+61.6171`, cat `8`, no-op `44`, NegRMS `0.2291`, all five fold sums positive.
+- PCOR-MAIN: `291/141`, capture `24.56%`, sum `+62.9741`, cat `9`, no-op `57`, NegRMS `0.2261`.
+
+The unchanged capture floor is `35.50%`; no arm is promotable. V44 is **strong partial mechanism success + promotion failure**.
+
+### Failed mechanism: scene-global five-mode behavior posterior
+
+The V44 behavior target is severely imbalanced:
+
+- `yield=2557/3000 (85.23%)`;
+- `cv=351`, `brake=54`, `nonyield=26`, `ca=12`.
+
+Honest OOF behavior accuracy is exactly `85.2333%`, identical to the majority baseline; every fold's accuracy equals its fold majority rate. The fitted OOF classifier predicts the majority `yield` class for all 3000 held-out scenes. Its probabilistic Brier error is also substantially worse than a fit-fold class-prior predictor.
+
+This is not an engineering bug. The preregistered behavior experiment reliably falsifies the **scene-global five-mode posterior**. However it does not prove that every discrete behavioral basis is intrinsically impossible: the target itself is structurally weak. It assigns one mode per scene by averaging mode ADE over about 29.4 valid agents on average (median 32), while the conditioning features describe ego-plan interaction consequence. Irrelevant agents therefore dilute the response of the decision-relevant interactor. Minority-mode labels are also often nearly tied in ADE.
+
+`PC-REWEIGHT` is consequently almost a replay of V43 FUTURE-MEAN: the two arms share 230 accepted proposals; only one V43-only and six PC-REWEIGHT-only proposals differ. **Do not retain the learned scene-global mode posterior as a paper mechanism.**
+
+### Successful mechanism: full-horizon ungated occupancy support
+
+The full-horizon V44 occupancy potential is a strong independent mediator and must be retained/upgraded.
+
+Relative to V43 FUTURE-MEAN:
+
+- common accepted: 149 proposals, teacher sum `+45.2103`, 9 catastrophes;
+- V43-only: 82 proposals, teacher sum `-0.3188`, 4 catastrophes;
+- **PC-OCC-MEAN-only: 69 proposals, teacher sum `+15.1651`, zero catastrophes**.
+
+Relative to V42 QUALITY:
+
+- QUALITY-only: 66 proposals, teacher sum `-3.0881`, 4 catastrophes;
+- **PC-OCC-MEAN-only: 79 proposals, teacher sum `+13.3818`, zero catastrophes**.
+
+Thus occupancy support does not obtain safety by blanket abstention. It selectively rotates the frozen RSMR proposal population toward high-value interventions.
+
+Material-positive recovery (`Delta_T>0.2`) improves from QUALITY `30/50` and V43 mean `33/50` to PC-OCC-MEAN `39/50`, PC-OCC-ROBUST `40/50`, and MAIN `43/50`. Catastrophes fall from RSMR 28 to 9/8 under occupancy mean/robust.
+
+### CVaR status
+
+PC-OCC-ROBUST gives a modest incremental rotation over occupancy mean: 11 robust-only scenes sum `+2.9676` with zero catastrophe, whereas seven mean-only scenes sum `+1.7258` and contain one catastrophe. This is supportive tail evidence but **not enough to elevate CVaR to a core mechanism**, because the response posterior supplying mode probabilities is not behavior-identified. Do not tune alpha/mixture weight.
+
+### Translation status
+
+PCOR-MAIN further improves aggregate/NegRMS but remains a zero-boundary movement: compared with PC-OCC-ROBUST it adds 84 main-only proposals with only 21 positives and 63 non-positive outcomes. It does not solve capture and should not be tuned or retained as the next first-order mechanism.
+
+## V44 -> V45 dominant bottleneck
+
+The remaining problem is no longer merely future horizon or pre-gate occupancy support. V44 proves support geometry is useful, while its behavior supervision fails to identify the response layer. The bottleneck tightens to:
+
+> **agent-local, action-conditioned continuous future-response/consequence representation for the frozen extremal proposal, with reliable behavior identification and absolute incumbent-exit sign.**
+
+There are two coupled residual sources:
+
+1. **response target mismatch / aggregation:** one scene-global mode averages many irrelevant agents and is behaviorally unidentifiable;
+2. **response family insufficiency:** among the remaining material-positive misses and accepted catastrophes, different hand-built modes can imply opposite occupancy directions; other cases remain wrong even when all simple modes agree, indicating that mode reweighting alone cannot be a complete solution.
+
+## V44-specific no-repeat constraints
+
+Keep every historical closure. Additionally:
+
+- permanently close the **scene-global five-mode posterior** path;
+- do not rescue it with class weights, focal loss, balanced sampling, temperature, a stronger multiclass MLP, or mode-probability tuning;
+- do not add a sixth/seventh handcrafted response mode as the first-order solution;
+- retain V44 ungated full-horizon occupancy support, but do not tune its distance threshold/bandwidth (it intentionally has none beyond inherited geometry);
+- do not promote CVaR as the main contribution until a response distribution is independently identified;
+- do not tune selected translation or relax capture because PCOR aggregate sum is high;
+- do not modify RSMR, B/M, candidate count, top-K, or use second-best fallback;
+- do not use logged future or teacher value at deployment;
+- TRAIN-only response learning may use logged agent future but must remain outer-fold isolated and must never use teacher-improvement/action-value labels.
+
+# V64.3.45 EAF-ICER-PIRF
+
+Full name: **Plan-Conditioned Interaction Response Field**.
+
+V45 keeps the successful V44 full-horizon ungated occupancy support but replaces the failed scene-global categorical behavior target with an **agent-local continuous longitudinal response field**.
+
+For each valid TRAIN agent, fit a physically bounded constant longitudinal acceleration target from its logged future relative to current-state constant velocity. The target is clipped to the already-existing response envelope `[-2.0,+0.5] m/s^2`; this is inherited from the frozen V43 brake/CA response family and is not tuned in V45.
+
+The response field is factorized:
+
+`a_local(j) = f_local(current/history agent state, current ego-agent geometry)`
+
+`a_plan(j,a) = a_local(j) + g_plan(current state, candidate ego plan a)`.
+
+`f_local` is a fixed-lambda (`lambda=1`) low-capacity ridge model. `g_plan` is a zero-bias ridge residual whose every feature is multiplied by the continuous full-horizon candidate-agent interaction exposure. Therefore the candidate-induced response correction vanishes continuously when interaction exposure vanishes; it cannot hallucinate an arbitrary response shift for a non-interacting candidate.
+
+Deployment rolls each current agent under the predicted continuous acceleration and evaluates the same V44 ungated occupancy potential. No logged future, teacher label, new neural evidence query, distance threshold or kernel-bandwidth sweep is used at runtime.
+
+### Honest nuisance-response fitting
+
+For outer fold `k`, response models exclude both `k` and `(k+1)%5`, matching the value nested protocol. Response targets are agent-level TRAIN logged-future quantities; response OOF diagnostics are kept independent from selected-value metrics.
+
+V45 separately reports:
+
+- CV baseline response MSE;
+- agent-local response MSE;
+- plan-conditioned response MSE.
+
+A plan-conditioned mechanism claim requires aggregate PLAN MSE < LOCAL MSE and improvement in at least 4/5 outer folds. This prevents another V44-style value gain from being incorrectly attributed to a behavior model that learned nothing.
+
+### Preregistered causal arms
+
+1. **CV-OCC**: V44 ungated occupancy support with a single continuous CV response; no response learner. Tests whether support geometry alone is sufficient.
+2. **LOCAL-RF**: agent-local continuous response, candidate-independent. Tests whether continuous per-agent behavior is necessary beyond CV.
+3. **PLAN-RF / PIRF**: local response plus zero-at-zero-interaction candidate-conditioned response residual. Tests the missing action-conditioned response mechanism.
+
+V45 deliberately removes selected translation and CVaR from the main causal test. Tail aggregation may be revisited only after behavior/response support is independently identified.
+
+### Preregistered branch logic
+
+Promotion chooses the **simplest causally sufficient arm**, in order:
+
+- if CV-OCC passes the unchanged value gate -> occupancy support is sufficient; response learning is unnecessary;
+- else if LOCAL-RF passes and agent-local response MSE beats CV in >=4/5 folds -> continuous agent-local behavior is required, but plan conditioning is not;
+- else if PLAN-RF passes and PLAN response MSE beats LOCAL in >=4/5 folds -> plan-conditioned response field is supported;
+- if PLAN value passes but PLAN response is not independently identified -> fail closed; do not claim plan-conditioned behavior;
+- if response field is identifiable but value gate still fails -> the next bottleneck is a richer continuous plan-conditioned occupancy/trajectory response representation or an additional future consequence family, not a larger scalar value head;
+- if response field itself is not identifiable -> close this low-order longitudinal field and move to a general continuous interaction/occupancy predictor.
+
+The value promotion gate is unchanged: >=20% no-op reduction, capture within 3pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate and 5/5 fold sums, selected>=64, positive>=32, exact frozen-winner containment.
+
+V45 uses no CAL500 translation. Only after TRAIN passes may it select independent A500+B500 using label-free seed:
+
+`v64.3.45-eaf-icer-pirf-double-fresh-v1`
+
+A/B remain strictly unpooled.
+
+Candidate paper mechanism, conditional on independent validation: **Selection–Valuation–Response Sufficiency with agent-local interaction response fields** — a bounded auditable interface can be sufficient for ordinal extremal selection, while safe absolute valuation of the frozen proposal requires a distinct continuous action-conditioned response/consequence representation. Observational logged-future response fitting supports a conditional-response claim; causal agent-response claims require subsequent frozen closed-loop/interventional evidence.

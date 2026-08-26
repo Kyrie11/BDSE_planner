@@ -1,0 +1,58 @@
+V64.3.45 EAF-ICER-PIRF engineering validation
+================================================
+
+Basis
+-----
+V45 was created from the preregistered/uploaded V44 code line after V44 was
+independently judged engineering-valid. The V45 launcher hard-checks the exact
+V44 scientific signatures before constructing any new response supervision.
+
+Static validation
+-----------------
+- python -m compileall -q bdse: PASS
+- bash -n RUN_V64_3_45_EAF_ICER_PIRF_SCREEN_2GPU.sh: PASS
+
+Focused V45 tests
+-----------------
+- bdse/tests/test_v64_3_45_eaf_icer_pirf.py: 6/6 PASS
+- continuous response target recovers CV and bounded deceleration
+- plan feature is candidate/interactor specific
+- plan response correction is exactly zero when plan interaction features are zero
+- response-field runtime instrumentation is label-future free
+- agent-local runtime features use current/history state only
+- tournament supports the new observable while preserving same-winner post-selection semantics
+
+Historical targeted regression
+------------------------------
+V13 through V45 targeted regression: 213/213 PASS
+Warnings: 2 historical PyTorch Transformer nested-tensor warnings; no new warning class.
+
+Full repository test suite
+--------------------------
+120 test files were divided into four mutually exclusive/exhaustive partitions:
+- partition 0: 149/149 PASS
+- partition 1: 132/132 PASS
+- partition 2: 121/121 PASS
+- partition 3: 141/141 PASS
+TOTAL: 543/543 PASS
+
+V45 fail-closed contracts implemented
+--------------------------------------
+- V44 RSMR/QUALITY/PC-OCC success/failure signatures are hard prerequisites.
+- RSMR remains the sole challenger selector.
+- response learning uses TRAIN logged agent future only; never teacher improvement.
+- deployment response observables consume current runtime + candidate trajectories + frozen model only.
+- outer response fit excludes outer test and the associated value-calibration fold.
+- plan response residual has zero bias and all plan features are multiplied by continuous interaction exposure.
+- full-horizon occupancy reuses V44 geometry; no new distance threshold or bandwidth.
+- no selected translation in V45 primary arms.
+- no CVaR tuning in V45 primary arms.
+- no reranking, second-best, or fallback rescue.
+- TRAIN failure exits before any fresh A/B selection.
+
+Note
+----
+A full end-to-end response-supervision/crossfit run requires the user's
+BDSE_TRAIN_CACHE and is therefore performed by the supplied server launcher.
+The local artifact environment validated the implementation through unit,
+historical targeted, and complete repository regression tests.

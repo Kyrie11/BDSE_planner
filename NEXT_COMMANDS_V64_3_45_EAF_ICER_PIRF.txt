@@ -1,0 +1,20 @@
+# V64.3.45 EAF-ICER-PIRF next commands
+
+cd bdse_v64_3_45_eaf_icer_pirf
+bash RUN_V64_3_45_EAF_ICER_PIRF_SCREEN_2GPU.sh
+
+# If historical results/caches are elsewhere:
+cd bdse_v64_3_45_eaf_icer_pirf
+V44_ROOT=/path/to/outputs_v64_3_44_eaf_icer_pcor_screen_2gpu_v1 \
+EAF_V64_3_13_ROOT=/path/to/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+BDSE_TRAIN_CACHE=/path/to/bdse_train_v2 \
+BDSE_VAL_CACHE=/path/to/bdse_val_v2 \
+bash RUN_V64_3_45_EAF_ICER_PIRF_SCREEN_2GPU.sh
+
+# If checkpoint cannot be resolved automatically:
+export EAF_CKPT=/path/to/checkpoint.pt
+
+# V45 fresh seed (used ONLY if nested TRAIN passes):
+# v64.3.45-eaf-icer-pirf-double-fresh-v1
+# V45 has no selected-translation CAL500: after TRAIN pass it selects independent A500+B500.
+# A/B must never be pooled or used to tune response/value hyperparameters.
