@@ -152,6 +152,13 @@ def runtime_value_observable_costs(
             raise ValueError("V46 distributional-interaction-response observable schema mismatch")
         out = np.concatenate([out, dr], axis=1)
         names.extend(dn)
+    if bool(ic.get("instrument_future_state_factorization_observables", False)):
+        from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES, runtime_future_state_factorization_observable_costs
+        fs, fn = runtime_future_state_factorization_observable_costs(runtime, candidates, cfg)
+        if fn != FSFR_OBSERVABLE_NAMES or fs.shape != (K, len(FSFR_OBSERVABLE_NAMES)):
+            raise ValueError("V47 future-state-factorization observable schema mismatch")
+        out = np.concatenate([out, fs], axis=1)
+        names.extend(fn)
     if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
         raise ValueError("deployment value-observable matrix is malformed or non-finite")
     return out, names

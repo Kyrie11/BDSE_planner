@@ -1,0 +1,16 @@
+ALGORITHM_CHANGELOG.md
+RUN_V64_3_47_EAF_ICER_FSFR_SCREEN_2GPU.sh
+V64_3_46_RESULT_POSTMORTEM_AND_V64_3_47_FSFR_DESIGN.md
+V64_3_46_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_47.csv
+V64_3_46_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_47.json
+V64_3_47_ENGINEERING_VALIDATION.txt
+NEXT_COMMANDS_V64_3_47_EAF_ICER_FSFR.txt
+bdse/planner/future_state_factorization.py
+bdse/planner/tournament.py
+bdse/planner/value_observables.py
+bdse/tests/test_v64_3_47_eaf_icer_fsfr.py
+bdse/tools/build_v64_3_47_future_state_supervision.py
+bdse/tools/build_v64_3_47_crossfit_future_state_observables.py
+bdse/tools/fit_v64_3_47_eaf_icer_fsfr.py
+bdse/tools/check_v64_3_47_eaf_icer_fsfr_split.py
+bdse/tools/check_v64_3_47_eaf_icer_fsfr_screen.py

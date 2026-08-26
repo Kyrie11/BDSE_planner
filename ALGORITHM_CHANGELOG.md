@@ -11534,3 +11534,149 @@ Only after TRAIN passes may V46 select independent A500+B500 with label-free see
 A/B remain strictly unpooled.
 
 Candidate paper mechanism, conditional on independent fresh/full/closed-loop validation: **Selection–Valuation–Response Sufficiency with distributional temporal interaction profiles** — a bounded auditable interface may be sufficient for ordinal extremal selection, while absolute execution of the frozen proposal requires a distinct action-conditioned response distribution and/or temporal consequence sufficient statistic. Observational response learning supports predictive conditional-response claims; causal interaction claims still require frozen interventional/closed-loop evidence.
+
+# V64.3.46 uploaded TRAIN result audit -> V64.3.47 EAF-ICER-FSFR
+
+## V64.3.46 result validity
+
+- Uploaded V46 code SHA256 is `8110dba70aaf52cef914d068fbb83031784a7f9597c715caa4edc84c0bfb92cc`, exactly matching the preregistered V46 package.
+- Uploaded output ZIP SHA256 is `f986d043a78df3e25fcdeffa2bdf52f9a3fe95519cc6dc90c49b15a32b056311`.
+- The V45 RSMR / QUALITY / PLAN controls replay exactly, including `V45 PLAN = 217 selected / 121 positive / 38 no-op / 9 catastrophe / +56.55117310290402`.
+- The new response instrumentation exactly replays the frozen V45 PLAN occupancy with maximum absolute error `0.0`.
+- All 782 direct TRAIN scenes and all five nested outer folds are complete. Server targeted regression is `219/219 PASS`.
+- The second-moment nuisance fit excludes each outer test fold and its paired value-calibration fold; it uses TRAIN logged-agent future only and no teacher value/improvement. Deployment consumes no logged future.
+- RSMR remains the sole challenger selector. Every V46 arm can only accept the same frozen RSMR winner or return to incumbent; no rerank, second-best or fallback exists.
+- The launcher stopped at the preregistered TRAIN scientific gate. No A500/B500 fresh manifest exists.
+
+Conclusion: **V46 is engineering-valid; no V46.1 repair is required.**
+
+## V64.3.46 preregistered mechanism result
+
+Frozen RSMR remains `502 / 221`, capture `38.5017%`, sum `+43.2941`, catastrophe `28`, no-op `107`, NegRMS `0.3557`.
+
+- V45 PLAN-CONTROL: `217 / 121`, capture `21.08%`, sum `+56.5512`, catastrophe `9`, no-op `38`, NegRMS `0.2402`.
+- DIST-MEAN: `216 / 118`, capture `20.56%`, sum `+57.5256`, catastrophe `9`, no-op `39`, NegRMS `0.2413`.
+- TEMPORAL-PROFILE: `217 / 119`, capture `20.73%`, sum `+51.2632`, catastrophe `14`, no-op `41`, NegRMS `0.3297`.
+- DIRP-JOINT: `207 / 115`, capture `20.03%`, sum `+55.3031`, catastrophe `12`, no-op `39`, NegRMS `0.2730`.
+
+All V46 arms preserve 5/5 nonnegative outer-fold selected sums and the frozen-winner contract, but all fail the unchanged `35.50%` capture floor. V46 is therefore **scientific failure as a deployment mechanism**, with two useful representation diagnostics.
+
+### Response second moment is identifiable but not decision-sufficient
+
+Honest OOF second-moment MSE is:
+
+- constant baseline: `0.7338943`;
+- LOCAL second moment: `0.3918492`;
+- PLAN second moment: `0.3844647`.
+
+LOCAL beats constant and PLAN beats LOCAL in every fold, so the nuisance second moment is genuinely identifiable. Nevertheless DIST-MEAN is almost the same deployment policy as V45 PLAN: 207 proposals are common, PLAN-only 10 scenes sum `+1.9860`, DIST-only 9 scenes sum `+2.9604`, and catastrophe remains exactly `9`. NegRMS and capture are slightly worse. Therefore **predictable response variance is not the first-order missing deployment statistic in this low-order longitudinal family**.
+
+### Hand temporal profile contains prediction signal but produces harmful deployment rotation
+
+TEMPORAL-PROFILE improves selected-value regression strongly relative to PLAN:
+
+- RMSE `0.6478 -> 0.6009`;
+- Pearson `0.4171 -> 0.5353`.
+
+But its deployment set is worse. Relative to PLAN, TEMPORAL-only contains 55 scenes with teacher sum `-3.2791` and **six catastrophes**, while PLAN-only contains 55 scenes with `+2.0088` and one catastrophe. Total catastrophe rises `9 -> 14` and NegRMS `0.2402 -> 0.3297`.
+
+This establishes an important distinction:
+
+> **a representation can improve ordinary signed-value regression while becoming worse for the post-selection incumbent-exit zero/tail decision.**
+
+The temporal information is not necessarily absent; the current all-edge signed-mean residual is not guaranteed to convert it into the deployment functional we need. This becomes a secondary bottleneck and a preregistered stop condition for future representation work.
+
+### DIRP-JOINT does not rescue the trade-off
+
+The joint distributional + temporal arm still has `12` catastrophes and only `20.03%` capture. Thus V46 triggers the exact preregistered branch: **close low-order longitudinal acceleration-distribution plus hand-designed temporal-functionals as a deployment-sufficient solution.** Do not rescue V46 with variance weights, temporal coefficients, CVaR tuning, thresholds or a larger scalar head.
+
+### Remaining zero-boundary error
+
+V45 PLAN misses 100 RSMR positives; 85 are `<=0.01`, so count-level capture remains dominated by near-zero cases. But 15 material positives `>0.2`, totaling about `+15.80`, are still missed. The problem therefore remains scientifically meaningful and cannot be removed by redefining capture.
+
+The six new TEMPORAL-only catastrophes include `fd35b4e54a465e54` and `1c3f933be722564d` (both about `-2.02` teacher value): PLAN correctly assigns slightly negative values while the temporal residual crosses them to positive. This is direct zero-boundary evidence, not only an aggregate statistic.
+
+## V46 -> V47 dominant bottleneck
+
+V46 closes another family without invalidating the successful earlier layers. Two richer future-state sources remain scientifically justified by the preregistered V46 branch:
+
+1. **2-D agent response geometry.** V45/V46 model only bounded longitudinal acceleration. Lateral drift/cut-in geometry is absent even though the planner is spatial and many residual interaction errors can be generated by 2-D response rather than acceleration uncertainty.
+2. **runtime-predictable future ego-reference consequence.** The frozen teacher base cost contains a logged-future demonstration/reference component that V42 intentionally excluded from deployment observables. Some residual errors occur when current agent-risk support is zero, so an independent future non-agent/reference consequence family remains open.
+
+The primary bottleneck is now:
+
+> **future-state factorization sufficiency for the frozen extremal proposal: agent-local plan-conditioned 2-D response geometry and runtime-predictable ego-reference consequence at the incumbent-exit zero boundary.**
+
+A secondary bottleneck is now explicitly preregistered: if richer future-state nuisance variables are independently identifiable and again improve ordinary regression without closing deployment capture/tail, **stop adding representation and move to a selected-policy deployment decision functional**.
+
+## V46-specific no-repeat constraints
+
+Keep every historical closure. Additionally:
+
+- close V46 low-order longitudinal second-moment / three-point quadrature as a first-order deployment solution;
+- close hand-designed `[mean, peak, early, second]` temporal functionals as a first-order deployment solution;
+- do not tune variance scale, sigma points, temporal weights, CVaR alpha, thresholds or selected translation;
+- do not make a larger MLP over V46 DIRP features;
+- do not post-hoc union PLAN/DIST/TEMP/JOIN policies;
+- do not re-open RSMR, B/M, candidate count, evidence acquisition, support/admissibility or second-best fallback;
+- do not use logged future at deployment;
+- do not interpret better all-edge MSE/Pearson as deployment success without the preregistered sign/tail gate;
+- if V47 nuisance families are identifiable but again show prediction gain without deployment gain, the next version must change the selected-policy decision functional rather than append more observable blocks.
+
+# V64.3.47 EAF-ICER-FSFR
+
+Full name: **Future-State Factorized Recovery**.
+
+V47 freezes RSMR, EPV/QUALITY, the V44 ungated full-horizon occupancy support, and the V45 longitudinal response-mean field. It deliberately does **not** carry forward V46 second-moment or hand temporal-profile features. It tests two orthogonal future-state families.
+
+## Branch A: AGENT-2D response geometry
+
+For each valid TRAIN agent, V47 derives a continuous lateral-drift target from logged future relative to its current-state constant-velocity local frame. This target is orthogonal in intent to V45's longitudinal acceleration target and contains no teacher value/improvement.
+
+The response is factorized:
+
+`v_lat_local(j) = f_lat(current/history agent state)`
+
+`v_lat_plan(j,a) = v_lat_local(j) + g_lat(current state, ego candidate a)`.
+
+The PLAN residual reuses the V45 continuous interaction-exposure feature schema, has zero bias and fixed ridge `lambda=1`, so candidate conditioning vanishes as interaction exposure vanishes. Deployment rolls a 2-D agent trajectory using the **frozen V45 longitudinal acceleration mean + learned lateral drift**, then evaluates the already-validated V44 ungated occupancy support.
+
+AGENT-2D receives an independent nuisance gate: LOCAL lateral response must beat a zero-drift baseline and PLAN lateral response must beat LOCAL in aggregate and in at least `4/5` outer folds. Value gain cannot be attributed to 2-D response if this gate fails.
+
+## Branch B: runtime-predictable ego-reference consequence
+
+The teacher base cost contains a demonstration/reference term that depends on logged ego future and therefore cannot be consumed directly at deployment. V47 uses it only as a TRAIN nuisance target and learns a low-capacity predictor from current/runtime-available candidate quantities: deviation from current-kinematic ego extrapolation, speed/heading change, route deviation, progress deficit and comfort.
+
+The deployment model sees only current ego history, current map/route and the already generated candidate trajectory. It never sees logged ego future, teacher total cost, teacher improvement or a selected-action label.
+
+Its nuisance gate requires the learned reference predictor to beat a deterministic current-kinematic CV proxy in aggregate and in at least `4/5` outer folds.
+
+## Preregistered causal arms
+
+1. **PLAN-CONTROL**: exact V45 PLAN occupancy statistic; engineering/scientific control.
+2. **AGENT-2D**: replace only the 1-D agent response geometry with the separately identified 2-D response trajectory; isolates missing agent future geometry.
+3. **EGO-REF**: keep V45 1-D agent response and add the runtime-predictable ego-reference consequence; isolates the future non-agent/reference family.
+4. **FSFR-JOINT**: 2-D agent response + predicted ego-reference consequence; tests whether both are jointly necessary.
+
+All arms fit fixed-`lambda=1`, scene-equal residuals after the frozen EPV+QUALITY backbone. RSMR is still the sole challenger selector; every arm can only accept the same RSMR winner or return to incumbent. No selected translation, CVaR, threshold, reranking or fallback is allowed.
+
+## Preregistered branch logic
+
+Promotion selects the simplest causally sufficient mechanism in fixed order:
+
+- if **AGENT-2D** passes the unchanged value gate and its lateral nuisance gate passes -> missing 2-D agent response geometry is the first-order mechanism; retain it without EGO-REF;
+- else if **EGO-REF** passes and its nuisance gate passes -> the missing first-order family is runtime-predictable ego future reference consequence; retain V45 response geometry and add only EGO-REF;
+- else if **FSFR-JOINT** passes and both nuisance gates pass -> both future-state factors are jointly required;
+- if either nuisance is not identified, do not attribute any value movement to that mechanism;
+- if both nuisances are identifiable and prediction diagnostics improve but all deployment value arms fail -> **stop adding future-state representation blocks**. The next version must target the selected-policy deployment functional / zero-boundary estimator exposed by V46's temporal paradox;
+- if neither nuisance is identifiable -> close this low-order future-state factorization and move only if a substantially different, physically justified future-state model is available.
+
+The value gate is unchanged: >=20% no-op reduction, capture within 3pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate, 5/5 nonnegative outer-fold sums, selected>=64, positive>=32 and exact frozen-winner containment.
+
+V47 first hard-replays the complete V46 scientific-failure signature and exact V45 PLAN occupancy. Fresh selection is forbidden unless nested TRAIN passes. If TRAIN passes, V47 uses independent label-free A500+B500 seed:
+
+`v64.3.47-eaf-icer-fsfr-double-fresh-v1`
+
+A/B remain strictly unpooled.
+
+Candidate paper mechanism, conditional on untouched validation and frozen closed-loop evidence: **Selection–Valuation–Future-State Sufficiency under a bounded auditable planner interface**. Ordinal extremal selection and absolute execution valuation require different sufficient statistics; the latter can require separately identifiable future agent response geometry and ego-reference consequences. Logged future is TRAIN-only supervision for nuisance prediction, never runtime information. Causal interaction claims still require later frozen interventional/closed-loop evaluation.

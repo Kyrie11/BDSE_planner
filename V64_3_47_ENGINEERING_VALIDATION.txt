@@ -1,0 +1,54 @@
+V64.3.47 EAF-ICER-FSFR ENGINEERING VALIDATION
+==============================================
+
+Source basis
+------------
+V46 preregistered base code SHA256:
+  8110dba70aaf52cef914d068fbb83031784a7f9597c715caa4edc84c0bfb92cc
+
+V46 uploaded TRAIN result was audited engineering-valid before V47 design.
+
+V47 structural changes
+-----------------------
+- Added TRAIN-only agent lateral-drift nuisance supervision.
+- Added TRAIN-only ego-reference/demo-component nuisance supervision.
+- Added honest outer-fold cross-fit nuisance fitting with paired calibration-fold exclusion.
+- Retained exact V45 longitudinal response mean and V44 ungated occupancy support.
+- Added runtime-only 2-D agent trajectory rollout and predicted ego-reference cost.
+- Added PLAN-CONTROL / AGENT-2D / EGO-REF / FSFR-JOINT causal arms.
+- Added independent nuisance-identification gates.
+- Added exact V46 prerequisite signature and exact V45 PLAN occupancy replay hard gates.
+- RSMR remains sole challenger selector; no rerank/second-best/fallback.
+- No selected translation, CVaR tuning or threshold sweep.
+- Deployment uses no logged future.
+
+Validation
+----------
+Python compileall: PASS
+Main launcher bash -n: PASS
+V46 + V47 focused: 12/12 PASS
+V13 -> V47 targeted regression: 225/225 PASS (2 historical warnings)
+Full repository test files: 122/122 covered
+Full repository partition results:
+  partition 0: 154/154 PASS
+  partition 1: 143/143 PASS
+  partition 2: 122/122 PASS
+  partition 3: 136/136 PASS
+Total: 555/555 PASS
+Warnings: 36 historical warning instances across partitions; no new warning class observed.
+
+Key V47 runtime invariants covered by tests
+-------------------------------------------
+- lateral response target is zero for CV and recovers constant local-normal drift;
+- 2-D rollout adds a bounded lateral component while retaining V45 longitudinal basis;
+- ego-reference runtime features are current-only and candidate-specific;
+- zero lateral model gives exact 1-D/2-D occupancy equality;
+- runtime value-observable schema can be VALUE + FSFR only;
+- tournament consumes vector FSFR residual on the frozen proposal without reranking.
+
+Fresh policy
+------------
+No fresh data are created by code construction/testing.
+V47 launcher selects A500+B500 only after nested TRAIN gate passes.
+Fresh seed: v64.3.47-eaf-icer-fsfr-double-fresh-v1
+A/B pooling is prohibited.

@@ -1,0 +1,1463 @@
+--- /mnt/data/v46code/bdse_v64_3_46_eaf_icer_dirp/ALGORITHM_CHANGELOG.md	2026-08-26 03:17:58.000000000 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/ALGORITHM_CHANGELOG.md	2026-08-26 05:07:45.293433336 +0000
+@@ -11534,3 +11534,149 @@
+ A/B remain strictly unpooled.
+ 
+ Candidate paper mechanism, conditional on independent fresh/full/closed-loop validation: **Selection–Valuation–Response Sufficiency with distributional temporal interaction profiles** — a bounded auditable interface may be sufficient for ordinal extremal selection, while absolute execution of the frozen proposal requires a distinct action-conditioned response distribution and/or temporal consequence sufficient statistic. Observational response learning supports predictive conditional-response claims; causal interaction claims still require frozen interventional/closed-loop evidence.
++
++# V64.3.46 uploaded TRAIN result audit -> V64.3.47 EAF-ICER-FSFR
++
++## V64.3.46 result validity
++
++- Uploaded V46 code SHA256 is `8110dba70aaf52cef914d068fbb83031784a7f9597c715caa4edc84c0bfb92cc`, exactly matching the preregistered V46 package.
++- Uploaded output ZIP SHA256 is `f986d043a78df3e25fcdeffa2bdf52f9a3fe95519cc6dc90c49b15a32b056311`.
++- The V45 RSMR / QUALITY / PLAN controls replay exactly, including `V45 PLAN = 217 selected / 121 positive / 38 no-op / 9 catastrophe / +56.55117310290402`.
++- The new response instrumentation exactly replays the frozen V45 PLAN occupancy with maximum absolute error `0.0`.
++- All 782 direct TRAIN scenes and all five nested outer folds are complete. Server targeted regression is `219/219 PASS`.
++- The second-moment nuisance fit excludes each outer test fold and its paired value-calibration fold; it uses TRAIN logged-agent future only and no teacher value/improvement. Deployment consumes no logged future.
++- RSMR remains the sole challenger selector. Every V46 arm can only accept the same frozen RSMR winner or return to incumbent; no rerank, second-best or fallback exists.
++- The launcher stopped at the preregistered TRAIN scientific gate. No A500/B500 fresh manifest exists.
++
++Conclusion: **V46 is engineering-valid; no V46.1 repair is required.**
++
++## V64.3.46 preregistered mechanism result
++
++Frozen RSMR remains `502 / 221`, capture `38.5017%`, sum `+43.2941`, catastrophe `28`, no-op `107`, NegRMS `0.3557`.
++
++- V45 PLAN-CONTROL: `217 / 121`, capture `21.08%`, sum `+56.5512`, catastrophe `9`, no-op `38`, NegRMS `0.2402`.
++- DIST-MEAN: `216 / 118`, capture `20.56%`, sum `+57.5256`, catastrophe `9`, no-op `39`, NegRMS `0.2413`.
++- TEMPORAL-PROFILE: `217 / 119`, capture `20.73%`, sum `+51.2632`, catastrophe `14`, no-op `41`, NegRMS `0.3297`.
++- DIRP-JOINT: `207 / 115`, capture `20.03%`, sum `+55.3031`, catastrophe `12`, no-op `39`, NegRMS `0.2730`.
++
++All V46 arms preserve 5/5 nonnegative outer-fold selected sums and the frozen-winner contract, but all fail the unchanged `35.50%` capture floor. V46 is therefore **scientific failure as a deployment mechanism**, with two useful representation diagnostics.
++
++### Response second moment is identifiable but not decision-sufficient
++
++Honest OOF second-moment MSE is:
++
++- constant baseline: `0.7338943`;
++- LOCAL second moment: `0.3918492`;
++- PLAN second moment: `0.3844647`.
++
++LOCAL beats constant and PLAN beats LOCAL in every fold, so the nuisance second moment is genuinely identifiable. Nevertheless DIST-MEAN is almost the same deployment policy as V45 PLAN: 207 proposals are common, PLAN-only 10 scenes sum `+1.9860`, DIST-only 9 scenes sum `+2.9604`, and catastrophe remains exactly `9`. NegRMS and capture are slightly worse. Therefore **predictable response variance is not the first-order missing deployment statistic in this low-order longitudinal family**.
++
++### Hand temporal profile contains prediction signal but produces harmful deployment rotation
++
++TEMPORAL-PROFILE improves selected-value regression strongly relative to PLAN:
++
++- RMSE `0.6478 -> 0.6009`;
++- Pearson `0.4171 -> 0.5353`.
++
++But its deployment set is worse. Relative to PLAN, TEMPORAL-only contains 55 scenes with teacher sum `-3.2791` and **six catastrophes**, while PLAN-only contains 55 scenes with `+2.0088` and one catastrophe. Total catastrophe rises `9 -> 14` and NegRMS `0.2402 -> 0.3297`.
++
++This establishes an important distinction:
++
++> **a representation can improve ordinary signed-value regression while becoming worse for the post-selection incumbent-exit zero/tail decision.**
++
++The temporal information is not necessarily absent; the current all-edge signed-mean residual is not guaranteed to convert it into the deployment functional we need. This becomes a secondary bottleneck and a preregistered stop condition for future representation work.
++
++### DIRP-JOINT does not rescue the trade-off
++
++The joint distributional + temporal arm still has `12` catastrophes and only `20.03%` capture. Thus V46 triggers the exact preregistered branch: **close low-order longitudinal acceleration-distribution plus hand-designed temporal-functionals as a deployment-sufficient solution.** Do not rescue V46 with variance weights, temporal coefficients, CVaR tuning, thresholds or a larger scalar head.
++
++### Remaining zero-boundary error
++
++V45 PLAN misses 100 RSMR positives; 85 are `<=0.01`, so count-level capture remains dominated by near-zero cases. But 15 material positives `>0.2`, totaling about `+15.80`, are still missed. The problem therefore remains scientifically meaningful and cannot be removed by redefining capture.
++
++The six new TEMPORAL-only catastrophes include `fd35b4e54a465e54` and `1c3f933be722564d` (both about `-2.02` teacher value): PLAN correctly assigns slightly negative values while the temporal residual crosses them to positive. This is direct zero-boundary evidence, not only an aggregate statistic.
++
++## V46 -> V47 dominant bottleneck
++
++V46 closes another family without invalidating the successful earlier layers. Two richer future-state sources remain scientifically justified by the preregistered V46 branch:
++
++1. **2-D agent response geometry.** V45/V46 model only bounded longitudinal acceleration. Lateral drift/cut-in geometry is absent even though the planner is spatial and many residual interaction errors can be generated by 2-D response rather than acceleration uncertainty.
++2. **runtime-predictable future ego-reference consequence.** The frozen teacher base cost contains a logged-future demonstration/reference component that V42 intentionally excluded from deployment observables. Some residual errors occur when current agent-risk support is zero, so an independent future non-agent/reference consequence family remains open.
++
++The primary bottleneck is now:
++
++> **future-state factorization sufficiency for the frozen extremal proposal: agent-local plan-conditioned 2-D response geometry and runtime-predictable ego-reference consequence at the incumbent-exit zero boundary.**
++
++A secondary bottleneck is now explicitly preregistered: if richer future-state nuisance variables are independently identifiable and again improve ordinary regression without closing deployment capture/tail, **stop adding representation and move to a selected-policy deployment decision functional**.
++
++## V46-specific no-repeat constraints
++
++Keep every historical closure. Additionally:
++
++- close V46 low-order longitudinal second-moment / three-point quadrature as a first-order deployment solution;
++- close hand-designed `[mean, peak, early, second]` temporal functionals as a first-order deployment solution;
++- do not tune variance scale, sigma points, temporal weights, CVaR alpha, thresholds or selected translation;
++- do not make a larger MLP over V46 DIRP features;
++- do not post-hoc union PLAN/DIST/TEMP/JOIN policies;
++- do not re-open RSMR, B/M, candidate count, evidence acquisition, support/admissibility or second-best fallback;
++- do not use logged future at deployment;
++- do not interpret better all-edge MSE/Pearson as deployment success without the preregistered sign/tail gate;
++- if V47 nuisance families are identifiable but again show prediction gain without deployment gain, the next version must change the selected-policy decision functional rather than append more observable blocks.
++
++# V64.3.47 EAF-ICER-FSFR
++
++Full name: **Future-State Factorized Recovery**.
++
++V47 freezes RSMR, EPV/QUALITY, the V44 ungated full-horizon occupancy support, and the V45 longitudinal response-mean field. It deliberately does **not** carry forward V46 second-moment or hand temporal-profile features. It tests two orthogonal future-state families.
++
++## Branch A: AGENT-2D response geometry
++
++For each valid TRAIN agent, V47 derives a continuous lateral-drift target from logged future relative to its current-state constant-velocity local frame. This target is orthogonal in intent to V45's longitudinal acceleration target and contains no teacher value/improvement.
++
++The response is factorized:
++
++`v_lat_local(j) = f_lat(current/history agent state)`
++
++`v_lat_plan(j,a) = v_lat_local(j) + g_lat(current state, ego candidate a)`.
++
++The PLAN residual reuses the V45 continuous interaction-exposure feature schema, has zero bias and fixed ridge `lambda=1`, so candidate conditioning vanishes as interaction exposure vanishes. Deployment rolls a 2-D agent trajectory using the **frozen V45 longitudinal acceleration mean + learned lateral drift**, then evaluates the already-validated V44 ungated occupancy support.
++
++AGENT-2D receives an independent nuisance gate: LOCAL lateral response must beat a zero-drift baseline and PLAN lateral response must beat LOCAL in aggregate and in at least `4/5` outer folds. Value gain cannot be attributed to 2-D response if this gate fails.
++
++## Branch B: runtime-predictable ego-reference consequence
++
++The teacher base cost contains a demonstration/reference term that depends on logged ego future and therefore cannot be consumed directly at deployment. V47 uses it only as a TRAIN nuisance target and learns a low-capacity predictor from current/runtime-available candidate quantities: deviation from current-kinematic ego extrapolation, speed/heading change, route deviation, progress deficit and comfort.
++
++The deployment model sees only current ego history, current map/route and the already generated candidate trajectory. It never sees logged ego future, teacher total cost, teacher improvement or a selected-action label.
++
++Its nuisance gate requires the learned reference predictor to beat a deterministic current-kinematic CV proxy in aggregate and in at least `4/5` outer folds.
++
++## Preregistered causal arms
++
++1. **PLAN-CONTROL**: exact V45 PLAN occupancy statistic; engineering/scientific control.
++2. **AGENT-2D**: replace only the 1-D agent response geometry with the separately identified 2-D response trajectory; isolates missing agent future geometry.
++3. **EGO-REF**: keep V45 1-D agent response and add the runtime-predictable ego-reference consequence; isolates the future non-agent/reference family.
++4. **FSFR-JOINT**: 2-D agent response + predicted ego-reference consequence; tests whether both are jointly necessary.
++
++All arms fit fixed-`lambda=1`, scene-equal residuals after the frozen EPV+QUALITY backbone. RSMR is still the sole challenger selector; every arm can only accept the same RSMR winner or return to incumbent. No selected translation, CVaR, threshold, reranking or fallback is allowed.
++
++## Preregistered branch logic
++
++Promotion selects the simplest causally sufficient mechanism in fixed order:
++
++- if **AGENT-2D** passes the unchanged value gate and its lateral nuisance gate passes -> missing 2-D agent response geometry is the first-order mechanism; retain it without EGO-REF;
++- else if **EGO-REF** passes and its nuisance gate passes -> the missing first-order family is runtime-predictable ego future reference consequence; retain V45 response geometry and add only EGO-REF;
++- else if **FSFR-JOINT** passes and both nuisance gates pass -> both future-state factors are jointly required;
++- if either nuisance is not identified, do not attribute any value movement to that mechanism;
++- if both nuisances are identifiable and prediction diagnostics improve but all deployment value arms fail -> **stop adding future-state representation blocks**. The next version must target the selected-policy deployment functional / zero-boundary estimator exposed by V46's temporal paradox;
++- if neither nuisance is identifiable -> close this low-order future-state factorization and move only if a substantially different, physically justified future-state model is available.
++
++The value gate is unchanged: >=20% no-op reduction, capture within 3pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate, 5/5 nonnegative outer-fold sums, selected>=64, positive>=32 and exact frozen-winner containment.
++
++V47 first hard-replays the complete V46 scientific-failure signature and exact V45 PLAN occupancy. Fresh selection is forbidden unless nested TRAIN passes. If TRAIN passes, V47 uses independent label-free A500+B500 seed:
++
++`v64.3.47-eaf-icer-fsfr-double-fresh-v1`
++
++A/B remain strictly unpooled.
++
++Candidate paper mechanism, conditional on untouched validation and frozen closed-loop evidence: **Selection–Valuation–Future-State Sufficiency under a bounded auditable planner interface**. Ordinal extremal selection and absolute execution valuation require different sufficient statistics; the latter can require separately identifiable future agent response geometry and ego-reference consequences. Logged future is TRAIN-only supervision for nuisance prediction, never runtime information. Causal interaction claims still require later frozen interventional/closed-loop evaluation.
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/RUN_V64_3_47_EAF_ICER_FSFR_SCREEN_2GPU.sh	2026-08-26 05:03:56.447835843 +0000
+@@ -0,0 +1,114 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
++export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++export V44_ROOT="${V44_ROOT:-outputs_v64_3_44_eaf_icer_pcor_screen_2gpu_v1}"
++export V45_ROOT="${V45_ROOT:-outputs_v64_3_45_eaf_icer_pirf_screen_2gpu_v1}"
++export V46_ROOT="${V46_ROOT:-outputs_v64_3_46_eaf_icer_dirp_screen_2gpu_v1}"
++export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1}"
++export DESIGN_EXCLUDE_TOKENS="${DESIGN_EXCLUDE_TOKENS:-bdse/configs/v64_3_32_design_exclude_v64_3_30_3_screen_tokens.txt}"
++export FROZEN_TRAIN_TOKENS="${FROZEN_TRAIN_TOKENS:-bdse/configs/v64_3_29_frozen_v28_train_3000_tokens.txt}"
++export FRESH_HASH_SEED="${FRESH_HASH_SEED:-v64.3.47-eaf-icer-fsfr-double-fresh-v1}"
++export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++RAW_CONFIG="bdse/configs/v64_3_20_eaf_icer_dc_raw.yaml"; V20_CONFIG="bdse/configs/v64_3_20_icer_dc_dual.yaml"
++V46_FIT="$V46_ROOT/provenance/v64_3_46_dirp_fit.json"
++V45_SUP="$V45_ROOT/provenance/v64_3_45_train_response_field_supervision.jsonl"
++V45_SIDECAR="$V45_ROOT/provenance/v64_3_45_crossfit_response_observables.jsonl"
++V45_RF_REPORT="$V45_ROOT/provenance/v64_3_45_response_field_crossfit_report.json"
++V44_EDGES="$V44_ROOT/provenance/train_v20_plan_conditioned_response_edges.jsonl"
++V44_PRESERVE="$V44_ROOT/provenance/v64_3_44_preserve.yaml"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++TIMING="$OUT_ROOT/provenance/v64_3_47_stage_timing.tsv"; :>"$TIMING"; ALL_START=$(date +%s)
++stage_start(){ STAGE_NAME="$1";STAGE_START=$(date +%s);}; stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))">>"$TIMING";}
++for f in "$RAW_CONFIG" "$V20_CONFIG" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" "$V46_FIT" "$V45_SUP" "$V45_SIDECAR" "$V45_RF_REPORT" "$V44_EDGES" "$V44_PRESERVE"; do [[ -s "$f" ]] || { echo "STOP missing $f" >&2; exit 2; }; done
++[[ -d "$BDSE_TRAIN_CACHE" && -d "$BDSE_VAL_CACHE" ]] || { echo 'STOP missing train/val cache' >&2; exit 2; }
++
++stage_start exact_v46_prerequisite_and_fresh_guard
++python - "$V46_FIT" "$V46_ROOT" "$FROZEN_TRAIN_TOKENS" <<'PY'
++import json,sys,hashlib
++from pathlib import Path
++r=json.load(open(sys.argv[1]));n=r.get('nested_crossfit',{})
++e={
++'rsmr_rank_aggregate':(502,221,107,28,43.29405361274824),
++'quality_control_aggregate':(205,129,30,13,43.905547394411805),
++'v45_plan_control_aggregate':(217,121,38,9,56.55117310290402),
++'distribution_mean_aggregate':(216,118,39,9,57.52557473140379),
++'temporal_profile_aggregate':(217,119,41,14,51.26324847539882),
++'dirp_joint_aggregate':(207,115,39,12,55.30307441748546),
++}
++for k,x in e.items():
++ d=n.get(k,{});g=(d.get('selected_count'),d.get('selected_positive_count'),d.get('no_positive_opportunity_false_intervention_count'),d.get('catastrophic_count'),d.get('teacher_improvement_sum'))
++ if any(g[i]!=x[i] for i in range(4)) or abs(float(g[4])-x[4])>1e-9: raise SystemExit(f'STOP V47: V46 signature changed {k}: {g}')
++if r.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='response_second_moment_is_identifiable_but_acceleration_distribution_or_interaction_profile_still_not_absolute_value_sufficient' or not bool(n.get('distribution_identification',{}).get('identified',False)):
++ raise SystemExit('STOP V47: V46 preregistered scientific-stop signature changed')
++tr=[x.strip() for x in open(sys.argv[3]) if x.strip()]
++if len(tr)!=3000 or len(set(tr))!=3000 or hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4': raise SystemExit('STOP V47: frozen TRAIN changed')
++root=Path(sys.argv[2]);spent=[root/'provenance/val_screen_fresh1000_tokens.txt',root/'provenance/val_screen_fresh_A_tokens.txt',root/'provenance/val_screen_fresh_B_tokens.txt']
++if any(p.exists() and p.stat().st_size>0 for p in spent): raise SystemExit('STOP V47: V46 fresh was consumed')
++print('PASS V47 prerequisite: exact V46 identified-second-moment/promotion-failure signature and fresh-unspent state reproduced')
++PY
++stage_end
++
++stage_start prerequisites_and_regression
++python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_47_FSFR --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_47.json" > "$OUT_ROOT/logs/v64_3_13_reaudit.out"
++read -r SELECTED_EPOCH < <(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_47.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False): raise SystemExit('STOP prerequisites')
++print(int(r['selected_epoch']))
++PY
++)
++if [[ -z "${EAF_CKPT:-}" ]]; then EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"; fi; export EAF_CKPT; [[ -s "$EAF_CKPT" ]] || { echo 'STOP missing EAF checkpoint' >&2; exit 2; }
++python -m compileall -q bdse
++pytest -q bdse/tests/test_v64_3_{13_eaf_dmvr,14_eaf_ocfi,15_eaf_eair,16_eaf_raer,17_eaf_daler,18_eaf_dacer,19_eaf_icer,20_eaf_icer_dc,21_eaf_icer_mcr,22_eaf_icer_tcr,23_eaf_icer_rcr,24_eaf_icer_arc,25_eaf_icer_drc,26_eaf_icer_sarc,27_eaf_icer_trcc,28_eaf_icer_ptmc,29_eaf_icer_fcr,30_2_eaf_icer_fbic_pure,30_3_eaf_icer_fbic_pure_auditfix,30_eaf_icer_fbic,31_eaf_icer_scir,32_1_eaf_icer_ssir_weightfix,32_eaf_icer_ssir,33_eaf_icer_spcr,34_eaf_icer_rsmr,35_eaf_icer_fbcsr,36_eaf_icer_sgrr,37_eaf_icer_pvr,38_eaf_icer_davr,39_eaf_icer_cfsr,40_eaf_icer_sdfr,41_eaf_icer_epvr,42_eaf_icer_ovdr,43_eaf_icer_cfrv,44_eaf_icer_pcor,45_eaf_icer_pirf,46_eaf_icer_dirp,47_eaf_icer_fsfr}.py | tee "$OUT_ROOT/logs/targeted_regression.out"
++stage_end
++
++stage_start future_state_supervision
++AGENT_SUP="$OUT_ROOT/provenance/v64_3_47_train_agent_lateral_supervision.jsonl"; EGO_SUP="$OUT_ROOT/provenance/v64_3_47_train_ego_reference_supervision.jsonl"; SUP_AUD="$OUT_ROOT/provenance/v64_3_47_future_state_supervision_audit.json"
++python -m bdse.tools.build_v64_3_47_future_state_supervision --preprocessed-dir "$BDSE_TRAIN_CACHE" --split train --scenario-token-file "$FROZEN_TRAIN_TOKENS" --base-config "$V20_CONFIG" --output-agent "$AGENT_SUP" --output-ego "$EGO_SUP" --output-audit "$SUP_AUD" | tee "$OUT_ROOT/logs/v64_3_47_future_state_supervision.out"
++stage_end
++
++stage_start crossfit_future_state_factorization
++FS_SIDECAR="$OUT_ROOT/provenance/v64_3_47_crossfit_future_state_observables.jsonl"; FS_MODEL="$OUT_ROOT/provenance/v64_3_47_full_train_future_state_model.json"; FS_REPORT="$OUT_ROOT/provenance/v64_3_47_future_state_crossfit_report.json"
++python -m bdse.tools.build_v64_3_47_crossfit_future_state_observables --agent-supervision "$AGENT_SUP" --ego-supervision "$EGO_SUP" --v45-supervision "$V45_SUP" --v45-sidecar "$V45_SIDECAR" --v45-response-report "$V45_RF_REPORT" --preprocessed-dir "$BDSE_TRAIN_CACHE" --split train --scenario-token-file "$FROZEN_TRAIN_TOKENS" --base-config "$V20_CONFIG" --output-sidecar "$FS_SIDECAR" --output-model "$FS_MODEL" --output-report "$FS_REPORT" | tee "$OUT_ROOT/logs/v64_3_47_future_state_crossfit.out"
++stage_end
++
++stage_start nested_train_fsfr_gate
++RSMR_CONFIG="$OUT_ROOT/provenance/v64_3_47_rsmr.yaml"; QUALITY_CONFIG="$OUT_ROOT/provenance/v64_3_47_quality.yaml"; PLAN_CONFIG="$OUT_ROOT/provenance/v64_3_47_plan_control.yaml"; A2D_CONFIG="$OUT_ROOT/provenance/v64_3_47_agent_2d.yaml"; EGO_CONFIG="$OUT_ROOT/provenance/v64_3_47_ego_ref.yaml"; JOINT_CONFIG="$OUT_ROOT/provenance/v64_3_47_fsfr_joint.yaml"; FIT_REPORT="$OUT_ROOT/provenance/v64_3_47_fsfr_fit.json"; SCENE_AUDIT="$OUT_ROOT/provenance/v64_3_47_fsfr_train_scene_audit.csv"
++set +e
++python -m bdse.tools.fit_v64_3_47_eaf_icer_fsfr --train-frontier-edges "$V44_EDGES" --fsfr-sidecar "$FS_SIDECAR" --fsfr-model "$FS_MODEL" --fsfr-report "$FS_REPORT" --v46-fit-report "$V46_FIT" --base-config "$V20_CONFIG" --output-rsmr-config "$RSMR_CONFIG" --output-quality-config "$QUALITY_CONFIG" --output-plan-control-config "$PLAN_CONFIG" --output-agent-2d-config "$A2D_CONFIG" --output-ego-ref-config "$EGO_CONFIG" --output-fsfr-joint-config "$JOINT_CONFIG" --output-report "$FIT_REPORT" --output-scene-audit "$SCENE_AUDIT" 2>&1 | tee "$OUT_ROOT/logs/v64_3_47_fsfr_fit.out"
++FIT_STATUS=${PIPESTATUS[0]};set -e;stage_end;[[ $FIT_STATUS -eq 0 ]] || exit "$FIT_STATUS"
++
++stage_start double_fresh_selection
++TOK1000="$OUT_ROOT/provenance/val_screen_fresh1000_tokens.txt"; TOKA="$OUT_ROOT/provenance/val_screen_fresh_A_tokens.txt"; TOKB="$OUT_ROOT/provenance/val_screen_fresh_B_tokens.txt"; EX="$OUT_ROOT/provenance/v64_3_47_selection_exclude.txt"
++cat "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOKENS" | awk 'NF&&!seen[$0]++' > "$EX"
++python -m bdse.tools.select_fresh_preprocessed_tokens --preprocessed-dir "$BDSE_VAL_CACHE" --split val --exclude-tokens "$EX" --count 1000 --hash-seed "$FRESH_HASH_SEED" --output "$TOK1000" --audit-output "$OUT_ROOT/provenance/v64_3_47_fresh1000_selection_audit.json" > "$OUT_ROOT/logs/fresh_selection.out"
++head -n500 "$TOK1000">"$TOKA";tail -n500 "$TOK1000">"$TOKB"
++python - "$TOKA" "$TOKB" "$EX" <<'PY'
++import sys
++A=[x.strip() for x in open(sys.argv[1]) if x.strip()];B=[x.strip() for x in open(sys.argv[2]) if x.strip()];E={x.strip() for x in open(sys.argv[3]) if x.strip()}
++if len(A)!=500 or len(B)!=500 or len(set(A))!=500 or len(set(B))!=500 or set(A)&set(B) or (set(A)|set(B))&E: raise SystemExit('STOP V47 fresh independence')
++print('PASS V47 independent A500+B500 selection')
++PY
++stage_end
++
++PREFERRED=$(python - "$FIT_REPORT" <<'PY'
++import json,sys
++print(json.load(open(sys.argv[1]))['nested_crossfit']['preferred_promotion_arm'] or '')
++PY
++)
++[[ "$PREFERRED" =~ ^(agent_2d|ego_ref|fsfr_joint)$ ]] || { echo 'STOP V47 no preregistered preferred arm' >&2; exit 2; }
++run_eval(){ local gpu="$1" cfg="$2" tok="$3" tag="$4"; CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.experiments.evaluate_open_loop --config "$cfg" --checkpoint "$EAF_CKPT" --split val --preprocessed-dir "$BDSE_VAL_CACHE" --max-scenarios 500 --scenario-token-file "$tok" --require-all-scenario-tokens --output "$OUT_ROOT/provenance/${tag}_metrics.json" --per-sample-output "$OUT_ROOT/provenance/${tag}_rows.jsonl" --frontier-edge-output "$OUT_ROOT/provenance/${tag}_edges.jsonl" --disable-dense-diagnostic --device cuda > "$OUT_ROOT/logs/${tag}.out" 2>&1; }
++for sp in A B; do
++ tok="$TOKA";[[ "$sp" == B ]]&&tok="$TOKB";tags=(raw v20 preserve rsmr quality plan_control agent_2d ego_ref fsfr_joint);cfgs=("$RAW_CONFIG" "$V20_CONFIG" "$V44_PRESERVE" "$RSMR_CONFIG" "$QUALITY_CONFIG" "$PLAN_CONFIG" "$A2D_CONFIG" "$EGO_CONFIG" "$JOINT_CONFIG")
++ for ((i=0;i<9;i+=2));do stage_start "fresh_${sp}_wave_$i";s=0;run_eval "$GPU0" "${cfgs[$i]}" "$tok" "${sp}_${tags[$i]}" & p0=$!;if ((i+1<9));then run_eval "$GPU1" "${cfgs[$((i+1))]}" "$tok" "${sp}_${tags[$((i+1))]}" & p1=$!;else p1='';fi;wait "$p0"||s=1;if [[ -n "$p1" ]];then wait "$p1"||s=1;fi;[[ $s -eq 0 ]]||exit 2;stage_end;done
++done
++
++stage_start double_fresh_screen
++for sp in A B;do args=();for tag in raw v20 preserve rsmr quality plan_control agent_2d ego_ref fsfr_joint;do x=${tag//_/-};args+=("--${x}-metrics" "$OUT_ROOT/provenance/${sp}_${tag}_metrics.json" "--${x}-rows" "$OUT_ROOT/provenance/${sp}_${tag}_rows.jsonl");[[ "$tag" == raw ]]||args+=("--${x}-edges" "$OUT_ROOT/provenance/${sp}_${tag}_edges.jsonl");done;python -m bdse.tools.check_v64_3_47_eaf_icer_fsfr_split --split-name "$sp" --preferred-arm "$PREFERRED" "${args[@]}" --output "$OUT_ROOT/provenance/v64_3_47_split_${sp}_screen.json" | tee "$OUT_ROOT/logs/v64_3_47_split_${sp}.out";done
++python -m bdse.tools.check_v64_3_47_eaf_icer_fsfr_screen --split-a "$OUT_ROOT/provenance/v64_3_47_split_A_screen.json" --split-b "$OUT_ROOT/provenance/v64_3_47_split_B_screen.json" --fit-report "$FIT_REPORT" --output "$OUT_ROOT/provenance/v64_3_47_eaf_icer_fsfr_double_fresh_screen.json" | tee "$OUT_ROOT/logs/v64_3_47_screen.out"
++stage_end
++printf 'TOTAL\t%s\n' "$(( $(date +%s)-ALL_START ))">>"$TIMING"
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/planner/future_state_factorization.py	2026-08-26 05:08:08.220326990 +0000
+@@ -0,0 +1,312 @@
++from __future__ import annotations
++
++"""V64.3.47 Future-State Factorized Recovery (FSFR) observables.
++
++V46 showed that a learnable longitudinal response second moment and hand-built
++hazard-profile functionals are not deployment-sufficient.  V47 therefore does
++not enlarge those scalar statistics.  It tests two distinct future-state
++families that remain absent from the frozen V45 PLAN value path:
++
++1. an agent-local, ego-plan-conditioned *2-D* response field.  V45's learned
++   longitudinal acceleration is retained exactly and a separately supervised
++   lateral drift component is added; and
++2. a runtime-predictable ego-reference consequence approximating the teacher's
++   label-only demonstration term.  Logged ego future is TRAIN-only nuisance
++   supervision; deployment sees only current ego history, route and the already
++   generated candidate trajectories.
++
++All outputs are lower-is-better candidate costs.  This module never selects or
++re-ranks actions and never consumes logged future at deployment.
++"""
++
++from typing import Any
++
++import numpy as np
++
++from bdse.data.cache_schema import CandidateBank, RuntimeFeatures
++from bdse.planner.evidence_atoms import _eval_traj
++from bdse.planner.interaction_response_field import (
++    EPS,
++    RESPONSE_FIELD_LOCAL_FEATURE_NAMES,
++    RESPONSE_FIELD_PLAN_FEATURE_NAMES,
++    _agent_velocity,
++    _candidate_times,
++    _finite,
++    _occupancy_cost_for_accels,
++    _predict_local_accel,
++    _predict_plan_accel,
++    _response_model_cfg,
++    response_field_local_agent_features,
++    response_field_plan_agent_features,
++)
++from bdse.planner.response_value_observables import _ungated_future_agent_occupancy
++from bdse.planner.teacher_cost import demo_cost, global_comfort_cost
++from bdse.utils import nearest_polyline_distance, route_progress_along_polyline
++
++FSFR_OBSERVABLE_NAMES = [
++    "fsfr_plan_1d_occupancy_cost",
++    "fsfr_plan_2d_occupancy_cost",
++    "fsfr_predicted_demo_cost",
++]
++
++EGO_REFERENCE_FEATURE_NAMES = [
++    "cv_position_mse",
++    "cv_terminal_position_sq",
++    "current_speed_mse",
++    "terminal_speed_delta_sq",
++    "current_heading_mse",
++    "terminal_heading_delta_sq",
++    "route_deviation_cost",
++    "progress_deficit_cost",
++    "global_comfort_cost",
++]
++
++
++def _wrap_angle(x: np.ndarray | float) -> np.ndarray:
++    a = np.asarray(x, dtype=np.float64)
++    return np.arctan2(np.sin(a), np.cos(a))
++
++
++def _fsfr_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
++    ic = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {})
++    sc = ic.get("selection_conditioned_intervention_recovery", {}) or {}
++    return sc.get("future_state_factorization", {}) or {}
++
++
++def logged_lateral_drift_target(
++    runtime: RuntimeFeatures,
++    logged_agents: np.ndarray,
++    agent_index: int,
++    cfg: dict[str, Any],
++) -> float:
++    """Least-squares lateral drift velocity of logged future relative to CV.
++
++    The local normal is defined by the current measured velocity (falling back to
++    yaw), so this target is orthogonal to V45's longitudinal acceleration target.
++    No teacher value/action label is used.
++    """
++    cur = np.asarray(runtime.current_agents, dtype=np.float64)
++    gt = np.asarray(logged_agents, dtype=np.float64)
++    if agent_index >= len(cur) or gt.ndim != 3 or agent_index >= gt.shape[0] or gt.shape[1] <= 0:
++        return 0.0
++    st = cur[agent_index].reshape(-1)
++    v0, hx, hy = _agent_velocity(st)
++    nx, ny = -hy, hx
++    dt = float((cfg.get("candidate", {}) or {}).get("step_s", 0.1))
++    T = int(gt.shape[1])
++    t = np.arange(1, T + 1, dtype=np.float64) * dt
++    cvx = float(st[0]) + hx * v0 * t
++    cvy = float(st[1]) + hy * v0 * t
++    rx = gt[agent_index, :, 0] - cvx
++    ry = gt[agent_index, :, 1] - cvy
++    rlat = nx * rx + ny * ry
++    good = np.isfinite(rlat) & np.isfinite(t)
++    if not np.any(good):
++        return 0.0
++    den = float(np.dot(t[good], t[good]))
++    if den <= EPS:
++        return 0.0
++    drift = float(np.dot(t[good], rlat[good]) / den)
++    # Parameter-free physical containment: in the current local frame, the
++    # learned lateral drift component cannot exceed the measured current
++    # agent speed.  This uses no tuned V47 threshold and is applied to both
++    # TRAIN target and runtime rollout.
++    return float(np.clip(drift, -max(v0, 0.0), max(v0, 0.0)))
++
++
++def _predict_lateral(local: np.ndarray, plan: np.ndarray, cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
++    """Return local N and plan KxN lateral drift predictions."""
++    model = (_fsfr_cfg(cfg).get("agent_lateral_response", {}) or {})
++    N = int(local.shape[0])
++    K = int(plan.shape[0])
++    if not bool(model.get("enabled", False)):
++        z = np.zeros((N,), dtype=np.float64)
++        return z, np.zeros((K, N), dtype=np.float64)
++    if [str(x) for x in model.get("local_feature_names", [])] != RESPONSE_FIELD_LOCAL_FEATURE_NAMES:
++        raise ValueError("V47 FSFR lateral local feature schema mismatch")
++    if [str(x) for x in model.get("plan_feature_names", [])] != RESPONSE_FIELD_PLAN_FEATURE_NAMES:
++        raise ValueError("V47 FSFR lateral plan feature schema mismatch")
++    ls = np.asarray(model.get("local_feature_scale", []), dtype=np.float64)
++    lw = np.asarray(model.get("local_weights", []), dtype=np.float64)
++    ps = np.asarray(model.get("plan_feature_scale", []), dtype=np.float64)
++    pw = np.asarray(model.get("plan_weights", []), dtype=np.float64)
++    if ls.size != local.shape[1] or lw.size != local.shape[1] or ps.size != plan.shape[2] or pw.size != plan.shape[2]:
++        raise ValueError("V47 FSFR lateral model shape mismatch")
++    local_v = local / np.maximum(ls[None, :], 1.0e-6) @ lw + float(model.get("local_bias", 0.0))
++    base = np.broadcast_to(local_v[None, :], (K, N)).copy()
++    if bool(model.get("plan_enabled", True)):
++        base += np.tensordot(plan / np.maximum(ps[None, None, :], 1.0e-6), pw, axes=([2], [0]))
++    return _finite(local_v), _finite(base)
++
++
++def _agent_future_2d(st: np.ndarray, T: int, dt: float, accel: float, lateral_drift: float) -> np.ndarray:
++    """Roll a continuous local-frame 2-D response with V45 longitudinal mean.
++
++    Longitudinal motion is the frozen V45 constant-acceleration response.  The
++    new component is a constant local-normal drift learned from TRAIN future.
++    This is intentionally the smallest 2-D generalization after V46 closes
++    second-moment/hand-profile rescue.
++    """
++    s = np.asarray(st, dtype=np.float64).reshape(-1)
++    x0 = float(s[0]) if s.size else 0.0
++    y0 = float(s[1]) if s.size > 1 else 0.0
++    yaw0 = float(s[2]) if s.size > 2 and np.isfinite(s[2]) else 0.0
++    v0, hx, hy = _agent_velocity(s)
++    nx, ny = -hy, hx
++    a = float(np.clip(accel, -2.0, 0.5))
++    vl = float(np.nan_to_num(lateral_drift, nan=0.0, posinf=0.0, neginf=0.0))
++    vl = float(np.clip(vl, -max(v0, 0.0), max(v0, 0.0)))
++    t = np.arange(1, T + 1, dtype=np.float64) * float(dt)
++    if a < 0.0 and v0 > 0.0:
++        tstop = v0 / max(-a, 1.0e-9)
++        te = np.minimum(t, tstop)
++        along = v0 * te + 0.5 * a * te * te
++        vlong = np.maximum(v0 + a * t, 0.0)
++    else:
++        along = v0 * t + 0.5 * a * t * t
++        vlong = np.maximum(v0 + a * t, 0.0)
++    lat = vl * t
++    x = x0 + hx * along + nx * lat
++    y = y0 + hy * along + ny * lat
++    vx = hx * vlong + nx * vl
++    vy = hy * vlong + ny * vl
++    speed = np.hypot(vx, vy)
++    yaw = np.where(speed > 1.0e-4, np.arctan2(vy, vx), yaw0)
++    return np.stack([x, y, yaw, speed, t], axis=1)
++
++
++def _occupancy_cost_2d(
++    runtime: RuntimeFeatures,
++    candidates: CandidateBank,
++    cfg: dict[str, Any],
++    long_accel: np.ndarray,
++    lateral_drift: np.ndarray,
++) -> np.ndarray:
++    traj = np.asarray(candidates.trajectories, dtype=np.float64)
++    K, T = int(traj.shape[0]), int(traj.shape[1])
++    cur = np.asarray(runtime.current_agents, dtype=np.float64)
++    valid = np.asarray(runtime.agent_valid, dtype=bool).reshape(-1)
++    N = min(len(cur), len(valid))
++    dt = float((cfg.get("candidate", {}) or {}).get("step_s", 0.1))
++    times = _candidate_times(traj, dt)
++    A = np.asarray(long_accel, dtype=np.float64)
++    L = np.asarray(lateral_drift, dtype=np.float64)
++    if A.shape != L.shape or A.shape[0] != K or A.shape[1] < N:
++        raise ValueError("V47 FSFR 2-D response shape mismatch")
++    occ = np.zeros((K, T), dtype=np.float64)
++    for k in range(K):
++        one = traj[k : k + 1]
++        one_t = times[k : k + 1] if times.ndim == 2 else times
++        for j in range(N):
++            if not valid[j]:
++                continue
++            fut = _agent_future_2d(cur[j], T, dt, float(A[k, j]), float(L[k, j]))
++            pot = _ungated_future_agent_occupancy(one, one_t, fut, cur[j], cfg)
++            if pot.size:
++                occ[k, : pot.shape[1]] = np.maximum(occ[k, : pot.shape[1]], pot[0])
++    return _finite(np.mean(occ, axis=1) if T > 0 else np.zeros((K,), dtype=np.float64))
++
++
++def _ego_current(runtime: RuntimeFeatures) -> np.ndarray:
++    h = np.asarray(runtime.ego_history, dtype=np.float64)
++    if h.ndim == 2 and h.shape[0] and h.shape[1] >= 4:
++        return h[-1]
++    return np.zeros((5,), dtype=np.float64)
++
++
++def ego_reference_candidate_features(runtime: RuntimeFeatures, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
++    """Kx9 current-only features for predicting the teacher demo component."""
++    K = int(candidates.K)
++    out = np.zeros((K, len(EGO_REFERENCE_FEATURE_NAMES)), dtype=np.float64)
++    ego = _ego_current(runtime)
++    x0, y0, yaw0, v0 = (float(ego[0]), float(ego[1]), float(ego[2]), float(ego[3]))
++    tcfg = cfg.get("teacher", {}) if isinstance(cfg, dict) else {}
++    base_dt = float((cfg.get("candidate", {}) or {}).get("step_s", 0.1))
++    stride = max(1, int(tcfg.get("cost_eval_stride", 1)))
++    dt = base_dt * stride
++    route = np.asarray(runtime.map_features.get("route_centerline", np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32)), dtype=np.float64).reshape(-1, 2)
++    if route.size:
++        route = route[np.isfinite(route).all(axis=1)]
++    if len(route) < 2:
++        route = np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float64)
++    valid = np.asarray(candidates.valid_mask, dtype=bool).reshape(-1)
++    terminal_progress = route_progress_along_polyline(np.asarray(candidates.trajectories[:, -1, :2], dtype=np.float64), route)
++    best_progress = float(terminal_progress[valid].max()) if np.any(valid) else 0.0
++    for a in range(K):
++        tr = np.asarray(_eval_traj(candidates.trajectories[a], cfg), dtype=np.float64)
++        n = len(tr)
++        tt = np.arange(1, n + 1, dtype=np.float64) * dt
++        cvx = x0 + v0 * np.cos(yaw0) * tt
++        cvy = y0 + v0 * np.sin(yaw0) * tt
++        d2 = (tr[:, 0] - cvx) ** 2 + (tr[:, 1] - cvy) ** 2
++        speed = tr[:, 3] if tr.shape[1] > 3 else np.zeros((n,), dtype=np.float64)
++        heading = tr[:, 2] if tr.shape[1] > 2 else np.full((n,), yaw0, dtype=np.float64)
++        route_dev = float(np.square(nearest_polyline_distance(tr[:, :2], route)).mean()) if n else 0.0
++        progress_def = float(max(0.0, best_progress - float(terminal_progress[a])))
++        comfort = float(global_comfort_cost(tr, dt)) if n else 0.0
++        out[a] = [
++            float(np.mean(d2)) if n else 0.0,
++            float(d2[-1]) if n else 0.0,
++            float(np.mean((speed - v0) ** 2)) if n else 0.0,
++            float((speed[-1] - v0) ** 2) if n else 0.0,
++            float(np.mean(_wrap_angle(heading - yaw0) ** 2)) if n else 0.0,
++            float(_wrap_angle(heading[-1] - yaw0) ** 2) if n else 0.0,
++            route_dev,
++            progress_def,
++            comfort,
++        ]
++    return _finite(out)
++
++
++def logged_demo_component_targets(runtime: RuntimeFeatures, logged_ego: np.ndarray, candidates: CandidateBank, cfg: dict[str, Any]) -> np.ndarray:
++    """Exact TRAIN-only teacher demo component for each candidate."""
++    tcfg = cfg.get("teacher", {}) if isinstance(cfg, dict) else {}
++    w = float(tcfg.get("demo_weight", 1.0)) / max(float(tcfg.get("demo_scale", 120.0)), 1.0e-6)
++    gt = _eval_traj(np.asarray(logged_ego, dtype=np.float64), cfg)
++    out = np.zeros((int(candidates.K),), dtype=np.float64)
++    for a in range(int(candidates.K)):
++        out[a] = w * float(demo_cost(_eval_traj(candidates.trajectories[a], cfg), gt))
++    return _finite(np.maximum(out, 0.0))
++
++
++def _predict_demo(features: np.ndarray, cfg: dict[str, Any]) -> np.ndarray:
++    model = (_fsfr_cfg(cfg).get("ego_reference_model", {}) or {})
++    K = int(features.shape[0])
++    if not bool(model.get("enabled", False)):
++        # Current-kinematic CV deviation is a deterministic runtime baseline.
++        tcfg = cfg.get("teacher", {}) if isinstance(cfg, dict) else {}
++        w = float(tcfg.get("demo_weight", 1.0)) / max(float(tcfg.get("demo_scale", 120.0)), 1.0e-6)
++        return _finite(np.maximum(features[:, 0] * w, 0.0))
++    if [str(x) for x in model.get("feature_names", [])] != EGO_REFERENCE_FEATURE_NAMES:
++        raise ValueError("V47 FSFR ego-reference feature schema mismatch")
++    scale = np.asarray(model.get("feature_scale", []), dtype=np.float64)
++    weights = np.asarray(model.get("weights", []), dtype=np.float64)
++    if scale.size != features.shape[1] or weights.size != features.shape[1]:
++        raise ValueError("V47 FSFR ego-reference model shape mismatch")
++    pred = features / np.maximum(scale[None, :], 1.0e-6) @ weights + float(model.get("bias", 0.0))
++    return _finite(np.maximum(pred, 0.0))
++
++
++def runtime_future_state_factorization_observable_costs(
++    runtime: RuntimeFeatures,
++    candidates: CandidateBank,
++    cfg: dict[str, Any],
++) -> tuple[np.ndarray, list[str]]:
++    """Return Kx3 V47 current-only future-state costs."""
++    K = int(candidates.K)
++    if K <= 0:
++        return np.zeros((0, len(FSFR_OBSERVABLE_NAMES)), dtype=np.float64), list(FSFR_OBSERVABLE_NAMES)
++    local = response_field_local_agent_features(runtime, cfg)
++    plan, _ = response_field_plan_agent_features(runtime, candidates, cfg)
++    mean_model = _response_model_cfg(cfg)
++    local_a = _predict_local_accel(local, mean_model)
++    plan_a = _predict_plan_accel(local_a, plan, mean_model)
++    plan_1d = _occupancy_cost_for_accels(runtime, candidates, cfg, plan_a)
++    _, lateral_plan = _predict_lateral(local, plan, cfg)
++    plan_2d = _occupancy_cost_2d(runtime, candidates, cfg, plan_a, lateral_plan)
++    ego_feat = ego_reference_candidate_features(runtime, candidates, cfg)
++    demo_hat = _predict_demo(ego_feat, cfg)
++    out = np.stack([plan_1d, plan_2d, demo_hat], axis=1).astype(np.float64)
++    if out.shape != (K, len(FSFR_OBSERVABLE_NAMES)) or not np.all(np.isfinite(out)):
++        raise ValueError("V47 FSFR observable matrix malformed/non-finite")
++    return out, list(FSFR_OBSERVABLE_NAMES)
+--- /mnt/data/v46code/bdse_v64_3_46_eaf_icer_dirp/bdse/planner/tournament.py	2026-08-26 03:07:14.000000000 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/planner/tournament.py	2026-08-26 05:02:22.868335648 +0000
+@@ -2602,7 +2602,7 @@
+     if bool(scir_cfg.get("scene_reservation_enabled", False)):
+         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
+     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
+-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile"}
++    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}
+     if mode not in allowed:
+         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
+     b = int(proposal_action)
+@@ -2627,7 +2627,7 @@
+     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
+         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
+ 
+-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile"}:
++    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
+             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
+         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
+@@ -2662,7 +2662,7 @@
+         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
+         value_feature = phi
+         value_names = [f"post_value::{n}" for n in runtime_value_names]
+-        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile"}:
++        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+             if value_observable_matrix is None or value_observable_names is None:
+                 raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
+             om = np.asarray(value_observable_matrix, dtype=np.float64)
+@@ -2682,7 +2682,7 @@
+             qobs = delta_obs[np.asarray(qidx, dtype=np.int64)]
+             qres = float((qobs / np.maximum(qscale, 1.0e-6)) @ qw)
+             value = float(np.clip(value + qres, -40.0, 40.0))
+-            if mode == "endpoint_potential_quality_distributional_response_profile":
++            if mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+                 rnames = [str(x) for x in scir_cfg.get("post_selection_future_response_observable_names", [])]
+                 if not rnames or any(n not in on for n in rnames):
+                     raise ValueError("EAF-ICER V46 response-profile observable schema missing")
+--- /mnt/data/v46code/bdse_v64_3_46_eaf_icer_dirp/bdse/planner/value_observables.py	2026-08-26 03:07:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/planner/value_observables.py	2026-08-26 04:58:17.910917975 +0000
+@@ -152,6 +152,13 @@
+             raise ValueError("V46 distributional-interaction-response observable schema mismatch")
+         out = np.concatenate([out, dr], axis=1)
+         names.extend(dn)
++    if bool(ic.get("instrument_future_state_factorization_observables", False)):
++        from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES, runtime_future_state_factorization_observable_costs
++        fs, fn = runtime_future_state_factorization_observable_costs(runtime, candidates, cfg)
++        if fn != FSFR_OBSERVABLE_NAMES or fs.shape != (K, len(FSFR_OBSERVABLE_NAMES)):
++            raise ValueError("V47 future-state-factorization observable schema mismatch")
++        out = np.concatenate([out, fs], axis=1)
++        names.extend(fn)
+     if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
+         raise ValueError("deployment value-observable matrix is malformed or non-finite")
+     return out, names
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/tests/test_v64_3_47_eaf_icer_fsfr.py	2026-08-26 05:02:50.422998767 +0000
+@@ -0,0 +1,78 @@
++import numpy as np
++import pytest
++
++from bdse.data.cache_schema import CandidateBank, RuntimeFeatures
++from bdse.planner.future_state_factorization import (
++    EGO_REFERENCE_FEATURE_NAMES, FSFR_OBSERVABLE_NAMES, _agent_future_2d,
++    ego_reference_candidate_features, logged_lateral_drift_target,
++    runtime_future_state_factorization_observable_costs,
++)
++from bdse.planner.interaction_response_field import RESPONSE_FIELD_LOCAL_FEATURE_NAMES, RESPONSE_FIELD_PLAN_FEATURE_NAMES
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
++from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES, runtime_value_observable_costs
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
++
++
++def _runtime():
++    cur=np.array([[18,0,0,2,0,2,0,4.8,2.0,1.0]],dtype=np.float32)
++    hist=np.stack([cur.copy(),cur.copy()],axis=1); hist[0,0,0]-=.4
++    ego=np.array([[-1,0,0,5,0],[0,0,0,5,0]],dtype=np.float32)
++    return RuntimeFeatures(ego_history=ego,agent_history=hist,agent_valid=np.ones(1,bool),current_agents=cur,traffic_lights=[],map_features={'route_centerline':np.array([[0,0],[80,0]],dtype=np.float32),'route_corridor_width':4.0,'stop_lines':[],'speed_limit_mps':20.0},route_roadblock_ids=[],mission_goal=None)
++
++
++def _bank():
++    T=41;t=np.arange(1,T+1,dtype=np.float32)*.2;tr=np.zeros((2,T,5),dtype=np.float32)
++    tr[0,:,0]=5*t;tr[0,:,3]=5;tr[1,:,0]=5*t;tr[1,:,1]=8;tr[1,:,3]=5;tr[:,:,4]=t[None,:]
++    return CandidateBank(trajectories=tr,valid_mask=np.ones(2,bool),maneuver_ids=np.zeros(2,np.int64),theta=[{},{}],dynamic_flags=[{},{}],metadata=[{},{}])
++
++
++def _cfg():
++    mean={'enabled':True,'local_feature_names':list(RESPONSE_FIELD_LOCAL_FEATURE_NAMES),'local_feature_scale':[1.0]*6,'local_weights':[0.0]*6,'local_bias':-0.2,'plan_enabled':True,'plan_feature_names':list(RESPONSE_FIELD_PLAN_FEATURE_NAMES),'plan_feature_scale':[1.0]*6,'plan_weights':[0.0]*6,'plan_bias':0.0}
++    lat={'enabled':True,'local_feature_names':list(RESPONSE_FIELD_LOCAL_FEATURE_NAMES),'local_feature_scale':[1.0]*6,'local_weights':[0.0]*6,'local_bias':0.0,'plan_enabled':True,'plan_feature_names':list(RESPONSE_FIELD_PLAN_FEATURE_NAMES),'plan_feature_scale':[1.0]*6,'plan_weights':[0.0]*6,'plan_bias':0.0}
++    ego={'enabled':True,'feature_names':list(EGO_REFERENCE_FEATURE_NAMES),'feature_scale':[1.0]*len(EGO_REFERENCE_FEATURE_NAMES),'weights':[0.0]*len(EGO_REFERENCE_FEATURE_NAMES),'bias':0.2}
++    return {'candidate':{'step_s':.2,'horizon_s':8.0},'teacher':{'demo_weight':1.0,'demo_scale':120.0,'route_weight':50.0,'route_scale':1.0,'progress_weight':5.0,'progress_scale':10.0,'comfort_global_weight':1.0,'comfort_scale':80.0},'runtime_safety':{'use_box_agent_risk':True,'ego_length_m':4.8,'ego_width_m':2.0,'soft_agent_radius_m':1.5,'hard_longitudinal_clearance_m':.2,'soft_longitudinal_extra_m':1.0,'hard_lateral_clearance_m':.15,'soft_lateral_extra_m':.65},'runtime':{'decisive_frontier_value':{'incumbent_contrastive_extremal_recovery':{'instrument_value_observables':True,'instrument_future_state_factorization_observables':True,'selection_conditioned_intervention_recovery':{'interaction_response_field':mean,'future_state_factorization':{'agent_lateral_response':lat,'ego_reference_model':ego}}}}}}
++
++
++def test_v47_lateral_target_is_zero_for_cv_and_recovers_constant_drift():
++    rt=_runtime();cfg=_cfg();T=20;dt=.2;st=rt.current_agents[0];t=np.arange(1,T+1)*dt
++    gt=np.zeros((1,T,5),dtype=float);gt[0,:,0]=st[0]+2*t;gt[0,:,1]=0
++    assert logged_lateral_drift_target(rt,gt,0,cfg)==pytest.approx(0.0,abs=1e-8)
++    gt[0,:,1]=.5*t
++    assert logged_lateral_drift_target(rt,gt,0,cfg)==pytest.approx(.5,abs=1e-8)
++
++
++def test_v47_2d_agent_rollout_adds_lateral_motion_without_changing_longitudinal_basis():
++    st=_runtime().current_agents[0];f=_agent_future_2d(st,10,.2,-.5,.4)
++    assert f.shape==(10,5) and np.all(np.isfinite(f))
++    assert f[-1,1]>f[0,1]
++    z=_agent_future_2d(st,10,.2,-.5,0.0)
++    assert np.allclose(z[:,1],0.0,atol=1e-12)
++
++
++def test_v47_ego_reference_features_are_current_only_finite_and_candidate_specific():
++    x=ego_reference_candidate_features(_runtime(),_bank(),_cfg())
++    assert x.shape==(2,len(EGO_REFERENCE_FEATURE_NAMES)) and np.all(np.isfinite(x))
++    assert not np.allclose(x[0],x[1])
++
++
++def test_v47_runtime_fsfr_replays_v45_plan_as_first_column():
++    c,n=runtime_future_state_factorization_observable_costs(_runtime(),_bank(),_cfg())
++    assert n==FSFR_OBSERVABLE_NAMES and c.shape==(2,len(n)) and np.all(np.isfinite(c))
++    # With zero lateral model, 1-D and 2-D interaction costs are exactly the same.
++    assert np.allclose(c[:,0],c[:,1],atol=1e-12,rtol=0)
++
++
++def test_v47_runtime_value_schema_can_be_base_plus_fsfr_only():
++    x,n=runtime_value_observable_costs(_runtime(),_bank(),_cfg())
++    assert n==VALUE_OBSERVABLE_NAMES+FSFR_OBSERVABLE_NAMES
++    assert x.shape==(2,len(n))
++
++
++def test_v47_tournament_consumes_vector_fsfr_without_rerank():
++    raw_names=list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES);feature_names=[f'delta::{n}' for n in raw_names]+['delta::support_logit'];obs_names=VALUE_OBSERVABLE_NAMES+FSFR_OBSERVABLE_NAMES
++    rn=['fsfr_plan_2d_occupancy_cost','fsfr_predicted_demo_cost']
++    sc={'feature_names':feature_names,'feature_mean':[0.0]*19,'feature_std':[1.0]*19,'weights':[0.0]*19,'bias':0.0,'base_feature_names':raw_names,'post_selection_value_enabled':True,'post_selection_value_mode':'endpoint_potential_quality_future_state_factorization','post_selection_endpoint_feature_names':EPV_NAMES,'post_selection_endpoint_feature_scale':[1.0]*38,'post_selection_endpoint_weights':[0.0]*38,'post_selection_endpoint_bias':0.0,'post_selection_observable_names':obs_names,'post_selection_quality_observable_names':['route_deviation_cost','progress_deficit_cost','global_comfort_cost'],'post_selection_quality_observable_scale':[1.0]*3,'post_selection_quality_observable_weights':[0.0]*3,'post_selection_future_response_observable_names':rn,'post_selection_future_response_scales':[1.0,1.0],'post_selection_future_response_weights':[1.0,2.0]}
++    raw=np.zeros((2,len(raw_names)));sup=np.zeros(2);X=np.zeros((2,19));mu=np.zeros(2);obs=np.zeros((2,len(obs_names)))
++    obs[0,obs_names.index(rn[0])]=2.;obs[1,obs_names.index(rn[0])]=.5;obs[0,obs_names.index(rn[1])]=1.;obs[1,obs_names.index(rn[1])]=.75
++    v,feat,names=_icer_post_selection_value(1,mu,X,feature_names,sc,raw_feat=raw,raw_feature_names=raw_names,support_logits=sup,legacy_action=0,value_observable_matrix=obs,value_observable_names=obs_names)
++    assert v==pytest.approx(2.0);assert feat.shape[0]==43;assert names[-2].endswith(rn[0]) and names[-1].endswith(rn[1])
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/tools/build_v64_3_47_future_state_supervision.py	2026-08-26 04:58:44.396860756 +0000
+@@ -0,0 +1,196 @@
++from __future__ import annotations
++
++"""TRAIN-only nuisance supervision for V64.3.47 FSFR.
++
++Produces two disjoint supervision tables:
++- agent-local lateral response drift from logged agent future;
++- candidate demo/reference component from logged ego future.
++
++Neither table contains teacher total cost, teacher improvement, selected action,
++or outer-test deployment outputs.  Logged future is never consumed by runtime.
++"""
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.data.cache_schema import CandidateBank, Sample, load_sample_npz
++from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
++from bdse.planner.future_state_factorization import (
++    EGO_REFERENCE_FEATURE_NAMES,
++    ego_reference_candidate_features,
++    logged_demo_component_targets,
++    logged_lateral_drift_target,
++)
++from bdse.planner.interaction_response_field import (
++    RESPONSE_FIELD_LOCAL_FEATURE_NAMES,
++    RESPONSE_FIELD_PLAN_FEATURE_NAMES,
++    response_field_local_agent_features,
++    response_field_plan_agent_features,
++)
++
++
++def _load_tokens(path: str | Path) -> list[str]:
++    vals = [x.strip() for x in Path(path).read_text().splitlines() if x.strip()]
++    if len(vals) != len(set(vals)):
++        raise ValueError("V47 token file contains duplicates")
++    return vals
++
++
++def _logged_ego_bank(sample: Sample) -> CandidateBank | None:
++    if sample.label_future is None:
++        return None
++    ego = np.asarray(sample.label_future.logged_ego, dtype=np.float32)
++    if ego.ndim != 2 or ego.shape[0] <= 0 or ego.shape[1] < 4 or not np.all(np.isfinite(ego[:, :4])):
++        return None
++    return CandidateBank(
++        trajectories=ego[None, :, :],
++        valid_mask=np.asarray([True], dtype=bool),
++        maneuver_ids=np.asarray([0], dtype=np.int64),
++        theta=[{}], dynamic_flags=[{}], metadata=[{"source": "V47_TRAIN_logged_ego_plan_features_only"}],
++    )
++
++
++def _agent_rows(sample: Sample, cfg: dict[str, Any]) -> list[dict[str, Any]]:
++    if sample.label_future is None:
++        return []
++    bank = _logged_ego_bank(sample)
++    if bank is None:
++        return []
++    logged = np.asarray(sample.label_future.logged_agents, dtype=np.float64)
++    lvalid = np.asarray(sample.label_future.agent_valid, dtype=bool).reshape(-1)
++    rvalid = np.asarray(sample.runtime.agent_valid, dtype=bool).reshape(-1)
++    cur = np.asarray(sample.runtime.current_agents, dtype=np.float64)
++    if logged.ndim != 3 or logged.shape[0] <= 0 or logged.shape[1] <= 0:
++        return []
++    n = min(logged.shape[0], lvalid.size, rvalid.size, len(cur))
++    local = response_field_local_agent_features(sample.runtime, cfg)
++    plan, exposure = response_field_plan_agent_features(sample.runtime, bank, cfg)
++    out: list[dict[str, Any]] = []
++    for j in range(n):
++        if not (lvalid[j] and rvalid[j]):
++            continue
++        gt = logged[j, :, :2]
++        if gt.size == 0 or not np.any(np.isfinite(gt)):
++            continue
++        target = logged_lateral_drift_target(sample.runtime, logged, j, cfg)
++        lf = np.asarray(local[j], dtype=np.float64)
++        pf = np.asarray(plan[0, j], dtype=np.float64)
++        if not (np.all(np.isfinite(lf)) and np.all(np.isfinite(pf)) and np.isfinite(target)):
++            continue
++        out.append({
++            "scenario_token": str(sample.scenario_token),
++            "agent_index": int(j),
++            "target_lateral_drift_mps": float(target),
++            "local_feature_names": list(RESPONSE_FIELD_LOCAL_FEATURE_NAMES),
++            "local_features": [float(x) for x in lf],
++            "plan_feature_names": list(RESPONSE_FIELD_PLAN_FEATURE_NAMES),
++            "plan_features_logged_ego": [float(x) for x in pf],
++            "logged_ego_interaction_exposure": float(exposure[0, j]),
++            "supervision_source": "TRAIN_logged_agent_future_lateral_drift_only",
++        })
++    return out
++
++
++def _ego_rows(sample: Sample, cfg: dict[str, Any]) -> list[dict[str, Any]]:
++    if sample.label_future is None:
++        return []
++    features = ego_reference_candidate_features(sample.runtime, sample.candidates, cfg)
++    target = logged_demo_component_targets(sample.runtime, sample.label_future.logged_ego, sample.candidates, cfg)
++    tcfg = cfg.get("teacher", {}) if isinstance(cfg, dict) else {}
++    w = float(tcfg.get("demo_weight", 1.0)) / max(float(tcfg.get("demo_scale", 120.0)), 1.0e-6)
++    out: list[dict[str, Any]] = []
++    valid = np.asarray(sample.candidates.valid_mask, dtype=bool).reshape(-1)
++    for a in range(int(sample.candidates.K)):
++        if a >= len(valid) or not valid[a]:
++            continue
++        x = np.asarray(features[a], dtype=np.float64)
++        y = float(target[a])
++        if not (np.all(np.isfinite(x)) and np.isfinite(y)):
++            continue
++        out.append({
++            "scenario_token": str(sample.scenario_token),
++            "action": int(a),
++            "feature_names": list(EGO_REFERENCE_FEATURE_NAMES),
++            "features": [float(z) for z in x],
++            "target_demo_component": y,
++            "cv_demo_proxy": float(max(x[0] * w, 0.0)),
++            "supervision_source": "TRAIN_logged_ego_future_demo_component_only",
++        })
++    return out
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--preprocessed-dir", required=True)
++    ap.add_argument("--split", default="train")
++    ap.add_argument("--scenario-token-file", required=True)
++    ap.add_argument("--base-config", required=True)
++    ap.add_argument("--output-agent", required=True)
++    ap.add_argument("--output-ego", required=True)
++    ap.add_argument("--output-audit", required=True)
++    a = ap.parse_args()
++    cfg = yaml.safe_load(Path(a.base_config).read_text())
++    tokens = _load_tokens(a.scenario_token_file); want = set(tokens)
++    if len(tokens) != 3000:
++        raise SystemExit(f"STOP V47 DATA: expected frozen 3000 TRAIN tokens, got {len(tokens)}")
++    ds = PreprocessedBDSEDataset(a.preprocessed_dir, split=a.split, scenario_tokens=want)
++    paths = ds.build_index(); bytok: dict[str, Path] = {}
++    for p in paths:
++        try:
++            with np.load(p, allow_pickle=True) as z:
++                tok = str(z["scenario_token"].item() if z["scenario_token"].shape == () else z["scenario_token"].reshape(-1)[0])
++        except Exception:
++            continue
++        if tok in want:
++            bytok[tok] = Path(p)
++    missing = want - set(bytok)
++    if missing:
++        raise SystemExit(f"STOP V47 DATA: cache missing {len(missing)} frozen TRAIN tokens")
++
++    ar: list[dict[str, Any]] = []; er: list[dict[str, Any]] = []
++    agent_scenes = ego_scenes = 0
++    for tok in tokens:
++        s = load_sample_npz(bytok[tok], include_label_future=True, include_candidate_metadata=False, include_evidence_aux_metadata=False)
++        aa = _agent_rows(s, cfg); ee = _ego_rows(s, cfg)
++        if aa: agent_scenes += 1; ar.extend(aa)
++        if ee: ego_scenes += 1; er.extend(ee)
++    if agent_scenes < 512 or len(ar) < 4096:
++        raise SystemExit(f"STOP V47 DATA: lateral supervision only {agent_scenes} scenes/{len(ar)} rows")
++    if ego_scenes < 512 or len(er) < 4096:
++        raise SystemExit(f"STOP V47 DATA: ego-reference supervision only {ego_scenes} scenes/{len(er)} rows")
++    pa, pe = Path(a.output_agent), Path(a.output_ego)
++    pa.parent.mkdir(parents=True, exist_ok=True); pe.parent.mkdir(parents=True, exist_ok=True)
++    with pa.open("w") as f:
++        for r in ar: f.write(json.dumps(r, sort_keys=True) + "\n")
++    with pe.open("w") as f:
++        for r in er: f.write(json.dumps(r, sort_keys=True) + "\n")
++    lat = np.asarray([r["target_lateral_drift_mps"] for r in ar], dtype=np.float64)
++    demo = np.asarray([r["target_demo_component"] for r in er], dtype=np.float64)
++    proxy = np.asarray([r["cv_demo_proxy"] for r in er], dtype=np.float64)
++    audit = {
++        "audit": "v64_3_47_future_state_supervision",
++        "requested_tokens": len(tokens),
++        "agent_supervised_scenes": agent_scenes,
++        "agent_rows": len(ar),
++        "ego_supervised_scenes": ego_scenes,
++        "ego_candidate_rows": len(er),
++        "lateral_target_mean_mps": float(np.mean(lat)),
++        "lateral_target_rms_mps": float(np.sqrt(np.mean(lat * lat))),
++        "demo_component_mean": float(np.mean(demo)),
++        "cv_demo_proxy_mean": float(np.mean(proxy)),
++        "deployment_uses_logged_future": False,
++        "uses_teacher_total_or_improvement": False,
++        "agent_target_uses_logged_agent_future_only": True,
++        "ego_target_uses_logged_ego_future_demo_component_only": True,
++    }
++    Path(a.output_audit).write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
++    print(json.dumps(audit, indent=2, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/tools/build_v64_3_47_crossfit_future_state_observables.py	2026-08-26 04:59:22.988317842 +0000
+@@ -0,0 +1,196 @@
++from __future__ import annotations
++
++"""Honest cross-fit V47 FSFR nuisance models and runtime-only observables."""
++
++import argparse
++import copy
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.data.cache_schema import load_sample_npz
++from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
++from bdse.planner.future_state_factorization import (
++    EGO_REFERENCE_FEATURE_NAMES,
++    FSFR_OBSERVABLE_NAMES,
++    runtime_future_state_factorization_observable_costs,
++)
++from bdse.planner.interaction_response_field import RESPONSE_FIELD_LOCAL_FEATURE_NAMES, RESPONSE_FIELD_PLAN_FEATURE_NAMES
++from bdse.tools.build_v64_3_45_crossfit_response_observables import (
++    _fit as _fit_mean,
++    _read as _read_v45_supervision,
++    _scene_weights,
++    _weighted_scale,
++)
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import FOLDS, RIDGE_LAMBDA, _fold
++
++EPS = 1.0e-12
++
++
++def _read_jsonl(path: Path) -> list[dict[str, Any]]:
++    out=[]
++    for line in path.read_text().splitlines():
++        if line.strip(): out.append(json.loads(line))
++    return out
++
++
++def _fit_ridge(X: np.ndarray, y: np.ndarray, w: np.ndarray, bias: bool=True) -> tuple[np.ndarray,np.ndarray,float]:
++    scale=_weighted_scale(X,w); Z=X/scale[None,:]
++    A=np.concatenate([Z,np.ones((len(Z),1),dtype=np.float64)],axis=1) if bias else Z
++    sw=np.sqrt(np.maximum(w,0.0)); Aw=A*sw[:,None]; yw=y*sw
++    reg=np.eye(A.shape[1],dtype=np.float64)*RIDGE_LAMBDA
++    if bias: reg[-1,-1]=0.0
++    coef=np.linalg.solve(Aw.T@Aw+reg,Aw.T@yw)
++    return (scale,coef[:-1],float(coef[-1])) if bias else (scale,coef,0.0)
++
++
++def _fit_lateral(rows: list[dict[str,Any]]) -> dict[str,Any]:
++    Xl=np.asarray([r['local_features'] for r in rows],dtype=np.float64)
++    Xp=np.asarray([r['plan_features_logged_ego'] for r in rows],dtype=np.float64)
++    y=np.asarray([r['target_lateral_drift_mps'] for r in rows],dtype=np.float64)
++    sw=_scene_weights(rows)
++    ls,lw,lb=_fit_ridge(Xl,y,sw,True)
++    local=Xl/np.maximum(ls[None,:],1e-6)@lw+lb
++    resid=y-local
++    exposure=np.maximum(np.asarray([r['logged_ego_interaction_exposure'] for r in rows],dtype=np.float64),0.0)
++    toks=[str(r['scenario_token']) for r in rows]; sums={}
++    for t,e in zip(toks,exposure): sums[t]=sums.get(t,0.0)+float(e)
++    pw_scene=np.asarray([sw[i]*(exposure[i]/max(sums[toks[i]],EPS) if sums[toks[i]]>EPS else 0.0) for i in range(len(rows))],dtype=np.float64)
++    if float(pw_scene.sum())<=EPS:
++        ps=np.ones((Xp.shape[1],),dtype=np.float64); pw=np.zeros((Xp.shape[1],),dtype=np.float64)
++    else:
++        ps,pw,_=_fit_ridge(Xp,resid,pw_scene,False)
++    return {
++        'enabled':True,'model':'agent_local_plan_conditioned_lateral_drift_field','lambda':RIDGE_LAMBDA,
++        'local_feature_names':list(RESPONSE_FIELD_LOCAL_FEATURE_NAMES),'local_feature_scale':ls,'local_weights':lw,'local_bias':lb,
++        'plan_enabled':True,'plan_feature_names':list(RESPONSE_FIELD_PLAN_FEATURE_NAMES),'plan_feature_scale':ps,'plan_weights':pw,'plan_bias':0.0,
++    }
++
++
++def _predict_lateral_rows(rows: list[dict[str,Any]],m: dict[str,Any]) -> tuple[np.ndarray,np.ndarray,np.ndarray]:
++    Xl=np.asarray([r['local_features'] for r in rows],dtype=np.float64); Xp=np.asarray([r['plan_features_logged_ego'] for r in rows],dtype=np.float64)
++    y=np.asarray([r['target_lateral_drift_mps'] for r in rows],dtype=np.float64)
++    local=Xl/np.maximum(np.asarray(m['local_feature_scale'])[None,:],1e-6)@np.asarray(m['local_weights'])+float(m['local_bias'])
++    plan=local+Xp/np.maximum(np.asarray(m['plan_feature_scale'])[None,:],1e-6)@np.asarray(m['plan_weights'])
++    return y,local,plan
++
++
++def _fit_ego(rows: list[dict[str,Any]]) -> dict[str,Any]:
++    X=np.asarray([r['features'] for r in rows],dtype=np.float64); y=np.asarray([r['target_demo_component'] for r in rows],dtype=np.float64); w=_scene_weights(rows)
++    s,coef,b=_fit_ridge(X,y,w,True)
++    return {'enabled':True,'model':'runtime_predictable_ego_future_reference_cost','lambda':RIDGE_LAMBDA,'feature_names':list(EGO_REFERENCE_FEATURE_NAMES),'feature_scale':s,'weights':coef,'bias':b}
++
++
++def _predict_ego_rows(rows: list[dict[str,Any]],m: dict[str,Any]) -> tuple[np.ndarray,np.ndarray,np.ndarray]:
++    X=np.asarray([r['features'] for r in rows],dtype=np.float64); y=np.asarray([r['target_demo_component'] for r in rows],dtype=np.float64)
++    base=np.asarray([r['cv_demo_proxy'] for r in rows],dtype=np.float64)
++    pred=np.maximum(0.0,X/np.maximum(np.asarray(m['feature_scale'])[None,:],1e-6)@np.asarray(m['weights'])+float(m['bias']))
++    return y,base,pred
++
++
++def _scene_equal_mse(rows: list[dict[str,Any]],y: np.ndarray,p: np.ndarray) -> float:
++    by={}
++    for r,z in zip(rows,(y-p)**2): by.setdefault(str(r['scenario_token']),[]).append(float(z))
++    return float(np.mean([np.mean(v) for v in by.values()])) if by else float('nan')
++
++
++def _serial(x: Any) -> Any:
++    if isinstance(x,np.ndarray): return x.tolist()
++    if isinstance(x,dict): return {k:_serial(v) for k,v in x.items()}
++    if isinstance(x,list): return [_serial(v) for v in x]
++    return x
++
++
++def _cfg_with_models(base: dict[str,Any],mean: dict[str,Any],lat: dict[str,Any],ego: dict[str,Any]) -> dict[str,Any]:
++    c=copy.deepcopy(base)
++    ic=c.setdefault('runtime',{}).setdefault('decisive_frontier_value',{}).setdefault('incumbent_contrastive_extremal_recovery',{})
++    ic['instrument_value_observables']=True; ic['instrument_interaction_response_field_observables']=True; ic['instrument_future_state_factorization_observables']=True
++    sc=ic.setdefault('selection_conditioned_intervention_recovery',{})
++    sc['interaction_response_field']=_serial(mean)
++    sc['future_state_factorization']={'agent_lateral_response':_serial(lat),'ego_reference_model':_serial(ego)}
++    return c
++
++
++def _read_v45_plan(path: Path) -> dict[str,np.ndarray]:
++    out={}
++    for line in path.read_text().splitlines():
++        if not line.strip(): continue
++        r=json.loads(line); c=np.asarray(r['costs'],dtype=np.float64)
++        if c.ndim!=2 or c.shape[1]!=3: raise ValueError('V47 V45 sidecar schema mismatch')
++        out[str(r['scenario_token'])]=c[:,2]
++    return out
++
++
++def main() -> None:
++    ap=argparse.ArgumentParser()
++    ap.add_argument('--agent-supervision',required=True); ap.add_argument('--ego-supervision',required=True)
++    ap.add_argument('--v45-supervision',required=True); ap.add_argument('--v45-sidecar',required=True); ap.add_argument('--v45-response-report',required=True)
++    ap.add_argument('--preprocessed-dir',required=True); ap.add_argument('--split',default='train'); ap.add_argument('--scenario-token-file',required=True); ap.add_argument('--base-config',required=True)
++    ap.add_argument('--output-sidecar',required=True); ap.add_argument('--output-model',required=True); ap.add_argument('--output-report',required=True)
++    a=ap.parse_args()
++    agent=_read_jsonl(Path(a.agent_supervision)); ego=_read_jsonl(Path(a.ego_supervision)); v45rows=_read_v45_supervision(Path(a.v45_supervision)); v45side=_read_v45_plan(Path(a.v45_sidecar))
++    if len(agent)<4096 or len(ego)<4096: raise SystemExit('STOP V47 DATA: insufficient future-state supervision')
++    for r in agent:
++        if r.get('local_feature_names')!=RESPONSE_FIELD_LOCAL_FEATURE_NAMES or r.get('plan_feature_names')!=RESPONSE_FIELD_PLAN_FEATURE_NAMES: raise SystemExit('STOP V47 DATA: lateral schema mismatch')
++    for r in ego:
++        if r.get('feature_names')!=EGO_REFERENCE_FEATURE_NAMES: raise SystemExit('STOP V47 DATA: ego-reference schema mismatch')
++    rr=json.loads(Path(a.v45_response_report).read_text()); ag=rr.get('aggregate',{}); exp=(.30137842796229286,.12486025654085724,.12385468573917016); got=(float(ag.get('cv_mse',-1)),float(ag.get('local_mse',-1)),float(ag.get('plan_mse',-1)))
++    if any(abs(x-y)>1e-12 for x,y in zip(got,exp)) or not bool(rr.get('plan_response_identified',False)): raise SystemExit(f'STOP V47 prerequisite V45 response changed {got}')
++    tokens=[x.strip() for x in Path(a.scenario_token_file).read_text().splitlines() if x.strip()]; want=set(tokens)
++    if len(tokens)!=3000 or len(want)!=3000: raise SystemExit('STOP V47 DATA: frozen TRAIN changed')
++    base=yaml.safe_load(Path(a.base_config).read_text())
++    by_agent={k:[] for k in range(FOLDS)}; by_ego={k:[] for k in range(FOLDS)}
++    for r in agent:
++        if str(r['scenario_token']) in want: by_agent[_fold(str(r['scenario_token']))].append(r)
++    for r in ego:
++        if str(r['scenario_token']) in want: by_ego[_fold(str(r['scenario_token']))].append(r)
++    mean_models={}; lat_models={}; ego_models={}; fd=[]
++    for k in range(FOLDS):
++        cf=(k+1)%FOLDS
++        fitv=[r for r in v45rows if str(r['scenario_token']) in want and _fold(str(r['scenario_token'])) not in {k,cf}]
++        fita=[r for r in agent if str(r['scenario_token']) in want and _fold(str(r['scenario_token'])) not in {k,cf}]
++        fite=[r for r in ego if str(r['scenario_token']) in want and _fold(str(r['scenario_token'])) not in {k,cf}]
++        mm=_fit_mean(fitv); lm=_fit_lateral(fita); em=_fit_ego(fite)
++        mean_models[k]=mm; lat_models[k]=lm; ego_models[k]=em
++        ya,z,lp=_predict_lateral_rows(by_agent[k],lm); ye,bp,ep=_predict_ego_rows(by_ego[k],em)
++        z0=np.zeros_like(ya)
++        z_m=_scene_equal_mse(by_agent[k],ya,z0); l_m=_scene_equal_mse(by_agent[k],ya,z); p_m=_scene_equal_mse(by_agent[k],ya,lp)
++        b_m=_scene_equal_mse(by_ego[k],ye,bp); e_m=_scene_equal_mse(by_ego[k],ye,ep)
++        fd.append({'fold':k,'fit_agent_rows':len(fita),'test_agent_rows':len(by_agent[k]),'fit_ego_rows':len(fite),'test_ego_rows':len(by_ego[k]),
++                   'lateral_zero_mse':z_m,'lateral_local_mse':l_m,'lateral_plan_mse':p_m,'lateral_local_better_than_zero':bool(l_m<z_m),'lateral_plan_better_than_local':bool(p_m<l_m),
++                   'ego_cv_proxy_mse':b_m,'ego_reference_mse':e_m,'ego_reference_better_than_cv_proxy':bool(e_m<b_m)})
++    full_mean=_fit_mean([r for r in v45rows if str(r['scenario_token']) in want]); full_lat=_fit_lateral([r for r in agent if str(r['scenario_token']) in want]); full_ego=_fit_ego([r for r in ego if str(r['scenario_token']) in want])
++    ds=PreprocessedBDSEDataset(a.preprocessed_dir,split=a.split,scenario_tokens=want); bytok={}
++    for p in ds.build_index():
++        try:
++            with np.load(p,allow_pickle=True) as z: tok=str(z['scenario_token'].item() if z['scenario_token'].shape==() else z['scenario_token'].reshape(-1)[0])
++        except Exception: continue
++        if tok in want: bytok[tok]=Path(p)
++    miss=want-set(bytok)
++    if miss: raise SystemExit(f'STOP V47 DATA: current cache missing {len(miss)}')
++    out=Path(a.output_sidecar); out.parent.mkdir(parents=True,exist_ok=True); replay=0.0
++    with out.open('w') as f:
++        for tok in tokens:
++            s=load_sample_npz(bytok[tok],include_label_future=False,include_candidate_metadata=False,include_evidence_aux_metadata=False)
++            cfg=_cfg_with_models(base,mean_models[_fold(tok)],lat_models[_fold(tok)],ego_models[_fold(tok)])
++            cost,names=runtime_future_state_factorization_observable_costs(s.runtime,s.candidates,cfg)
++            if names!=FSFR_OBSERVABLE_NAMES or cost.shape!=(s.candidates.K,len(FSFR_OBSERVABLE_NAMES)): raise SystemExit(f'STOP V47 DATA: runtime cost malformed {tok}')
++            if tok not in v45side or v45side[tok].shape[0]!=s.candidates.K: raise SystemExit(f'STOP V47 prerequisite V45 sidecar mismatch {tok}')
++            diff=float(np.max(np.abs(cost[:,0]-v45side[tok]))) if s.candidates.K else 0.0; replay=max(replay,diff)
++            if diff>1e-10: raise SystemExit(f'STOP V47 ENGINEERING: V45 PLAN occupancy replay drift {tok}: {diff}')
++            f.write(json.dumps({'scenario_token':tok,'outer_fold':_fold(tok),'observable_names':names,'costs':cost.tolist()},sort_keys=True)+'\n')
++    agg={k:float(np.mean([d[k] for d in fd])) for k in ['lateral_zero_mse','lateral_local_mse','lateral_plan_mse','ego_cv_proxy_mse','ego_reference_mse']}
++    lc=sum(d['lateral_local_better_than_zero'] for d in fd); pc=sum(d['lateral_plan_better_than_local'] for d in fd); ec=sum(d['ego_reference_better_than_cv_proxy'] for d in fd)
++    report={'audit':'v64_3_47_crossfit_future_state_factorization','folds':fd,'aggregate':agg,
++            'lateral_local_better_fold_count':lc,'lateral_plan_better_fold_count':pc,'ego_reference_better_fold_count':ec,
++            'agent_2d_response_identified':bool(agg['lateral_local_mse']<agg['lateral_zero_mse'] and agg['lateral_plan_mse']<agg['lateral_local_mse'] and lc>=4 and pc>=4),
++            'ego_reference_identified':bool(agg['ego_reference_mse']<agg['ego_cv_proxy_mse'] and ec>=4),
++            'v45_plan_occupancy_exact_replay_max_abs':replay,'deployment_uses_logged_future':False,'uses_teacher_total_or_improvement':False,
++            'full_train_mean_response_model':_serial(full_mean),'full_train_agent_lateral_model':_serial(full_lat),'full_train_ego_reference_model':_serial(full_ego)}
++    Path(a.output_model).write_text(json.dumps({'mean_response_model':_serial(full_mean),'future_state_factorization':{'agent_lateral_response':_serial(full_lat),'ego_reference_model':_serial(full_ego)}},indent=2,sort_keys=True))
++    Path(a.output_report).write_text(json.dumps(report,indent=2,sort_keys=True)); print(json.dumps(report,indent=2,sort_keys=True))
++
++if __name__=='__main__': main()
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/tools/fit_v64_3_47_eaf_icer_fsfr.py	2026-08-26 05:02:13.131484671 +0000
+@@ -0,0 +1,296 @@
++from __future__ import annotations
++
++"""V64.3.47 FSFR nested TRAIN mechanism test.
++
++The RSMR challenger identity, EPV, and V42 QUALITY backbone stay frozen in role.
++V47 only changes which runtime-only future-state nuisance observable is used to
++value the already frozen RSMR proposal.
++"""
++
++import argparse
++import csv
++import json
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import yaml
++
++from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES
++from bdse.planner.value_observables import QUALITY_NAMES, VALUE_OBSERVABLE_NAMES
++from bdse.tools.fit_v64_3_33_eaf_icer_spcr import FOLDS, RIDGE_LAMBDA, _fold, _read_edges, _select
++from bdse.tools.fit_v64_3_34_eaf_icer_rsmr import _fit_regret_structured_margin, _structured_scores
++from bdse.tools.fit_v64_3_38_eaf_icer_davr import CAPTURE_TOL, CATASTROPHE_REDUCTION_MIN, NOOP_REDUCTION_MIN, _value_diag, _write_rsmr
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import _base_cfg, _fit_zero_ridge, _pred as _epv_pred
++from bdse.tools.fit_v64_3_43_eaf_icer_cfrv import _fit_weighted_zero_ridge, _gate, _metrics, _quality_value, _quality_x, _scene as _v43_scene, _write_quality_control
++
++ALL_OBSERVABLE_NAMES = list(VALUE_OBSERVABLE_NAMES) + list(FSFR_OBSERVABLE_NAMES)
++ARM_FEATURES = {
++    "plan_control": ["fsfr_plan_1d_occupancy_cost"],
++    "agent_2d": ["fsfr_plan_2d_occupancy_cost"],
++    "ego_ref": ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"],
++    "fsfr_joint": ["fsfr_plan_2d_occupancy_cost", "fsfr_predicted_demo_cost"],
++}
++
++
++def _read_sidecar(path: Path) -> dict[str, np.ndarray]:
++    out: dict[str, np.ndarray] = {}
++    for line in path.read_text().splitlines():
++        if not line.strip():
++            continue
++        r = json.loads(line)
++        t = str(r["scenario_token"])
++        names = [str(x) for x in r["observable_names"]]
++        if names != FSFR_OBSERVABLE_NAMES:
++            raise ValueError(f"V47 FSFR sidecar schema mismatch {t}: {names}")
++        c = np.asarray(r["costs"], dtype=np.float64)
++        if c.ndim != 2 or c.shape[1] != len(FSFR_OBSERVABLE_NAMES) or not np.all(np.isfinite(c)):
++            raise ValueError(f"V47 FSFR invalid sidecar costs {t}")
++        if t in out:
++            raise ValueError(f"duplicate V47 FSFR sidecar {t}")
++        out[t] = c
++    return out
++
++
++def _scene(groups: dict[str, list[dict[str, Any]]], side: dict[str, np.ndarray]) -> dict[str, list[dict[str, Any]]]:
++    base = _v43_scene(groups)
++    out: dict[str, list[dict[str, Any]]] = {}
++    for t, ss in base.items():
++        if t not in side:
++            raise ValueError(f"V47 sidecar missing {t}")
++        c = side[t]
++        inc = int(groups[t][0].get("raw_top_action", -1))
++        if not (0 <= inc < len(c)):
++            raise ValueError(f"V47 incumbent out of sidecar range {t}")
++        rr: list[dict[str, Any]] = []
++        for a in ss:
++            act = int(a["action"])
++            if not (0 <= act < len(c)):
++                raise ValueError(f"V47 action out of sidecar range {t}/{act}")
++            z = dict(a)
++            for j, n in enumerate(FSFR_OBSERVABLE_NAMES):
++                z[n + "_improvement"] = float(c[inc, j] - c[act, j])
++            rr.append(z)
++        out[t] = rr
++    return out
++
++
++def _rx(a: dict[str, Any], names: list[str]) -> np.ndarray:
++    return np.asarray([float(a[n + "_improvement"]) for n in names], dtype=np.float64)
++
++
++def _rval(a: dict[str, Any], epv: dict[str, Any], q: dict[str, Any], r: dict[str, Any], names: list[str]) -> float:
++    base = _quality_value(a, epv, q)
++    x = _rx(a, names)
++    return float(np.clip(base + (x / np.maximum(np.asarray(r["scale"]), 1.0e-6)) @ np.asarray(r["weights"]), -40.0, 40.0))
++
++
++def _sig(d: dict[str, Any]) -> tuple[Any, Any, Any, Any, float]:
++    return (
++        d.get("selected_count"), d.get("selected_positive_count"),
++        d.get("no_positive_opportunity_false_intervention_count"), d.get("catastrophic_count"),
++        float(d.get("teacher_improvement_sum", float("nan"))),
++    )
++
++
++def _check_v46(path: Path) -> None:
++    r = json.loads(path.read_text())
++    n = r.get("nested_crossfit", {})
++    exp = {
++        "rsmr_rank_aggregate": (502, 221, 107, 28, 43.29405361274824),
++        "quality_control_aggregate": (205, 129, 30, 13, 43.905547394411805),
++        "v45_plan_control_aggregate": (217, 121, 38, 9, 56.55117310290402),
++        "distribution_mean_aggregate": (216, 118, 39, 9, 57.52557473140379),
++        "temporal_profile_aggregate": (217, 119, 41, 14, 51.26324847539882),
++        "dirp_joint_aggregate": (207, 115, 39, 12, 55.30307441748546),
++    }
++    for k, e in exp.items():
++        g = _sig(n.get(k, {}))
++        if any(g[i] != e[i] for i in range(4)) or abs(g[4] - e[4]) > 1.0e-9:
++            raise RuntimeError(f"V47 ENGINEERING STOP: V46 signature mismatch {k}: {g}")
++    if r.get("train_gate_pass") is not False:
++        raise RuntimeError("V47 ENGINEERING STOP: V46 unexpectedly passed TRAIN gate")
++    if n.get("failure_diagnosis") != "response_second_moment_is_identifiable_but_acceleration_distribution_or_interaction_profile_still_not_absolute_value_sufficient":
++        raise RuntimeError("V47 ENGINEERING STOP: V46 scientific-stop signature changed")
++    if not bool(n.get("distribution_identification", {}).get("identified", False)):
++        raise RuntimeError("V47 ENGINEERING STOP: V46 second-moment identification changed")
++
++
++def _nested(groups: dict[str, list[dict[str, Any]]], side: dict[str, np.ndarray], audit_csv: Path, fs_report: dict[str, Any]) -> dict[str, Any]:
++    scene = _scene(groups, side)
++    arms = ["rsmr", "quality"] + list(ARM_FEATURES)
++    agg = {a: [] for a in arms}; caps = {a: 0 for a in arms}; noops = {a: 0 for a in arms}; oppsels = {a: 0 for a in arms}
++    total_opp = total_noop = 0; folds: list[dict[str, Any]] = []; aud: list[dict[str, Any]] = []; vy: list[float] = []; vp = {a: [] for a in arms}
++    for k in range(FOLDS):
++        test = [t for t in scene if _fold(t) == k]
++        cf = (k + 1) % FOLDS
++        fit = [t for t in scene if _fold(t) not in {k, cf}]
++        cal = [t for t in scene if _fold(t) == cf]
++        rsm = _fit_regret_structured_margin(scene, fit)
++        epv = _fit_zero_ridge(scene, fit, "epv")
++        q = _fit_weighted_zero_ridge(scene, fit, lambda a: float(a["y"]) - _epv_pred(a, epv), _quality_x, QUALITY_NAMES)
++        rs = {
++            arm: _fit_weighted_zero_ridge(scene, fit, lambda a: float(a["y"]) - _quality_value(a, epv, q), lambda a, nn=names: _rx(a, nn), names)
++            for arm, names in ARM_FEATURES.items()
++        }
++        fv = {a: [] for a in arms}; fc = {a: 0 for a in arms}; fn = {a: 0 for a in arms}; fo = {a: 0 for a in arms}
++        opp = noopsc = 0; subset = identity = True
++        for t in test:
++            ss = scene[t]; yy = np.asarray([float(a["y"]) for a in ss]); has = bool(np.any(yy > 0)); opp += int(has); noopsc += int(not has)
++            score = _structured_scores(ss, rsm); idx = _select(ss, score)
++            vals = {a: float("nan") for a in arms}; chosen = {a: None for a in arms}; chosen["rsmr"] = idx
++            if idx is not None:
++                row = ss[idx]; vals["rsmr"] = float(score[idx])
++                qv = _quality_value(row, epv, q); vals["quality"] = qv; chosen["quality"] = idx if qv > 0 else None
++                for arm, names in ARM_FEATURES.items():
++                    v = _rval(row, epv, q, rs[arm], names); vals[arm] = v; chosen[arm] = idx if v > 0 else None
++                vy.append(float(yy[idx])); [vp[n].append(float(vals[n])) for n in arms]
++            subset = subset and all(chosen[n] is None or idx is not None for n in arms if n != "rsmr")
++            identity = identity and all(chosen[n] is None or chosen[n] == idx for n in arms if n != "rsmr")
++            for n, ii in chosen.items():
++                if ii is None: continue
++                v = float(yy[ii]); fv[n].append(v); fc[n] += int(has and v > 0); fn[n] += int(not has); fo[n] += int(has)
++            aud.append({
++                "scenario_token": t, "outer_test_fold": k, "calibration_fold": cf, "candidate_count": len(ss), "positive_opportunity": int(has),
++                "rsm_selected_action": -1 if idx is None else int(ss[idx]["action"]),
++                "rsm_selected_teacher_improvement": float("nan") if idx is None else float(yy[idx]),
++                **{f"{n}_selected_action": -1 if chosen[n] is None else int(ss[chosen[n]]["action"]) for n in arms if n != "rsmr"},
++                **{f"{n}_value": float(vals[n]) for n in arms if n != "rsmr"},
++                **({f"{name}_improvement": float(row[name + "_improvement"]) for name in FSFR_OBSERVABLE_NAMES} if idx is not None else {f"{name}_improvement": float("nan") for name in FSFR_OBSERVABLE_NAMES}),
++            })
++        total_opp += opp; total_noop += noopsc; fd: dict[str, Any] = {}
++        for n in arms:
++            fd[n] = _metrics(fv[n], fc[n], opp, fn[n], fo[n], noopsc); agg[n] += fv[n]; caps[n] += fc[n]; noops[n] += fn[n]; oppsels[n] += fo[n]
++        folds.append({"fold": k, "fit_scenes": len(fit), "value_calibration_scenes": len(cal), "test_scenes": len(test), **{n: fd[n] for n in arms}, "monotone_subset_valid": subset, "frozen_winner_identity_valid": identity})
++    audit_csv.parent.mkdir(parents=True, exist_ok=True)
++    with audit_csv.open("w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=list(aud[0])); w.writeheader(); w.writerows(aud)
++    A = {n: _metrics(agg[n], caps[n], total_opp, noops[n], oppsels[n], total_noop) for n in arms}
++    vd = {n: _value_diag(vy, vp[n]) for n in arms}
++    g = {n: _gate(A[n], A["rsmr"], folds, n) for n in arms if n != "rsmr"}
++    contracts = all(f["monotone_subset_valid"] and f["frozen_winner_identity_valid"] for f in folds)
++    agent_ident = bool(fs_report.get("agent_2d_response_identified", False))
++    ego_ident = bool(fs_report.get("ego_reference_identified", False))
++    promotion = {
++        "agent_2d": bool(g["agent_2d"]["pass"] and agent_ident),
++        "ego_ref": bool(g["ego_ref"]["pass"] and ego_ident),
++        "fsfr_joint": bool(g["fsfr_joint"]["pass"] and agent_ident and ego_ident),
++    }
++    preferred = "agent_2d" if promotion["agent_2d"] else ("ego_ref" if promotion["ego_ref"] else ("fsfr_joint" if promotion["fsfr_joint"] else None))
++    if preferred == "agent_2d": diag = "agent_local_plan_conditioned_2d_trajectory_response_is_sufficient"
++    elif preferred == "ego_ref": diag = "runtime_predictable_ego_future_reference_consequence_is_sufficient"
++    elif preferred == "fsfr_joint": diag = "agent_2d_response_and_ego_reference_consequence_are_jointly_required"
++    elif agent_ident and ego_ident:
++        diag = "future_state_nuisances_are_identifiable_but_absolute_zero_requires_selected_deployment_decision_functional_or_more_general_future_state"
++    elif agent_ident:
++        diag = "agent_2d_response_identified_but_ego_reference_not_identified_and_value_gate_remains_open"
++    elif ego_ident:
++        diag = "ego_reference_identified_but_agent_2d_response_not_identified_and_value_gate_remains_open"
++    else:
++        diag = "v47_future_state_nuisances_not_identified_close_low_order_future_state_factorization"
++    return {
++        "folds": folds, "scene_audit_csv": str(audit_csv),
++        "rsmr_rank_aggregate": A["rsmr"], "quality_control_aggregate": A["quality"],
++        "v45_plan_control_aggregate": A["plan_control"], "agent_2d_aggregate": A["agent_2d"],
++        "ego_reference_aggregate": A["ego_ref"], "fsfr_joint_aggregate": A["fsfr_joint"],
++        "selected_proposal_value_prediction_diagnostics": vd, "gates": g,
++        "future_state_identification": {"agent_2d_response_identified": agent_ident, "ego_reference_identified": ego_ident, "crossfit_report": fs_report},
++        "promotion_eligible": promotion, "preferred_promotion_arm": preferred,
++        "monotone_frozen_winner_contract_valid": contracts,
++        "train_gate_pass": bool(contracts and preferred is not None), "failure_diagnosis": diag,
++    }
++
++
++def _decorate(rsmcfg: dict[str, Any], epv: dict[str, Any], q: dict[str, Any], residual: dict[str, Any], models: dict[str, Any], names: list[str], path: str, version: str) -> None:
++    cfg = yaml.safe_load(yaml.safe_dump(rsmcfg, sort_keys=False))
++    ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    ic["instrument_value_observables"] = True
++    ic["instrument_future_response_observables"] = False
++    ic["instrument_plan_conditioned_response_observables"] = False
++    ic["instrument_interaction_response_field_observables"] = False
++    ic["instrument_distributional_interaction_response_observables"] = False
++    ic["instrument_future_state_factorization_observables"] = True
++    sc = ic["selection_conditioned_intervention_recovery"]
++    fs = models.get("future_state_factorization", {})
++    sc.update({
++        "post_selection_value_enabled": True,
++        "post_selection_value_mode": "endpoint_potential_quality_future_state_factorization",
++        "post_selection_endpoint_feature_names": list(epv["names"]),
++        "post_selection_endpoint_feature_scale": [float(x) for x in epv["scale"]],
++        "post_selection_endpoint_weights": [float(x) for x in epv["weights"]],
++        "post_selection_endpoint_bias": 0.0,
++        "post_selection_observable_names": list(ALL_OBSERVABLE_NAMES),
++        "post_selection_quality_observable_names": list(QUALITY_NAMES),
++        "post_selection_quality_observable_scale": [float(x) for x in q["scale"]],
++        "post_selection_quality_observable_weights": [float(x) for x in q["weights"]],
++        "post_selection_future_response_observable_names": list(names),
++        "post_selection_future_response_scales": [float(x) for x in residual["scale"]],
++        "post_selection_future_response_weights": [float(x) for x in residual["weights"]],
++        "post_selection_selected_bias": 0.0,
++        "interaction_response_field": models["mean_response_model"],
++        "future_state_factorization": fs,
++        "post_selection_value_training": "scene_equal_all_edge_EPV_plus_QUALITY_plus_FSFR_fixed_lambda_1",
++        "post_selection_operator": "freeze_RSMR_winner_then_FSFR_value_accept_same_winner_iff_positive_else_incumbent_no_rerank_no_fallback",
++    })
++    cfg.setdefault("metadata", {})["algorithm_version"] = version
++    cfg.setdefault("provenance", {})["algorithm_version"] = version
++    cfg.setdefault("experiment", {})["name"] = version.lower().replace(".", "_").replace("-", "_")
++    cfg["experiment"]["algorithm"] = version
++    Path(path).write_text(yaml.safe_dump(cfg, sort_keys=False))
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--train-frontier-edges", required=True)
++    ap.add_argument("--fsfr-sidecar", required=True); ap.add_argument("--fsfr-model", required=True); ap.add_argument("--fsfr-report", required=True)
++    ap.add_argument("--v46-fit-report", required=True); ap.add_argument("--base-config", required=True)
++    for n in ["rsmr", "quality", "plan_control", "agent_2d", "ego_ref", "fsfr_joint"]:
++        ap.add_argument(f"--output-{n.replace('_','-')}-config", dest=f"output_{n}_config", required=True)
++    ap.add_argument("--output-report", required=True); ap.add_argument("--output-scene-audit", required=True)
++    a = ap.parse_args()
++
++    _check_v46(Path(a.v46_fit_report))
++    _, groups = _read_edges(Path(a.train_frontier_edges))
++    side = _read_sidecar(Path(a.fsfr_sidecar)); fr = json.loads(Path(a.fsfr_report).read_text())
++    nested = _nested(groups, side, Path(a.output_scene_audit), fr)
++    pc = nested["v45_plan_control_aggregate"]; expected = (217, 121, 38, 9, 56.55117310290402); got = _sig(pc)
++    if any(got[i] != expected[i] for i in range(4)) or abs(got[4] - expected[4]) > 1.0e-9:
++        raise RuntimeError(f"V47 ENGINEERING STOP: V45 PLAN control failed exact replay {got}")
++
++    report = {
++        "audit": "v64_3_47_eaf_icer_fsfr_fit",
++        "scientific_role": "TRAIN_only_future_state_factorization_after_V46_closes_low_order_longitudinal_distribution_and_hand_temporal_profile",
++        "frozen_train_scenes": len(groups), "ridge_lambda": RIDGE_LAMBDA,
++        "mechanism_hypothesis": "V46 shows identifiable longitudinal second moments and temporal features are not deployment-sufficient. V47 independently tests missing 2-D agent response geometry and runtime-predictable ego future reference consequence while freezing RSMR/EPV/QUALITY and V45 longitudinal response mean.",
++        "nested_crossfit": nested, "train_gate_pass": nested["train_gate_pass"],
++        "train_gate_contract": {
++            "V46_failure_signature_is_exact_hard_gate": True,
++            "V45_plan_response_mean_is_retained": True,
++            "RSMR_is_sole_challenger_selector": True,
++            "agent_lateral_and_ego_reference_supervision_are_TRAIN_only_nuisance_targets": True,
++            "teacher_total_or_improvement_not_used_by_future_state_nuisance_models": True,
++            "deployment_uses_no_logged_future": True,
++            "no_selected_translation_CVaR_or_threshold_tuning": True,
++            "capture_tolerance": CAPTURE_TOL, "noop_reduction_min": NOOP_REDUCTION_MIN, "catastrophe_reduction_min": CATASTROPHE_REDUCTION_MIN,
++        },
++    }
++    Path(a.output_report).write_text(json.dumps(report, indent=2, sort_keys=True))
++
++    scene = _scene(groups, side); base = _base_cfg(a.base_config)
++    base["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["instrument_value_observables"] = True
++    rsm = _fit_regret_structured_margin(scene, list(scene)); rsmcfg = _write_rsmr(base, a.output_rsmr_config, rsm); Path(a.output_rsmr_config).write_text(yaml.safe_dump(rsmcfg, sort_keys=False))
++    epv = _fit_zero_ridge(scene, list(scene), "epv")
++    q = _fit_weighted_zero_ridge(scene, list(scene), lambda x: float(x["y"]) - _epv_pred(x, epv), _quality_x, QUALITY_NAMES)
++    _write_quality_control(rsmcfg, epv, q, a.output_quality_config)
++    models = json.loads(Path(a.fsfr_model).read_text())
++    for arm, names in ARM_FEATURES.items():
++        res = _fit_weighted_zero_ridge(scene, list(scene), lambda x: float(x["y"]) - _quality_value(x, epv, q), lambda x, nn=names: _rx(x, nn), names)
++        _decorate(rsmcfg, epv, q, res, models, names, getattr(a, f"output_{arm}_config"), f"V64.3.47-EAF-ICER-FSFR-{arm.upper()}")
++
++    print(json.dumps({"pass": nested["train_gate_pass"], "preferred_promotion_arm": nested["preferred_promotion_arm"], "failure_diagnosis": nested["failure_diagnosis"]}, sort_keys=True))
++    if not nested["train_gate_pass"]:
++        raise SystemExit(f"V64.3.47 FSFR nested TRAIN gate failed ({nested['failure_diagnosis']}); STOP before fresh selection")
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/tools/check_v64_3_47_eaf_icer_fsfr_split.py	2026-08-26 05:03:16.599496070 +0000
+@@ -0,0 +1,31 @@
++from __future__ import annotations
++import argparse, json, math
++from pathlib import Path
++from bdse.tools.check_v64_3_39_eaf_icer_cfsr_split import (
++    EPS, _containment, _f, _icer_edge_diag, _load_rows, _mechanism_gate,
++    _metric_pack, _query_diag, _replacement_tail_diag, _selected_policy_diag, _structural,
++)
++
++TAGS=['raw','v20','preserve','rsmr','quality','plan_control','agent_2d','ego_ref','fsfr_joint']
++VALUE_TAGS=['quality','plan_control','agent_2d','ego_ref','fsfr_joint']
++
++
++def main():
++    ap=argparse.ArgumentParser();ap.add_argument('--split-name',required=True);ap.add_argument('--preferred-arm',required=True,choices=['agent_2d','ego_ref','fsfr_joint'])
++    for t in TAGS:
++        x=t.replace('_','-');ap.add_argument(f'--{x}-metrics',dest=t+'_metrics',required=True);ap.add_argument(f'--{x}-rows',dest=t+'_rows',required=True)
++        if t!='raw': ap.add_argument(f'--{x}-edges',dest=t+'_edges',required=True)
++    ap.add_argument('--output',required=True);a=ap.parse_args()
++    metrics={t:json.load(open(getattr(a,t+'_metrics'))) for t in TAGS};rows={t:_load_rows(getattr(a,t+'_rows')) for t in TAGS};toks=set(rows['raw'])
++    if len(toks)!=500 or any(set(rows[t])!=toks for t in TAGS[1:]): raise SystemExit('STOP DATA: V47 arms must contain exact paired 500 scenes')
++    flagged={t for t in toks if _f(rows['raw'][t],'all_actions_safety_flagged_rate',0)>=.5};safe=toks-flagged
++    q={t:_query_diag(rows['v20'],rows[t],toks) for t in TAGS[2:]};struct={t:_structural(rows[t],rows['raw'],flagged) for t in ['v20']+TAGS[2:]};cont={t:_containment(rows['rsmr'],rows[t],safe) for t in VALUE_TAGS}
++    eng=(all(v['all_query_counts_exact_scene_parity'] for v in q.values()) and all((not flagged) or (struct[t]['final_identity_vs_raw']==1.0 and struct[t]['icer_structural_delegation_rate']==1.0) for t in TAGS[2:]) and all(x['monotone_selected_policy_containment_valid'] for x in cont.values()))
++    edge={t:_icer_edge_diag(Path(getattr(a,t+'_edges')),safe) for t in TAGS if t!='raw'};policy={t:_selected_policy_diag(getattr(a,t+'_edges'),safe) for t in ['rsmr']+VALUE_TAGS};g={t:_mechanism_gate(policy[t],policy['rsmr']) for t in VALUE_TAGS};M={t:_metric_pack(metrics[t]) for t in TAGS};tail={t:_replacement_tail_diag(rows['raw'],rows[t],getattr(a,t+'_edges'),safe) for t in TAGS if t!='raw'}
++    arm=a.preferred_arm;pc=float(edge['preserve']['direct_incumbent_opportunity_capture_rate']);mc=float(edge[arm]['direct_incumbent_opportunity_capture_rate']);coverage=math.isfinite(pc) and math.isfinite(mc) and mc>=pc+.03-EPS
++    endpoint=(M[arm]['match']>=M['preserve']['match']-.002 and M[arm]['regret']<=M['preserve']['regret']*1.005 and M[arm]['match']>=M['v20']['match']-.002 and M[arm]['regret']<=M['v20']['regret']*1.005)
++    full=bool(eng and g[arm]['pass'] and coverage and endpoint)
++    rep={'audit':'v64_3_47_eaf_icer_fsfr_split','split_name':a.split_name,'preferred_arm':arm,'full_split_pass':full,'engineering_valid':eng,'mechanism_gates':g,'preferred_capture_gain_over_preserve':mc-pc if math.isfinite(mc) and math.isfinite(pc) else float('nan'),'endpoint_noninferior':endpoint,'query_parity':q,'structural':struct,'containment':cont,'edge_diagnostics':edge,'selected_policy_diagnostics':policy,'direct_selected_path_tail':tail,'metrics':M,'frozen_contract':{'RSMR_winner_frozen':True,'V42_QUALITY_frozen':True,'V44_ungated_occupancy_support_retained':True,'V45_longitudinal_response_mean_retained':True,'V46_distribution_and_hand_temporal_profile_not_resurrected':True,'FSFR_runtime_no_logged_future':True,'no_selected_translation_CVaR_or_threshold_tuning':True,'no_second_best_fallback':True,'no_AB_pooling':True}}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n');print(json.dumps(rep,indent=2,sort_keys=True))
++
++if __name__=='__main__': main()
+--- /dev/null	2026-08-26 04:49:12.757773841 +0000
++++ /mnt/data/bdse_v64_3_47_eaf_icer_fsfr/bdse/tools/check_v64_3_47_eaf_icer_fsfr_screen.py	2026-08-26 05:03:16.600274127 +0000
+@@ -0,0 +1,10 @@
++from __future__ import annotations
++import argparse,json
++from pathlib import Path
++
++def main():
++    ap=argparse.ArgumentParser();ap.add_argument('--split-a',required=True);ap.add_argument('--split-b',required=True);ap.add_argument('--fit-report',required=True);ap.add_argument('--output',required=True);a=ap.parse_args()
++    A=json.load(open(a.split_a));B=json.load(open(a.split_b));F=json.load(open(a.fit_report));pa=bool(A.get('full_split_pass'));pb=bool(B.get('full_split_pass'));same=A.get('preferred_arm')==B.get('preferred_arm')==F.get('nested_crossfit',{}).get('preferred_promotion_arm');ok=bool(pa and pb and same and F.get('train_gate_pass'))
++    rep={'audit':'v64_3_47_eaf_icer_fsfr_double_fresh','pass':ok,'split_A_pass':pa,'split_B_pass':pb,'preferred_arm':F.get('nested_crossfit',{}).get('preferred_promotion_arm'),'same_preregistered_arm_on_both_splits':same,'next_action':'freeze_V47_and_run_full_validation_plus_official_closed_loop' if ok else 'STOP_no_promotion_do_not_pool_A_B_or_tune'}
++    Path(a.output).write_text(json.dumps(rep,indent=2,sort_keys=True)+'\n');print(json.dumps(rep,indent=2,sort_keys=True))
++if __name__=='__main__': main()
