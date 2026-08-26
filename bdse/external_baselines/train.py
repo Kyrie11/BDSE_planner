@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import inspect
+import importlib
 import json
 import math
 import os
@@ -344,6 +345,86 @@ def validation_open_loop(
     return {f"val_{k}": float(v) for k, v in out.items() if isinstance(v, (int, float, np.floating))}
 
 
+
+def _startup_training_preflight(
+    *,
+    model: torch.nn.Module,
+    dataset: ExternalBaselineDataset,
+    cfg: dict[str, Any],
+    device: torch.device,
+    amp: bool,
+    sample_count: int,
+    variant: str,
+    budget: int,
+) -> None:
+    """Fail fast on cache/shape/model-contract problems before a long two-GPU run.
+
+    This is deliberately eager (uncompiled) and does not step an optimizer, so it
+    cannot change training semantics.  It catches the common failure modes that
+    previously surfaced only as the wrapper's generic ``FAILED: <model>`` line:
+    missing expert futures/teacher proposal labels, heterogeneous tensor shapes,
+    invalid candidate targets, and GameFormer/DTPP forward/backward shape errors.
+    """
+    n = min(max(int(sample_count), 0), len(dataset))
+    if n <= 0:
+        return
+    print(
+        f"[train-preflight-start] variant={variant} B={budget} samples={n} device={device}",
+        flush=True,
+    )
+    was_training = model.training
+    cpu_rng_state = torch.random.get_rng_state()
+    cuda_rng_states = torch.cuda.get_rng_state_all() if device.type == "cuda" else None
+    try:
+        samples = [dataset[i] for i in range(n)]
+        batch = collate(samples, cfg)
+        batch = {k: v.to(device, non_blocking=False) for k, v in batch.items()}
+        model.train()
+        model.zero_grad(set_to_none=True)
+        with _amp_context(device, amp):
+            out = model(batch)
+            losses = compute_external_baseline_losses(out, batch, cfg)
+            loss = losses["loss"]
+        if not bool(torch.isfinite(loss.detach()).item()):
+            raise FloatingPointError(f"non-finite startup loss: {float(loss.detach().cpu())}")
+        # Exercise the exact autograd path used by training without changing any
+        # parameter: no optimizer exists yet and gradients are immediately cleared.
+        loss.backward()
+        bad_grad = None
+        for name, param in model.named_parameters():
+            if param.grad is not None and not bool(torch.isfinite(param.grad).all().item()):
+                bad_grad = name
+                break
+        if bad_grad is not None:
+            raise FloatingPointError(f"non-finite gradient during startup preflight: {bad_grad}")
+        model.zero_grad(set_to_none=True)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        shapes = {k: tuple(v.shape) for k, v in batch.items() if k in {
+            "candidate_valid", "candidate_numeric_features", "evidence_features",
+            "evidence_proposal_features", "expert_candidate_index", "expert_candidate_cost",
+            "oracle_selected_mask",
+        }}
+        print(
+            f"[train-preflight-ok] variant={variant} B={budget} loss={float(loss.detach().cpu()):.6f} shapes={shapes}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            f"[train-preflight-failed] variant={variant} B={budget} error={type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        raise
+    finally:
+        model.zero_grad(set_to_none=True)
+        torch.random.set_rng_state(cpu_rng_state)
+        if cuda_rng_states is not None:
+            torch.cuda.set_rng_state_all(cuda_rng_states)
+        model.train(was_training)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train budget-compatible external baseline adapters on matched BDSE caches.")
     parser.add_argument("--config", type=str, required=True)
@@ -378,6 +459,12 @@ def main() -> None:
         choices=["tqdm", "lines", "none"],
         default="tqdm",
         help="Progress rendering. Use 'lines' for two concurrent GPU jobs so output stays readable and tee-friendly.",
+    )
+    parser.add_argument(
+        "--startup-preflight-samples",
+        type=int,
+        default=2,
+        help="Synchronously validate this many training samples plus one eager forward/backward before spawning the long training loop; 0 disables.",
     )
     parser.add_argument("--optimizer-fused", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--compile", action="store_true", help="Compile the training/eval forward graph while saving the original uncompiled state_dict.")
@@ -418,6 +505,16 @@ def main() -> None:
             fn = getattr(torch.backends.cuda, name, None)
             if callable(fn):
                 fn(True)
+        props = torch.cuda.get_device_properties(device)
+        print(
+            f"[train-env] torch={torch.__version__} torch_cuda={torch.version.cuda} cudnn={torch.backends.cudnn.version()} "
+            f"gpu={props.name!r} capability={props.major}.{props.minor} total_mem_gib={props.total_memory / (1024**3):.1f} "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')} "
+            f"PYTORCH_CUDA_ALLOC_CONF={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}",
+            flush=True,
+        )
+    else:
+        print(f"[train-env] torch={torch.__version__} device={device}", flush=True)
 
     train_source = PreprocessedBDSEDataset(
         args.preprocessed_dir,
@@ -513,6 +610,16 @@ def main() -> None:
         f"amp={bool(args.amp)} compile={bool(args.compile)}",
         flush=True,
     )
+    _startup_training_preflight(
+        model=model,
+        dataset=train_ds,
+        cfg=cfg,
+        device=device,
+        amp=bool(args.amp),
+        sample_count=int(args.startup_preflight_samples),
+        variant=variant,
+        budget=budget,
+    )
     optimizer = _make_optimizer(model, lr=lr, weight_decay=wd, fused=bool(args.optimizer_fused), device=device)
     scheduler = _make_scheduler(optimizer, scheduler_name=args.scheduler, epochs=epochs, warmup_epochs=args.warmup_epochs)
     scaler = _make_scaler(device, args.amp)
@@ -526,8 +633,8 @@ def main() -> None:
             raise RuntimeError("torch.compile is unavailable in this PyTorch build")
         if args.compile_fallback:
             try:
-                import torch._dynamo
-                torch._dynamo.config.suppress_errors = True
+                dynamo = importlib.import_module("torch._dynamo")
+                dynamo.config.suppress_errors = True
             except Exception:
                 pass
         runtime_model = torch.compile(model, mode=args.compile_mode)  # type: ignore[assignment]

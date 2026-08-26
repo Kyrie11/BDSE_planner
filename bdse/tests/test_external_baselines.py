@@ -139,3 +139,18 @@ def test_external_minimal_npz_loader_preserves_external_contract(tmp_path, synth
     assert torch.equal(tensors["candidate_valid"], torch.from_numpy(synthetic_sample.candidates.valid_mask))
     assert int(tensors["expert_candidate_index"]) >= 0
     assert tensors["expert_candidate_cost"].shape[0] == synthetic_sample.candidates.K
+
+
+def test_external_train_main_does_not_shadow_module_torch():
+    import ast
+    import inspect
+    from bdse.external_baselines import train as train_module
+
+    tree = ast.parse(inspect.getsource(train_module.main))
+    shadowing_imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "torch" or alias.name.startswith("torch."):
+                    shadowing_imports.append(alias.name)
+    assert shadowing_imports == []
