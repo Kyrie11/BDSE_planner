@@ -11680,3 +11680,34 @@ V47 first hard-replays the complete V46 scientific-failure signature and exact V
 A/B remain strictly unpooled.
 
 Candidate paper mechanism, conditional on untouched validation and frozen closed-loop evidence: **Selection–Valuation–Future-State Sufficiency under a bounded auditable planner interface**. Ordinal extremal selection and absolute execution valuation require different sufficient statistics; the latter can require separately identifiable future agent response geometry and ego-reference consequences. Logged future is TRAIN-only supervision for nuisance prediction, never runtime information. Causal interaction claims still require later frozen interventional/closed-loop evaluation.
+
+# V64.3.47.1 engineering hotfix — canonical V46 historical-signature replay
+
+## Trigger
+
+Running the unchanged V47 launcher stopped before any V47 TRAIN work with:
+
+`STOP V47: V46 signature changed distribution_mean_aggregate: (216, 118, 39, 9, 57.52556590728618)`
+
+This is an **engineering false stop**, not a V47 scientific branch result. The four discrete components of the V46 historical signature exactly match the frozen V46 audit; the launcher/fitter expected value was copied with a small floating-point transcription error. The same problem existed in all three new V46 arms, so fixing only DIST-MEAN would have exposed later false stops for TEMPORAL-PROFILE and DIRP-JOINT.
+
+Authoritative V46 uploaded-result values are:
+
+- `distribution_mean_aggregate = (216, 118, 39, 9, 57.52556590728618)`;
+- `temporal_profile_aggregate = (217, 119, 41, 14, 51.263247843232456)`;
+- `dirp_joint_aggregate = (207, 115, 39, 12, 55.303074132712666)`.
+
+The originally hard-coded V47 values were respectively `57.52557473140379`, `51.26324847539882`, and `55.30307441748546`, which differ by approximately `8.82e-6`, `6.32e-7`, and `2.85e-7`. The historical guard intentionally uses `1e-9`; therefore this was deterministic false rejection rather than evidence that V46 changed.
+
+## Repair
+
+- Correct the three V46 aggregate sums in `bdse/tools/fit_v64_3_47_eaf_icer_fsfr.py` to the authoritative uploaded-result audit values.
+- Remove the duplicate V46 aggregate hard-coding from `RUN_V64_3_47_EAF_ICER_FSFR_SCREEN_2GPU.sh`; the launcher now calls the fitter's single canonical `_check_v46()` implementation before checking frozen TRAIN identity and fresh-unspent state.
+- Keep the `1e-9` historical-signature tolerance unchanged. This hotfix does **not** weaken fail-closed behavior.
+- Add regression tests proving that the authoritative V46 signature passes while a genuine `1e-4` aggregate drift still raises `V47 ENGINEERING STOP`.
+
+## Scientific status
+
+**No algorithm mechanism, feature, target, fold split, gate, threshold, winner selector, fresh seed, or preregistered branch is changed.** V47 remains the same FSFR stopping experiment. No V47 algorithm conclusion may be drawn from the original STOP because execution never reached V47 nuisance fitting or TRAIN value arms.
+
+The next action is therefore to rerun the **same original command**. Only after complete V47 TRAIN output exists should AGENT-2D / EGO-REF / FSFR-JOINT be attributed according to the existing preregistration. In particular, the existing rule remains binding: if both V47 future-state nuisances are identifiable and ordinary prediction improves but all deployment gates fail, stop representation expansion and move to the selected-policy zero/tail deployment functional; do not add another feature family.

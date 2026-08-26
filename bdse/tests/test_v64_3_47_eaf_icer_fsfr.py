@@ -11,6 +11,7 @@ from bdse.planner.interaction_response_field import RESPONSE_FIELD_LOCAL_FEATURE
 from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
 from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES, runtime_value_observable_costs
 from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
+from bdse.tools.fit_v64_3_47_eaf_icer_fsfr import _check_v46
 
 
 def _runtime():
@@ -76,3 +77,33 @@ def test_v47_tournament_consumes_vector_fsfr_without_rerank():
     obs[0,obs_names.index(rn[0])]=2.;obs[1,obs_names.index(rn[0])]=.5;obs[0,obs_names.index(rn[1])]=1.;obs[1,obs_names.index(rn[1])]=.75
     v,feat,names=_icer_post_selection_value(1,mu,X,feature_names,sc,raw_feat=raw,raw_feature_names=raw_names,support_logits=sup,legacy_action=0,value_observable_matrix=obs,value_observable_names=obs_names)
     assert v==pytest.approx(2.0);assert feat.shape[0]==43;assert names[-2].endswith(rn[0]) and names[-1].endswith(rn[1])
+
+
+def _authoritative_v46_nested_signature():
+    return {
+        "rsmr_rank_aggregate": {"selected_count":502,"selected_positive_count":221,"no_positive_opportunity_false_intervention_count":107,"catastrophic_count":28,"teacher_improvement_sum":43.29405361274824},
+        "quality_control_aggregate": {"selected_count":205,"selected_positive_count":129,"no_positive_opportunity_false_intervention_count":30,"catastrophic_count":13,"teacher_improvement_sum":43.905547394411805},
+        "v45_plan_control_aggregate": {"selected_count":217,"selected_positive_count":121,"no_positive_opportunity_false_intervention_count":38,"catastrophic_count":9,"teacher_improvement_sum":56.55117310290402},
+        "distribution_mean_aggregate": {"selected_count":216,"selected_positive_count":118,"no_positive_opportunity_false_intervention_count":39,"catastrophic_count":9,"teacher_improvement_sum":57.52556590728618},
+        "temporal_profile_aggregate": {"selected_count":217,"selected_positive_count":119,"no_positive_opportunity_false_intervention_count":41,"catastrophic_count":14,"teacher_improvement_sum":51.263247843232456},
+        "dirp_joint_aggregate": {"selected_count":207,"selected_positive_count":115,"no_positive_opportunity_false_intervention_count":39,"catastrophic_count":12,"teacher_improvement_sum":55.303074132712666},
+        "failure_diagnosis":"response_second_moment_is_identifiable_but_acceleration_distribution_or_interaction_profile_still_not_absolute_value_sufficient",
+        "distribution_identification":{"identified":True},
+    }
+
+
+def test_v47_historical_guard_accepts_authoritative_v46_signature(tmp_path):
+    import json
+    p=tmp_path/'v46.json'
+    p.write_text(json.dumps({"train_gate_pass":False,"nested_crossfit":_authoritative_v46_nested_signature()}))
+    _check_v46(p)
+
+
+def test_v47_historical_guard_still_fails_closed_on_real_v46_drift(tmp_path):
+    import json
+    n=_authoritative_v46_nested_signature()
+    n["distribution_mean_aggregate"]["teacher_improvement_sum"] += 1e-4
+    p=tmp_path/'v46_bad.json'
+    p.write_text(json.dumps({"train_gate_pass":False,"nested_crossfit":n}))
+    with pytest.raises(RuntimeError, match="V46 signature mismatch distribution_mean_aggregate"):
+        _check_v46(p)

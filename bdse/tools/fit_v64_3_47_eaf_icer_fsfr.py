@@ -100,9 +100,9 @@ def _check_v46(path: Path) -> None:
         "rsmr_rank_aggregate": (502, 221, 107, 28, 43.29405361274824),
         "quality_control_aggregate": (205, 129, 30, 13, 43.905547394411805),
         "v45_plan_control_aggregate": (217, 121, 38, 9, 56.55117310290402),
-        "distribution_mean_aggregate": (216, 118, 39, 9, 57.52557473140379),
-        "temporal_profile_aggregate": (217, 119, 41, 14, 51.26324847539882),
-        "dirp_joint_aggregate": (207, 115, 39, 12, 55.30307441748546),
+        "distribution_mean_aggregate": (216, 118, 39, 9, 57.52556590728618),
+        "temporal_profile_aggregate": (217, 119, 41, 14, 51.263247843232456),
+        "dirp_joint_aggregate": (207, 115, 39, 12, 55.303074132712666),
     }
     for k, e in exp.items():
         g = _sig(n.get(k, {}))

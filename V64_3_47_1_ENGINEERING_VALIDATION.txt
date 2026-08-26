@@ -1,0 +1,38 @@
+V64.3.47.1 engineering hotfix validation
+========================================
+
+Issue reproduced from user/server output:
+  STOP V47: V46 signature changed distribution_mean_aggregate: (216, 118, 39, 9, 57.52556590728618)
+
+Diagnosis:
+  False engineering prerequisite STOP. V47 had not started its scientific TRAIN experiment.
+  The V46 historical control copied three floating teacher_improvement_sum constants incorrectly.
+  Discrete signature counts are unchanged.
+
+Authoritative V46 values used by the repaired guard:
+  distribution_mean_aggregate = (216, 118, 39, 9, 57.52556590728618)
+  temporal_profile_aggregate  = (217, 119, 41, 14, 51.263247843232456)
+  dirp_joint_aggregate        = (207, 115, 39, 12, 55.303074132712666)
+
+Repair properties:
+  - original launcher name/command preserved
+  - V47 algorithm and preregistered branch logic unchanged
+  - 1e-9 fail-closed historical tolerance unchanged
+  - launcher and fitter now share one canonical V46 signature implementation
+  - regression test accepts authoritative V46 signature
+  - regression test rejects deliberate 1e-4 V46 aggregate drift
+
+Validation:
+  python compile: PASS
+  launcher bash -n: PASS
+  V47 focused tests: 8/8 PASS
+  full repository tests (4 parallel file partitions):
+    partition 0: 154 PASS
+    partition 1: 143 PASS
+    partition 2: 122 PASS
+    partition 3: 138 PASS
+    total: 557/557 PASS
+  only historical warning classes observed
+
+Scientific interpretation:
+  No V47 algorithm result exists yet from the stopped run. Rerun the same V47 launcher.

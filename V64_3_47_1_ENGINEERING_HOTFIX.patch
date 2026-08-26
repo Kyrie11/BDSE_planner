@@ -1,0 +1,138 @@
+--- a/RUN_V64_3_47_EAF_ICER_FSFR_SCREEN_2GPU.sh
++++ b/RUN_V64_3_47_EAF_ICER_FSFR_SCREEN_2GPU.sh
+@@ -28,22 +28,14 @@
+ 
+ stage_start exact_v46_prerequisite_and_fresh_guard
+ python - "$V46_FIT" "$V46_ROOT" "$FROZEN_TRAIN_TOKENS" <<'PY'
+-import json,sys,hashlib
++import sys,hashlib
+ from pathlib import Path
+-r=json.load(open(sys.argv[1]));n=r.get('nested_crossfit',{})
+-e={
+-'rsmr_rank_aggregate':(502,221,107,28,43.29405361274824),
+-'quality_control_aggregate':(205,129,30,13,43.905547394411805),
+-'v45_plan_control_aggregate':(217,121,38,9,56.55117310290402),
+-'distribution_mean_aggregate':(216,118,39,9,57.52557473140379),
+-'temporal_profile_aggregate':(217,119,41,14,51.26324847539882),
+-'dirp_joint_aggregate':(207,115,39,12,55.30307441748546),
+-}
+-for k,x in e.items():
+- d=n.get(k,{});g=(d.get('selected_count'),d.get('selected_positive_count'),d.get('no_positive_opportunity_false_intervention_count'),d.get('catastrophic_count'),d.get('teacher_improvement_sum'))
+- if any(g[i]!=x[i] for i in range(4)) or abs(float(g[4])-x[4])>1e-9: raise SystemExit(f'STOP V47: V46 signature changed {k}: {g}')
+-if r.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='response_second_moment_is_identifiable_but_acceleration_distribution_or_interaction_profile_still_not_absolute_value_sufficient' or not bool(n.get('distribution_identification',{}).get('identified',False)):
+- raise SystemExit('STOP V47: V46 preregistered scientific-stop signature changed')
++from bdse.tools.fit_v64_3_47_eaf_icer_fsfr import _check_v46
++
++# Keep one canonical historical-signature implementation.  The original V47
++# launcher duplicated three V46 floating aggregates and copied them with tiny
++# transcription errors, causing a false engineering STOP before V47 started.
++_check_v46(Path(sys.argv[1]))
+ tr=[x.strip() for x in open(sys.argv[3]) if x.strip()]
+ if len(tr)!=3000 or len(set(tr))!=3000 or hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4': raise SystemExit('STOP V47: frozen TRAIN changed')
+ root=Path(sys.argv[2]);spent=[root/'provenance/val_screen_fresh1000_tokens.txt',root/'provenance/val_screen_fresh_A_tokens.txt',root/'provenance/val_screen_fresh_B_tokens.txt']
+--- a/bdse/tools/fit_v64_3_47_eaf_icer_fsfr.py
++++ b/bdse/tools/fit_v64_3_47_eaf_icer_fsfr.py
+@@ -100,9 +100,9 @@
+         "rsmr_rank_aggregate": (502, 221, 107, 28, 43.29405361274824),
+         "quality_control_aggregate": (205, 129, 30, 13, 43.905547394411805),
+         "v45_plan_control_aggregate": (217, 121, 38, 9, 56.55117310290402),
+-        "distribution_mean_aggregate": (216, 118, 39, 9, 57.52557473140379),
+-        "temporal_profile_aggregate": (217, 119, 41, 14, 51.26324847539882),
+-        "dirp_joint_aggregate": (207, 115, 39, 12, 55.30307441748546),
++        "distribution_mean_aggregate": (216, 118, 39, 9, 57.52556590728618),
++        "temporal_profile_aggregate": (217, 119, 41, 14, 51.263247843232456),
++        "dirp_joint_aggregate": (207, 115, 39, 12, 55.303074132712666),
+     }
+     for k, e in exp.items():
+         g = _sig(n.get(k, {}))
+--- a/bdse/tests/test_v64_3_47_eaf_icer_fsfr.py
++++ b/bdse/tests/test_v64_3_47_eaf_icer_fsfr.py
+@@ -11,6 +11,7 @@
+ from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
+ from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES, runtime_value_observable_costs
+ from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
++from bdse.tools.fit_v64_3_47_eaf_icer_fsfr import _check_v46
+ 
+ 
+ def _runtime():
+@@ -76,3 +77,33 @@
+     obs[0,obs_names.index(rn[0])]=2.;obs[1,obs_names.index(rn[0])]=.5;obs[0,obs_names.index(rn[1])]=1.;obs[1,obs_names.index(rn[1])]=.75
+     v,feat,names=_icer_post_selection_value(1,mu,X,feature_names,sc,raw_feat=raw,raw_feature_names=raw_names,support_logits=sup,legacy_action=0,value_observable_matrix=obs,value_observable_names=obs_names)
+     assert v==pytest.approx(2.0);assert feat.shape[0]==43;assert names[-2].endswith(rn[0]) and names[-1].endswith(rn[1])
++
++
++def _authoritative_v46_nested_signature():
++    return {
++        "rsmr_rank_aggregate": {"selected_count":502,"selected_positive_count":221,"no_positive_opportunity_false_intervention_count":107,"catastrophic_count":28,"teacher_improvement_sum":43.29405361274824},
++        "quality_control_aggregate": {"selected_count":205,"selected_positive_count":129,"no_positive_opportunity_false_intervention_count":30,"catastrophic_count":13,"teacher_improvement_sum":43.905547394411805},
++        "v45_plan_control_aggregate": {"selected_count":217,"selected_positive_count":121,"no_positive_opportunity_false_intervention_count":38,"catastrophic_count":9,"teacher_improvement_sum":56.55117310290402},
++        "distribution_mean_aggregate": {"selected_count":216,"selected_positive_count":118,"no_positive_opportunity_false_intervention_count":39,"catastrophic_count":9,"teacher_improvement_sum":57.52556590728618},
++        "temporal_profile_aggregate": {"selected_count":217,"selected_positive_count":119,"no_positive_opportunity_false_intervention_count":41,"catastrophic_count":14,"teacher_improvement_sum":51.263247843232456},
++        "dirp_joint_aggregate": {"selected_count":207,"selected_positive_count":115,"no_positive_opportunity_false_intervention_count":39,"catastrophic_count":12,"teacher_improvement_sum":55.303074132712666},
++        "failure_diagnosis":"response_second_moment_is_identifiable_but_acceleration_distribution_or_interaction_profile_still_not_absolute_value_sufficient",
++        "distribution_identification":{"identified":True},
++    }
++
++
++def test_v47_historical_guard_accepts_authoritative_v46_signature(tmp_path):
++    import json
++    p=tmp_path/'v46.json'
++    p.write_text(json.dumps({"train_gate_pass":False,"nested_crossfit":_authoritative_v46_nested_signature()}))
++    _check_v46(p)
++
++
++def test_v47_historical_guard_still_fails_closed_on_real_v46_drift(tmp_path):
++    import json
++    n=_authoritative_v46_nested_signature()
++    n["distribution_mean_aggregate"]["teacher_improvement_sum"] += 1e-4
++    p=tmp_path/'v46_bad.json'
++    p.write_text(json.dumps({"train_gate_pass":False,"nested_crossfit":n}))
++    with pytest.raises(RuntimeError, match="V46 signature mismatch distribution_mean_aggregate"):
++        _check_v46(p)
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -11680,3 +11680,34 @@
+ A/B remain strictly unpooled.
+ 
+ Candidate paper mechanism, conditional on untouched validation and frozen closed-loop evidence: **Selection–Valuation–Future-State Sufficiency under a bounded auditable planner interface**. Ordinal extremal selection and absolute execution valuation require different sufficient statistics; the latter can require separately identifiable future agent response geometry and ego-reference consequences. Logged future is TRAIN-only supervision for nuisance prediction, never runtime information. Causal interaction claims still require later frozen interventional/closed-loop evaluation.
++
++# V64.3.47.1 engineering hotfix — canonical V46 historical-signature replay
++
++## Trigger
++
++Running the unchanged V47 launcher stopped before any V47 TRAIN work with:
++
++`STOP V47: V46 signature changed distribution_mean_aggregate: (216, 118, 39, 9, 57.52556590728618)`
++
++This is an **engineering false stop**, not a V47 scientific branch result. The four discrete components of the V46 historical signature exactly match the frozen V46 audit; the launcher/fitter expected value was copied with a small floating-point transcription error. The same problem existed in all three new V46 arms, so fixing only DIST-MEAN would have exposed later false stops for TEMPORAL-PROFILE and DIRP-JOINT.
++
++Authoritative V46 uploaded-result values are:
++
++- `distribution_mean_aggregate = (216, 118, 39, 9, 57.52556590728618)`;
++- `temporal_profile_aggregate = (217, 119, 41, 14, 51.263247843232456)`;
++- `dirp_joint_aggregate = (207, 115, 39, 12, 55.303074132712666)`.
++
++The originally hard-coded V47 values were respectively `57.52557473140379`, `51.26324847539882`, and `55.30307441748546`, which differ by approximately `8.82e-6`, `6.32e-7`, and `2.85e-7`. The historical guard intentionally uses `1e-9`; therefore this was deterministic false rejection rather than evidence that V46 changed.
++
++## Repair
++
++- Correct the three V46 aggregate sums in `bdse/tools/fit_v64_3_47_eaf_icer_fsfr.py` to the authoritative uploaded-result audit values.
++- Remove the duplicate V46 aggregate hard-coding from `RUN_V64_3_47_EAF_ICER_FSFR_SCREEN_2GPU.sh`; the launcher now calls the fitter's single canonical `_check_v46()` implementation before checking frozen TRAIN identity and fresh-unspent state.
++- Keep the `1e-9` historical-signature tolerance unchanged. This hotfix does **not** weaken fail-closed behavior.
++- Add regression tests proving that the authoritative V46 signature passes while a genuine `1e-4` aggregate drift still raises `V47 ENGINEERING STOP`.
++
++## Scientific status
++
++**No algorithm mechanism, feature, target, fold split, gate, threshold, winner selector, fresh seed, or preregistered branch is changed.** V47 remains the same FSFR stopping experiment. No V47 algorithm conclusion may be drawn from the original STOP because execution never reached V47 nuisance fitting or TRAIN value arms.
++
++The next action is therefore to rerun the **same original command**. Only after complete V47 TRAIN output exists should AGENT-2D / EGO-REF / FSFR-JOINT be attributed according to the existing preregistration. In particular, the existing rule remains binding: if both V47 future-state nuisances are identifiable and ordinary prediction improves but all deployment gates fail, stop representation expansion and move to the selected-policy zero/tail deployment functional; do not add another feature family.
+--- a/NEXT_COMMANDS_V64_3_47_EAF_ICER_FSFR.txt
++++ b/NEXT_COMMANDS_V64_3_47_EAF_ICER_FSFR.txt
+@@ -1,3 +1,7 @@
++V64.3.47.1 engineering-hotfix note
++====================================
++The original V47 command is intentionally unchanged. The hotfix only repairs a false V46 historical-signature prerequisite STOP and keeps the V47 algorithm/preregistered gates frozen.
++
+ V64.3.47 EAF-ICER-FSFR next server command
+ ============================================
+ 

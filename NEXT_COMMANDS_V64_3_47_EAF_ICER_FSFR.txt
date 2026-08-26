@@ -1,3 +1,7 @@
+V64.3.47.1 engineering-hotfix note
+====================================
+The original V47 command is intentionally unchanged. The hotfix only repairs a false V46 historical-signature prerequisite STOP and keeps the V47 algorithm/preregistered gates frozen.
+
 V64.3.47 EAF-ICER-FSFR next server command
 ============================================
 

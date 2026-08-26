@@ -28,22 +28,14 @@ for f in "$RAW_CONFIG" "$V20_CONFIG" "$DESIGN_EXCLUDE_TOKENS" "$FROZEN_TRAIN_TOK
 
 stage_start exact_v46_prerequisite_and_fresh_guard
 python - "$V46_FIT" "$V46_ROOT" "$FROZEN_TRAIN_TOKENS" <<'PY'
-import json,sys,hashlib
+import sys,hashlib
 from pathlib import Path
-r=json.load(open(sys.argv[1]));n=r.get('nested_crossfit',{})
-e={
-'rsmr_rank_aggregate':(502,221,107,28,43.29405361274824),
-'quality_control_aggregate':(205,129,30,13,43.905547394411805),
-'v45_plan_control_aggregate':(217,121,38,9,56.55117310290402),
-'distribution_mean_aggregate':(216,118,39,9,57.52557473140379),
-'temporal_profile_aggregate':(217,119,41,14,51.26324847539882),
-'dirp_joint_aggregate':(207,115,39,12,55.30307441748546),
-}
-for k,x in e.items():
- d=n.get(k,{});g=(d.get('selected_count'),d.get('selected_positive_count'),d.get('no_positive_opportunity_false_intervention_count'),d.get('catastrophic_count'),d.get('teacher_improvement_sum'))
- if any(g[i]!=x[i] for i in range(4)) or abs(float(g[4])-x[4])>1e-9: raise SystemExit(f'STOP V47: V46 signature changed {k}: {g}')
-if r.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='response_second_moment_is_identifiable_but_acceleration_distribution_or_interaction_profile_still_not_absolute_value_sufficient' or not bool(n.get('distribution_identification',{}).get('identified',False)):
- raise SystemExit('STOP V47: V46 preregistered scientific-stop signature changed')
+from bdse.tools.fit_v64_3_47_eaf_icer_fsfr import _check_v46
+
+# Keep one canonical historical-signature implementation.  The original V47
+# launcher duplicated three V46 floating aggregates and copied them with tiny
+# transcription errors, causing a false engineering STOP before V47 started.
+_check_v46(Path(sys.argv[1]))
 tr=[x.strip() for x in open(sys.argv[3]) if x.strip()]
 if len(tr)!=3000 or len(set(tr))!=3000 or hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()!='b36a847e7a3d7caa3c785ac96b6789ddefed071fae050170482108d950447da4': raise SystemExit('STOP V47: frozen TRAIN changed')
 root=Path(sys.argv[2]);spent=[root/'provenance/val_screen_fresh1000_tokens.txt',root/'provenance/val_screen_fresh_A_tokens.txt',root/'provenance/val_screen_fresh_B_tokens.txt']
