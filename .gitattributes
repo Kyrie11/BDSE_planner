@@ -1,0 +1,5 @@
+# V64.3.48.1 engineering hotfix: preserve byte-stable LF checkout for
+# source-manifested text files that were accidentally packaged with CRLF.
+bdse/nuplan_config/splitter/nuplan.yaml text eol=lf
+bdse/tests/test_candidate_valid_repair.py text eol=lf
+bdse/tests/test_nuplan_future_next_token_fallback.py text eol=lf
