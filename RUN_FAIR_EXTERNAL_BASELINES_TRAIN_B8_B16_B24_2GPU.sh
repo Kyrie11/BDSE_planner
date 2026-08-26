@@ -16,6 +16,8 @@ export PREFETCH_FACTOR="${PREFETCH_FACTOR:-4}"
 export TORCH_COMPILE="${TORCH_COMPILE:-1}"
 export TORCH_COMPILE_MODE="${TORCH_COMPILE_MODE:-reduce-overhead}"
 export LOG_EVERY_N_STEPS="${LOG_EVERY_N_STEPS:-100}"
+export TRAIN_PROGRESS_STYLE="${TRAIN_PROGRESS_STYLE:-lines}"
+export PYTHONUNBUFFERED=1
 # Keep paper-grade full validation by default. Set VAL_MAX_SCENARIOS to a
 # positive number only for exploratory fast runs.
 export VAL_MAX_SCENARIOS="${VAL_MAX_SCENARIOS:-0}"
@@ -62,8 +64,8 @@ run_one_budget() {
     compile_args+=(--compile --compile-mode "$TORCH_COMPILE_MODE" --compile-fallback)
   fi
 
-  echo "[train] gpu=$gpu system=$name B=$B batch=$batch accum=$accum workers=$NUM_WORKERS_PER_JOB compile=$TORCH_COMPILE"
-  CUDA_VISIBLE_DEVICES="$gpu" python -m bdse.external_baselines.train \
+  echo "[train] START gpu=$gpu system=$name B=$B batch=$batch accum=$accum workers=$NUM_WORKERS_PER_JOB compile=$TORCH_COMPILE progress=$TRAIN_PROGRESS_STYLE"
+  CUDA_VISIBLE_DEVICES="$gpu" python -u -m bdse.external_baselines.train \
     --config "$cfg" \
     --split train_boston train_pittsburgh train_singapore train_vegas_2 \
     --preprocessed-dir "$BDSE_TRAIN_CACHE" \
@@ -82,10 +84,12 @@ run_one_budget() {
     --selection-metric val_action_ce \
     --early-stop-patience 0 \
     --log-every-n-steps "$LOG_EVERY_N_STEPS" \
+    --progress-style "$TRAIN_PROGRESS_STYLE" \
     "${compile_args[@]}" \
     --log-file "$outdir/${name}.train_log.jsonl" \
     --output "$outdir/${name}_budgeted.pt" \
-    > "$outdir/${name}.train.out" 2>&1
+    2>&1 | tee "$outdir/${name}.train.out"
+  echo "[train] DONE gpu=$gpu system=$name B=$B checkpoint=$outdir/${name}_budgeted.best.pt"
 }
 
 run_model_all_budgets() {

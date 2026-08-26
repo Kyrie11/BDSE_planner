@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import hashlib
 import json
@@ -45,7 +46,28 @@ def _token_hash(tokens: list[str]) -> str:
     return hashlib.sha256(("\n".join(tokens) + "\n").encode("utf-8")).hexdigest()
 
 
-def load_tokens(cache_root: Path, split: str, limit: int, scan_max: int) -> tuple[list[str], list[str]]:
+def _read_token_and_hint(path: Path) -> tuple[str, str] | None:
+    try:
+        with np.load(path, allow_pickle=False) as z:
+            value = z["scenario_token"]
+            token = str(value.item() if value.shape == () else value.reshape(-1)[0])
+    except Exception:
+        return None
+    token = token.strip()
+    if not token:
+        return None
+    return token, path.parent.name
+
+
+def load_tokens(
+    cache_root: Path,
+    split: str,
+    limit: int,
+    scan_max: int,
+    *,
+    scan_workers: int = 8,
+    progress_interval_s: float = 5.0,
+) -> tuple[list[str], list[str]]:
     """Load paired scenario tokens plus conservative raw-log filename hints.
 
     The NPZ parent folder in the user's cache layout is the acquisition/log name.
@@ -56,29 +78,64 @@ def load_tokens(cache_root: Path, split: str, limit: int, scan_max: int) -> tupl
         max_scenarios: int | None = max(int(limit), int(scan_max))
     else:
         max_scenarios = None
+    print(f"[manifest] indexing NPZ cache: root={cache_root} split={split} limit={limit or 'ALL'}", flush=True)
+    index_started = time.time()
     paths = PreprocessedBDSEDataset(cache_root, split=[split], max_scenarios=max_scenarios).build_index()
+    print(
+        f"[manifest] index ready: files={len(paths)} elapsed={time.time() - index_started:.1f}s; "
+        f"reading scenario_token with workers={max(1, int(scan_workers)) if limit <= 0 else 1}",
+        flush=True,
+    )
     tokens: list[str] = []
     log_hints: list[str] = []
     seen: set[str] = set()
-    for path in paths:
-        try:
-            with np.load(path, allow_pickle=False) as z:
-                value = z["scenario_token"]
-                token = str(value.item() if value.shape == () else value.reshape(-1)[0])
-        except Exception:
-            continue
-        if token and token not in seen:
-            seen.add(token)
-            tokens.append(token)
-            log_hints.append(path.parent.name)
-        if limit > 0 and len(tokens) >= limit:
-            break
+    scan_started = time.time()
+    last_progress = scan_started
+
+    # A small --limit is primarily used for debugging; keep that path sequential
+    # so we can stop immediately after enough unique tokens are found.  The full
+    # paper test set benefits from parallel NPZ decompression / metadata reads.
+    if limit > 0 or int(scan_workers) <= 1:
+        iterator = ((_read_token_and_hint(path)) for path in paths)
+        executor = None
+    else:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(scan_workers)))
+        iterator = executor.map(_read_token_and_hint, paths)
+
+    try:
+        for scanned, result in enumerate(iterator, start=1):
+            if result is not None:
+                token, hint = result
+                if token not in seen:
+                    seen.add(token)
+                    tokens.append(token)
+                    log_hints.append(hint)
+            now = time.time()
+            if now - last_progress >= max(0.5, float(progress_interval_s)) or scanned == len(paths):
+                elapsed = max(now - scan_started, 1e-9)
+                print(
+                    f"[manifest-progress] files={scanned}/{len(paths)} ({100.0 * scanned / max(len(paths), 1):.1f}%) "
+                    f"unique_tokens={len(tokens)} rate={scanned / elapsed:.1f} files/s elapsed={elapsed:.1f}s",
+                    flush=True,
+                )
+                last_progress = now
+            if limit > 0 and len(tokens) >= limit:
+                break
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
+
     if not tokens:
         raise RuntimeError(f"no scenario_token values found under cache={cache_root} split={split}")
     if limit > 0 and len(tokens) < limit:
         raise RuntimeError(
             f"only found {len(tokens)} unique scenario tokens; need {limit}; increase --token-scan-max or use --limit 0"
         )
+    print(
+        f"[manifest] ready: unique_tokens={len(tokens)} sha256={_token_hash(tokens)[:16]}... "
+        f"elapsed={time.time() - scan_started:.1f}s",
+        flush=True,
+    )
     return tokens, log_hints
 
 
@@ -183,6 +240,86 @@ def final_metric_row(root: Path) -> tuple[dict[str, float], Path]:
     raise RuntimeError(f"no final_score row under {root}")
 
 
+def _gpu_memory_used_mb(gpu: str) -> str:
+    """Best-effort physical-GPU memory telemetry for progress logs."""
+    try:
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                "-i",
+                str(gpu),
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2.0,
+        )
+        if proc.returncode == 0:
+            raw = proc.stdout.strip().splitlines()
+            if raw:
+                return f"{int(float(raw[0].strip()))}MB"
+    except Exception:
+        pass
+    return "n/a"
+
+
+def _tail_log(path: Path, max_bytes: int = 32768) -> str:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            f.seek(max(0, size - max_bytes))
+            text = f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    # tqdm/progress bars often use carriage returns. Normalize them so the last
+    # visible update can be surfaced in a one-line heartbeat.
+    text = text.replace("\r", "\n")
+    ansi = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+    lines = [ansi.sub("", line).strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    line = lines[-1]
+    return line[-240:]
+
+
+def _closed_loop_phase(log_path: Path) -> str:
+    try:
+        text = _tail_log(log_path, max_bytes=131072)
+    except Exception:
+        text = ""
+    # _tail_log returns one line, so also inspect a bounded suffix for the
+    # explicit planner-ready marker.
+    try:
+        size = log_path.stat().st_size
+        with log_path.open("rb") as f:
+            f.seek(max(0, size - 131072))
+            suffix = f.read().decode("utf-8", errors="replace")
+    except Exception:
+        suffix = ""
+    if "Number of successful simulations:" in suffix:
+        return "metrics/finalizing"
+    if "[planner-ready]" in suffix or "BDSEnuPlanPlanner device:" in suffix:
+        return "planner-loaded/simulating"
+    if text:
+        return "nuplan-init/scenario-build"
+    return "process-starting"
+
+
+def _latest_marker_line(log_path: Path, marker: str, max_bytes: int = 262144) -> str:
+    try:
+        size = log_path.stat().st_size
+        with log_path.open("rb") as f:
+            f.seek(max(0, size - max_bytes))
+            text = f.read().decode("utf-8", errors="replace").replace("\r", "\n")
+    except Exception:
+        return ""
+    matches = [line.strip() for line in text.splitlines() if marker in line]
+    return matches[-1][-500:] if matches else ""
+
+
 def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args: argparse.Namespace) -> dict[str, Any]:
     root = args.output_root / f"B{task.budget}" / task.name
     summary_path = root / "closed_loop_summary.json"
@@ -196,6 +333,11 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
             and str(data.get("config_sha256", "")) == sha256(task.config)
             and str(data.get("checkpoint_sha256", "")) == expected_ckpt_sha
         ):
+            print(
+                f"[task-resume] system={task.name} B={task.budget} already complete; "
+                f"scenarios={len(tokens)} output={root}",
+                flush=True,
+            )
             return data
     if root.exists():
         shutil.rmtree(root)
@@ -238,8 +380,13 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
     if task_device == "cuda":
         env["CUDA_VISIBLE_DEVICES"] = gpu
     env.update({
+        "PYTHONUNBUFFERED": "1",
         "BDSE_SHARE_MODEL_PER_PROCESS": "1",
         "BDSE_SERIALIZE_GPU_INFERENCE": "0",
+        # Each suite subprocess is already pinned to one physical GPU via
+        # CUDA_VISIBLE_DEVICES, so planner-level multi-GPU sharding is neither
+        # needed nor desirable here.
+        "BDSE_SHARD_PLANNERS_ACROSS_GPUS": "0",
         "BDSE_PROFILE_CLOSED_LOOP": "1",
         "BDSE_CLOSED_LOOP_PROFILE_JSON": str(root / "bdse_closed_loop_profile.json"),
         "OMP_NUM_THREADS": "1",
@@ -249,14 +396,64 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
     })
     started = time.time()
     log_path = root / "run.log"
+    checkpoint_text = "none (CPU rule scorer)" if task.checkpoint is None else str(task.checkpoint)
+    print(
+        f"[task-start] system={task.name} B={task.budget} physical_gpu={gpu if task_device == 'cuda' else 'CPU'} "
+        f"device={task_device} scenarios={len(tokens)} workers={args.workers_per_job} checkpoint={checkpoint_text}",
+        flush=True,
+    )
     with log_path.open("w", encoding="utf-8") as log:
-        proc = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
+        proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
+        print(
+            f"[task-process] system={task.name} B={task.budget} pid={proc.pid} log={log_path}",
+            flush=True,
+        )
+        heartbeat = max(2.0, float(args.heartbeat_seconds))
+        planner_ready_reported = False
+        while True:
+            try:
+                returncode = proc.wait(timeout=heartbeat)
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.time() - started
+                phase = _closed_loop_phase(log_path)
+                gpu_mem = _gpu_memory_used_mb(gpu) if task_device == "cuda" else "cpu"
+                if not planner_ready_reported:
+                    marker_line = _latest_marker_line(log_path, "[planner-ready]")
+                    if marker_line:
+                        planner_ready_reported = True
+                        print(
+                            f"[task-gpu-ready] system={task.name} B={task.budget} physical_gpu={gpu if task_device == 'cuda' else 'CPU'} "
+                            f"{marker_line}",
+                            flush=True,
+                        )
+                tail = _tail_log(log_path)
+                print(
+                    f"[task-heartbeat] system={task.name} B={task.budget} pid={proc.pid} "
+                    f"phase={phase} elapsed={elapsed:.0f}s gpu_mem={gpu_mem}"
+                    + (f" last='{tail}'" if tail else ""),
+                    flush=True,
+                )
+        if not planner_ready_reported:
+            marker_line = _latest_marker_line(log_path, "[planner-ready]")
+            if marker_line:
+                print(
+                    f"[task-gpu-ready] system={task.name} B={task.budget} physical_gpu={gpu if task_device == 'cuda' else 'CPU'} "
+                    f"{marker_line}",
+                    flush=True,
+                )
     wall = time.time() - started
     text = log_path.read_text(encoding="utf-8", errors="replace")
     success, failed = parse_success(text)
-    if proc.returncode != 0 or success != len(tokens) or failed != 0:
+    if returncode != 0 or success != len(tokens) or failed != 0:
+        tail_lines = "\n".join(text.replace("\r", "\n").splitlines()[-20:])
+        print(
+            f"[task-failed] system={task.name} B={task.budget} return={returncode} successful={success} failed={failed}\n"
+            f"--- last 20 log lines: {log_path} ---\n{tail_lines}",
+            flush=True,
+        )
         raise RuntimeError(
-            f"{task.name} B={task.budget} invalid: return={proc.returncode}, successful={success}, failed={failed}, "
+            f"{task.name} B={task.budget} invalid: return={returncode}, successful={success}, failed={failed}, "
             f"expected={len(tokens)}; see {log_path}"
         )
     metrics, metric_file = final_metric_row(root)
@@ -274,6 +471,8 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
         "nuplan_db_mode": "restricted_files" if args.resolved_db_files else "root",
         "nuplan_db_file_count": len(args.resolved_db_files) if args.resolved_db_files else -1,
         "nuplan_workers_per_job": int(args.workers_per_job),
+        "token_scan_workers": int(args.token_scan_workers),
+        "heartbeat_seconds": float(args.heartbeat_seconds),
         "schedule_mode": str(args.schedule_mode),
         "device": task_device,
         "config": str(task.config.resolve()),
@@ -289,6 +488,11 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
     summary.update(metrics)
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     complete_path.write_text(json.dumps({"complete": True, "scenario_token_sha256": token_sha}, indent=2), encoding="utf-8")
+    print(
+        f"[task-done] system={task.name} B={task.budget} scenarios={success}/{len(tokens)} "
+        f"wall={wall / 60.0:.1f}min throughput={summary['scenarios_per_wall_hour']:.1f} scenarios/h output={root}",
+        flush=True,
+    )
     return summary
 
 
@@ -372,6 +576,8 @@ def main() -> None:
     p.add_argument("--token-split", default="public_set_test")
     p.add_argument("--limit", type=int, default=0, help="0 = all unique test scenario tokens")
     p.add_argument("--token-scan-max", type=int, default=100000)
+    p.add_argument("--token-scan-workers", type=int, default=8, help="Parallel workers used only while reading scenario_token from the full NPZ test cache")
+    p.add_argument("--token-progress-seconds", type=float, default=5.0, help="How often to print NPZ manifest-scan progress")
     p.add_argument("--nuplan-root", type=Path, required=True, help="nuPlan data root used by the simulator for non-DB assets/config defaults")
     p.add_argument("--nuplan-map-root", type=Path, default=None, help="Optional map root; defaults to <nuplan-root>/maps")
     p.add_argument("--nuplan-exp-root", type=Path, default=None, help="Optional experiment root; defaults to <nuplan-root>/exp")
@@ -383,6 +589,7 @@ def main() -> None:
     p.add_argument("--output-root", type=Path, required=True)
     p.add_argument("--gpus", default="0,1")
     p.add_argument("--workers-per-job", type=int, default=4, help="nuPlan thread-pool workers inside each concurrently running model job")
+    p.add_argument("--heartbeat-seconds", type=float, default=15.0, help="Closed-loop task heartbeat interval; reports phase, PID, elapsed time, and GPU memory")
     p.add_argument("--schedule-mode", choices=["model_pairs", "queue"], default="model_pairs", help="model_pairs pins one model (all budgets) to one GPU, two models at a time")
     p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     p.add_argument("--systems", nargs="+", default=["bdse", "gameformer", "dtpp", "plantf", "pluto", "pdm_closed_style"])
@@ -394,6 +601,10 @@ def main() -> None:
         raise ValueError("--proposal-top-m must be >0")
     if int(args.workers_per_job) <= 0:
         raise ValueError("--workers-per-job must be >0")
+    if int(args.token_scan_workers) <= 0:
+        raise ValueError("--token-scan-workers must be >0")
+    if float(args.heartbeat_seconds) <= 0:
+        raise ValueError("--heartbeat-seconds must be >0")
     _validate_db_root(args.nuplan_db_root)
     args.nuplan_map_root = args.nuplan_map_root or (args.nuplan_root / "maps")
     args.nuplan_exp_root = args.nuplan_exp_root or (args.nuplan_root / "exp")
@@ -410,7 +621,44 @@ def main() -> None:
             if not path.is_file():
                 raise FileNotFoundError(path)
     args.output_root.mkdir(parents=True, exist_ok=True)
-    tokens, log_hints = load_tokens(args.split_cache, args.token_split, args.limit, args.token_scan_max)
+
+    # Fail fast before touching thousands of NPZ files. The closed-loop suite is
+    # evaluation-only: it never trains missing external checkpoints. Previously
+    # a missing checkpoint was discovered only after the full scenario-token
+    # scan, which could look like a hung/no-GPU training run for many minutes.
+    trainable_external = [x for x in args.systems if x in {"gameformer", "dtpp", "plantf", "pluto"}]
+    missing_checkpoints: list[Path] = []
+    found_checkpoints = 0
+    for budget in args.budgets:
+        for name in trainable_external:
+            budget_ckpt = args.external_checkpoint_root / f"B{budget}" / f"{name}_budgeted.best.pt"
+            legacy_ckpt = args.external_checkpoint_root / f"{name}_budgeted.best.pt"
+            if budget_ckpt.is_file() or (args.allow_shared_external_checkpoint and legacy_ckpt.is_file()):
+                found_checkpoints += 1
+            else:
+                missing_checkpoints.append(budget_ckpt)
+    if missing_checkpoints:
+        sample = "\n".join(f"  - {p}" for p in missing_checkpoints[:12])
+        raise FileNotFoundError(
+            "Closed-loop evaluation does not train models, and required budget-specific checkpoints are missing.\n"
+            f"Missing {len(missing_checkpoints)} checkpoint(s):\n{sample}\n"
+            "Run: bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh\n"
+            "Then rerun the closed-loop script."
+        )
+    print(
+        f"[preflight] evaluation-only suite: checkpoints_ok={found_checkpoints} "
+        f"systems={args.systems} budgets={args.budgets} device={args.device}",
+        flush=True,
+    )
+
+    tokens, log_hints = load_tokens(
+        args.split_cache,
+        args.token_split,
+        args.limit,
+        args.token_scan_max,
+        scan_workers=int(args.token_scan_workers),
+        progress_interval_s=float(args.token_progress_seconds),
+    )
     token_sha = _token_hash(tokens)
     args.resolved_db_files = _restrict_flat_db_files(args.nuplan_db_root, log_hints)
     if args.resolved_db_files:
@@ -439,6 +687,8 @@ def main() -> None:
         "nuplan_db_mode": "restricted_files" if args.resolved_db_files else "root",
         "nuplan_db_file_count": len(args.resolved_db_files) if args.resolved_db_files else -1,
         "nuplan_workers_per_job": int(args.workers_per_job),
+        "token_scan_workers": int(args.token_scan_workers),
+        "heartbeat_seconds": float(args.heartbeat_seconds),
         "schedule_mode": str(args.schedule_mode),
     }, indent=2, sort_keys=True), encoding="utf-8")
 

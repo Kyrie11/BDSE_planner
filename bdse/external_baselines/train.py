@@ -235,6 +235,12 @@ def _finalize_meters(meters: dict[str, torch.Tensor], count: int, prefix: str = 
     return {f"{prefix}{k}": float((v / denom).cpu()) for k, v in meters.items()}
 
 
+def _progress_iter(iterable, *, total: int | None, desc: str, style: str, leave: bool = False):
+    if style == "tqdm":
+        return tqdm(iterable, total=total, desc=desc, leave=leave, mininterval=1.0)
+    return iterable
+
+
 @torch.inference_mode()
 def validation_loss(
     model: ExternalBaselineModel,
@@ -243,31 +249,66 @@ def validation_loss(
     device: torch.device,
     *,
     amp: bool,
+    progress_style: str = "tqdm",
+    progress_prefix: str = "val",
+    log_every_n_steps: int = 100,
 ) -> dict[str, float]:
     was = model.training
     model.eval()
     meters: dict[str, torch.Tensor] = {}
     count = 0
-    for batch in tqdm(loader, desc="val-loss", leave=False):
+    total = len(loader)
+    started = time.perf_counter()
+    if progress_style == "lines":
+        print(f"[{progress_prefix}-start] batches={total}", flush=True)
+    iterator = _progress_iter(loader, total=total, desc="val-loss", style=progress_style, leave=False)
+    for step, batch in enumerate(iterator, start=1):
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
         with _amp_context(device, amp):
             out = model(batch)
             losses = compute_external_baseline_losses(out, batch, cfg)
         _accumulate(meters, losses)
         count += 1
+        if progress_style == "lines" and (step % max(1, int(log_every_n_steps)) == 0 or step == total):
+            elapsed = max(time.perf_counter() - started, 1e-9)
+            print(
+                f"[{progress_prefix}-progress] step={step}/{total} ({100.0 * step / max(total, 1):.1f}%) "
+                f"loss={float(losses['loss'].detach().cpu()):.4f} rate={step / elapsed:.2f} batch/s elapsed={elapsed:.1f}s",
+                flush=True,
+            )
     if was:
         model.train()
-    return _finalize_meters(meters, count, prefix="val_")
+    out = _finalize_meters(meters, count, prefix="val_")
+    if progress_style == "lines":
+        print(
+            f"[{progress_prefix}-done] batches={count} elapsed={time.perf_counter() - started:.1f}s "
+            f"val_loss={out.get('val_loss', float('nan')):.4f}",
+            flush=True,
+        )
+    return out
 
 
 @torch.inference_mode()
-def validation_open_loop(model: ExternalBaselineModel, dataset: PreprocessedBDSEDataset, cfg: dict[str, Any], max_scenarios: int | None = None) -> dict[str, float]:
+def validation_open_loop(
+    model: ExternalBaselineModel,
+    dataset: PreprocessedBDSEDataset,
+    cfg: dict[str, Any],
+    max_scenarios: int | None = None,
+    *,
+    progress_style: str = "tqdm",
+    progress_prefix: str = "val-open-loop",
+    log_every_n_steps: int = 100,
+) -> dict[str, float]:
     was = model.training
     model.eval()
     core = BDSEPlannerCore(model=model, cfg=cfg)
     results = []
     n = len(dataset) if max_scenarios is None else min(len(dataset), int(max_scenarios))
-    for i in tqdm(range(n), desc="val-open-loop", leave=False):
+    started = time.perf_counter()
+    if progress_style == "lines":
+        print(f"[{progress_prefix}-start] scenarios={n}", flush=True)
+    iterator = _progress_iter(range(n), total=n, desc="val-open-loop", style=progress_style, leave=False)
+    for i in iterator:
         sample = dataset[i]
         pred, sel, tour, _ = core._run_certificate_stage(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
         qdiag = runtime_query_diagnostics(pred, sel.selected)
@@ -287,9 +328,19 @@ def validation_open_loop(model: ExternalBaselineModel, dataset: PreprocessedBDSE
             certificate_margin_matrix=tour.margins,
         )
         results.append(diag)
+        done = i + 1
+        if progress_style == "lines" and (done % max(1, int(log_every_n_steps)) == 0 or done == n):
+            elapsed = max(time.perf_counter() - started, 1e-9)
+            print(
+                f"[{progress_prefix}-progress] scenarios={done}/{n} ({100.0 * done / max(n, 1):.1f}%) "
+                f"rate={done / elapsed:.2f} scenario/s elapsed={elapsed:.1f}s",
+                flush=True,
+            )
     if was:
         model.train()
     out = aggregate_metric_results(results) if results else {}
+    if progress_style == "lines":
+        print(f"[{progress_prefix}-done] scenarios={n} elapsed={time.perf_counter() - started:.1f}s", flush=True)
     return {f"val_{k}": float(v) for k, v in out.items() if isinstance(v, (int, float, np.floating))}
 
 
@@ -322,6 +373,12 @@ def main() -> None:
     parser.add_argument("--grad-clip", type=float, default=None)
     parser.add_argument("--grad-accum-steps", type=int, default=1, help="Gradient accumulation steps; useful to match published effective batch sizes on fewer GPUs.")
     parser.add_argument("--log-every-n-steps", type=int, default=25)
+    parser.add_argument(
+        "--progress-style",
+        choices=["tqdm", "lines", "none"],
+        default="tqdm",
+        help="Progress rendering. Use 'lines' for two concurrent GPU jobs so output stays readable and tee-friendly.",
+    )
     parser.add_argument("--optimizer-fused", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--compile", action="store_true", help="Compile the training/eval forward graph while saving the original uncompiled state_dict.")
     parser.add_argument("--compile-mode", choices=["default", "reduce-overhead", "max-autotune"], default="reduce-overhead")
@@ -447,6 +504,15 @@ def main() -> None:
     # Keep `model` as the canonical eager module for optimizer/checkpoint state.
     # `runtime_model` may be an OptimizedModule but shares the same parameters.
     model: torch.nn.Module = ExternalBaselineModel(cfg).to(device)
+    budget = int((cfg.get("evidence", {}) or {}).get("budget", (cfg.get("external_baseline", {}) or {}).get("budget", -1)))
+    param_count = int(sum(int(p.numel()) for p in model.parameters()))
+    print(
+        f"[train-init] variant={variant} B={budget} device={device} CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')} "
+        f"params={param_count} train_samples={len(train_ds)} val_samples={0 if val_ds_for_manifest is None else len(val_ds_for_manifest)} "
+        f"batch={batch_size} grad_accum={grad_accum_steps} effective_batch={batch_size * grad_accum_steps} workers={num_workers} "
+        f"amp={bool(args.amp)} compile={bool(args.compile)}",
+        flush=True,
+    )
     optimizer = _make_optimizer(model, lr=lr, weight_decay=wd, fused=bool(args.optimizer_fused), device=device)
     scheduler = _make_scheduler(optimizer, scheduler_name=args.scheduler, epochs=epochs, warmup_epochs=args.warmup_epochs)
     scaler = _make_scaler(device, args.amp)
@@ -465,6 +531,10 @@ def main() -> None:
             except Exception:
                 pass
         runtime_model = torch.compile(model, mode=args.compile_mode)  # type: ignore[assignment]
+        print(
+            f"[train-compile] variant={variant} B={budget} mode={args.compile_mode}; first batch may pause while PyTorch compiles the graph.",
+            flush=True,
+        )
 
     log_path = Path(args.log_file) if args.log_file else None
     if log_path:
@@ -478,7 +548,19 @@ def main() -> None:
         runtime_model.train()
         meters: dict[str, torch.Tensor] = {}
         batch_count = 0
-        pbar = tqdm(loader, desc=f"external-{variant} epoch {epoch + 1}/{epochs}", mininterval=1.0)
+        epoch_started = time.perf_counter()
+        if args.progress_style == "lines":
+            print(
+                f"[train-epoch-start] variant={variant} B={budget} epoch={epoch + 1}/{epochs} batches={len(loader)}",
+                flush=True,
+            )
+        pbar = _progress_iter(
+            loader,
+            total=len(loader),
+            desc=f"external-{variant} B{budget} epoch {epoch + 1}/{epochs}",
+            style=args.progress_style,
+            leave=True,
+        )
         optimizer.zero_grad(set_to_none=True)
         total_steps = len(loader)
         for step, batch in enumerate(pbar, start=1):
@@ -502,15 +584,48 @@ def main() -> None:
             _accumulate(meters, losses)
             batch_count += 1
             if step % max(1, args.log_every_n_steps) == 0 or step == total_steps:
-                pbar.set_postfix(loss=f"{float(loss.detach().cpu()):.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+                current_loss = float(loss.detach().cpu())
+                if args.progress_style == "tqdm":
+                    pbar.set_postfix(loss=f"{current_loss:.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
+                elif args.progress_style == "lines":
+                    elapsed = max(time.perf_counter() - epoch_started, 1e-9)
+                    seen = min(step * batch_size, len(train_ds))
+                    print(
+                        f"[train-progress] variant={variant} B={budget} epoch={epoch + 1}/{epochs} "
+                        f"step={step}/{total_steps} ({100.0 * step / max(total_steps, 1):.1f}%) "
+                        f"samples~={seen}/{len(train_ds)} loss={current_loss:.4f} lr={optimizer.param_groups[0]['lr']:.2e} "
+                        f"rate={step / elapsed:.2f} batch/s elapsed={elapsed:.1f}s",
+                        flush=True,
+                    )
 
         metrics = _finalize_meters(meters, batch_count)
         validation_ran = (epoch + 1) % max(1, int(args.val_every_n_epochs)) == 0
         if validation_ran:
             if val_loader is not None:
-                metrics.update(validation_loss(runtime_model, val_loader, cfg, device, amp=args.amp))
+                metrics.update(
+                    validation_loss(
+                        runtime_model,
+                        val_loader,
+                        cfg,
+                        device,
+                        amp=args.amp,
+                        progress_style=args.progress_style,
+                        progress_prefix=f"val-{variant}-B{budget}-e{epoch + 1}",
+                        log_every_n_steps=max(1, args.log_every_n_steps),
+                    )
+                )
             elif val_dataset is not None:
-                metrics.update(validation_open_loop(runtime_model, val_dataset, cfg, args.val_max_scenarios))
+                metrics.update(
+                    validation_open_loop(
+                        runtime_model,
+                        val_dataset,
+                        cfg,
+                        args.val_max_scenarios,
+                        progress_style=args.progress_style,
+                        progress_prefix=f"val-open-{variant}-B{budget}-e{epoch + 1}",
+                        log_every_n_steps=max(1, args.log_every_n_steps),
+                    )
+                )
 
         if scheduler is not None:
             scheduler.step()
@@ -562,7 +677,14 @@ def main() -> None:
         if log_path:
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, sort_keys=True) + "\n")
-        print(json.dumps(row, sort_keys=True), flush=True)
+        if args.progress_style != "none":
+            print(
+                f"[train-epoch-done] variant={variant} B={budget} epoch={epoch + 1}/{epochs} "
+                f"loss={metrics.get('loss', float('nan')):.4f} val_loss={metrics.get('val_loss', float('nan')):.4f} "
+                f"selection={selection_key}:{score:.6f} best={best_val:.6f} improved={improved} "
+                f"epoch_wall={time.perf_counter() - epoch_started:.1f}s total_wall={time.perf_counter() - start_wall:.1f}s",
+                flush=True,
+            )
 
         if (
             args.early_stop_patience > 0
@@ -590,7 +712,11 @@ def main() -> None:
         "wall_time_s": time.perf_counter() - start_wall,
     }
     Path(args.output).with_suffix(".training_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
+    print(
+        f"[train-complete] variant={variant} B={budget} best_metric={best_val:.6f} "
+        f"checkpoint={best_path.resolve()} wall={summary['wall_time_s'] / 60.0:.1f}min",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

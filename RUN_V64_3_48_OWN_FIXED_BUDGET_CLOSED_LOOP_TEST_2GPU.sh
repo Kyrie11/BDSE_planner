@@ -16,6 +16,10 @@ export PROPOSAL_TOP_M="${PROPOSAL_TOP_M:-24}"
 export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_nonreactive_agents}"
 export CL_LIMIT="${CL_LIMIT:-0}"
 export CL_WORKERS_PER_JOB="${CL_WORKERS_PER_JOB:-4}"
+export CL_TOKEN_SCAN_WORKERS="${CL_TOKEN_SCAN_WORKERS:-8}"
+export CL_TOKEN_PROGRESS_SECONDS="${CL_TOKEN_PROGRESS_SECONDS:-5}"
+export CL_HEARTBEAT_SECONDS="${CL_HEARTBEAT_SECONDS:-15}"
+export PYTHONUNBUFFERED=1
 
 [[ -d "$NUPLAN_TEST_DB_ROOT" ]] || { echo "missing raw test DB directory: $NUPLAN_TEST_DB_ROOT" >&2; exit 2; }
 if ! find "$NUPLAN_TEST_DB_ROOT" -maxdepth 1 -type f -name '*.db' -print -quit | grep -q .; then
@@ -52,4 +56,7 @@ python -m bdse.tools.run_fixed_budget_closed_loop_suite \
   --nuplan-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" --nuplan-exp-root "$NUPLAN_EXP_ROOT" --nuplan-db-root "$NUPLAN_TEST_DB_ROOT" \
   --budgets $BUDGETS --proposal-top-m "$PROPOSAL_TOP_M" \
   --challenge "$CL_CHALLENGE" --output-root "$OWN_CLOSED_LOOP_OUT_ROOT" \
-  --gpus "$GPUS" --workers-per-job "$CL_WORKERS_PER_JOB" --schedule-mode model_pairs --systems bdse --resume
+  --gpus "$GPUS" --workers-per-job "$CL_WORKERS_PER_JOB" --schedule-mode model_pairs \
+  --token-scan-workers "$CL_TOKEN_SCAN_WORKERS" --token-progress-seconds "$CL_TOKEN_PROGRESS_SECONDS" \
+  --heartbeat-seconds "$CL_HEARTBEAT_SECONDS" \
+  --systems bdse --resume

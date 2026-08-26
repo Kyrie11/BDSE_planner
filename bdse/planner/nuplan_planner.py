@@ -1727,7 +1727,40 @@ class BDSEnuPlanPlanner(AbstractPlanner):
             model.to(self.device)
             if hasattr(model, "eval"):
                 model.eval()
-        print(f"BDSEnuPlanPlanner device: {self.device} shared_model={share_model} reused={reused_model}")
+        variant = str((cfg.get("external_baseline", {}) or {}).get("variant", "bdse")) if external_enabled else "bdse"
+        params = 0
+        model_param_devices: set[str] = set()
+        if model is not None and hasattr(model, "parameters"):
+            try:
+                model_params = list(model.parameters())
+                params = int(sum(int(p.numel()) for p in model_params))
+                model_param_devices = {str(p.device) for p in model_params if int(p.numel()) > 0}
+            except Exception:
+                params = -1
+        if str(self.device).startswith("cuda") and params > 0:
+            if not model_param_devices or any(not dev.startswith("cuda") for dev in model_param_devices):
+                raise RuntimeError(
+                    f"Planner requested CUDA ({self.device}) but model parameters are on {sorted(model_param_devices)}. "
+                    "Refusing a silent CPU closed-loop run."
+                )
+        cuda_alloc_mb = 0.0
+        cuda_reserved_mb = 0.0
+        if str(self.device).startswith("cuda"):
+            try:
+                import torch
+
+                cuda_alloc_mb = float(torch.cuda.memory_allocated(self.device)) / (1024.0 ** 2)
+                cuda_reserved_mb = float(torch.cuda.memory_reserved(self.device)) / (1024.0 ** 2)
+            except Exception:
+                pass
+        print(
+            f"[planner-ready] variant={variant} logical_device={self.device} "
+            f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')} "
+            f"params={params} param_devices={sorted(model_param_devices)} "
+            f"cuda_alloc={cuda_alloc_mb:.1f}MB cuda_reserved={cuda_reserved_mb:.1f}MB "
+            f"shared_model={share_model} reused={reused_model} checkpoint={'yes' if checkpoint else 'no'}",
+            flush=True,
+        )
         self.core = BDSEPlannerCore(model=model, cfg=cfg, inference_lock=inference_lock)
         _register_closed_loop_profile_flush()
         self._name = "BDSEPlanner"
