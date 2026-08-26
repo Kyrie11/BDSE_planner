@@ -153,7 +153,15 @@ def vectorize_mission_goal(goal: np.ndarray | None, cfg: dict[str, Any]) -> tupl
     return out, valid
 
 
-def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runtime: RuntimeFeatures, cfg: dict[str, Any], include_dense_query: bool) -> dict[str, np.ndarray]:
+def evidence_arrays(
+    evidence_bank: EvidenceBank,
+    candidates: CandidateBank,
+    runtime: RuntimeFeatures,
+    cfg: dict[str, Any],
+    include_dense_query: bool,
+    *,
+    include_query_tensor: bool = True,
+) -> dict[str, np.ndarray]:
     Emax = int(cfg.get("evidence", {}).get("max_atoms", 128))
     efd = int(cfg.get("model", {}).get("evidence_feature_dim", 24))
     qfd = int(cfg.get("model", {}).get("query_feature_dim", ATOM_QUERY_DIM))
@@ -206,8 +214,10 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
         if i < proposal_source.shape[0]:
             cols = min(prop_dim, proposal_source.shape[1])
             prop[i, :cols] = proposal_source[i, :cols]
-    query = np.zeros((Emax, candidates.K, qfd), dtype=np.float32)
+    query = np.zeros((Emax, candidates.K, qfd), dtype=np.float32) if include_query_tensor else None
     if include_dense_query:
+        if query is None:
+            raise ValueError("include_dense_query=True requires include_query_tensor=True")
         # V63 query-contract rule: training/dense diagnostics must be able to use
         # exactly the same runtime-only feature implementation as sparse
         # deployment.  Historical caches may contain query tensors produced by a
@@ -289,16 +299,18 @@ def evidence_arrays(evidence_bank: EvidenceBank, candidates: CandidateBank, runt
             raise ValueError(f"Unknown dense_query_feature_source={source!r}")
         q = q_src[:E, : candidates.K, :qfd]
         query[: q.shape[0], : q.shape[1], : q.shape[2]] = q
-    return {
+    out = {
         "evidence_features": feat,
         "evidence_proposal_features": prop,
-        "evidence_query_features": query,
         "evidence_active": active,
         "evidence_type_ids": type_ids,
         "evidence_family_ids": fam_ids,
         "evidence_agent_group_ids": agent_group_ids,
         "evidence_budget_costs": budget,
     }
+    if query is not None:
+        out["evidence_query_features"] = query
+    return out
 
 
 def runtime_to_model_numpy(runtime: RuntimeFeatures, candidates: CandidateBank, evidence_bank: EvidenceBank, cfg: dict[str, Any], include_dense_query: bool = False) -> dict[str, np.ndarray]:

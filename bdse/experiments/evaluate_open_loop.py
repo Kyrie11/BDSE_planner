@@ -684,6 +684,12 @@ def main() -> None:
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
+    if bool((cfg.get("external_baseline", {}) or {}).get("enabled", False)) and not args.disable_dense_diagnostic:
+        # External adapters expose g=0 and their predict_dense_numpy simply repeats
+        # the certificate forward.  Running it doubles inference without adding a
+        # distinct diagnostic, so disable it automatically for these baselines.
+        args.disable_dense_diagnostic = True
+        print("[external] skipping redundant dense diagnostic for faster open-loop evaluation", flush=True)
     device = resolve_torch_device(args.device, context="Open-loop evaluation")
     configure_torch_for_device(device)
     model = load_model(args.checkpoint, cfg, device)

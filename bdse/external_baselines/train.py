@@ -18,9 +18,9 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from bdse.config import load_config
-from bdse.data.cache_schema import Sample, load_sample_npz
+from bdse.data.cache_schema import Sample
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
-from bdse.data.tensorizer import sample_to_model_inputs
+from bdse.external_baselines.data import external_sample_to_model_inputs, load_external_training_sample_npz
 from bdse.external_baselines.losses import compute_external_baseline_losses
 from bdse.external_baselines.models import ExternalBaselineModel, external_reference, external_variant
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
@@ -29,18 +29,26 @@ from bdse.utils import configure_torch_for_device, resolve_torch_device, torch_l
 
 
 class ExternalBaselineDataset(Dataset):
-    def __init__(self, source: PreprocessedBDSEDataset):
+    def __init__(self, source: PreprocessedBDSEDataset, *, include_label_future: bool = False):
         self.paths = [Path(p) for p in source.build_index()]
+        self.include_label_future = bool(include_label_future)
 
     def __len__(self) -> int:
         return len(self.paths)
 
     def __getitem__(self, idx: int) -> Sample:
-        return load_sample_npz(self.paths[idx], include_label_future=False, include_candidate_metadata=False)
+        return load_external_training_sample_npz(
+            self.paths[idx],
+            include_label_future=self.include_label_future,
+        )
+
+
+def _planner_supervision(cfg: dict[str, Any]) -> str:
+    return str((cfg.get("external_baseline", {}) or {}).get("planner_supervision", "teacher_cost")).strip().lower()
 
 
 def collate(samples: list[Sample], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
-    items = [sample_to_model_inputs(s, cfg, include_teacher=True, include_dense_query=False) for s in samples]
+    items = [external_sample_to_model_inputs(sample, cfg) for sample in samples]
     return {k: torch.stack([it[k] for it in items], dim=0) for k in items[0]}
 
 
@@ -227,7 +235,7 @@ def _finalize_meters(meters: dict[str, torch.Tensor], count: int, prefix: str = 
     return {f"{prefix}{k}": float((v / denom).cpu()) for k, v in meters.items()}
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def validation_loss(
     model: ExternalBaselineModel,
     loader: DataLoader,
@@ -252,7 +260,7 @@ def validation_loss(
     return _finalize_meters(meters, count, prefix="val_")
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def validation_open_loop(model: ExternalBaselineModel, dataset: PreprocessedBDSEDataset, cfg: dict[str, Any], max_scenarios: int | None = None) -> dict[str, float]:
     was = model.training
     model.eval()
@@ -300,7 +308,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
-    parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--prefetch-factor", type=int, default=4)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--warmup-epochs", type=int, default=3)
@@ -312,9 +320,12 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--grad-clip", type=float, default=None)
+    parser.add_argument("--grad-accum-steps", type=int, default=1, help="Gradient accumulation steps; useful to match published effective batch sizes on fewer GPUs.")
     parser.add_argument("--log-every-n-steps", type=int, default=25)
     parser.add_argument("--optimizer-fused", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--compile", action="store_true", help="Optional torch.compile; disabled by default for reproducibility.")
+    parser.add_argument("--compile", action="store_true", help="Compile the training/eval forward graph while saving the original uncompiled state_dict.")
+    parser.add_argument("--compile-mode", choices=["default", "reduce-overhead", "max-autotune"], default="reduce-overhead")
+    parser.add_argument("--compile-fallback", action=argparse.BooleanOptionalAction, default=True, help="Let torch.compile fall back to eager for unsupported subgraphs instead of aborting a long run.")
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--resume-from", type=str, default=None)
     parser.add_argument("--log-file", type=str, default=None)
@@ -334,6 +345,7 @@ def main() -> None:
     lr = float(args.lr if args.lr is not None else ecfg.get("lr", tcfg.get("lr", 1e-4)))
     wd = float(args.weight_decay if args.weight_decay is not None else ecfg.get("weight_decay", tcfg.get("weight_decay", 1e-2)))
     grad_clip = float(args.grad_clip if args.grad_clip is not None else ecfg.get("grad_clip", tcfg.get("grad_clip", 5.0)))
+    grad_accum_steps = max(1, int(args.grad_accum_steps))
 
     _seed_everything(args.seed)
     device = resolve_torch_device(args.device, context="external baseline training")
@@ -343,6 +355,12 @@ def main() -> None:
     if device.type == "cuda":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
+        # A30/Ampere can accelerate nn.MultiheadAttention/TransformerEncoder via
+        # scaled-dot-product attention.  These calls are guarded for older torch.
+        for name in ("enable_flash_sdp", "enable_mem_efficient_sdp", "enable_math_sdp"):
+            fn = getattr(torch.backends.cuda, name, None)
+            if callable(fn):
+                fn(True)
 
     train_source = PreprocessedBDSEDataset(
         args.preprocessed_dir,
@@ -350,7 +368,8 @@ def main() -> None:
         max_scenarios=args.max_scenarios,
         max_scenarios_per_split=args.max_scenarios_per_split,
     )
-    train_ds = ExternalBaselineDataset(train_source)
+    use_label_future = _planner_supervision(cfg) == "expert_imitation"
+    train_ds = ExternalBaselineDataset(train_source, include_label_future=use_label_future)
     generator = torch.Generator()
     generator.manual_seed(args.seed)
     collate_fn = partial(collate, cfg=cfg)
@@ -372,9 +391,10 @@ def main() -> None:
     val_dataset = None
     val_ds_for_manifest: ExternalBaselineDataset | None = None
     if args.val_mode != "none" and args.val_preprocessed_dir:
-        val_source = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=args.val_max_scenarios)
+        val_max_scenarios = None if args.val_max_scenarios is not None and int(args.val_max_scenarios) <= 0 else args.val_max_scenarios
+        val_source = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=val_max_scenarios)
         if args.val_mode == "loss":
-            val_ds_for_manifest = ExternalBaselineDataset(val_source)
+            val_ds_for_manifest = ExternalBaselineDataset(val_source, include_label_future=use_label_future)
             val_workers = max(0, min(num_workers, 6))
             val_kwargs: dict[str, Any] = {
                 "batch_size": batch_size,
@@ -390,7 +410,7 @@ def main() -> None:
             val_loader = DataLoader(val_ds_for_manifest, **val_kwargs)
         else:
             val_dataset = val_source
-            val_ds_for_manifest = ExternalBaselineDataset(val_source)
+            val_ds_for_manifest = ExternalBaselineDataset(val_source, include_label_future=use_label_future)
 
     training_manifest: dict[str, Any] = {
         "schema_version": 1,
@@ -405,20 +425,27 @@ def main() -> None:
             "max_scenarios": args.max_scenarios,
             "max_scenarios_per_split": args.max_scenarios_per_split,
             "batch_size": batch_size,
+            "grad_accum_steps": grad_accum_steps,
+            "effective_batch_size_per_process": batch_size * grad_accum_steps,
             "epochs": epochs,
             "lr": lr,
             "weight_decay": wd,
             "warmup_epochs": args.warmup_epochs,
             "scheduler": args.scheduler,
             "selection_metric": args.selection_metric,
+            "planner_supervision": _planner_supervision(cfg),
             "val_every_n_epochs": args.val_every_n_epochs,
-            "val_max_scenarios": args.val_max_scenarios,
+            "torch_compile": bool(args.compile),
+            "torch_compile_mode": args.compile_mode if args.compile else "disabled",
+            "val_max_scenarios": None if args.val_max_scenarios is not None and int(args.val_max_scenarios) <= 0 else args.val_max_scenarios,
         },
     }
     manifest_path = Path(args.output).with_suffix(".data_manifest.json")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(training_manifest, indent=2, sort_keys=True), encoding="utf-8")
 
+    # Keep `model` as the canonical eager module for optimizer/checkpoint state.
+    # `runtime_model` may be an OptimizedModule but shares the same parameters.
     model: torch.nn.Module = ExternalBaselineModel(cfg).to(device)
     optimizer = _make_optimizer(model, lr=lr, weight_decay=wd, fused=bool(args.optimizer_fused), device=device)
     scheduler = _make_scheduler(optimizer, scheduler_name=args.scheduler, epochs=epochs, warmup_epochs=args.warmup_epochs)
@@ -427,10 +454,17 @@ def main() -> None:
     best_val = float("inf")
     if args.resume_from:
         start_epoch, best_val = _load_resume(args.resume_from, model, optimizer, scheduler)
+    runtime_model: torch.nn.Module = model
     if args.compile:
         if not hasattr(torch, "compile"):
             raise RuntimeError("torch.compile is unavailable in this PyTorch build")
-        model = torch.compile(model)  # type: ignore[assignment]
+        if args.compile_fallback:
+            try:
+                import torch._dynamo
+                torch._dynamo.config.suppress_errors = True
+            except Exception:
+                pass
+        runtime_model = torch.compile(model, mode=args.compile_mode)  # type: ignore[assignment]
 
     log_path = Path(args.log_file) if args.log_file else None
     if log_path:
@@ -441,34 +475,42 @@ def main() -> None:
 
     for epoch in range(start_epoch, epochs):
         model.train()
+        runtime_model.train()
         meters: dict[str, torch.Tensor] = {}
         batch_count = 0
         pbar = tqdm(loader, desc=f"external-{variant} epoch {epoch + 1}/{epochs}", mininterval=1.0)
+        optimizer.zero_grad(set_to_none=True)
+        total_steps = len(loader)
         for step, batch in enumerate(pbar, start=1):
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-            optimizer.zero_grad(set_to_none=True)
+            group_start = ((step - 1) // grad_accum_steps) * grad_accum_steps
+            group_size = min(grad_accum_steps, total_steps - group_start)
             with _amp_context(device, args.amp):
-                out = model(batch)
+                out = runtime_model(batch)
                 losses = compute_external_baseline_losses(out, batch, cfg)
                 loss = losses["loss"]
-            scaler.scale(loss).backward()
-            if grad_clip > 0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+                backward_loss = loss / float(group_size)
+            scaler.scale(backward_loss).backward()
+            do_step = (step % grad_accum_steps == 0) or (step == total_steps)
+            if do_step:
+                if grad_clip > 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
             _accumulate(meters, losses)
             batch_count += 1
-            if step % max(1, args.log_every_n_steps) == 0 or step == len(loader):
+            if step % max(1, args.log_every_n_steps) == 0 or step == total_steps:
                 pbar.set_postfix(loss=f"{float(loss.detach().cpu()):.4f}", lr=f"{optimizer.param_groups[0]['lr']:.2e}")
 
         metrics = _finalize_meters(meters, batch_count)
         validation_ran = (epoch + 1) % max(1, int(args.val_every_n_epochs)) == 0
         if validation_ran:
             if val_loader is not None:
-                metrics.update(validation_loss(model, val_loader, cfg, device, amp=args.amp))
+                metrics.update(validation_loss(runtime_model, val_loader, cfg, device, amp=args.amp))
             elif val_dataset is not None:
-                metrics.update(validation_open_loop(model, val_dataset, cfg, args.val_max_scenarios))
+                metrics.update(validation_open_loop(runtime_model, val_dataset, cfg, args.val_max_scenarios))
 
         if scheduler is not None:
             scheduler.step()

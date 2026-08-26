@@ -33,7 +33,7 @@ def _file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _strict_budget_config(source: Path, output: Path, budget: int, *, bdse_local: bool) -> None:
+def _strict_budget_config(source: Path, output: Path, budget: int, *, bdse_local: bool, proposal_top_m: int = 24) -> None:
     cfg = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
     if not isinstance(cfg, dict):
         raise ValueError(f"expected YAML mapping: {source}")
@@ -42,7 +42,7 @@ def _strict_budget_config(source: Path, output: Path, budget: int, *, bdse_local
     selector["min_selected_atoms"] = int(budget)
     selector["force_fill_budget"] = True
     max_atoms = int((cfg.get("evidence", {}) or {}).get("max_atoms", 128))
-    selector["proposal_top_m"] = min(max_atoms, max(24, 3 * int(budget)))
+    selector["proposal_top_m"] = min(max_atoms, int(proposal_top_m))
     fallback = cfg.setdefault("fallback", {})
     fallback["enabled"] = False
     fallback["max_additional_stages"] = 0
@@ -195,6 +195,7 @@ def main() -> None:
     p.add_argument("--split", default="val_tune")
     p.add_argument("--max-scenarios", type=int, default=1000)
     p.add_argument("--budgets", type=int, nargs="+", default=[8, 16, 24, 32])
+    p.add_argument("--proposal-top-m", type=int, default=24, help="Fixed upstream proposal pool M; it must not scale with B.")
     p.add_argument("--external", nargs="+", default=["gameformer", "dtpp", "plantf", "pluto"])
     p.add_argument("--include-pdm-closed", action="store_true")
     p.add_argument("--output-root", type=Path, required=True)
@@ -209,7 +210,7 @@ def main() -> None:
     tasks: list[Task] = []
     for budget in args.budgets:
         bdse_cfg = config_root / f"bdse_local_B{budget}.yaml"
-        _strict_budget_config(args.bdse_config, bdse_cfg, budget, bdse_local=True)
+        _strict_budget_config(args.bdse_config, bdse_cfg, budget, bdse_local=True, proposal_top_m=args.proposal_top_m)
         tasks.append(Task("bdse_local", budget, bdse_cfg, args.bdse_checkpoint, args.output_root / f"B{budget}" / "bdse_local"))
         for name in args.external:
             src = Path(f"bdse/configs/external_{name}_budgeted_fast_cl.yaml")
@@ -217,12 +218,12 @@ def main() -> None:
             if not checkpoint.is_file():
                 raise FileNotFoundError(f"missing external checkpoint: {checkpoint}")
             cfg = config_root / f"{name}_B{budget}.yaml"
-            _strict_budget_config(src, cfg, budget, bdse_local=False)
+            _strict_budget_config(src, cfg, budget, bdse_local=False, proposal_top_m=args.proposal_top_m)
             tasks.append(Task(name, budget, cfg, checkpoint, args.output_root / f"B{budget}" / name))
         if args.include_pdm_closed:
             src = Path("bdse/configs/external_pdm_closed_budgeted_fast_cl.yaml")
             cfg = config_root / f"pdm_closed_B{budget}.yaml"
-            _strict_budget_config(src, cfg, budget, bdse_local=False)
+            _strict_budget_config(src, cfg, budget, bdse_local=False, proposal_top_m=args.proposal_top_m)
             tasks.append(Task("pdm_closed", budget, cfg, None, args.output_root / f"B{budget}" / "pdm_closed"))
     gpus = [x.strip() for x in args.gpus.split(",") if x.strip()] if args.device == "cuda" else ["cpu"]
     slots = [gpu for gpu in gpus for _ in range(max(1, args.workers_per_gpu))]

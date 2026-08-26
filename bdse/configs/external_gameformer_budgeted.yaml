@@ -5,9 +5,8 @@ evidence:
 fallback:
   budget_stages:
   - 16
-  - 32
-  enabled: true
-  max_additional_stages: 1
+  enabled: false
+  max_additional_stages: 0
   proposal_multiplier: 3.0
   rival_stages:
   - 16
@@ -27,7 +26,7 @@ selector:
   force_hard_topm: true
   mandatory_hard_quota: 3
   min_selected_atoms: 16
-  proposal_top_m: 64
+  proposal_top_m: 24
   runtime_pair_cap_multiplier: 1.0
 tournament:
   L_infer: 16
@@ -48,7 +47,7 @@ external_baseline:
   loss_weights:
     action: 1.0
     cost: 0.5
-    pair: 1.0
+    pair: 0.0
     proposal: 0.25
     deep_supervision: 0.25
   implementation_label: GameFormer-inspired budget adapter
@@ -56,3 +55,4 @@ external_baseline:
     Interactive Prediction and Planning for Autonomous Driving (ICCV 2023)'
   reference_source: https://github.com/MCZhi/GameFormer
   implementation_fidelity: partial
+  planner_supervision: expert_imitation

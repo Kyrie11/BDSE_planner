@@ -102,3 +102,40 @@ def test_external_runtime_budget_override_changes_selected_count(synthetic_sampl
     assert int(out2["external_selected_mask"].sum()) <= 2
     assert int(out6["external_selected_mask"].sum()) <= 6
     assert int(out6["external_selected_mask"].sum()) >= int(out2["external_selected_mask"].sum())
+
+
+def test_external_compact_tensorizer_matches_generic_forward(synthetic_sample):
+    from bdse.external_baselines.data import external_sample_to_model_inputs
+
+    for variant in ("gameformer", "dtpp", "plantf", "pluto"):
+        torch.manual_seed(7)
+        cfg = _cfg_for_variant(variant)
+        model = ExternalBaselineModel(cfg).eval()
+        full = sample_to_model_inputs(synthetic_sample, cfg, include_teacher=True, include_dense_query=False)
+        compact = external_sample_to_model_inputs(synthetic_sample, cfg)
+        assert torch.equal(full["oracle_selected_mask"], compact["oracle_selected_mask"]), variant
+        full_b = {k: v.unsqueeze(0) for k, v in full.items()}
+        compact_b = {k: v.unsqueeze(0) for k, v in compact.items()}
+        with torch.inference_mode():
+            out_full = model(full_b)["J0"]
+            out_compact = model(compact_b)["J0"]
+        assert torch.allclose(out_full, out_compact, atol=2e-5, rtol=2e-5), variant
+
+
+def test_external_minimal_npz_loader_preserves_external_contract(tmp_path, synthetic_sample):
+    from bdse.data.cache_schema import save_sample_npz
+    from bdse.external_baselines.data import (
+        external_sample_to_model_inputs,
+        load_external_training_sample_npz,
+    )
+
+    cfg = _cfg_for_variant("plantf")
+    cfg["external_baseline"]["planner_supervision"] = "expert_imitation"
+    path = tmp_path / "sample.npz"
+    save_sample_npz(synthetic_sample, path)
+    lean = load_external_training_sample_npz(path, include_label_future=True)
+    tensors = external_sample_to_model_inputs(lean, cfg)
+    assert lean.scenario_token == synthetic_sample.scenario_token
+    assert torch.equal(tensors["candidate_valid"], torch.from_numpy(synthetic_sample.candidates.valid_mask))
+    assert int(tensors["expert_candidate_index"]) >= 0
+    assert tensors["expert_candidate_cost"].shape[0] == synthetic_sample.candidates.K

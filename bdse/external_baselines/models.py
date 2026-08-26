@@ -8,7 +8,6 @@ import torch.nn.functional as F
 from torch import nn
 
 from bdse.data.cache_schema import RuntimeFeatures
-from bdse.data.tensorizer import runtime_to_model_numpy
 from bdse.planner.fallback import runtime_safety_flags_from_runtime
 from bdse.planner.hab import family_ids_from_atoms
 from bdse.planner.pair_screen import build_runtime_pairs_from_base, build_rival_sets_from_base
@@ -277,7 +276,31 @@ class ExternalBaselineModel(nn.Module):
         self.unit_cost = bool(cfg.get("evidence", {}).get("unit_cost", True))
         self.reference = external_reference(self.variant)
 
+        # PDM-Closed-style is a deterministic NumPy scorer.  Avoid allocating a
+        # several-layer Transformer that is never executed during open/closed loop.
+        if self.variant == "pdm_closed":
+            self.register_buffer("_pdm_device_anchor", torch.empty(0), persistent=False)
+            return
+
         self.ego_mlp = nn.Sequential(nn.Linear(8, h), nn.ReLU(), nn.LayerNorm(h), nn.Linear(h, h))
+        # PlanTF's defining SDE embeds individual kinematic state variables as
+        # tokens and aggregates them with an attention query.  The original
+        # adapter applied elementwise dropout before an MLP, which is not the
+        # paper's mechanism.  Use an attention-based token SDE for PlanTF and
+        # PLUTO (which builds on the SDE lineage), while preserving x/y/heading.
+        self.use_state_dropout_encoder = self.variant in {"plantf", "pluto"}
+        if self.use_state_dropout_encoder:
+            self.state_value_proj = nn.Linear(1, h)
+            self.state_index_embed = nn.Embedding(8, h)
+            self.state_query = nn.Parameter(torch.zeros(1, 1, h))
+            self.state_cross_attn = nn.MultiheadAttention(h, int(self.ecfg.get("attention_heads", cfg.get("model", {}).get("attention_heads", 8))), dropout=self.dropout_p, batch_first=True)
+            self.state_norm = nn.LayerNorm(h)
+        else:
+            self.state_value_proj = None
+            self.state_index_embed = None
+            self.state_query = None
+            self.state_cross_attn = None
+            self.state_norm = None
         self.agent_mlp = nn.Sequential(nn.Linear(16, h), nn.ReLU(), nn.LayerNorm(h), nn.Linear(h, h))
         self.map_mlp = nn.Sequential(nn.Linear(16, h), nn.ReLU(), nn.LayerNorm(h), nn.Linear(h, h))
         self.route_mlp = nn.Sequential(nn.Linear(16, h), nn.ReLU(), nn.LayerNorm(h), nn.Linear(h, h))
@@ -320,12 +343,53 @@ class ExternalBaselineModel(nn.Module):
         mf = m.float()
         return (x * mf).sum(dim=dims) / mf.sum(dim=dims).clamp_min(1.0)
 
+    def _encode_ego_state(self, ego_cur: torch.Tensor) -> torch.Tensor:
+        if not self.use_state_dropout_encoder:
+            if self.training and self.state_dropout > 0.0:
+                keep = (torch.rand_like(ego_cur) > self.state_dropout).float()
+                ego_cur = ego_cur * keep
+            return self.ego_mlp(ego_cur)
+        assert self.state_value_proj is not None and self.state_index_embed is not None
+        assert self.state_query is not None and self.state_cross_attn is not None and self.state_norm is not None
+        B, D = ego_cur.shape
+        idx = torch.arange(D, device=ego_cur.device).view(1, D).expand(B, D)
+        tokens = self.state_value_proj(ego_cur.unsqueeze(-1)) + self.state_index_embed(idx)
+        padding = torch.zeros(B, D, device=ego_cur.device, dtype=torch.bool)
+        if self.training and self.state_dropout > 0.0:
+            padding = torch.rand(B, D, device=ego_cur.device) < self.state_dropout
+            # Paper SDE keeps position and heading.  Our cache's first three
+            # channels are x, y, heading; never mask those tokens.
+            padding[:, : min(3, D)] = False
+        q = self.state_query.expand(B, -1, -1)
+        pooled, _ = self.state_cross_attn(q, tokens, tokens, key_padding_mask=padding, need_weights=False)
+        return self.state_norm(pooled[:, 0])
+
     def _scene_embedding(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        # The optimized external DataLoader/closed-loop path provides exactly the
+        # pooled quantities used by the old implementation.  Fall back to the
+        # generic full tensors for backward compatibility with older tests/tools.
+        if "external_ego_current" in batch:
+            ego_cur = _fit_last_dim_torch(batch["external_ego_current"].float(), 8)
+            ego_state_feat = self._encode_ego_state(ego_cur)
+            B = ego_cur.shape[0]
+            device, dtype = ego_cur.device, ego_cur.dtype
+            agent_feat = _fit_last_dim_torch(batch.get("external_agent_summary", torch.zeros(B, 16, device=device, dtype=dtype)).float(), 16)
+            map_feat = _fit_last_dim_torch(batch.get("external_map_summary", torch.zeros(B, 16, device=device, dtype=dtype)).float(), 16)
+            route_feat = _fit_last_dim_torch(batch.get("external_route_summary", torch.zeros(B, 16, device=device, dtype=dtype)).float(), 16)
+            traffic_feat = _fit_last_dim_torch(batch.get("external_traffic_summary", torch.zeros(B, 12, device=device, dtype=dtype)).float(), 12)
+            goal = _fit_last_dim_torch(batch.get("mission_goal", torch.zeros(B, 4, device=device, dtype=dtype)).float(), 4)
+            return (
+                ego_state_feat
+                + self.agent_mlp(agent_feat)
+                + self.map_mlp(map_feat)
+                + self.route_mlp(route_feat)
+                + self.traffic_mlp(traffic_feat)
+                + self.goal_mlp(goal)
+            )
+
         ego = batch["ego_history"].float()
         ego_cur = _fit_last_dim_torch(ego[:, -1], 8)
-        if self.training and self.state_dropout > 0.0:
-            drop = (torch.rand_like(ego_cur) > self.state_dropout).float()
-            ego_cur = ego_cur * drop
+        ego_state_feat = self._encode_ego_state(ego_cur)
         agent = batch.get("agent_history")
         agent_valid = batch.get("agent_valid")
         if agent is not None:
@@ -370,7 +434,7 @@ class ExternalBaselineModel(nn.Module):
             traffic_feat = torch.zeros(ego.shape[0], 12, device=ego.device, dtype=ego.dtype)
         goal = _fit_last_dim_torch(batch.get("mission_goal", torch.zeros(ego.shape[0], 4, device=ego.device, dtype=ego.dtype)).float(), 4)
         return (
-            self.ego_mlp(ego_cur)
+            ego_state_feat
             + self.agent_mlp(agent_feat)
             + self.map_mlp(map_feat)
             + self.route_mlp(route_feat)
@@ -438,15 +502,45 @@ class ExternalBaselineModel(nn.Module):
         return selected, order, accepted
 
     def _candidate_tokens(self, batch: dict[str, torch.Tensor], scene: torch.Tensor) -> torch.Tensor:
-        traj = batch["candidate_trajectories"].float()
         valid = batch["candidate_valid"].bool()
-        cfeat = candidate_numeric_features_torch(traj, valid, self.step_s)
+        if "candidate_numeric_features" in batch:
+            cfeat = _fit_last_dim_torch(batch["candidate_numeric_features"].float(), 15)
+        else:
+            traj = batch["candidate_trajectories"].float()
+            cfeat = candidate_numeric_features_torch(traj, valid, self.step_s)
         mid = batch.get("candidate_maneuver_ids", torch.zeros(valid.shape, dtype=torch.long, device=valid.device)).long().clamp_min(0).clamp_max(self.maneuver_embed.num_embeddings - 1)
         tok = self.cand_mlp(cfeat) + self.maneuver_embed(mid) + scene[:, None, :]
         return tok
 
     def forward(self, batch: dict[str, torch.Tensor], budget_override: float | None = None) -> dict[str, Any]:
         valid = batch["candidate_valid"].bool()
+        if self.variant == "pdm_closed":
+            if "candidate_trajectories" in batch:
+                traj = batch["candidate_trajectories"].float()
+                j = -traj[:, :, -1, 0] * 0.05 + traj[:, :, :, 1].abs().mean(dim=-1)
+            else:
+                feat = batch["candidate_numeric_features"].float()
+                # progress and mean |lateral| are the first/third normalized descriptors.
+                j = -feat[..., 0] * 6.0 + feat[..., 2] * 20.0
+            ev = batch.get("evidence_features")
+            active = batch.get("evidence_active")
+            if ev is None:
+                prop_logits = torch.zeros((valid.shape[0], 1), device=valid.device, dtype=torch.float32)
+                active = torch.ones_like(prop_logits, dtype=torch.bool)
+            else:
+                prop_logits = (5.0 * ev[..., 0].float()).masked_fill(~active.bool(), -1e9)
+            costs = batch.get("evidence_budget_costs", torch.ones_like(prop_logits)).float().clamp_min(1e-6)
+            selected_mask, selected_indices, selected_valid = self._top_budget_selection(prop_logits, active.bool(), costs, budget_override=budget_override)
+            return {
+                "J0": j.float().masked_fill(~valid, 1e6),
+                "proposal_logits": prop_logits.float(),
+                "external_selected_mask": selected_mask,
+                "external_selected_indices": selected_indices,
+                "external_selected_valid": selected_valid,
+                "external_variant": self.variant,
+                "external_implementation_label": self.reference.get("implementation_label", self.variant),
+                "external_fidelity": self.reference.get("fidelity", "unspecified"),
+            }
         scene = self._scene_embedding(batch)
         cand = self._candidate_tokens(batch, scene)
         ev_tokens, prop_logits, ev_active = self._evidence_tokens(batch, scene)
@@ -466,11 +560,7 @@ class ExternalBaselineModel(nn.Module):
         scene_tok = self.scene_token.expand(cand.shape[0], -1, -1) + scene[:, None, :]
         auxiliary_costs: list[torch.Tensor] = []
 
-        if self.variant == "pdm_closed":
-            # Neural forward is not used for PDM.  Keep a simple differentiable
-            # equivalent for py_compile/tests if somebody calls it.
-            j = -batch["candidate_trajectories"][:, :, -1, 0].float() * 0.05 + batch["candidate_trajectories"][:, :, :, 1].float().abs().mean(dim=-1)
-        elif self.variant in {"plantf", "pluto"}:
+        if self.variant in {"plantf", "pluto"}:
             tokens = torch.cat([scene_tok, cand, ev_sel], dim=1)
             padding = torch.cat([torch.zeros((valid.shape[0], 1), dtype=torch.bool, device=valid.device), candidate_padding, selected_padding], dim=1)
             enc = self.scene_transformer(tokens, src_key_padding_mask=padding)
@@ -621,14 +711,15 @@ class ExternalBaselineModel(nn.Module):
             "external_fidelity": self.reference.get("fidelity", "unspecified"),
         }
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def predict_certificate_numpy(self, runtime: RuntimeFeatures, candidates: Any, evidence_bank: Any, cfg: dict[str, Any]) -> dict[str, Any]:
         if self.variant == "pdm_closed":
             flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg)
             J0 = candidate_rule_cost_np(candidates, flags, cfg)
             proposal_logits = cheap_proposal_logits_np(evidence_bank, cfg)
             return self._numpy_pred_common(runtime, candidates, evidence_bank, cfg, J0, proposal_logits)
-        arrays = runtime_to_model_numpy(runtime, candidates, evidence_bank, cfg, include_dense_query=False)
+        from bdse.external_baselines.data import external_runtime_to_model_numpy
+        arrays = external_runtime_to_model_numpy(runtime, candidates, evidence_bank, cfg)
         device = next(self.parameters()).device
         batch: dict[str, torch.Tensor] = {}
         for k, v in arrays.items():
@@ -646,7 +737,7 @@ class ExternalBaselineModel(nn.Module):
         proposal = out["proposal_logits"][0].detach().cpu().numpy().astype(np.float32)
         return self._numpy_pred_common(runtime, candidates, evidence_bank, cfg, J0, proposal)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def predict_dense_numpy(self, runtime: RuntimeFeatures, candidates: Any, evidence_bank: Any, cfg: dict[str, Any]) -> dict[str, Any]:
         pred = self.predict_certificate_numpy(runtime, candidates, evidence_bank, cfg)
         return {"J0": pred["J0"], "g": pred["g"]}
