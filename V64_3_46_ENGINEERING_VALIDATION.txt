@@ -1,0 +1,90 @@
+V64.3.46 EAF-ICER-DIRP ENGINEERING VALIDATION
+================================================
+
+Scope
+-----
+V46 is a preregistered next-step implementation after the uploaded V45 TRAIN scientific stop.
+It freezes the mature RSMR/QUALITY/V44-support/V45-response-mean layers and adds only:
+  (1) honest TRAIN-only conditional acceleration second-moment fitting,
+  (2) fixed moment-matching response propagation,
+  (3) bounded temporal interaction-profile observables,
+  (4) nested TRAIN causal arms DIST-MEAN / TEMPORAL-PROFILE / DIRP-JOINT.
+
+Uploaded V45 reliability prerequisites independently established before V46 design
+-------------------------------------------------------------------------
+- uploaded V45 code SHA256:
+  d8acc5abb5d5b63c24e93d96884649c0b0a055676a3f684a1861bdffca8752ca
+  exactly matches preregistered V45 delivery.
+- uploaded V45 output ZIP SHA256:
+  b557eef258718f8381e7373bcbcaa7bb53a6f4cf5a38c48e1cbcb815c9d493bc
+- V45 server targeted regression: 213/213 PASS.
+- independent rerun on uploaded V45 code: 213/213 PASS.
+- 782/782 unique TRAIN direct scenes; 5/5 nested folds.
+- exact V44 historical control replay and frozen-winner containment.
+- no deployment logged future / no teacher-value response target.
+- V45 TRAIN gate stopped scientifically before A500/B500 selection; fresh unspent.
+
+V46 compile / launcher
+----------------------
+- python -m compileall -q bdse: PASS
+- bash -n RUN_V64_3_46_EAF_ICER_DIRP_SCREEN_2GPU.sh: PASS
+
+Focused regression
+------------------
+- V46 focused: 6/6 PASS
+- V45 + V46 focused: 12/12 PASS
+
+Historical targeted regression
+------------------------------
+V13 -> V46 exact targeted suite:
+  219/219 PASS
+  2 historical PyTorch nested-tensor warnings, no new warning class.
+
+Full repository regression
+--------------------------
+121 test files were partitioned into four mutually exclusive, exhaustive sets.
+Results:
+  partition 0: 159/159 PASS
+  partition 1: 133/133 PASS
+  partition 2: 121/121 PASS
+  partition 3: 136/136 PASS
+  total:       549/549 PASS
+Warnings: 36 historical warnings, no new warning class introduced by V46.
+
+V46 structural contracts covered by focused tests / runtime assertions
+---------------------------------------------------------------------
+- fixed 3-point sigma rule has unit total weight, zero mean offset and unit variance;
+- V46 PLAN mean occupancy exactly replays the V45 PLAN occupancy statistic;
+- DIRP observables are finite, nonnegative and runtime-only;
+- V46 value-observable schema appends without changing historical coordinate order;
+- vector response-profile residual is consumed only after the frozen RSMR winner;
+- no reranking / second-best / fallback is enabled;
+- V46 build tool hard-checks V45 response OOF signature before fitting second moments;
+- V46 sidecar generation hard-checks per-scene V45 PLAN occupancy replay <= 1e-10;
+- second-moment PLAN correction inherits the V45 zero-bias exposure-conditioned form;
+- no selected translation, CVaR alpha/weight tuning, new distance threshold or kernel bandwidth.
+
+Scientific fail-closed gates
+----------------------------
+Before V46 attribution, the launcher requires exact V45 signatures:
+- RSMR       502 / 221 / 107 no-op / 28 cat / +43.29405361274824
+- QUALITY    205 / 129 / 30 no-op  / 13 cat / +43.905547394411805
+- CV-OCC     220 / 120 / 43 no-op  / 13 cat / +45.20842296723279
+- LOCAL-RF   218 / 122 / 37 no-op  / 9 cat  / +54.57972428889805
+- PLAN-RF    217 / 121 / 38 no-op  / 9 cat  / +56.55117310290402
+- response MSE CV / LOCAL / PLAN:
+  0.30137842796229286 / 0.12486025654085724 / 0.12385468573917016
+- V45 scientific-stop diagnosis unchanged.
+- V45 fresh-unspent state unchanged.
+
+Second-moment response attribution additionally requires an independent nuisance gate:
+- LOCAL second-moment MSE beats a constant baseline in aggregate and >=4/5 folds;
+- PLAN second-moment MSE beats LOCAL in aggregate and >=4/5 folds.
+Value gain cannot be attributed to response distribution if this nuisance gate fails.
+
+Fresh protocol
+--------------
+V46 selects no fresh data unless nested TRAIN passes.
+If TRAIN passes, it selects independent A500+B500 using label-free seed:
+  v64.3.46-eaf-icer-dirp-double-fresh-v1
+A/B pooling remains prohibited.

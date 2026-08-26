@@ -145,6 +145,13 @@ def runtime_value_observable_costs(
             raise ValueError("V45 interaction-response-field observable schema mismatch")
         out = np.concatenate([out, rf], axis=1)
         names.extend(rn)
+    if bool(ic.get("instrument_distributional_interaction_response_observables", False)):
+        from bdse.planner.distributional_interaction_response import DIRP_OBSERVABLE_NAMES, runtime_distributional_interaction_response_observable_costs
+        dr, dn = runtime_distributional_interaction_response_observable_costs(runtime, candidates, cfg)
+        if dn != DIRP_OBSERVABLE_NAMES or dr.shape != (K, len(DIRP_OBSERVABLE_NAMES)):
+            raise ValueError("V46 distributional-interaction-response observable schema mismatch")
+        out = np.concatenate([out, dr], axis=1)
+        names.extend(dn)
     if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
         raise ValueError("deployment value-observable matrix is malformed or non-finite")
     return out, names

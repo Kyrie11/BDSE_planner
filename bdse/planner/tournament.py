@@ -2602,7 +2602,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2627,7 +2627,7 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field"}:
+    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile"}:
         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
@@ -2662,7 +2662,7 @@ def _icer_post_selection_value(
         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
         value_feature = phi
         value_names = [f"post_value::{n}" for n in runtime_value_names]
-        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field"}:
+        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile"}:
             if value_observable_matrix is None or value_observable_names is None:
                 raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
             om = np.asarray(value_observable_matrix, dtype=np.float64)
@@ -2682,19 +2682,34 @@ def _icer_post_selection_value(
             qobs = delta_obs[np.asarray(qidx, dtype=np.int64)]
             qres = float((qobs / np.maximum(qscale, 1.0e-6)) @ qw)
             value = float(np.clip(value + qres, -40.0, 40.0))
-            rname = str(scir_cfg.get("post_selection_future_response_observable_name", ""))
-            if rname not in on:
-                raise ValueError("EAF-ICER V43 selected future-response observable missing")
-            ridx = on.index(rname)
-            rscale = float(scir_cfg.get("post_selection_future_response_scale", float("nan")))
-            rw = float(scir_cfg.get("post_selection_future_response_weight", float("nan")))
-            if not math.isfinite(rscale) or rscale <= 0.0 or not math.isfinite(rw):
-                raise ValueError("EAF-ICER V43 future-response residual parameters invalid")
-            robs = float(delta_obs[ridx])
-            rres = float((robs / max(rscale, 1.0e-6)) * rw)
-            value = float(np.clip(value + rres, -40.0, 40.0))
-            value_feature = np.concatenate([phi, qobs, np.asarray([robs], dtype=np.float64)])
-            value_names = [f"post_value::{n}" for n in runtime_value_names] + [f"observable_improvement::{n}" for n in qnames] + [f"future_response_improvement::{rname}"]
+            if mode == "endpoint_potential_quality_distributional_response_profile":
+                rnames = [str(x) for x in scir_cfg.get("post_selection_future_response_observable_names", [])]
+                if not rnames or any(n not in on for n in rnames):
+                    raise ValueError("EAF-ICER V46 response-profile observable schema missing")
+                ridx = [on.index(n) for n in rnames]
+                rscale = np.asarray(scir_cfg.get("post_selection_future_response_scales", []), dtype=np.float64).reshape(-1)
+                rw = np.asarray(scir_cfg.get("post_selection_future_response_weights", []), dtype=np.float64).reshape(-1)
+                if rscale.size != len(ridx) or rw.size != len(ridx) or np.any(~np.isfinite(rscale)) or np.any(rscale <= 0.0) or np.any(~np.isfinite(rw)):
+                    raise ValueError("EAF-ICER V46 response-profile residual parameters invalid")
+                robs = delta_obs[np.asarray(ridx, dtype=np.int64)]
+                rres = float((robs / np.maximum(rscale, 1.0e-6)) @ rw)
+                value = float(np.clip(value + rres, -40.0, 40.0))
+                value_feature = np.concatenate([phi, qobs, robs])
+                value_names = [f"post_value::{n}" for n in runtime_value_names] + [f"observable_improvement::{n}" for n in qnames] + [f"future_response_improvement::{n}" for n in rnames]
+            else:
+                rname = str(scir_cfg.get("post_selection_future_response_observable_name", ""))
+                if rname not in on:
+                    raise ValueError("EAF-ICER V43 selected future-response observable missing")
+                ridx = on.index(rname)
+                rscale = float(scir_cfg.get("post_selection_future_response_scale", float("nan")))
+                rw = float(scir_cfg.get("post_selection_future_response_weight", float("nan")))
+                if not math.isfinite(rscale) or rscale <= 0.0 or not math.isfinite(rw):
+                    raise ValueError("EAF-ICER V43 future-response residual parameters invalid")
+                robs = float(delta_obs[ridx])
+                rres = float((robs / max(rscale, 1.0e-6)) * rw)
+                value = float(np.clip(value + rres, -40.0, 40.0))
+                value_feature = np.concatenate([phi, qobs, np.asarray([robs], dtype=np.float64)])
+                value_names = [f"post_value::{n}" for n in runtime_value_names] + [f"observable_improvement::{n}" for n in qnames] + [f"future_response_improvement::{rname}"]
             if mode in {"endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response_shift"}:
                 shift = float(scir_cfg.get("post_selection_selected_bias", float("nan")))
                 if not math.isfinite(shift):

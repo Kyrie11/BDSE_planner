@@ -11364,3 +11364,173 @@ V45 uses no CAL500 translation. Only after TRAIN passes may it select independen
 A/B remain strictly unpooled.
 
 Candidate paper mechanism, conditional on independent validation: **Selection–Valuation–Response Sufficiency with agent-local interaction response fields** — a bounded auditable interface can be sufficient for ordinal extremal selection, while safe absolute valuation of the frozen proposal requires a distinct continuous action-conditioned response/consequence representation. Observational logged-future response fitting supports a conditional-response claim; causal agent-response claims require subsequent frozen closed-loop/interventional evidence.
+
+# V64.3.45 uploaded TRAIN result audit -> V64.3.46 EAF-ICER-DIRP
+
+## V64.3.45 result validity
+
+- Uploaded V45 code SHA256 is `d8acc5abb5d5b63c24e93d96884649c0b0a055676a3f684a1861bdffca8752ca`, exactly matching the preregistered V45 package.
+- Uploaded output ZIP SHA256 is `b557eef258718f8381e7373bcbcaa7bb53a6f4cf5a38c48e1cbcb815c9d493bc`.
+- V44 historical RSMR / QUALITY / PC-OCC controls replay exactly; 782/782 unique direct scenes and all five nested outer folds complete.
+- Server and independent uploaded-code targeted regression both report `213/213 PASS` (two historical warnings only).
+- Response supervision contains 3000 frozen TRAIN scenes / 88318 agent rows, uses TRAIN logged agent future only for the nuisance response target, explicitly excludes teacher value/improvement, and deployment consumes no logged future.
+- RSMR remains the sole challenger selector. CV-OCC / LOCAL-RF / PLAN-RF can only accept the same frozen RSMR winner or return to the incumbent; no rerank, second-best or fallback is introduced.
+- The launcher stopped at the preregistered nested TRAIN scientific gate. No A500/B500 fresh manifest was created.
+
+Conclusion: **V45 is engineering-valid and can be attributed scientifically; no V45.1 repair is required.**
+
+## V64.3.45 preregistered mechanism result
+
+Frozen RSMR remains `502 selected / 221 positive / capture 38.5017% / +43.2941 / 28 catastrophe / 107 no-op / NegRMS 0.3557`.
+
+- QUALITY: `205 / 129`, capture `22.47%`, sum `+43.9055`, cat `13`, no-op `30`, NegRMS `0.3127`.
+- CV-OCC: `220 / 120`, capture `20.91%`, sum `+45.2084`, cat `13`, no-op `43`, NegRMS `0.3030`.
+- LOCAL-RF: `218 / 122`, capture `21.25%`, sum `+54.5797`, cat `9`, no-op `37`, NegRMS `0.2396`.
+- PLAN-RF: `217 / 121`, capture `21.08%`, sum `+56.5512`, cat `9`, no-op `38`, NegRMS `0.2402`.
+- All three V45 arms pass tail / population / five-fold nonnegative-sum sub-gates, but all fail the unchanged `35.50%` capture floor. V45 is therefore **strong partial mechanism success + promotion failure**.
+
+### Response layer is now independently identified
+
+Unlike V44's failed scene-global five-mode posterior, V45's continuous agent-local nuisance response model is genuinely learnable under honest OOF fitting:
+
+- CV response MSE `0.3013784`;
+- LOCAL response MSE `0.1248603`, better than CV in `5/5` folds;
+- PLAN response MSE `0.1238547`, better than LOCAL in `5/5` folds.
+
+The plan-conditioning increment is small in ordinary all-agent MSE (~0.8%), but a post-hoc diagnostic restricted by continuous interaction exposure shows PLAN improves LOCAL in `5/5` folds and by roughly 6--8% on the highest-exposure agents. This diagnostic is not a retroactive V45 gate; it motivates the next representation test.
+
+### Successful mechanism: agent-local continuous response + ungated occupancy
+
+LOCAL-RF is a genuine selective mediator, not blanket abstention. Relative to CV-OCC on the frozen RSMR proposal population:
+
+- common: 188 scenes, teacher sum `+49.6880`, 9 catastrophes;
+- CV-only: 32 scenes, teacher sum `-4.4795`, 4 catastrophes;
+- **LOCAL-only: 30 scenes, teacher sum `+4.8918`, zero catastrophes**.
+
+Relative to QUALITY:
+
+- QUALITY-only: 56 scenes, `-0.9868`, 4 catastrophes;
+- **LOCAL-only: 69 scenes, `+9.6874`, zero catastrophes**.
+
+Thus the V44 full-horizon ungated support mechanism remains valid and upgrading the response target from scene-global categorical behavior to agent-local continuous response adds independent value. **Retain both layers.**
+
+### PLAN conditioning: identified but only incremental
+
+LOCAL -> PLAN changes only eleven accepted decisions:
+
+- common: 212 scenes, `+54.5740`, 9 catastrophes;
+- LOCAL-only: 6 scenes, `+0.0058`, zero catastrophes;
+- PLAN-only: 5 scenes, `+1.9772`, zero catastrophes.
+
+So plan conditioning is not noise: its response MSE improves in 5/5 folds and its unique selected subset is net positive. But it does not remove any of LOCAL's nine catastrophes and still fails capture badly. It should be **retained as a low-capacity response-mean component**, not promoted as a sufficient absolute-valuation mechanism.
+
+### Deterministic point response is not a sufficient replacement for response uncertainty
+
+Cross-version comparison is decisive. V44 PC-OCC-ROBUST vs V45 PLAN-RF:
+
+- common: 188 scenes, `+54.6976`, 8 catastrophes;
+- **V44-ROBUST-only: 34 scenes, `+6.9195`, 19 positives including 7 material positives, zero catastrophes**;
+- V45-PLAN-only: 29 scenes, `+1.8536`, 15 positives including only 2 material positives, **1 catastrophe**.
+
+Therefore a more accurately learned deterministic mean response can still discard decision-relevant uncertainty represented by V44's multi-response ensemble. Do not interpret V45 as evidence that point response should replace a response distribution.
+
+### Remaining zero-boundary failure
+
+PLAN-RF misses 100 RSMR positives. The count is still dominated by near-zero positives (`69 <= 0.001`, another `16 <= 0.01`), but **15 material positives >0.2 remain missed**, with total teacher value about `+15.80`. Hence capture cannot be dismissed as a near-zero metric artifact.
+
+The nine PLAN-RF catastrophes are the same nine accepted by LOCAL-RF. All nine have V42 current-risk deltas exactly zero. V44 mode-specific occupancy consequences on these scenes are often mixed; some catastrophes appear favorable under every simple kinematic mode. This shows the remaining error is not fixable by a scalar zero translation or by one more deterministic acceleration coefficient.
+
+## V45 -> V46 dominant bottleneck
+
+V45 closes the question of whether an agent-local response *mean* is identifiable: it is. The dominant bottleneck tightens to:
+
+> **distributional agent-response and temporal interaction-profile sufficiency for absolute valuation of the frozen extremal proposal.**
+
+Two structural compressions are now independently suspect:
+
+1. **response-distribution collapse:** V45 compresses a conditional response distribution to one bounded constant longitudinal acceleration, and loses V44 ensemble-only material opportunities;
+2. **temporal-consequence collapse:** after rollout, V45 compresses the entire future interaction trace to one time-average occupancy scalar. Peak risk, early conflict and temporal concentration are therefore aliased.
+
+A post-hoc preregistration-design diagnostic on the already-frozen V45 TRAIN response supervision finds the conditional acceleration second moment is itself honestly identifiable: LOCAL `E[a^2|x]` beats a constant second-moment baseline in `5/5` folds, and PLAN-conditioned second moment beats LOCAL in `5/5`. This is **design evidence for V46, not V45 promotion evidence**.
+
+## V45-specific no-repeat constraints
+
+Keep all historical closures. Additionally:
+
+- do not replace V45's learned response field with a larger deterministic MLP/trajectory regressor before testing distributional sufficiency;
+- do not return to the failed scene-global five-mode classifier, class balancing, focal loss, temperature or response-probability tuning;
+- do not simply union V44 ROBUST and V45 PLAN policies or ensemble their value scores post hoc;
+- do not tune CVaR alpha/weight to recover V44 unique decisions;
+- do not add a selected translation/threshold to repair capture;
+- do not add time-to-collision or occupancy hard thresholds/bandwidths/top-K agents to the ungated support;
+- do not alter RSMR, B/M, candidate bank, evidence acquisition, support/admissibility or no-fallback containment;
+- do not use logged future, teacher value or teacher-improvement labels at deployment;
+- do not claim causal ego-plan -> agent-response effects from observational logged-future fitting without later frozen closed-loop/interventional evidence.
+
+# V64.3.46 EAF-ICER-DIRP
+
+Full name: **Distributional Interaction Response Profile**.
+
+V46 freezes RSMR, EPV/QUALITY semantics, V44 full-horizon ungated support and V45's agent-local plan-conditioned response **mean**. It tests the two remaining information bottlenecks with orthogonal causal arms rather than adding generic value capacity.
+
+### Conditional response second moment
+
+On the same V45 TRAIN-only agent supervision, V46 fits an additional low-capacity conditional second moment
+
+`m2(j,a) = E[a_j^2 | current state, ego candidate a]`
+
+with the same nested exclusions as V45. LOCAL `m2` uses the existing agent-local feature schema; the PLAN correction uses the existing exposure-weighted plan features, zero bias and fixed ridge `lambda=1`. The deployment variance is
+
+`var(j,a) = max(m2(j,a) - mu(j,a)^2, 0)`.
+
+No teacher value/improvement is used. Logged agent future is TRAIN-only nuisance supervision; deployment uses current state, the generated ego candidate and frozen response parameters.
+
+The response distribution is propagated by a fixed three-point moment-matching rule at
+
+`mu + {-sqrt(3), 0, +sqrt(3)} * sigma`
+
+with fixed weights `{1/6, 2/3, 1/6}`, clipped only by the already-frozen V45 physical acceleration envelope `[-2.0,+0.5] m/s^2`. There is no tuned uncertainty coefficient, number of response samples or mode probability.
+
+V46 has an independent response-distribution identification gate: LOCAL second moment must beat a constant baseline and PLAN second moment must beat LOCAL, each in at least `4/5` folds and in aggregate. Value gain is not allowed to be attributed to response uncertainty if this nuisance gate fails.
+
+### Temporal interaction profile
+
+For every candidate, V46 preserves the full-horizon ungated interaction trace before scalar compression and exposes four bounded lower-is-better functionals:
+
+1. time mean (the exact V45 statistic),
+2. peak interaction,
+3. early-weighted interaction mass using a fixed linear horizon weight,
+4. second temporal moment `mean(h_t^2)`.
+
+No distance threshold, kernel bandwidth, horizon sweep or learned temporal attention is added. The purpose is to test whether temporal concentration/ordering is itself a missing sufficient statistic.
+
+### Preregistered causal arms
+
+1. **PLAN-CONTROL**: exact V45 PLAN-RF observable replay; engineering control only.
+2. **DIST-MEAN**: response mean + identified conditional second moment, but still compress future interaction to one time mean. Isolates response-distribution insufficiency.
+3. **TEMPORAL-PROFILE**: deterministic V45 PLAN response, but replaces the scalar time mean with `[mean, peak, early, second]`. Isolates temporal-compression insufficiency.
+4. **DIRP-JOINT**: distributional response + full temporal profile. Tests whether both are jointly required.
+
+RSMR remains the only challenger selector. Every arm can only accept that frozen winner or return to incumbent. There is no selected translation, CVaR tuning, rerank or fallback.
+
+### Preregistered branch logic
+
+Promotion chooses the simplest causally sufficient arm:
+
+- if **DIST-MEAN** passes the unchanged value gate and the second-moment nuisance gate passes -> point-response collapse was the first-order missing mechanism; retain distribution but not the temporal profile;
+- else if **TEMPORAL-PROFILE** passes -> scalar time averaging was the first-order missing mechanism; retain temporal profile and do not require response variance;
+- else if **DIRP-JOINT** passes and second moment is independently identified -> response uncertainty and temporal hazard structure are jointly necessary;
+- if second moment is identified but all value arms fail -> close low-order longitudinal acceleration distribution / hand-designed temporal functionals as deployment-sufficient; move to a richer **2D continuous plan-conditioned trajectory/occupancy response distribution or an uncovered future non-agent consequence family**, not a larger scalar value head;
+- if second moment is not identified -> close the acceleration-distribution route immediately and move to a general trajectory-response representation.
+
+The value promotion gate remains unchanged: >=20% no-op reduction, capture within 3pp of RSMR, >=25% catastrophe reduction, non-worse NegRMS, nonnegative aggregate and 5/5 nonnegative fold sums, selected>=64, positive>=32 and exact frozen-winner containment.
+
+V46 hard engineering gates require exact V45 RSMR / QUALITY / CV-OCC / LOCAL-RF / PLAN-RF signatures, exact V45 response OOF MSE signature, exact V45 PLAN occupancy replay from the new instrumentation, and fresh-unspent state before scientific attribution.
+
+Only after TRAIN passes may V46 select independent A500+B500 with label-free seed:
+
+`v64.3.46-eaf-icer-dirp-double-fresh-v1`
+
+A/B remain strictly unpooled.
+
+Candidate paper mechanism, conditional on independent fresh/full/closed-loop validation: **Selection–Valuation–Response Sufficiency with distributional temporal interaction profiles** — a bounded auditable interface may be sufficient for ordinal extremal selection, while absolute execution of the frozen proposal requires a distinct action-conditioned response distribution and/or temporal consequence sufficient statistic. Observational response learning supports predictive conditional-response claims; causal interaction claims still require frozen interventional/closed-loop evidence.

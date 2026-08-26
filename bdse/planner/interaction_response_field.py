@@ -253,12 +253,19 @@ def _predict_plan_accel(local_a: np.ndarray, plan: np.ndarray, model: dict[str, 
     return np.clip(base + corr, RESPONSE_ACCEL_MIN, RESPONSE_ACCEL_MAX)
 
 
-def _occupancy_cost_for_accels(
+def _occupancy_profile_for_accels(
     runtime: RuntimeFeatures,
     candidates: CandidateBank,
     cfg: dict[str, Any],
     accels: np.ndarray,
 ) -> np.ndarray:
+    """Return KxT worst-interactor ungated occupancy profile.
+
+    V45 exposed only the time mean of this profile.  V46 reuses the exact same
+    geometry but retains the bounded temporal measure before compression.  This
+    helper is intentionally backward-compatible: taking ``mean(axis=1)`` exactly
+    reproduces the V45 occupancy cost.
+    """
     traj = np.asarray(candidates.trajectories, dtype=np.float64)
     K, T = int(traj.shape[0]), int(traj.shape[1])
     cur = np.asarray(runtime.current_agents, dtype=np.float64)
@@ -274,7 +281,7 @@ def _occupancy_cost_for_accels(
     occ_time = np.zeros((K, T), dtype=np.float64)
     for k in range(K):
         one = traj[k : k + 1]
-        one_t = times[:1] if times.ndim == 2 else times
+        one_t = times[k : k + 1] if times.ndim == 2 else times
         for j in range(N):
             if not valid[j]:
                 continue
@@ -282,7 +289,17 @@ def _occupancy_cost_for_accels(
             pot = _ungated_future_agent_occupancy(one, one_t, fut, cur[j], cfg)
             if pot.size:
                 occ_time[k, : pot.shape[1]] = np.maximum(occ_time[k, : pot.shape[1]], pot[0])
-    return _finite(np.mean(occ_time, axis=1) if T > 0 else np.zeros((K,), dtype=np.float64))
+    return _finite(occ_time)
+
+
+def _occupancy_cost_for_accels(
+    runtime: RuntimeFeatures,
+    candidates: CandidateBank,
+    cfg: dict[str, Any],
+    accels: np.ndarray,
+) -> np.ndarray:
+    occ_time = _occupancy_profile_for_accels(runtime, candidates, cfg, accels)
+    return _finite(np.mean(occ_time, axis=1) if occ_time.shape[1] > 0 else np.zeros((occ_time.shape[0],), dtype=np.float64))
 
 
 def runtime_interaction_response_field_observable_costs(

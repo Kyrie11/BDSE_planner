@@ -1,0 +1,718 @@
+{
+  "aggregates": {
+    "cv_occupancy_aggregate": {
+      "catastrophic_count": 13,
+      "no_positive_opportunity_false_intervention_count": 43,
+      "no_positive_opportunity_false_intervention_rate": 0.20673076923076922,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 120,
+      "positive_capture_rate": 0.20905923344947736,
+      "positive_opportunity_proposal_rate": 0.3083623693379791,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 177,
+      "positive_opportunity_selected_precision": 0.6779661016949152,
+      "selected_count": 220,
+      "selected_positive_count": 120,
+      "selected_precision": 0.5454545454545454,
+      "teacher_improvement_sum": 45.20842296723279,
+      "teacher_improvement_worst": -2.020414070067741,
+      "teacher_negative_rms": 0.30298664858024654
+    },
+    "local_response_field_aggregate": {
+      "catastrophic_count": 9,
+      "no_positive_opportunity_false_intervention_count": 37,
+      "no_positive_opportunity_false_intervention_rate": 0.1778846153846154,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 122,
+      "positive_capture_rate": 0.21254355400696864,
+      "positive_opportunity_proposal_rate": 0.3153310104529617,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 181,
+      "positive_opportunity_selected_precision": 0.6740331491712708,
+      "selected_count": 218,
+      "selected_positive_count": 122,
+      "selected_precision": 0.5596330275229358,
+      "teacher_improvement_sum": 54.57972428889805,
+      "teacher_improvement_worst": -1.233023564266786,
+      "teacher_negative_rms": 0.2396210712077547
+    },
+    "plan_response_field_aggregate": {
+      "catastrophic_count": 9,
+      "no_positive_opportunity_false_intervention_count": 38,
+      "no_positive_opportunity_false_intervention_rate": 0.18269230769230768,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 121,
+      "positive_capture_rate": 0.21080139372822299,
+      "positive_opportunity_proposal_rate": 0.3118466898954704,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 179,
+      "positive_opportunity_selected_precision": 0.6759776536312849,
+      "selected_count": 217,
+      "selected_positive_count": 121,
+      "selected_precision": 0.5576036866359447,
+      "teacher_improvement_sum": 56.55117310290402,
+      "teacher_improvement_worst": -1.233023564266786,
+      "teacher_negative_rms": 0.24017259256907322
+    },
+    "quality_control_aggregate": {
+      "catastrophic_count": 13,
+      "no_positive_opportunity_false_intervention_count": 30,
+      "no_positive_opportunity_false_intervention_rate": 0.14423076923076922,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 129,
+      "positive_capture_rate": 0.22473867595818817,
+      "positive_opportunity_proposal_rate": 0.3048780487804878,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 175,
+      "positive_opportunity_selected_precision": 0.7371428571428571,
+      "selected_count": 205,
+      "selected_positive_count": 129,
+      "selected_precision": 0.6292682926829268,
+      "teacher_improvement_sum": 43.905547394411805,
+      "teacher_improvement_worst": -2.020414070067741,
+      "teacher_negative_rms": 0.3126575113037135
+    },
+    "rsmr_rank_aggregate": {
+      "catastrophic_count": 28,
+      "no_positive_opportunity_false_intervention_count": 107,
+      "no_positive_opportunity_false_intervention_rate": 0.5144230769230769,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 221,
+      "positive_capture_rate": 0.38501742160278746,
+      "positive_opportunity_proposal_rate": 0.6881533101045296,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 395,
+      "positive_opportunity_selected_precision": 0.5594936708860759,
+      "selected_count": 502,
+      "selected_positive_count": 221,
+      "selected_precision": 0.4402390438247012,
+      "teacher_improvement_sum": 43.29405361274824,
+      "teacher_improvement_worst": -3.806486467696913,
+      "teacher_negative_rms": 0.3556880321206127
+    }
+  },
+  "audit": "v64_3_45_uploaded_result_causal_audit_for_v64_3_46",
+  "gates": {
+    "cv_occ": {
+      "all_folds_sum_nonnegative": true,
+      "existence_and_capture": false,
+      "pass": false,
+      "population": true,
+      "tail": true
+    },
+    "local_rf": {
+      "all_folds_sum_nonnegative": true,
+      "existence_and_capture": false,
+      "pass": false,
+      "population": true,
+      "tail": true
+    },
+    "plan_rf": {
+      "all_folds_sum_nonnegative": true,
+      "existence_and_capture": false,
+      "pass": false,
+      "population": true,
+      "tail": true
+    },
+    "quality": {
+      "all_folds_sum_nonnegative": true,
+      "existence_and_capture": false,
+      "pass": false,
+      "population": true,
+      "tail": true
+    }
+  },
+  "material_positive_accept_counts": {
+    "cv_occ": 32,
+    "local_rf": 33,
+    "plan_rf": 35,
+    "quality": 30,
+    "v44_robust": 40
+  },
+  "mechanism_judgment": {
+    "absolute_zero": "still_not_mature",
+    "agent_local_continuous_response": "supported_and_retain",
+    "deterministic_point_response": "insufficient_to_replace_response_distribution",
+    "next_bottleneck": "distributional_agent_response_and_temporal_interaction_profile_sufficiency_for_frozen_proposal",
+    "plan_conditioned_mean_response": "identified_but_incremental_and_not_value_sufficient",
+    "ungated_full_horizon_occupancy_support": "supported_and_retain",
+    "v45_overall": "strong_partial_success_plus_promotion_failure"
+  },
+  "plan_rf_catastrophes": [
+    {
+      "current_risk_all_zero": true,
+      "local_value": 0.0734169905947113,
+      "plan_value": 0.0781112001876471,
+      "quality_value": 0.0078599697566682,
+      "scenario_token": "05ba4ac2db9c50d2",
+      "teacher_improvement": -0.98944860655242,
+      "v44_mode_occ_deltas": [
+        0.0126975774765014,
+        0.0127971917390823,
+        -0.0228565037250518,
+        0.0123962014913558,
+        0.0127717554569244
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 0.391472278579365,
+      "plan_value": 0.446687536387945,
+      "quality_value": 0.0901786313987583,
+      "scenario_token": "30a3163cf0805a69",
+      "teacher_improvement": -1.2324926170708386,
+      "v44_mode_occ_deltas": [
+        0.075107529759407,
+        0.0750872492790222,
+        0.0751108825206756,
+        0.075133740901947,
+        0.0750582665205001
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 0.3746464612325042,
+      "plan_value": 0.3827735048134562,
+      "quality_value": 0.3068196474224927,
+      "scenario_token": "95a810911ba359ec",
+      "teacher_improvement": -1.2317849212438547,
+      "v44_mode_occ_deltas": [
+        0.0311896130442619,
+        -0.0021501183509826,
+        0.002710998058319,
+        0.005811795592308,
+        0.0466801077127456
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 1.0017188725626969,
+      "plan_value": 1.0042547648015152,
+      "quality_value": 0.9347436413089348,
+      "scenario_token": "d5b4a2295da55f8c",
+      "teacher_improvement": -1.2230283835736102,
+      "v44_mode_occ_deltas": [
+        -0.0076355636119842,
+        0.0408045276999473,
+        0.0054308325052261,
+        0.0133397802710533,
+        -0.0039318650960922
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 0.1282336838411959,
+      "plan_value": 0.1141286020825226,
+      "quality_value": 0.1491291831835257,
+      "scenario_token": "7d363b1db0fc5975",
+      "teacher_improvement": -0.9769596037015144,
+      "v44_mode_occ_deltas": [
+        -0.0107380151748657,
+        -0.0099344179034233,
+        0.0025234520435333,
+        -0.0119344890117645,
+        -0.0103059858083724
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 2.399267901473595,
+      "plan_value": 2.3979479940237534,
+      "quality_value": 2.4079723824805743,
+      "scenario_token": "a8e99095a8235549",
+      "teacher_improvement": -1.2318749638779087,
+      "v44_mode_occ_deltas": [
+        -0.0090502500534057,
+        -0.0090502500534057,
+        3.057718276977539e-05,
+        -0.0090502500534057,
+        -0.0090502500534057
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 1.2027680770161324,
+      "plan_value": 1.225349655507184,
+      "quality_value": 1.0988049174796584,
+      "scenario_token": "2154d495b9b657a5",
+      "teacher_improvement": -1.220322729590535,
+      "v44_mode_occ_deltas": [
+        0.0513431131839752,
+        0.0518484264612197,
+        -0.0546877384185791,
+        0.0473218262195587,
+        0.0516043901443481
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 1.981312039451107,
+      "plan_value": 1.9670632491641007,
+      "quality_value": 1.7256074779917452,
+      "scenario_token": "b3c270be7e145adc",
+      "teacher_improvement": -1.2199467135749755,
+      "v44_mode_occ_deltas": [
+        0.0365313291549682,
+        0.0365313291549682,
+        0.0331029444932937,
+        0.0365313291549682,
+        0.0365313291549682
+      ]
+    },
+    {
+      "current_risk_all_zero": true,
+      "local_value": 1.6538843469529805,
+      "plan_value": 1.663260218519726,
+      "quality_value": 1.72126977691608,
+      "scenario_token": "c70954fab4a650c7",
+      "teacher_improvement": -1.233023564266786,
+      "v44_mode_occ_deltas": [
+        -0.0035465359687805,
+        -0.0030082762241363,
+        0.012658804655075,
+        -0.0059574842453002,
+        -0.0031442940235137
+      ]
+    }
+  ],
+  "plan_rf_positive_misses": {
+    "count": 100,
+    "material_gt_0.2": 15,
+    "material_sum": 15.795992456644818,
+    "near_zero_0.001_to_0.01": 16,
+    "near_zero_le_0.001": 69
+  },
+  "reliability": {
+    "code_matches_preregistered_v45": true,
+    "code_sha256": "d8acc5abb5d5b63c24e93d96884649c0b0a055676a3f684a1861bdffca8752ca",
+    "deployment_uses_logged_future": false,
+    "direct_scene_count": 782,
+    "engineering_valid": true,
+    "fresh_consumed": false,
+    "frozen_winner_containment": true,
+    "nested_outer_folds": 5,
+    "output_zip_sha256": "b557eef258718f8381e7373bcbcaa7bb53a6f4cf5a38c48e1cbcb815c9d493bc",
+    "targeted_regression_independent_rerun": "213/213 PASS",
+    "targeted_regression_server": "213/213 PASS",
+    "v44_controls_exact_replay": true
+  },
+  "response_identification": {
+    "crossfit_report": {
+      "aggregate": {
+        "cv_mse": 0.30137842796229286,
+        "local_mse": 0.12486025654085724,
+        "plan_mse": 0.12385468573917016
+      },
+      "audit": "v64_3_45_crossfit_response_field",
+      "current_state_sidecar_scenes": 3000,
+      "deployment_uses_logged_future": false,
+      "folds": [
+        {
+          "cv_mse": 0.2874498691965345,
+          "fit_agent_rows": 53463,
+          "fold": 0,
+          "local_better_than_cv": true,
+          "local_mse": 0.12031362497040729,
+          "plan_better_than_local": true,
+          "plan_mse": 0.1192082016826718,
+          "test_agent_rows": 18276,
+          "test_scenes": 617
+        },
+        {
+          "cv_mse": 0.2968625201469058,
+          "fit_agent_rows": 53781,
+          "fold": 1,
+          "local_better_than_cv": true,
+          "local_mse": 0.12041897371340157,
+          "plan_better_than_local": true,
+          "plan_mse": 0.11925443391373908,
+          "test_agent_rows": 16579,
+          "test_scenes": 561
+        },
+        {
+          "cv_mse": 0.32496600237772205,
+          "fit_agent_rows": 52486,
+          "fold": 2,
+          "local_better_than_cv": true,
+          "local_mse": 0.13409426419995618,
+          "plan_better_than_local": true,
+          "plan_mse": 0.1334326218590961,
+          "test_agent_rows": 17958,
+          "test_scenes": 608
+        },
+        {
+          "cv_mse": 0.3011584277762815,
+          "fit_agent_rows": 52813,
+          "fold": 3,
+          "local_better_than_cv": true,
+          "local_mse": 0.12709304584177247,
+          "plan_better_than_local": true,
+          "plan_mse": 0.1260508403588546,
+          "test_agent_rows": 17874,
+          "test_scenes": 613
+        },
+        {
+          "cv_mse": 0.2964553203140202,
+          "fit_agent_rows": 52411,
+          "fold": 4,
+          "local_better_than_cv": true,
+          "local_mse": 0.12238137397874867,
+          "plan_better_than_local": true,
+          "plan_mse": 0.1213273308814892,
+          "test_agent_rows": 17631,
+          "test_scenes": 601
+        }
+      ],
+      "full_train_model": {
+        "enabled": true,
+        "lambda": 1.0,
+        "local_bias": -0.0582527239686467,
+        "local_feature_names": [
+          "agent_speed",
+          "agent_recent_longitudinal_accel",
+          "current_rel_longitudinal",
+          "current_rel_lateral",
+          "agent_length",
+          "agent_width"
+        ],
+        "local_feature_scale": [
+          2.2316647972765367,
+          0.9751524635164209,
+          29.191600409318088,
+          22.590112138465773,
+          4.2788173420346105,
+          1.8228360530884085
+        ],
+        "local_weights": [
+          -0.3624678717711956,
+          -0.005305853007168472,
+          0.17181144011573035,
+          0.00026470512049847454,
+          -0.0171533070836512,
+          0.02259293590344883
+        ],
+        "model": "agent_local_continuous_longitudinal_response_field",
+        "plan_bias": 0.0,
+        "plan_enabled": true,
+        "plan_feature_names": [
+          "exposure_mean",
+          "exposure_times_peak",
+          "exposure_times_earlyness",
+          "exposure_times_rel_longitudinal_at_peak",
+          "exposure_times_rel_lateral_at_peak",
+          "exposure_times_relative_speed_at_peak"
+        ],
+        "plan_feature_scale": [
+          0.19557977113897243,
+          0.1253202659785586,
+          0.14654721308558938,
+          0.9918801404111038,
+          0.4095341742745549,
+          0.6375654790503936
+        ],
+        "plan_nonzero_exposure_rows": 88318,
+        "plan_weights": [
+          0.046713344207544694,
+          -0.053194894937748455,
+          0.015331011673821513,
+          -0.02093739250965369,
+          -0.005026251250803312,
+          0.033298530059858174
+        ],
+        "response_accel_clip_mps2": [
+          -2.0,
+          0.5
+        ]
+      },
+      "local_better_than_cv_fold_count": 5,
+      "plan_better_than_local_fold_count": 5,
+      "plan_response_identified": true
+    },
+    "local_identified": true,
+    "plan_identified": true
+  },
+  "response_posthoc_diagnostics_not_preregistered": {
+    "exposure_weighted_plan_beats_local_folds": 5,
+    "folds": [
+      {
+        "constant_second_moment_mse": 0.7045840751324312,
+        "exposure_weighted_local_mse": 0.04433164449525431,
+        "exposure_weighted_plan_mse": 0.04097462921496048,
+        "fold": 0,
+        "local_second_moment_mse": 0.37544824721955433,
+        "plan_second_moment_mse": 0.36777517050617403,
+        "top_exposure_quartile_local_mse": 0.03266029028167013,
+        "top_exposure_quartile_plan_mse": 0.029489268146620697
+      },
+      {
+        "constant_second_moment_mse": 0.7147275445949305,
+        "exposure_weighted_local_mse": 0.043461847686107696,
+        "exposure_weighted_plan_mse": 0.040025821458690304,
+        "fold": 1,
+        "local_second_moment_mse": 0.38248854098280727,
+        "plan_second_moment_mse": 0.37424305713783945,
+        "top_exposure_quartile_local_mse": 0.03147734494903255,
+        "top_exposure_quartile_plan_mse": 0.028093002769185464
+      },
+      {
+        "constant_second_moment_mse": 0.8091033054156648,
+        "exposure_weighted_local_mse": 0.04415034895283061,
+        "exposure_weighted_plan_mse": 0.04132627914029782,
+        "fold": 2,
+        "local_second_moment_mse": 0.44137236450936135,
+        "plan_second_moment_mse": 0.43531335602019744,
+        "top_exposure_quartile_local_mse": 0.031218959412236326,
+        "top_exposure_quartile_plan_mse": 0.028155298469316505
+      },
+      {
+        "constant_second_moment_mse": 0.7277235034372421,
+        "exposure_weighted_local_mse": 0.045156397963150054,
+        "exposure_weighted_plan_mse": 0.04144593377069258,
+        "fold": 3,
+        "local_second_moment_mse": 0.3815540097898095,
+        "plan_second_moment_mse": 0.37414735321112746,
+        "top_exposure_quartile_local_mse": 0.0326715469937182,
+        "top_exposure_quartile_plan_mse": 0.029104799263871575
+      },
+      {
+        "constant_second_moment_mse": 0.7133332215437392,
+        "exposure_weighted_local_mse": 0.04575504053714945,
+        "exposure_weighted_plan_mse": 0.042447472961973515,
+        "fold": 4,
+        "local_second_moment_mse": 0.3783828910008086,
+        "plan_second_moment_mse": 0.37084476974023445,
+        "top_exposure_quartile_local_mse": 0.033787167412965904,
+        "top_exposure_quartile_plan_mse": 0.030423353797386837
+      }
+    ],
+    "fraction_abs_plan_correction_gt_0.1": 0.01687085305373763,
+    "fraction_abs_plan_residual_gt_0.25": 0.26742000498199686,
+    "fraction_abs_plan_residual_gt_0.5": 0.06735886229307729,
+    "fraction_abs_plan_residual_gt_1.0": 0.03159038927511945,
+    "plan_correction_std_mps2": 0.02539145711165831,
+    "plan_residual_std_mps2": 0.3450557889105151,
+    "second_moment_local_beats_constant_folds": 5,
+    "second_moment_plan_beats_local_folds": 5
+  },
+  "set_rotations": {
+    "cv_occ_vs_local_rf": {
+      "both": {
+        "catastrophe_count": 9,
+        "material_positive_count": 30,
+        "positive_count": 105,
+        "scene_count": 188,
+        "teacher_sum": 49.687960938218225
+      },
+      "cv_occ_only": {
+        "catastrophe_count": 4,
+        "material_positive_count": 2,
+        "positive_count": 15,
+        "scene_count": 32,
+        "teacher_sum": -4.47953797098543
+      },
+      "local_rf_only": {
+        "catastrophe_count": 0,
+        "material_positive_count": 3,
+        "positive_count": 17,
+        "scene_count": 30,
+        "teacher_sum": 4.8917633506798195
+      },
+      "neither": {
+        "catastrophe_count": 15,
+        "material_positive_count": 15,
+        "positive_count": 84,
+        "scene_count": 252,
+        "teacher_sum": -6.806132705164371
+      }
+    },
+    "local_rf_vs_plan_rf": {
+      "both": {
+        "catastrophe_count": 9,
+        "material_positive_count": 33,
+        "positive_count": 118,
+        "scene_count": 212,
+        "teacher_sum": 54.57396026110594
+      },
+      "local_rf_only": {
+        "catastrophe_count": 0,
+        "material_positive_count": 0,
+        "positive_count": 4,
+        "scene_count": 6,
+        "teacher_sum": 0.005764027792116316
+      },
+      "neither": {
+        "catastrophe_count": 19,
+        "material_positive_count": 15,
+        "positive_count": 96,
+        "scene_count": 279,
+        "teacher_sum": -13.262883517947898
+      },
+      "plan_rf_only": {
+        "catastrophe_count": 0,
+        "material_positive_count": 2,
+        "positive_count": 3,
+        "scene_count": 5,
+        "teacher_sum": 1.9772128417980963
+      }
+    },
+    "quality_vs_local_rf": {
+      "both": {
+        "catastrophe_count": 9,
+        "material_positive_count": 26,
+        "positive_count": 96,
+        "scene_count": 149,
+        "teacher_sum": 44.89233310636804
+      },
+      "local_rf_only": {
+        "catastrophe_count": 0,
+        "material_positive_count": 7,
+        "positive_count": 26,
+        "scene_count": 69,
+        "teacher_sum": 9.687391182530002
+      },
+      "neither": {
+        "catastrophe_count": 15,
+        "material_positive_count": 13,
+        "positive_count": 66,
+        "scene_count": 228,
+        "teacher_sum": -10.298884964193563
+      },
+      "quality_only": {
+        "catastrophe_count": 4,
+        "material_positive_count": 4,
+        "positive_count": 33,
+        "scene_count": 56,
+        "teacher_sum": -0.9867857119562374
+      }
+    },
+    "quality_vs_plan_rf": {
+      "both": {
+        "catastrophe_count": 9,
+        "material_positive_count": 27,
+        "positive_count": 93,
+        "scene_count": 146,
+        "teacher_sum": 45.875978594742044
+      },
+      "neither": {
+        "catastrophe_count": 15,
+        "material_positive_count": 12,
+        "positive_count": 64,
+        "scene_count": 226,
+        "teacher_sum": -11.286688289825545
+      },
+      "plan_rf_only": {
+        "catastrophe_count": 0,
+        "material_positive_count": 8,
+        "positive_count": 28,
+        "scene_count": 71,
+        "teacher_sum": 10.675194508161983
+      },
+      "quality_only": {
+        "catastrophe_count": 4,
+        "material_positive_count": 3,
+        "positive_count": 36,
+        "scene_count": 59,
+        "teacher_sum": -1.970431200330236
+      }
+    },
+    "v44_robust_vs_v45_plan_rf": {
+      "both": {
+        "catastrophe_count": 8,
+        "material_positive_count": 33,
+        "positive_count": 106,
+        "scene_count": 188,
+        "teacher_sum": 54.697593152523766
+      },
+      "neither": {
+        "catastrophe_count": 19,
+        "material_positive_count": 8,
+        "positive_count": 81,
+        "scene_count": 251,
+        "teacher_sum": -20.17664384545016
+      },
+      "plan_rf_only": {
+        "catastrophe_count": 1,
+        "material_positive_count": 2,
+        "positive_count": 15,
+        "scene_count": 29,
+        "teacher_sum": 1.8535799503802606
+      },
+      "v44_robust_only": {
+        "catastrophe_count": 0,
+        "material_positive_count": 7,
+        "positive_count": 19,
+        "scene_count": 34,
+        "teacher_sum": 6.91952435529438
+      }
+    }
+  },
+  "teacher_population": {
+    "catastrophes": 28,
+    "material_positive_gt_0.2": 50,
+    "mild_harms": 253,
+    "near_zero_positive_le_0.01": 167,
+    "rsm_proposals": 502
+  },
+  "train_gate": {
+    "capture_floor": 0.35501742160278743,
+    "failure_diagnosis": "plan_conditioned_response_is_identifiable_but_absolute_zero_or_remaining_consequence_family_is_insufficient",
+    "pass": false
+  },
+  "value_diagnostics": {
+    "cv_occ": {
+      "mae": 0.34981178552232284,
+      "mse": 0.4214091733952774,
+      "noncatastrophe_auc": 0.5511603375527426,
+      "pearson": 0.44329885212385806,
+      "positive_auc": 0.5920516577832885,
+      "rmse": 0.64916036030805,
+      "sample_count": 502,
+      "zero_sign_accuracy": 0.599601593625498
+    },
+    "local_rf": {
+      "mae": 0.3294254934548016,
+      "mse": 0.42885489338216426,
+      "noncatastrophe_auc": 0.5767781796262809,
+      "pearson": 0.3940017860748295,
+      "positive_auc": 0.6237097631278079,
+      "rmse": 0.6548701347459389,
+      "sample_count": 502,
+      "zero_sign_accuracy": 0.6115537848605578
+    },
+    "plan_rf": {
+      "mae": 0.33017045858618554,
+      "mse": 0.41961824881767934,
+      "noncatastrophe_auc": 0.5892103676913804,
+      "pearson": 0.41705724295681545,
+      "positive_auc": 0.6145955781710439,
+      "rmse": 0.647779475452626,
+      "sample_count": 502,
+      "zero_sign_accuracy": 0.6095617529880478
+    },
+    "quality": {
+      "mae": 0.28157231470563165,
+      "mse": 0.4802413603025213,
+      "noncatastrophe_auc": 0.49156118143459915,
+      "pearson": 0.238299315316651,
+      "positive_auc": 0.6947875235503455,
+      "rmse": 0.6929944879308357,
+      "sample_count": 502,
+      "zero_sign_accuracy": 0.6653386454183267
+    },
+    "rsmr": {
+      "mae": 0.3859621202758237,
+      "mse": 0.5798110509132094,
+      "noncatastrophe_auc": 0.4816154309825196,
+      "pearson": -0.014447624424429944,
+      "positive_auc": 0.5927923865960291,
+      "rmse": 0.761453249328683,
+      "sample_count": 502,
+      "zero_sign_accuracy": 0.4402390438247012
+    }
+  }
+}
