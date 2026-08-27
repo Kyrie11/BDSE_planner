@@ -32,6 +32,10 @@ export COMPACT_PREFETCH="${COMPACT_PREFETCH:-1}"
 export COMPACT_DEVICE_CACHE="${COMPACT_DEVICE_CACHE:-auto}"
 export COMPACT_DEVICE_FLOAT_DTYPE="${COMPACT_DEVICE_FLOAT_DTYPE:-float32}"
 export COMPACT_DEVICE_RESERVE_GIB="${COMPACT_DEVICE_RESERVE_GIB:-8}"
+export COMPACT_DEVICE_CACHE_LAYOUT="${COMPACT_DEVICE_CACHE_LAYOUT:-auto}"
+export COMPACT_HOST_CACHE="${COMPACT_HOST_CACHE:-auto}"
+export COMPACT_HOST_RESERVE_GIB="${COMPACT_HOST_RESERVE_GIB:-16}"
+export AUTO_RESUME="${AUTO_RESUME:-1}"
 export TORCH_COMPILE="${TORCH_COMPILE:-0}"
 export TORCH_COMPILE_MODE="${TORCH_COMPILE_MODE:-reduce-overhead}"
 export LOG_EVERY_N_STEPS="${LOG_EVERY_N_STEPS:-100}"
@@ -154,7 +158,7 @@ if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
   [[ -f "$VAL_COMPACT_CACHE/compact_manifest.json" ]] || { echo "missing compact val cache: $VAL_COMPACT_CACHE" >&2; exit 2; }
 fi
 
-echo "[train-launch] GPUs=$GPUS budgets=[$BUDGETS] compile=$TORCH_COMPILE shared_dataloader=$SHARED_DATALOADER fast_refinement=$FAST_REFINEMENT workers_shared=$NUM_WORKERS_SHARED workers_per_job=$NUM_WORKERS_PER_JOB"
+echo "[train-launch] GPUs=$GPUS budgets=[$BUDGETS] compile=$TORCH_COMPILE shared_dataloader=$SHARED_DATALOADER fast_refinement=$FAST_REFINEMENT workers_shared=$NUM_WORKERS_SHARED workers_per_job=$NUM_WORKERS_PER_JOB auto_resume=$AUTO_RESUME device_cache=$COMPACT_DEVICE_CACHE/$COMPACT_DEVICE_CACHE_LAYOUT host_cache=$COMPACT_HOST_CACHE"
 
 run_one_budget() {
   local gpu="$1" B="$2" name="$3"
@@ -186,6 +190,7 @@ run_one_budget() {
   if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
     compact_args+=(--compact-cache-dir "$TRAIN_COMPACT_CACHE" --val-compact-cache-dir "$VAL_COMPACT_CACHE")
     compact_args+=(--compact-shuffle-mode "$COMPACT_SHUFFLE_MODE" --compact-block-size "$COMPACT_BLOCK_SIZE")
+    compact_args+=(--compact-host-cache "$COMPACT_HOST_CACHE" --compact-host-reserve-gib "$COMPACT_HOST_RESERVE_GIB")
     compact_args+=("${compact_bool_args[@]}")
   fi
 
@@ -216,6 +221,7 @@ run_one_budget() {
     --startup-preflight-samples "$STARTUP_PREFLIGHT_SAMPLES" \
     "${compact_args[@]}" \
     "${compile_args[@]}" \
+    $([[ "$AUTO_RESUME" == "1" || "$AUTO_RESUME" == "true" ]] && echo --auto-resume || echo --no-auto-resume) \
     --log-file "$outdir/${name}.train_log.jsonl" \
     --output "$outdir/${name}_budgeted.pt" \
     2>&1 | tee "$outdir/${name}.train.out"
@@ -231,8 +237,8 @@ run_one_budget() {
     rm -f "$marker"
     if (( py_rc != 0 )); then return "$py_rc"; else return "$tee_rc"; fi
   fi
-  [[ -s "$outdir/${name}_budgeted.best.pt" && "$outdir/${name}_budgeted.best.pt" -nt "$marker" ]] || {
-    echo "[train] FAILED gpu=$gpu system=$name B=$B: training exited 0 but no fresh best checkpoint was produced" >&2
+  [[ -s "$outdir/${name}_budgeted.pt" && -s "$outdir/${name}_budgeted.best.pt" ]] || {
+    echo "[train] FAILED gpu=$gpu system=$name B=$B: training exited 0 but latest/best checkpoint is missing" >&2
     rm -f "$marker"
     return 3
   }
@@ -297,6 +303,8 @@ run_pair_shared() {
       --compact-device-cache "$COMPACT_DEVICE_CACHE" \
       --compact-device-float-dtype "$COMPACT_DEVICE_FLOAT_DTYPE" \
       --compact-device-reserve-gib "$COMPACT_DEVICE_RESERVE_GIB" \
+      --compact-device-cache-layout "$COMPACT_DEVICE_CACHE_LAYOUT" \
+      $([[ "$AUTO_RESUME" == "1" || "$AUTO_RESUME" == "true" ]] && echo --auto-resume || echo --no-auto-resume) \
       "${compact_args[@]}" \
       "${compile_args[@]}" \
       2>&1 | tee "$outdir/${left}_${right}.pair.train.out"
@@ -309,8 +317,8 @@ run_pair_shared() {
       rm -f "$marker_l" "$marker_r"
       if (( py_rc != 0 )); then return "$py_rc"; else return "$tee_rc"; fi
     fi
-    [[ -s "$outdir/${left}_budgeted.best.pt" && "$outdir/${left}_budgeted.best.pt" -nt "$marker_l" ]] || { echo "missing fresh $left best checkpoint B=$B" >&2; return 3; }
-    [[ -s "$outdir/${right}_budgeted.best.pt" && "$outdir/${right}_budgeted.best.pt" -nt "$marker_r" ]] || { echo "missing fresh $right best checkpoint B=$B" >&2; return 3; }
+    [[ -s "$outdir/${left}_budgeted.pt" && -s "$outdir/${left}_budgeted.best.pt" ]] || { echo "missing $left latest/best checkpoint B=$B" >&2; return 3; }
+    [[ -s "$outdir/${right}_budgeted.pt" && -s "$outdir/${right}_budgeted.best.pt" ]] || { echo "missing $right latest/best checkpoint B=$B" >&2; return 3; }
     rm -f "$marker_l" "$marker_r"
     echo "[pair-train] DONE systems=$left,$right B=$B"
   done

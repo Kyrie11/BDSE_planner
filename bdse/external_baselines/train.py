@@ -130,6 +130,7 @@ def _save_checkpoint(
     best_metric: float,
     selection_metric: str,
     training_manifest: dict[str, Any],
+    scaler: Any | None = None,
 ) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +144,23 @@ def _save_checkpoint(
         "best_metric": float(best_metric),
         "selection_metric": str(selection_metric),
         "training_manifest": training_manifest,
+        "rng_state": {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch_cpu": torch.random.get_rng_state(),
+        },
     }
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        device = torch.device("cpu")
+    if device.type == "cuda":
+        payload["rng_state"]["torch_cuda_device"] = torch.cuda.get_rng_state(device)
+    if scaler is not None:
+        try:
+            payload["scaler"] = scaler.state_dict()
+        except Exception:
+            pass
     if scheduler is not None:
         payload["scheduler"] = scheduler.state_dict()
     torch.save(payload, tmp)
@@ -155,6 +172,8 @@ def _load_resume(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    scaler: Any | None = None,
+    restore_rng: bool = True,
 ) -> tuple[int, float]:
     ckpt = torch_load_any(path, map_location="cpu")
     state = ckpt.get("model", ckpt)
@@ -171,6 +190,29 @@ def _load_resume(
             scheduler.load_state_dict(ckpt["scheduler"])
         except Exception as exc:
             print(f"[external] scheduler resume skipped: {exc}", flush=True)
+    if scaler is not None and isinstance(ckpt, dict) and "scaler" in ckpt:
+        try:
+            scaler.load_state_dict(ckpt["scaler"])
+        except Exception as exc:
+            print(f"[external] AMP scaler resume skipped: {exc}", flush=True)
+    if restore_rng and isinstance(ckpt, dict) and isinstance(ckpt.get("rng_state"), dict):
+        rng = ckpt["rng_state"]
+        try:
+            if "python" in rng:
+                random.setstate(rng["python"])
+            if "numpy" in rng:
+                np.random.set_state(rng["numpy"])
+            if "torch_cpu" in rng:
+                torch.random.set_rng_state(rng["torch_cpu"])
+            if "torch_cuda_device" in rng and torch.cuda.is_available():
+                try:
+                    device = next(model.parameters()).device
+                except StopIteration:
+                    device = torch.device("cuda:0")
+                if device.type == "cuda":
+                    torch.cuda.set_rng_state(rng["torch_cuda_device"], device=device)
+        except Exception as exc:
+            print(f"[external] RNG resume skipped: {exc}", flush=True)
     start = int(ckpt.get("epoch", -1)) + 1 if isinstance(ckpt, dict) else 0
     best = float(ckpt.get("best_metric", float("inf"))) if isinstance(ckpt, dict) else float("inf")
     return start, best
@@ -450,6 +492,8 @@ def main() -> None:
     parser.add_argument("--compact-shuffle-mode", choices=["global", "block", "none"], default="global")
     parser.add_argument("--compact-block-size", type=int, default=4096)
     parser.add_argument("--compact-prefetch", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--compact-host-cache", choices=["off", "auto", "on"], default="auto")
+    parser.add_argument("--compact-host-reserve-gib", type=float, default=16.0)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--warmup-epochs", type=int, default=3)
@@ -481,6 +525,7 @@ def main() -> None:
     parser.add_argument("--compile-fallback", action=argparse.BooleanOptionalAction, default=True, help="Let torch.compile fall back to eager for unsupported subgraphs instead of aborting a long run.")
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--resume-from", type=str, default=None)
+    parser.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--log-file", type=str, default=None)
     args = parser.parse_args()
 
@@ -499,6 +544,61 @@ def main() -> None:
     wd = float(args.weight_decay if args.weight_decay is not None else ecfg.get("weight_decay", tcfg.get("weight_decay", 1e-2)))
     grad_clip = float(args.grad_clip if args.grad_clip is not None else ecfg.get("grad_clip", tcfg.get("grad_clip", 5.0)))
     grad_accum_steps = max(1, int(args.grad_accum_steps))
+    budget = int((cfg.get("evidence", {}) or {}).get("budget", (cfg.get("external_baseline", {}) or {}).get("budget", -1)))
+
+    # Resolve/skip a completed run before opening or materializing the large
+    # compact cache. This keeps legacy SHARED_DATALOADER=0 runs resumable too.
+    auto_resume_selected = False
+    if args.resume_from is None and args.auto_resume:
+        latest_candidate = Path(args.output)
+        best_candidate = _best_checkpoint_path(args.output)
+        if latest_candidate.is_file():
+            args.resume_from = str(latest_candidate)
+            auto_resume_selected = True
+        elif best_candidate.is_file():
+            args.resume_from = str(best_candidate)
+            auto_resume_selected = True
+    if auto_resume_selected and args.resume_from and Path(args.resume_from).is_file():
+        resume_meta = torch_load_any(args.resume_from, map_location="cpu")
+        if isinstance(resume_meta, dict):
+            manifest = resume_meta.get("training_manifest")
+            if isinstance(manifest, dict):
+                stored_hash = str(manifest.get("config_sha256", ""))
+                current_hash = _config_sha256(args.config)
+                if stored_hash and stored_hash != current_hash:
+                    raise ValueError(
+                        f"refusing auto-resume from config-mismatched checkpoint {args.resume_from}: "
+                        f"stored={stored_hash} current={current_hash}"
+                    )
+            old_cfg = resume_meta.get("cfg")
+            if isinstance(old_cfg, dict):
+                old_variant = external_variant(old_cfg)
+                old_budget = int((old_cfg.get("evidence", {}) or {}).get("budget", -1))
+                old_refine = str((old_cfg.get("external_baseline", {}) or {}).get("refinement_mode", "legacy_repeated_encoder"))
+                new_refine = str((cfg.get("external_baseline", {}) or {}).get("refinement_mode", "legacy_repeated_encoder"))
+                if (old_variant, old_budget, old_refine) != (variant, budget, new_refine):
+                    raise ValueError(
+                        f"refusing incompatible resume {args.resume_from}: "
+                        f"old={(old_variant, old_budget, old_refine)} new={(variant, budget, new_refine)}"
+                    )
+            completed_epochs = int(resume_meta.get("epoch", -1)) + 1
+            if completed_epochs >= epochs:
+                import shutil
+
+                source = Path(args.resume_from)
+                latest = Path(args.output)
+                best = _best_checkpoint_path(args.output)
+                latest.parent.mkdir(parents=True, exist_ok=True)
+                if not latest.is_file():
+                    shutil.copy2(source, latest)
+                if not best.is_file():
+                    shutil.copy2(source, best)
+                print(
+                    f"[train-resume-complete] variant={variant} B={budget} checkpoint={source} "
+                    f"completed_epochs={completed_epochs} target_epochs={epochs}; reusing existing checkpoint",
+                    flush=True,
+                )
+                return
 
     _seed_everything(args.seed)
     device = resolve_torch_device(args.device, context="external baseline training")
@@ -527,13 +627,16 @@ def main() -> None:
 
     use_label_future = _planner_supervision(cfg) == "expert_imitation"
     collate_fn = partial(collate, cfg=cfg)
-    budget = int((cfg.get("evidence", {}) or {}).get("budget", (cfg.get("external_baseline", {}) or {}).get("budget", -1)))
     compact_train = None
     if args.compact_cache_dir:
         if args.max_scenarios_per_split:
             raise ValueError("--compact-cache-dir does not support --max-scenarios-per-split")
         compact_train = CompactExternalCache.open(args.compact_cache_dir)
         compact_train.assert_compatible(cfg)
+        compact_train = compact_train.materialize_host(
+            mode=args.compact_host_cache,
+            reserve_gib=args.compact_host_reserve_gib,
+        )
         limit = int(args.max_scenarios) if args.max_scenarios is not None and int(args.max_scenarios) > 0 else None
         train_ds = CompactSampleDataset(compact_train, budget=budget, limit=limit)
         loader = CompactBatchLoader(
@@ -542,7 +645,7 @@ def main() -> None:
             shuffle_mode=args.compact_shuffle_mode, block_size=args.compact_block_size, limit=limit,
         )
         print(
-            f"[train-data] compact_mmap=1 path={compact_train.root} samples={len(train_ds)} "
+            f"[train-data] compact_cache=1 storage={compact_train.storage_kind} path={compact_train.root} samples={len(train_ds)} "
             f"shuffle={args.compact_shuffle_mode} prefetch={args.compact_prefetch}", flush=True,
         )
     else:
@@ -579,13 +682,17 @@ def main() -> None:
             if args.val_compact_cache_dir:
                 compact_val = CompactExternalCache.open(args.val_compact_cache_dir)
                 compact_val.assert_compatible(cfg)
+                compact_val = compact_val.materialize_host(
+                    mode=args.compact_host_cache,
+                    reserve_gib=args.compact_host_reserve_gib,
+                )
                 val_ds_for_manifest = CompactSampleDataset(compact_val, budget=budget, limit=val_max_scenarios)
                 val_loader = CompactBatchLoader(
                     compact_val, budget=budget, batch_size=batch_size, shuffle=False, seed=args.seed,
                     pin_memory=device.type == "cuda", prefetch=args.compact_prefetch,
                     shuffle_mode="none", block_size=args.compact_block_size, limit=val_max_scenarios,
                 )
-                print(f"[val-data] compact_mmap=1 path={compact_val.root} samples={len(val_ds_for_manifest)}", flush=True)
+                print(f"[val-data] compact_cache=1 storage={compact_val.storage_kind} path={compact_val.root} samples={len(val_ds_for_manifest)}", flush=True)
             else:
                 val_source = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=val_max_scenarios)
                 val_ds_for_manifest = ExternalBaselineDataset(val_source, include_label_future=use_label_future)
@@ -679,7 +786,12 @@ def main() -> None:
     start_epoch = 0
     best_val = float("inf")
     if args.resume_from:
-        start_epoch, best_val = _load_resume(args.resume_from, model, optimizer, scheduler)
+        start_epoch, best_val = _load_resume(args.resume_from, model, optimizer, scheduler, scaler)
+        print(
+            f"[train-resume] variant={variant} B={budget} checkpoint={args.resume_from} "
+            f"next_epoch={start_epoch + 1}/{epochs} best={best_val:.6f}",
+            flush=True,
+        )
     runtime_model: torch.nn.Module = model
     if args.compile:
         if not hasattr(torch, "compile"):
@@ -704,6 +816,8 @@ def main() -> None:
     start_wall = time.perf_counter()
 
     for epoch in range(start_epoch, epochs):
+        if hasattr(loader, "set_epoch"):
+            loader.set_epoch(epoch)
         model.train()
         runtime_model.train()
         meters: dict[str, torch.Tensor] = {}
@@ -811,6 +925,7 @@ def main() -> None:
                 best_metric=best_val,
                 selection_metric=selection_key,
                 training_manifest=training_manifest,
+                scaler=scaler,
             )
         elif validation_ran:
             no_improve_events += 1
@@ -826,6 +941,7 @@ def main() -> None:
             best_metric=best_val,
             selection_metric=selection_key,
             training_manifest=training_manifest,
+            scaler=scaler,
         )
         row = {
             "epoch": epoch + 1,

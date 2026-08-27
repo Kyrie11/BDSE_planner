@@ -658,6 +658,7 @@ class CompactExternalCache:
     float_mm: np.ndarray | None
     int_mm: np.ndarray | None
     bool_mm: np.ndarray | None
+    storage_kind: str = "mmap"
 
     @classmethod
     def open(cls, root: str | Path) -> "CompactExternalCache":
@@ -704,14 +705,117 @@ class CompactExternalCache:
     def source_manifest(self) -> dict[str, Any]:
         return dict(self.manifest.get("source_manifest", {}))
 
+    @property
+    def storage_bytes(self) -> int:
+        return int(sum(int(arr.nbytes) for arr in (self.float_mm, self.int_mm, self.bool_mm) if arr is not None))
+
+    @staticmethod
+    def _host_available_bytes() -> int | None:
+        """Best-effort host MemAvailable without adding a psutil dependency."""
+        try:
+            with Path("/proc/meminfo").open("r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            pass
+        try:
+            pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            if pages > 0 and page_size > 0:
+                return pages * page_size
+        except (AttributeError, OSError, ValueError):
+            pass
+        return None
+
+    def materialize_host(
+        self,
+        *,
+        mode: str = "auto",
+        reserve_gib: float = 16.0,
+        chunk_rows: int = 4096,
+    ) -> "CompactExternalCache":
+        """Copy the compact mmap arrays into ordinary RAM when it is safe.
+
+        Global random row indexing on a large mmap can turn the first training
+        epoch into storage-page-fault latency even after the raw NPZ decode has
+        already been removed.  A one-time sequential RAM copy preserves the
+        exact tensor values and exact shuffled row order while making every
+        subsequent random gather a memory operation.
+
+        ``auto`` is deliberately conservative: keep ``reserve_gib`` bytes free
+        according to MemAvailable.  ``on`` requests the copy even when the host
+        memory query is unavailable (allocation failure is then explicit).
+        """
+        mode_l = str(mode).strip().lower()
+        if mode_l not in {"off", "auto", "on"}:
+            raise ValueError("compact host cache mode must be off|auto|on")
+        if mode_l == "off" or self.storage_kind == "ram":
+            return self
+        need = self.storage_bytes
+        available = self._host_available_bytes()
+        reserve = max(0, int(float(reserve_gib) * (1024**3)))
+        fits = available is None or (need + reserve <= available)
+        print(
+            f"[compact-host-cache-check] mode={mode_l} need_gib={need/(1024**3):.2f} "
+            f"available_gib={'unknown' if available is None else f'{available/(1024**3):.2f}'} "
+            f"reserve_gib={reserve/(1024**3):.2f} fits={fits}",
+            flush=True,
+        )
+        if mode_l == "auto" and (available is None or not fits):
+            print("[compact-host-cache] auto fallback to mmap", flush=True)
+            return self
+        if mode_l == "on" and available is not None and not fits:
+            raise MemoryError(
+                f"compact host cache does not fit: need={need/(1024**3):.2f} GiB "
+                f"available={available/(1024**3):.2f} GiB reserve={reserve/(1024**3):.2f} GiB"
+            )
+
+        rows = max(1, int(chunk_rows))
+
+        def copy_group(src: np.ndarray | None) -> np.ndarray | None:
+            if src is None:
+                return None
+            dst = np.empty(tuple(src.shape), dtype=src.dtype)
+            for start in range(0, len(src), rows):
+                end = min(start + rows, len(src))
+                np.copyto(dst[start:end], src[start:end], casting="no")
+            return dst
+
+        t0 = time.perf_counter()
+        try:
+            float_ram = copy_group(self.float_mm)
+            int_ram = copy_group(self.int_mm)
+            bool_ram = copy_group(self.bool_mm)
+        except MemoryError:
+            if mode_l == "auto":
+                print("[compact-host-cache] allocation failed; falling back to mmap", flush=True)
+                return self
+            raise
+        elapsed = max(time.perf_counter() - t0, 1e-9)
+        print(
+            f"[compact-host-cache-ready] resident_gib={need/(1024**3):.2f} load_s={elapsed:.1f} "
+            f"read_gib_s={need/(1024**3)/elapsed:.2f}",
+            flush=True,
+        )
+        return CompactExternalCache(
+            root=self.root,
+            manifest=self.manifest,
+            float_mm=float_ram,
+            int_mm=int_ram,
+            bool_mm=bool_ram,
+            storage_kind="ram",
+        )
+
     def _group_batch(self, indices: np.ndarray, *, pin_memory: bool) -> dict[str, torch.Tensor]:
         groups: dict[str, torch.Tensor] = {}
         for group, mm in (("float32", self.float_mm), ("int64", self.int_mm), ("bool", self.bool_mm)):
             if mm is None:
                 continue
-            # Advanced indexing returns a compact writable ndarray, removing mmap
-            # lifetime/writability hazards before torch takes ownership of the view.
-            arr = np.asarray(mm[indices]).copy()
+            # Fancy indexing already returns an owning, writable ndarray even for
+            # a read-only memmap.  Avoid a second full-batch .copy(); pin_memory()
+            # below will perform the only additional host copy when CUDA is used.
+            arr = np.asarray(mm[indices])
             t = torch.from_numpy(arr)
             if pin_memory and torch.cuda.is_available():
                 t = t.pin_memory()
@@ -771,6 +875,10 @@ class CompactBatchLoader:
 
     def __len__(self) -> int:
         return int(math.ceil(self.count / float(self.batch_size)))
+
+    def set_epoch(self, epoch: int) -> None:
+        """Pin the next iterator to an absolute epoch for exact resume order."""
+        self._epoch = int(epoch)
 
     def _epoch_indices(self, epoch: int) -> np.ndarray:
         idx = np.arange(self.count, dtype=np.int64)
@@ -837,6 +945,10 @@ class CompactIndexLoader:
     def __len__(self) -> int:
         return int(math.ceil(self.count / float(self.batch_size)))
 
+    def set_epoch(self, epoch: int) -> None:
+        """Pin the next iterator to an absolute epoch for exact resume order."""
+        self._epoch = int(epoch)
+
     def _epoch_indices(self, epoch: int) -> np.ndarray:
         idx = np.arange(self.count, dtype=np.int64)
         if not self.shuffle or self.shuffle_mode == "none":
@@ -892,6 +1004,28 @@ class DeviceCompactExternalCache:
             + int(widths.get("int64", 0)) * 8
             + int(widths.get("bool", 0))
         )
+
+    @classmethod
+    def fit_info(
+        cls,
+        cache: CompactExternalCache,
+        device: torch.device,
+        *,
+        float_dtype: str = "float32",
+        reserve_gib: float = 8.0,
+    ) -> dict[str, int | bool]:
+        """Return a side-effect-free device-cache fit check."""
+        need = cls.estimated_bytes(cache, float_dtype=float_dtype)
+        with torch.cuda.device(device):
+            free_b, total_b = torch.cuda.mem_get_info()
+        reserve_b = int(float(reserve_gib) * (1024**3))
+        return {
+            "need": int(need),
+            "free": int(free_b),
+            "total": int(total_b),
+            "reserve": int(reserve_b),
+            "fits": bool(need + reserve_b <= int(free_b)),
+        }
 
     @classmethod
     def load(
