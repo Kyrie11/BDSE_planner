@@ -22,9 +22,16 @@ export USE_COMPACT_CACHE="${USE_COMPACT_CACHE:-1}"
 export AUTO_BUILD_COMPACT_CACHE="${AUTO_BUILD_COMPACT_CACHE:-1}"
 export COMPACT_BUILD_WORKERS="${COMPACT_BUILD_WORKERS:-$NUM_WORKERS_SHARED}"
 export COMPACT_BUILD_BATCH_SIZE="${COMPACT_BUILD_BATCH_SIZE:-32}"
+export COMPACT_BUILD_AUTOTUNE="${COMPACT_BUILD_AUTOTUNE:-1}"
+export COMPACT_BUILD_AUTOTUNE_MAX_WORKERS="${COMPACT_BUILD_AUTOTUNE_MAX_WORKERS:-32}"
+export COMPACT_BUILD_AUTOTUNE_PROBE_SAMPLES="${COMPACT_BUILD_AUTOTUNE_PROBE_SAMPLES:-128}"
+export COMPACT_NPZ_READ_MODE="${COMPACT_NPZ_READ_MODE:-auto}"
 export COMPACT_SHUFFLE_MODE="${COMPACT_SHUFFLE_MODE:-global}"
 export COMPACT_BLOCK_SIZE="${COMPACT_BLOCK_SIZE:-4096}"
 export COMPACT_PREFETCH="${COMPACT_PREFETCH:-1}"
+export COMPACT_DEVICE_CACHE="${COMPACT_DEVICE_CACHE:-auto}"
+export COMPACT_DEVICE_FLOAT_DTYPE="${COMPACT_DEVICE_FLOAT_DTYPE:-float32}"
+export COMPACT_DEVICE_RESERVE_GIB="${COMPACT_DEVICE_RESERVE_GIB:-8}"
 export TORCH_COMPILE="${TORCH_COMPILE:-0}"
 export TORCH_COMPILE_MODE="${TORCH_COMPILE_MODE:-reduce-overhead}"
 export LOG_EVERY_N_STEPS="${LOG_EVERY_N_STEPS:-100}"
@@ -72,6 +79,26 @@ for B in map(int, sys.argv[2:]):
 PY
 fi
 
+# Verify CUDA *before* the CPU-only compact-cache phase.  Seeing zero GPU memory
+# during BUILD is expected; this early diagnostic makes that explicit instead of
+# making the build look like a CUDA initialization failure.
+IFS=',' read -r -a GPU_ARR <<< "$GPUS"
+[[ ${#GPU_ARR[@]} -ge 2 ]] || { echo "This script expects two GPUs, e.g. GPUS=0,1" >&2; exit 2; }
+GPU0="${GPU_ARR[0]}"; GPU1="${GPU_ARR[1]}"
+CUDA_VISIBLE_DEVICES="$GPU0,$GPU1" python - <<'PY'
+import os
+import torch
+print(f"[train-launch-env] torch={torch.__version__} torch_cuda={torch.version.cuda} cuda_available={torch.cuda.is_available()} visible_count={torch.cuda.device_count()} alloc_conf={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}", flush=True)
+if not torch.cuda.is_available():
+    raise SystemExit("CUDA is not available in the current Python/PyTorch environment")
+if torch.cuda.device_count() < 2:
+    raise SystemExit(f"Expected 2 visible CUDA devices, got {torch.cuda.device_count()}")
+for i in range(torch.cuda.device_count()):
+    p = torch.cuda.get_device_properties(i)
+    print(f"[train-launch-gpu] logical={i} name={p.name} capability={p.major}.{p.minor} mem_gib={p.total_memory/(1024**3):.1f}", flush=True)
+print("[compact-cache-note] compact BUILD is intentionally CPU/storage-only; GPU memory will stay flat until pair training starts.", flush=True)
+PY
+
 # The raw BDSE cache is one NPZ per frame.  Profiling on the target A30 host can
 # show >95% of step time in NPZ/JSON decode/tensorization.  Build one persistent
 # mmap cache of the *exact compact external tensor contract* and reuse it across
@@ -90,6 +117,10 @@ if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
   FIRST_BUDGET="${BUDGETS%% *}"
   CACHE_CFG="$EXTERNAL_OUT_ROOT/configs/B${FIRST_BUDGET}/external_gameformer_budgeted.yaml"
   if [[ "$AUTO_BUILD_COMPACT_CACHE" == "1" || "$AUTO_BUILD_COMPACT_CACHE" == "true" ]]; then
+    compact_build_tune_args=()
+    if [[ "$COMPACT_BUILD_AUTOTUNE" == "0" || "$COMPACT_BUILD_AUTOTUNE" == "false" ]]; then
+      compact_build_tune_args+=(--no-autotune)
+    fi
     echo "[compact-cache] ensuring TRAIN cache: $TRAIN_COMPACT_CACHE"
     python -u -m bdse.external_baselines.compact_cache build \
       --config "$CACHE_CFG" \
@@ -99,7 +130,11 @@ if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
       --budgets $BUDGETS \
       --num-workers "$COMPACT_BUILD_WORKERS" \
       --prefetch-factor "$PREFETCH_FACTOR" \
-      --batch-size "$COMPACT_BUILD_BATCH_SIZE"
+      --batch-size "$COMPACT_BUILD_BATCH_SIZE" \
+      --npz-read-mode "$COMPACT_NPZ_READ_MODE" \
+      --autotune-max-workers "$COMPACT_BUILD_AUTOTUNE_MAX_WORKERS" \
+      --autotune-probe-samples "$COMPACT_BUILD_AUTOTUNE_PROBE_SAMPLES" \
+      "${compact_build_tune_args[@]}"
     echo "[compact-cache] ensuring VAL cache: $VAL_COMPACT_CACHE"
     python -u -m bdse.external_baselines.compact_cache build \
       --config "$CACHE_CFG" \
@@ -109,29 +144,17 @@ if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
       --budgets $BUDGETS \
       --num-workers "$COMPACT_BUILD_WORKERS" \
       --prefetch-factor "$PREFETCH_FACTOR" \
-      --batch-size "$COMPACT_BUILD_BATCH_SIZE"
+      --batch-size "$COMPACT_BUILD_BATCH_SIZE" \
+      --npz-read-mode "$COMPACT_NPZ_READ_MODE" \
+      --autotune-max-workers "$COMPACT_BUILD_AUTOTUNE_MAX_WORKERS" \
+      --autotune-probe-samples "$COMPACT_BUILD_AUTOTUNE_PROBE_SAMPLES" \
+      "${compact_build_tune_args[@]}"
   fi
   [[ -f "$TRAIN_COMPACT_CACHE/compact_manifest.json" ]] || { echo "missing compact train cache: $TRAIN_COMPACT_CACHE" >&2; exit 2; }
   [[ -f "$VAL_COMPACT_CACHE/compact_manifest.json" ]] || { echo "missing compact val cache: $VAL_COMPACT_CACHE" >&2; exit 2; }
 fi
 
-IFS=',' read -r -a GPU_ARR <<< "$GPUS"
-[[ ${#GPU_ARR[@]} -ge 2 ]] || { echo "This script expects two GPUs, e.g. GPUS=0,1" >&2; exit 2; }
-GPU0="${GPU_ARR[0]}"; GPU1="${GPU_ARR[1]}"
-
 echo "[train-launch] GPUs=$GPUS budgets=[$BUDGETS] compile=$TORCH_COMPILE shared_dataloader=$SHARED_DATALOADER fast_refinement=$FAST_REFINEMENT workers_shared=$NUM_WORKERS_SHARED workers_per_job=$NUM_WORKERS_PER_JOB"
-CUDA_VISIBLE_DEVICES="$GPU0,$GPU1" python - <<'PY'
-import os
-import torch
-print(f"[train-launch-env] torch={torch.__version__} torch_cuda={torch.version.cuda} cuda_available={torch.cuda.is_available()} visible_count={torch.cuda.device_count()} alloc_conf={os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '<unset>')}", flush=True)
-if not torch.cuda.is_available():
-    raise SystemExit("CUDA is not available in the current Python/PyTorch environment")
-if torch.cuda.device_count() < 2:
-    raise SystemExit(f"Expected 2 visible CUDA devices, got {torch.cuda.device_count()}")
-for i in range(torch.cuda.device_count()):
-    p = torch.cuda.get_device_properties(i)
-    print(f"[train-launch-gpu] logical={i} name={p.name} capability={p.major}.{p.minor} mem_gib={p.total_memory/(1024**3):.1f}", flush=True)
-PY
 
 run_one_budget() {
   local gpu="$1" B="$2" name="$3"
@@ -271,6 +294,9 @@ run_pair_shared() {
       --val-max-scenarios "$VAL_MAX_SCENARIOS" --val-every-n-epochs "$VAL_EVERY_N_EPOCHS" \
       --warmup-epochs 3 --scheduler cosine --selection-metric val_action_ce \
       --log-every-n-steps "$LOG_EVERY_N_STEPS" \
+      --compact-device-cache "$COMPACT_DEVICE_CACHE" \
+      --compact-device-float-dtype "$COMPACT_DEVICE_FLOAT_DTYPE" \
+      --compact-device-reserve-gib "$COMPACT_DEVICE_RESERVE_GIB" \
       "${compact_args[@]}" \
       "${compile_args[@]}" \
       2>&1 | tee "$outdir/${left}_${right}.pair.train.out"

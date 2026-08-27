@@ -9,6 +9,8 @@ runtime/candidate/evidence semantics while avoiding arrays that are never read b
 ExternalBaselineModel.
 """
 
+import io
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,7 @@ from bdse.data.cache_schema import (
     RuntimeFeatures,
     Sample,
     TeacherLabels,
+    _from_jsonable,
     _json_loads_npz,
     _string_list,
 )
@@ -33,8 +36,64 @@ from bdse.data.tensorizer import (
 )
 from bdse.planner.selector import _greedy_cover_from_pair_delta
 
+try:  # Optional fast path; correctness falls back to stdlib json.
+    import orjson as _orjson
+except Exception:  # pragma: no cover - environment dependent
+    _orjson = None
 
-def load_external_training_sample_npz(path: str | Path, *, include_label_future: bool) -> Sample:
+
+def external_json_backend() -> str:
+    return "orjson" if _orjson is not None else "stdlib-json"
+
+
+@contextmanager
+def _open_external_npz(path: str | Path, *, read_mode: str = "direct"):
+    """Open an external-training NPZ with an optional whole-file prefetch.
+
+    ``direct`` lets NumPy/zipfile seek to individual members.  That is ideal on
+    local SSDs when the NPZ contains large members we intentionally skip.
+    ``bytes`` reads the archive once into RAM and then serves all member reads
+    from ``BytesIO``.  On NFS / high-latency storage with many small member
+    accesses this can be substantially faster.  The compact-cache builder
+    benchmarks both modes on the target host and chooses the faster one.
+    """
+    mode = str(read_mode).strip().lower()
+    if mode == "direct":
+        with np.load(Path(path), allow_pickle=False) as z:
+            yield z
+        return
+    if mode == "bytes":
+        payload = Path(path).read_bytes()
+        bio = io.BytesIO(payload)
+        with np.load(bio, allow_pickle=False) as z:
+            yield z
+        return
+    raise ValueError(f"unsupported external NPZ read_mode={read_mode!r}; expected direct|bytes")
+
+
+def _fast_json_loads_npz(data: Any, key: str, default: Any) -> Any:
+    """Drop-in equivalent of ``_json_loads_npz`` using orjson when available."""
+    if _orjson is None or key not in data.files:
+        return _json_loads_npz(data, key, default)
+    raw = data[key]
+    try:
+        value = raw.item() if raw.shape == () else raw.tolist()
+        if isinstance(value, bytes):
+            payload = value
+        else:
+            payload = str(value).encode("utf-8")
+        return _from_jsonable(_orjson.loads(payload))
+    except Exception:
+        return _json_loads_npz(data, key, default)
+
+
+def load_external_training_sample_npz(
+    path: str | Path,
+    *,
+    include_label_future: bool,
+    read_mode: str = "direct",
+    compact_minimal: bool = False,
+) -> Sample:
     """Load only fields consumed by external adapter training.
 
     In particular this skips logged-agent futures, candidate metadata, runtime
@@ -43,24 +102,32 @@ def load_external_training_sample_npz(path: str | Path, *, include_label_future:
     deserialization even though the external losses never read them.
     """
     p = Path(path)
-    with np.load(p, allow_pickle=False) as z:
+    with _open_external_npz(p, read_mode=read_mode) as z:
         scenario_token = str(z["scenario_token"].item() if z["scenario_token"].shape == () else z["scenario_token"].reshape(-1)[0])
-        timestamp_us = int(z["timestamp_us"].item())
+        timestamp_us = int(z["timestamp_us"].item()) if not compact_minimal else 0
         mission_goal = np.asarray(z["mission_goal"], dtype=np.float32)
         mission_goal_val = mission_goal.astype(np.float32) if mission_goal.size else None
-        map_features = _json_loads_npz(z, "runtime_map_features_json", {})
+        map_features = _fast_json_loads_npz(z, "runtime_map_features_json", {})
         if not map_features:
             map_features = {
                 "route_centerline": np.array([[0.0, 0.0], [160.0, 0.0]], dtype=np.float32),
                 "route_corridor_width": 4.0,
                 "map_valid": False,
             }
+        proposal = np.asarray(z["evidence_proposal_features"], dtype=np.float32) if "evidence_proposal_features" in z.files else None
+        # ``current_agents`` is only needed if proposal features must be recomputed.
+        # Modern BDSE caches already store proposal features; avoid touching this
+        # extra NPZ member in compact-cache construction.
+        if compact_minimal and proposal is not None and proposal.size:
+            current_agents = np.zeros((0,), dtype=np.float32)
+        else:
+            current_agents = np.asarray(z["runtime_current_agents"], dtype=np.float32)
         runtime = RuntimeFeatures(
             ego_history=np.asarray(z["runtime_ego_history"], dtype=np.float32),
             agent_history=np.asarray(z["runtime_agent_history"], dtype=np.float32),
             agent_valid=np.asarray(z["runtime_agent_valid"], dtype=bool),
-            current_agents=np.asarray(z["runtime_current_agents"], dtype=np.float32),
-            traffic_lights=_json_loads_npz(z, "runtime_traffic_lights_json", []),
+            current_agents=current_agents,
+            traffic_lights=_fast_json_loads_npz(z, "runtime_traffic_lights_json", []),
             map_features=map_features,
             route_roadblock_ids=[],
             mission_goal=mission_goal_val,
@@ -96,8 +163,8 @@ def load_external_training_sample_npz(path: str | Path, *, include_label_future:
         hard = np.asarray(z["evidence_is_hard"], dtype=bool)
         costs = np.asarray(z["evidence_budget_costs"], dtype=np.float32)
         active = np.asarray(z["evidence_active"], dtype=bool)
-        anchors = _json_loads_npz(z, "evidence_anchors_json", [{} for _ in types])
-        cheap = _json_loads_npz(z, "evidence_cheap_features_json", [{} for _ in types])
+        anchors = _fast_json_loads_npz(z, "evidence_anchors_json", [{} for _ in types])
+        cheap = _fast_json_loads_npz(z, "evidence_cheap_features_json", [{} for _ in types])
         lambdas = np.asarray(z["evidence_lambda_weights"], dtype=np.float32) if "evidence_lambda_weights" in z.files else np.ones((len(types),), dtype=np.float32)
         if not isinstance(anchors, list) or len(anchors) != len(types):
             anchors = [{} for _ in types]
@@ -117,7 +184,6 @@ def load_external_training_sample_npz(path: str | Path, *, include_label_future:
             )
             for i in range(len(types))
         ]
-        proposal = np.asarray(z["evidence_proposal_features"], dtype=np.float32) if "evidence_proposal_features" in z.files else None
         # The external model never reads dense cached query_features; do not even
         # touch the potentially large NPZ member.
         evidence_bank = EvidenceBank(
@@ -131,8 +197,14 @@ def load_external_training_sample_npz(path: str | Path, *, include_label_future:
         if "teacher_J_base" in z.files and np.asarray(z["teacher_J_base"]).size:
             j_base = np.asarray(z["teacher_J_base"], dtype=np.float64)
             g_evid = np.asarray(z["teacher_g_evid"], dtype=np.float32)
-            j_t = np.asarray(z["teacher_J_T"], dtype=np.float64) if "teacher_J_T" in z.files else np.zeros((K,), dtype=np.float64)
-            a_star = int(np.asarray(z["teacher_a_star"]).item()) if "teacher_a_star" in z.files else int(np.argmin(j_t))
+            if compact_minimal:
+                # Proposal-oracle supervision consumes only J_base and g_evid.
+                # Planner supervision is expert imitation in the fair configs.
+                j_t = np.zeros((K,), dtype=np.float64)
+                a_star = 0
+            else:
+                j_t = np.asarray(z["teacher_J_T"], dtype=np.float64) if "teacher_J_T" in z.files else np.zeros((K,), dtype=np.float64)
+                a_star = int(np.asarray(z["teacher_a_star"]).item()) if "teacher_a_star" in z.files else int(np.argmin(j_t))
             teacher = TeacherLabels(
                 J_base=j_base,
                 g_evid=g_evid,
@@ -148,7 +220,7 @@ def load_external_training_sample_npz(path: str | Path, *, include_label_future:
             pair_indices = pair_indices.reshape(-1, 2)
             pair_margins = np.asarray(z["pair_margins"], dtype=np.float32)
             pair_weights = np.asarray(z["pair_weights"], dtype=np.float32)
-            pair_valid = np.asarray(z["pair_valid"], dtype=bool)
+            pair_valid = np.ones((len(pair_indices),), dtype=bool) if compact_minimal else np.asarray(z["pair_valid"], dtype=bool)
         else:
             pair_indices = np.zeros((0, 2), dtype=np.int64)
             pair_margins = np.zeros((0,), dtype=np.float32)
@@ -570,7 +642,82 @@ def _oracle_selected_mask(sample: Sample, cfg: dict[str, Any]) -> np.ndarray:
     return oracle
 
 
-def external_sample_to_model_inputs(sample: Sample, cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
+def oracle_selected_masks_for_budgets(
+    sample: Sample,
+    cfg: dict[str, Any],
+    budgets: list[int] | tuple[int, ...],
+) -> dict[int, np.ndarray]:
+    """Compute exact oracle masks for several fixed budgets with one greedy run
+    when the cache really uses unit evidence costs.
+
+    Under unit costs, greedy choices for B=8/16/24 are prefixes of the same
+    max-budget sequence because every active atom remains feasible until the slot
+    budget is exhausted.  If source costs are not exactly unit, fall back to the
+    independent reference-equivalent calls so semantics never change.
+    """
+    bs = sorted({int(b) for b in budgets})
+    if not bs:
+        return {}
+    Emax = int(cfg.get("evidence", {}).get("max_atoms", 128))
+    unit_cfg = bool((cfg.get("evidence", {}) or {}).get("unit_cost", False))
+    src_cost = np.asarray(sample.evidence_bank.budget_costs(), dtype=np.float32).reshape(-1)
+    src_active = np.asarray(sample.evidence_bank.active_mask, dtype=bool).reshape(-1)
+    ncost = min(Emax, src_cost.size, src_active.size)
+    truly_unit = bool(
+        unit_cfg
+        and ncost >= 0
+        and np.all(np.isfinite(src_cost[:ncost][src_active[:ncost]]))
+        and np.all(np.abs(src_cost[:ncost][src_active[:ncost]] - 1.0) <= 1e-6)
+    )
+    if not truly_unit:
+        out: dict[int, np.ndarray] = {}
+        for b in bs:
+            bcfg = dict(cfg)
+            bcfg = {**cfg, "evidence": {**(cfg.get("evidence", {}) or {}), "budget": int(b)}}
+            out[b] = _oracle_selected_mask(sample, bcfg)
+        return out
+
+    if sample.teacher is None or sample.pairs is None:
+        raise ValueError("external proposal supervision requires teacher/pair labels")
+    Pmax = int(cfg.get("pairs", {}).get("target_max", 256))
+    n = min(Pmax, len(sample.pairs.pairs))
+    empty = {b: np.zeros((Emax,), dtype=bool) for b in bs}
+    if n <= 0:
+        return empty
+    pairs = np.asarray(sample.pairs.pairs[:n], dtype=np.int64).reshape(-1, 2)
+    margins = np.asarray(sample.pairs.margins[:n], dtype=np.float32)
+    weights = np.asarray(sample.pairs.weights[:n], dtype=np.float32)
+    a, bidx = pairs[:, 0], pairs[:, 1]
+    base = np.asarray(sample.teacher.J_base, dtype=np.float64)
+    g_src = np.asarray(sample.teacher.g_evid, dtype=np.float32)
+    Etrue = min(Emax, g_src.shape[0])
+    base_delta = (base[bidx] - base[a]).astype(np.float32)
+    atom_delta = np.zeros((Emax, n), dtype=np.float32)
+    atom_delta[:Etrue] = g_src[:Etrue, bidx] - g_src[:Etrue, a]
+    caps = np.maximum(margins, 0.0).astype(np.float32)
+    e_cost = np.ones((Emax,), dtype=np.float32)
+    e_active = np.zeros((Emax,), dtype=bool)
+    e_active[:ncost] = src_active[:ncost]
+    selected, _, _ = _greedy_cover_from_pair_delta_vectorized(
+        atom_delta, base_delta, caps, weights, e_cost, float(max(bs)), e_active,
+    )
+    out = {}
+    for budget in bs:
+        mask = np.zeros((Emax,), dtype=bool)
+        take = selected[: min(len(selected), int(budget))]
+        if take:
+            mask[np.asarray(take, dtype=np.int64)] = True
+        out[budget] = mask
+    return out
+
+
+def external_sample_to_model_numpy(sample: Sample, cfg: dict[str, Any]) -> dict[str, np.ndarray]:
+    """Return the compact external training contract as NumPy arrays.
+
+    Keeping the cache-construction path in NumPy avoids creating a dozen small
+    torch tensors per sample only to stack them in a worker and immediately turn
+    them back into NumPy in the parent process.
+    """
     arrays = external_runtime_to_model_numpy(sample.runtime, sample.candidates, sample.evidence_bank, cfg)
     ecfg = cfg.get("external_baseline", {}) or {}
     supervision = str(ecfg.get("planner_supervision", "teacher_cost")).strip().lower()
@@ -601,6 +748,12 @@ def external_sample_to_model_inputs(sample: Sample, cfg: dict[str, Any]) -> dict
             valid[:n] = sample.pairs.valid_mask[:n]
         arrays["pair_indices"] = pairs
         arrays["pair_valid"] = valid
+
+    return {k: np.asarray(v) for k, v in arrays.items()}
+
+
+def external_sample_to_model_inputs(sample: Sample, cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
+    arrays = external_sample_to_model_numpy(sample, cfg)
 
     tensors: dict[str, torch.Tensor] = {}
     for k, v in arrays.items():

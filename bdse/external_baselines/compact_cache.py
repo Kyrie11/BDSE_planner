@@ -22,6 +22,7 @@ import math
 import os
 import random
 import shutil
+import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -36,8 +37,11 @@ from bdse.config import load_config
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
 from bdse.external_baselines.data import (
     _oracle_selected_mask,
+    external_json_backend,
+    external_sample_to_model_numpy,
     external_sample_to_model_inputs,
     load_external_training_sample_npz,
+    oracle_selected_masks_for_budgets,
 )
 
 CACHE_VERSION = 2
@@ -113,24 +117,61 @@ def _seed_worker(worker_id: int) -> None:
     np.random.seed(seed)
 
 
-def _sample_tensor_dict(path: Path, cfg: dict[str, Any], budgets: Sequence[int], *, include_label_future: bool) -> dict[str, torch.Tensor]:
-    sample = load_external_training_sample_npz(path, include_label_future=include_label_future)
+def _sample_array_dict(
+    path: Path,
+    cfg: dict[str, Any],
+    budgets: Sequence[int],
+    *,
+    include_label_future: bool,
+    npz_read_mode: str = "direct",
+    compact_minimal: bool = True,
+) -> dict[str, np.ndarray]:
+    sample = load_external_training_sample_npz(
+        path,
+        include_label_future=include_label_future,
+        read_mode=npz_read_mode,
+        compact_minimal=compact_minimal,
+    )
     base_budget = int(budgets[0])
     base_cfg = _cfg_for_budget(cfg, base_budget)
-    tensors = external_sample_to_model_inputs(sample, base_cfg)
+    proposal_enabled = float(((cfg.get("external_baseline", {}) or {}).get("loss_weights", {}) or {}).get("proposal", 0.25)) != 0.0
+    tensor_cfg = base_cfg
+    if proposal_enabled:
+        # Avoid computing B0 once inside the generic NumPy tensorizer and then
+        # recomputing all masks below.  Cache construction owns the multi-budget
+        # oracle path explicitly.
+        tensor_cfg = copy.deepcopy(base_cfg)
+        tensor_cfg.setdefault("external_baseline", {}).setdefault("loss_weights", {})["proposal"] = 0.0
+    arrays = external_sample_to_model_numpy(sample, tensor_cfg)
 
     # The scene/candidate/evidence compact contract is budget-independent.  Only
     # the greedy proposal-supervision mask changes with B, so keep one mask per B.
-    base_oracle = tensors.pop("oracle_selected_mask", None)
-    proposal_enabled = float(((cfg.get("external_baseline", {}) or {}).get("loss_weights", {}) or {}).get("proposal", 0.25)) != 0.0
     if proposal_enabled:
-        if base_oracle is None:
-            raise RuntimeError("proposal supervision is enabled but external tensorizer returned no oracle_selected_mask")
-        tensors[f"oracle_selected_mask_B{base_budget}"] = base_oracle
-        for budget in budgets[1:]:
-            bcfg = _cfg_for_budget(cfg, int(budget))
-            tensors[f"oracle_selected_mask_B{int(budget)}"] = torch.from_numpy(_oracle_selected_mask(sample, bcfg))
-    return tensors
+        # Reuse one greedy max-budget sequence when the source really has unit
+        # evidence costs (the fair protocol default); fall back exactly otherwise.
+        masks = oracle_selected_masks_for_budgets(sample, cfg, tuple(int(x) for x in budgets))
+        for budget in budgets:
+            arrays[f"oracle_selected_mask_B{int(budget)}"] = np.asarray(masks[int(budget)], dtype=bool)
+    return arrays
+
+
+def _sample_tensor_dict(path: Path, cfg: dict[str, Any], budgets: Sequence[int], *, include_label_future: bool) -> dict[str, torch.Tensor]:
+    arrays = _sample_array_dict(
+        path, cfg, budgets,
+        include_label_future=include_label_future,
+        npz_read_mode="direct",
+        compact_minimal=False,
+    )
+    out: dict[str, torch.Tensor] = {}
+    for name, arr in arrays.items():
+        a = np.asarray(arr)
+        if a.dtype == np.bool_:
+            out[name] = torch.from_numpy(a.astype(np.bool_, copy=False))
+        elif np.issubdtype(a.dtype, np.integer):
+            out[name] = torch.from_numpy(a.astype(np.int64, copy=False))
+        else:
+            out[name] = torch.from_numpy(a.astype(np.float32, copy=False))
+    return out
 
 
 class _CompactBuildDataset(Dataset):
@@ -142,22 +183,52 @@ class _CompactBuildDataset(Dataset):
         *,
         include_label_future: bool,
         start_index: int = 0,
+        end_index: int | None = None,
+        fields: Sequence[dict[str, Any]] | None = None,
+        widths: dict[str, int] | None = None,
+        npz_read_mode: str = "direct",
     ) -> None:
         self.paths = list(paths)
         self.cfg = cfg
         self.budgets = tuple(int(x) for x in budgets)
         self.include_label_future = bool(include_label_future)
         self.start_index = int(start_index)
+        self.end_index = len(self.paths) if end_index is None else min(len(self.paths), int(end_index))
+        self.fields = list(fields or [])
+        self.widths = dict(widths or {})
+        self.npz_read_mode = str(npz_read_mode)
 
     def __len__(self) -> int:
-        return max(0, len(self.paths) - self.start_index)
+        return max(0, self.end_index - self.start_index)
 
-    def __getitem__(self, local_idx: int) -> dict[str, torch.Tensor]:
+    def __getitem__(self, local_idx: int):
         idx = self.start_index + int(local_idx)
-        return _sample_tensor_dict(
+        arrays = _sample_array_dict(
             self.paths[idx], self.cfg, self.budgets,
             include_label_future=self.include_label_future,
+            npz_read_mode=self.npz_read_mode,
+            compact_minimal=True,
         )
+        if not self.fields:
+            return arrays
+        packed: dict[str, np.ndarray] = {
+            "float32": np.empty((int(self.widths.get("float32", 0)),), dtype=np.float32),
+            "int64": np.empty((int(self.widths.get("int64", 0)),), dtype=np.int64),
+            "bool": np.empty((int(self.widths.get("bool", 0)),), dtype=np.bool_),
+        }
+        for f in self.fields:
+            name, group = str(f["name"]), str(f["group"])
+            off, size = int(f["offset"]), int(f["size"])
+            arr = np.asarray(arrays[name]).reshape(-1)
+            if group == "float32":
+                packed[group][off:off + size] = arr.astype(np.float32, copy=False)
+            elif group == "int64":
+                packed[group][off:off + size] = arr.astype(np.int64, copy=False)
+            else:
+                packed[group][off:off + size] = arr.astype(np.bool_, copy=False)
+        # Three flat tensors instead of ~15 independent tensors per sample greatly
+        # reduces DataLoader collation/IPC metadata during one-time cache creation.
+        return tuple(torch.from_numpy(packed[g]) for g in ("float32", "int64", "bool"))
 
 
 def _schema_from_tensors(tensors: dict[str, torch.Tensor]) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -214,6 +285,171 @@ def _write_batch(mem: dict[str, np.memmap], fields: list[dict[str, Any]], batch:
         mem[group][start:end, off:off + size] = arr
 
 
+def _write_packed_batch(mem: dict[str, np.memmap], batch: Sequence[torch.Tensor], start: int, end: int) -> None:
+    """Write the three already-packed dtype groups emitted by build workers."""
+    names = ("float32", "int64", "bool")
+    bsz = int(end - start)
+    for group, tensor in zip(names, batch):
+        if group not in mem:
+            continue
+        t = tensor.detach().cpu()
+        if group == "float32":
+            arr = t.numpy().astype(np.float32, copy=False)
+        elif group == "int64":
+            arr = t.numpy().astype(np.int64, copy=False)
+        else:
+            arr = t.numpy().astype(np.bool_, copy=False)
+        mem[group][start:end, :] = arr.reshape(bsz, mem[group].shape[1])
+
+
+def _system_ram_gib() -> float:
+    try:
+        pages = int(os.sysconf("SC_PHYS_PAGES"))
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        return float(pages * page_size) / float(1024**3)
+    except Exception:
+        return float("nan")
+
+
+def _loader_probe_rate(
+    *,
+    paths: Sequence[Path],
+    cfg: dict[str, Any],
+    budgets: Sequence[int],
+    include_label_future: bool,
+    fields: Sequence[dict[str, Any]],
+    widths: dict[str, int],
+    start_index: int,
+    samples: int,
+    workers: int,
+    prefetch_factor: int,
+    batch_size: int,
+    npz_read_mode: str,
+) -> float:
+    end_index = min(len(paths), int(start_index) + max(1, int(samples)))
+    if end_index <= start_index:
+        return 0.0
+    ds = _CompactBuildDataset(
+        paths, cfg, budgets,
+        include_label_future=include_label_future,
+        start_index=start_index,
+        end_index=end_index,
+        fields=fields,
+        widths=widths,
+        npz_read_mode=npz_read_mode,
+    )
+    kwargs: dict[str, Any] = dict(
+        batch_size=max(1, int(batch_size)),
+        shuffle=False,
+        num_workers=max(0, int(workers)),
+        pin_memory=False,
+        persistent_workers=False,
+        worker_init_fn=_seed_worker,
+    )
+    if int(workers) > 0:
+        kwargs["prefetch_factor"] = max(1, int(prefetch_factor))
+    loader = DataLoader(ds, **kwargs)
+    it = iter(loader)
+    total = 0
+    # Exclude worker process startup / first-file cold metadata from steady-state
+    # throughput; those costs are negligible over a 364k-sample build.
+    try:
+        first = next(it)
+    except StopIteration:
+        return 0.0
+    total += int(first[0].shape[0])
+    t0 = time.perf_counter()
+    for batch in it:
+        total += int(batch[0].shape[0])
+    elapsed = max(time.perf_counter() - t0, 1e-9)
+    timed = max(total - int(first[0].shape[0]), 0)
+    return float(timed) / elapsed if timed > 0 else 0.0
+
+
+def _autotune_build_pipeline(
+    *,
+    paths: Sequence[Path],
+    cfg: dict[str, Any],
+    budgets: Sequence[int],
+    include_label_future: bool,
+    fields: Sequence[dict[str, Any]],
+    widths: dict[str, int],
+    start_index: int,
+    requested_workers: int,
+    max_workers: int,
+    prefetch_factor: int,
+    batch_size: int,
+    npz_read_mode: str,
+    probe_samples: int,
+) -> tuple[int, str]:
+    """Benchmark target-host NPZ mode and worker count on short disjoint windows."""
+    cpu = max(1, int(os.cpu_count() or 1))
+    cap = min(cpu, max(1, int(max_workers)))
+    ram_gib = _system_ram_gib()
+    # Each torch DataLoader process imports NumPy/PyTorch and can consume a few
+    # hundred MiB.  Avoid auto-selecting dozens of workers on a low-RAM host.
+    if math.isfinite(ram_gib):
+        cap = min(cap, max(2, int(ram_gib // 0.75)))
+    requested = max(1, min(cap, int(requested_workers)))
+    probe_n = max(batch_size * 3, int(probe_samples))
+    cursor = int(start_index)
+
+    modes = [str(npz_read_mode).strip().lower()]
+    if modes[0] == "auto":
+        modes = ["direct", "bytes"]
+    mode_rates: dict[str, float] = {}
+    mode_workers = min(requested, cap, 8)
+    for mode in modes:
+        if cursor + probe_n >= len(paths):
+            cursor = max(0, start_index)
+        rate = _loader_probe_rate(
+            paths=paths, cfg=cfg, budgets=budgets, include_label_future=include_label_future,
+            fields=fields, widths=widths, start_index=cursor, samples=probe_n,
+            workers=mode_workers, prefetch_factor=prefetch_factor, batch_size=batch_size,
+            npz_read_mode=mode,
+        )
+        cursor += probe_n
+        mode_rates[mode] = rate
+        print(f"[compact-autotune] read_mode={mode} workers={mode_workers} rate={rate:.1f} sample/s", flush=True)
+    chosen_mode = max(mode_rates, key=mode_rates.get)
+
+    candidates = sorted({
+        max(1, min(cap, requested)),
+        max(1, min(cap, 8)),
+        max(1, min(cap, 12)),
+        max(1, min(cap, 16)),
+        max(1, min(cap, 24)),
+        max(1, min(cap, 32)),
+    })
+    worker_rates: dict[int, float] = {}
+    for workers in candidates:
+        if cursor + probe_n >= len(paths):
+            cursor = max(0, start_index)
+        rate = _loader_probe_rate(
+            paths=paths, cfg=cfg, budgets=budgets, include_label_future=include_label_future,
+            fields=fields, widths=widths, start_index=cursor, samples=probe_n,
+            workers=workers, prefetch_factor=prefetch_factor, batch_size=batch_size,
+            npz_read_mode=chosen_mode,
+        )
+        cursor += probe_n
+        worker_rates[workers] = rate
+        print(f"[compact-autotune] read_mode={chosen_mode} workers={workers} rate={rate:.1f} sample/s", flush=True)
+
+    best_workers = max(worker_rates, key=worker_rates.get)
+    best_rate = worker_rates[best_workers]
+    # Prefer fewer workers when rates are effectively tied; this lowers RAM and
+    # metadata pressure without sacrificing meaningful throughput.
+    near = [w for w, r in worker_rates.items() if r >= 0.97 * best_rate]
+    if near:
+        best_workers = min(near)
+    print(
+        f"[compact-autotune] SELECT read_mode={chosen_mode} workers={best_workers} "
+        f"probe_best={best_rate:.1f} sample/s cpu={cpu} ram_gib={ram_gib:.1f}",
+        flush=True,
+    )
+    return int(best_workers), str(chosen_mode)
+
+
 def build_compact_cache(
     *,
     cfg: dict[str, Any],
@@ -228,6 +464,10 @@ def build_compact_cache(
     max_scenarios_per_split: int | None = None,
     resume: bool = True,
     log_every: int = 100,
+    npz_read_mode: str = "auto",
+    autotune: bool = False,
+    autotune_max_workers: int = 32,
+    autotune_probe_samples: int = 128,
 ) -> Path:
     budgets = tuple(sorted({int(x) for x in budgets}))
     if not budgets or any(x <= 0 for x in budgets):
@@ -313,20 +553,46 @@ def build_compact_cache(
     if start_index >= count:
         start_index = count
 
+    effective_workers = max(0, int(num_workers))
+    effective_read_mode = str(npz_read_mode).strip().lower()
+    if effective_read_mode not in {"auto", "direct", "bytes"}:
+        raise ValueError("npz_read_mode must be auto|direct|bytes")
+    if autotune and start_index < count:
+        effective_workers, effective_read_mode = _autotune_build_pipeline(
+            paths=paths,
+            cfg=cfg,
+            budgets=budgets,
+            include_label_future=include_label_future,
+            fields=fields,
+            widths=widths,
+            start_index=start_index,
+            requested_workers=max(1, effective_workers),
+            max_workers=autotune_max_workers,
+            prefetch_factor=prefetch_factor,
+            batch_size=batch_size,
+            npz_read_mode=effective_read_mode,
+            probe_samples=autotune_probe_samples,
+        )
+    elif effective_read_mode == "auto":
+        effective_read_mode = "direct"
+
     build_ds = _CompactBuildDataset(
         paths, cfg, budgets,
         include_label_future=include_label_future,
         start_index=start_index,
+        fields=fields,
+        widths=widths,
+        npz_read_mode=effective_read_mode,
     )
     kwargs: dict[str, Any] = dict(
         batch_size=max(1, int(batch_size)),
         shuffle=False,
-        num_workers=max(0, int(num_workers)),
+        num_workers=max(0, int(effective_workers)),
         pin_memory=False,
-        persistent_workers=int(num_workers) > 0,
+        persistent_workers=int(effective_workers) > 0,
         worker_init_fn=_seed_worker,
     )
-    if int(num_workers) > 0:
+    if int(effective_workers) > 0:
         kwargs["prefetch_factor"] = max(1, int(prefetch_factor))
     loader = DataLoader(build_ds, **kwargs)
 
@@ -334,14 +600,14 @@ def build_compact_cache(
     written = start_index
     print(
         f"[compact-cache] BUILD path={output} samples={count} start={start_index} budgets={list(budgets)} "
-        f"batch={batch_size} workers={num_workers} float_width={widths.get('float32',0)} "
+        f"batch={batch_size} workers={effective_workers} npz_read_mode={effective_read_mode} json={external_json_backend()} float_width={widths.get('float32',0)} "
         f"int_width={widths.get('int64',0)} bool_width={widths.get('bool',0)} estimated_gib={estimated_bytes/(1024**3):.2f}",
         flush=True,
     )
     for step, batch in enumerate(loader, start=1):
-        bsz = int(next(iter(batch.values())).shape[0])
+        bsz = int(batch[0].shape[0])
         end = written + bsz
-        _write_batch(mem, fields, batch, written, end)
+        _write_packed_batch(mem, batch, written, end)
         written = end
         if step % max(1, int(log_every)) == 0 or written >= count:
             for mm in mem.values():
@@ -544,6 +810,180 @@ class CompactBatchLoader:
                 yield batch
 
 
+class CompactIndexLoader:
+    """Yield only shuffled row indices for a device-resident compact cache."""
+
+    def __init__(
+        self,
+        count: int,
+        *,
+        batch_size: int,
+        shuffle: bool,
+        seed: int,
+        shuffle_mode: str = "global",
+        block_size: int = 4096,
+        limit: int | None = None,
+    ) -> None:
+        self.count = min(int(count), int(limit)) if limit is not None and int(limit) > 0 else int(count)
+        self.batch_size = max(1, int(batch_size))
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.shuffle_mode = str(shuffle_mode).strip().lower()
+        if self.shuffle_mode not in {"global", "block", "none"}:
+            raise ValueError("compact shuffle_mode must be one of: global, block, none")
+        self.block_size = max(self.batch_size, int(block_size))
+        self._epoch = 0
+
+    def __len__(self) -> int:
+        return int(math.ceil(self.count / float(self.batch_size)))
+
+    def _epoch_indices(self, epoch: int) -> np.ndarray:
+        idx = np.arange(self.count, dtype=np.int64)
+        if not self.shuffle or self.shuffle_mode == "none":
+            return idx
+        rng = np.random.default_rng(self.seed + int(epoch))
+        if self.shuffle_mode == "global":
+            rng.shuffle(idx)
+            return idx
+        blocks: list[np.ndarray] = []
+        for start in range(0, self.count, self.block_size):
+            block = idx[start:min(start + self.block_size, self.count)].copy()
+            rng.shuffle(block)
+            blocks.append(block)
+        order = np.arange(len(blocks)); rng.shuffle(order)
+        return np.concatenate([blocks[int(i)] for i in order], axis=0)
+
+    def __iter__(self) -> Iterator[np.ndarray]:
+        epoch = self._epoch; self._epoch += 1
+        idx = self._epoch_indices(epoch)
+        for start in range(0, self.count, self.batch_size):
+            yield idx[start:min(start + self.batch_size, self.count)]
+
+
+@dataclass
+class DeviceCompactExternalCache:
+    """Fully device-resident copy of the compact tensor contract.
+
+    This is intentionally a cache of *already parsed numeric tensors*, never raw
+    NPZ bytes.  It removes mmap/random-storage latency and per-step H2D copies.
+    """
+
+    manifest: dict[str, Any]
+    device: torch.device
+    groups: dict[str, torch.Tensor]
+    source_root: Path
+
+    @staticmethod
+    def _torch_dtype(group: str, float_dtype: str) -> torch.dtype:
+        if group == "float32":
+            return torch.float16 if str(float_dtype).lower() == "float16" else torch.float32
+        if group == "int64":
+            return torch.int64
+        if group == "bool":
+            return torch.bool
+        raise KeyError(group)
+
+    @classmethod
+    def estimated_bytes(cls, cache: CompactExternalCache, *, float_dtype: str = "float32") -> int:
+        count = len(cache); widths = cache.manifest["widths"]
+        fbytes = 2 if str(float_dtype).lower() == "float16" else 4
+        return int(count) * (
+            int(widths.get("float32", 0)) * fbytes
+            + int(widths.get("int64", 0)) * 8
+            + int(widths.get("bool", 0))
+        )
+
+    @classmethod
+    def load(
+        cls,
+        cache: CompactExternalCache,
+        device: torch.device,
+        *,
+        float_dtype: str = "float32",
+        reserve_gib: float = 8.0,
+        mode: str = "auto",
+        chunk_rows: int = 4096,
+    ) -> "DeviceCompactExternalCache | None":
+        if device.type != "cuda":
+            if str(mode).lower() == "on":
+                raise ValueError("device compact cache requires CUDA")
+            return None
+        float_dtype = str(float_dtype).lower()
+        if float_dtype not in {"float32", "float16"}:
+            raise ValueError("compact device float dtype must be float32|float16")
+        mode_l = str(mode).lower()
+        if mode_l not in {"off", "auto", "on"}:
+            raise ValueError("compact device cache mode must be off|auto|on")
+        if mode_l == "off":
+            return None
+        need = cls.estimated_bytes(cache, float_dtype=float_dtype)
+        with torch.cuda.device(device):
+            free_b, total_b = torch.cuda.mem_get_info()
+        reserve_b = int(float(reserve_gib) * (1024**3))
+        fits = need + reserve_b <= int(free_b)
+        print(
+            f"[compact-device-cache-check] device={device} mode={mode_l} dtype={float_dtype} "
+            f"need_gib={need/(1024**3):.2f} free_gib={free_b/(1024**3):.2f} "
+            f"total_gib={total_b/(1024**3):.2f} reserve_gib={reserve_gib:.2f} fits={fits}",
+            flush=True,
+        )
+        if not fits:
+            if mode_l == "on":
+                raise RuntimeError(
+                    f"compact device cache does not fit on {device}: need={need/(1024**3):.2f} GiB "
+                    f"free={free_b/(1024**3):.2f} GiB reserve={reserve_gib:.2f} GiB"
+                )
+            return None
+
+        mm_by_group = {"float32": cache.float_mm, "int64": cache.int_mm, "bool": cache.bool_mm}
+        groups: dict[str, torch.Tensor] = {}
+        t0 = time.perf_counter(); copied = 0
+        rows = max(1, int(chunk_rows))
+        for group, mm in mm_by_group.items():
+            if mm is None:
+                continue
+            dtype = cls._torch_dtype(group, float_dtype)
+            dst = torch.empty(tuple(mm.shape), dtype=dtype, device=device)
+            for start in range(0, len(cache), rows):
+                end = min(start + rows, len(cache))
+                # Writable host staging avoids PyTorch's read-only mmap warning and
+                # bounds temporary RAM while the full destination stays on-device.
+                host_np = np.array(mm[start:end], copy=True)
+                host = torch.from_numpy(host_np)
+                dst[start:end].copy_(host.to(device=device, dtype=dtype, non_blocking=False))
+                copied += int(host_np.nbytes)
+            groups[group] = dst
+        elapsed = max(time.perf_counter() - t0, 1e-9)
+        print(
+            f"[compact-device-cache-ready] device={device} dtype={float_dtype} "
+            f"resident_gib={sum(t.numel()*t.element_size() for t in groups.values())/(1024**3):.2f} "
+            f"source_read_gib={copied/(1024**3):.2f} load_s={elapsed:.1f} read_gib_s={copied/(1024**3)/elapsed:.2f}",
+            flush=True,
+        )
+        return cls(manifest=cache.manifest, device=device, groups=groups, source_root=cache.root)
+
+    def make_batch(self, indices: np.ndarray, *, budget: int) -> dict[str, torch.Tensor]:
+        budget = int(budget)
+        budgets = tuple(int(x) for x in self.manifest.get("budgets", []))
+        if budget not in budgets:
+            raise ValueError(f"budget B={budget} not present in device compact cache; available={budgets}")
+        idx = torch.as_tensor(np.asarray(indices, dtype=np.int64), dtype=torch.long, device=self.device)
+        gathered = {group: tensor.index_select(0, idx) for group, tensor in self.groups.items()}
+        bsz = int(idx.numel())
+        out: dict[str, torch.Tensor] = {}
+        oracle_name = f"oracle_selected_mask_B{budget}"
+        for f in self.manifest["fields"]:
+            stored_name = str(f["name"])
+            if stored_name.startswith("oracle_selected_mask_B") and stored_name != oracle_name:
+                continue
+            public_name = "oracle_selected_mask" if stored_name == oracle_name else stored_name
+            group = str(f["group"]); off = int(f["offset"]); size = int(f["size"])
+            shape = tuple(int(x) for x in f["shape"])
+            base = gathered[group][:, off:off + size]
+            out[public_name] = base.reshape((bsz,) + shape) if shape else base.reshape(bsz)
+        return out
+
+
 class CompactSampleDataset(Dataset):
     """Small Dataset facade used by single-model startup preflight/debug paths."""
 
@@ -575,6 +1015,10 @@ def _cli_build(args: argparse.Namespace) -> None:
         max_scenarios_per_split=args.max_scenarios_per_split,
         resume=not args.no_resume,
         log_every=args.log_every,
+        npz_read_mode=args.npz_read_mode,
+        autotune=not args.no_autotune,
+        autotune_max_workers=args.autotune_max_workers,
+        autotune_probe_samples=args.autotune_probe_samples,
     )
 
 
@@ -591,6 +1035,50 @@ def _cli_profile(args: argparse.Namespace) -> None:
         shuffle_mode=args.shuffle_mode,
         block_size=args.block_size,
     )
+
+
+def _cli_diagnose(args: argparse.Namespace) -> None:
+    """Break raw-cache construction into NPZ/JSON, feature, and oracle stages."""
+    cfg = load_config(args.config)
+    source = PreprocessedBDSEDataset(args.preprocessed_dir, split=list(args.split))
+    paths = [Path(p) for p in source.build_index()]
+    if not paths:
+        raise RuntimeError("no raw samples for compact diagnose")
+    n = min(max(1, int(args.samples)), len(paths))
+    # Spread probes across the ordered cache so one unusually easy log/city does
+    # not dominate the diagnosis while still opening only N samples.
+    ids = np.linspace(0, len(paths) - 1, num=n, dtype=np.int64)
+    probe_paths = [paths[int(i)] for i in ids]
+    sizes = [p.stat().st_size for p in probe_paths]
+    for mode in args.read_modes:
+        load_s: list[float] = []; core_s: list[float] = []; oracle_s: list[float] = []
+        for path in probe_paths:
+            t0 = time.perf_counter()
+            sample = load_external_training_sample_npz(
+                path,
+                include_label_future=_planner_supervision(cfg) == "expert_imitation",
+                read_mode=mode,
+                compact_minimal=True,
+            )
+            t1 = time.perf_counter()
+            core_cfg = copy.deepcopy(cfg)
+            core_cfg.setdefault("external_baseline", {}).setdefault("loss_weights", {})["proposal"] = 0.0
+            external_sample_to_model_numpy(sample, core_cfg)
+            t2 = time.perf_counter()
+            for budget in args.budgets:
+                _oracle_selected_mask(sample, _cfg_for_budget(cfg, int(budget)))
+            t3 = time.perf_counter()
+            load_s.append(t1 - t0); core_s.append(t2 - t1); oracle_s.append(t3 - t2)
+        def ms(v: Sequence[float]) -> float:
+            return 1000.0 * float(statistics.median(v))
+        total_med = ms([a + b + c for a, b, c in zip(load_s, core_s, oracle_s)])
+        print(
+            f"[compact-diagnose] read_mode={mode} samples={n} raw_file_mib_median={statistics.median(sizes)/(1024**2):.2f} "
+            f"npz_json_ms={ms(load_s):.1f} feature_target_ms={ms(core_s):.1f} "
+            f"oracle_Bs_ms={ms(oracle_s):.1f} total_ms={total_med:.1f} budgets={list(args.budgets)} "
+            f"json_backend={external_json_backend()}",
+            flush=True,
+        )
     it = iter(loader)
     warm = min(max(0, args.warmup), max(len(loader) - 1, 0))
     for _ in range(warm):
@@ -620,6 +1108,10 @@ def main() -> None:
     b.add_argument("--num-workers", type=int, default=10)
     b.add_argument("--prefetch-factor", type=int, default=4)
     b.add_argument("--batch-size", type=int, default=32)
+    b.add_argument("--npz-read-mode", choices=["auto", "direct", "bytes"], default="auto")
+    b.add_argument("--no-autotune", action="store_true")
+    b.add_argument("--autotune-max-workers", type=int, default=32)
+    b.add_argument("--autotune-probe-samples", type=int, default=128)
     b.add_argument("--max-scenarios", type=int, default=None)
     b.add_argument("--max-scenarios-per-split", type=int, default=None)
     b.add_argument("--log-every", type=int, default=100)
@@ -639,6 +1131,15 @@ def main() -> None:
     p.add_argument("--no-prefetch", action="store_true")
     p.add_argument("--pin-memory", action="store_true")
     p.set_defaults(func=_cli_profile)
+
+    d = sub.add_parser("diagnose")
+    d.add_argument("--config", required=True)
+    d.add_argument("--preprocessed-dir", required=True)
+    d.add_argument("--split", nargs="+", required=True)
+    d.add_argument("--budgets", nargs="+", type=int, default=[8, 16, 24])
+    d.add_argument("--samples", type=int, default=16)
+    d.add_argument("--read-modes", nargs="+", choices=["direct", "bytes"], default=["direct", "bytes"])
+    d.set_defaults(func=_cli_diagnose)
 
     args = ap.parse_args()
     args.func(args)

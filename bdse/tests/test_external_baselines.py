@@ -235,3 +235,20 @@ def test_external_compact_mmap_cache_preserves_tensor_contract(tmp_path, synthet
             assert torch.equal(got, target), key
     assert cache.budgets == (4, 8)
     assert cached["oracle_selected_mask"].shape == (2, 32)
+
+
+def test_external_multi_budget_unit_oracle_matches_independent(synthetic_sample):
+    from bdse.external_baselines.data import _oracle_selected_mask, oracle_selected_masks_for_budgets
+
+    cfg = _cfg_for_variant("gameformer")
+    cfg["evidence"]["unit_cost"] = True
+    # The synthetic fixture can have non-unit source costs; force a true unit-cost
+    # cache so the shared-prefix optimization is exercised rather than fallback.
+    for atom in synthetic_sample.evidence_bank.atoms:
+        atom.budget_cost = 1.0
+    budgets = [4, 8, 12]
+    got = oracle_selected_masks_for_budgets(synthetic_sample, cfg, budgets)
+    for budget in budgets:
+        bcfg = {**cfg, "evidence": {**cfg["evidence"], "budget": budget}}
+        ref = _oracle_selected_mask(synthetic_sample, bcfg)
+        assert torch.equal(torch.from_numpy(got[budget]), torch.from_numpy(ref)), budget

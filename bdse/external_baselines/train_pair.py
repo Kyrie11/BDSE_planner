@@ -32,7 +32,12 @@ from bdse.config import load_config
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
 from bdse.external_baselines.losses import compute_external_baseline_losses
 from bdse.external_baselines.models import ExternalBaselineModel, external_reference, external_variant
-from bdse.external_baselines.compact_cache import CompactBatchLoader, CompactExternalCache
+from bdse.external_baselines.compact_cache import (
+    CompactBatchLoader,
+    CompactExternalCache,
+    CompactIndexLoader,
+    DeviceCompactExternalCache,
+)
 from bdse.external_baselines.train import (
     ExternalBaselineDataset,
     _accumulate,
@@ -109,6 +114,14 @@ def _to_device(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str
     return {k: v.to(device, non_blocking=True) for k, v in batch.items()}
 
 
+def _cuda_mem(device: torch.device) -> tuple[float, float, float]:
+    with torch.cuda.device(device):
+        alloc = torch.cuda.memory_allocated() / (1024**3)
+        reserved = torch.cuda.memory_reserved() / (1024**3)
+        peak = torch.cuda.max_memory_allocated() / (1024**3)
+    return float(alloc), float(reserved), float(peak)
+
+
 @torch.inference_mode()
 def _validation_pair(
     model_a: torch.nn.Module,
@@ -166,6 +179,9 @@ def main() -> None:
     ap.add_argument("--compact-shuffle-mode", choices=["global", "block", "none"], default="global")
     ap.add_argument("--compact-block-size", type=int, default=4096)
     ap.add_argument("--compact-prefetch", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--compact-device-cache", choices=["off", "auto", "on"], default="auto")
+    ap.add_argument("--compact-device-float-dtype", choices=["float32", "float16"], default="float32")
+    ap.add_argument("--compact-device-reserve-gib", type=float, default=8.0)
     ap.add_argument("--warmup-epochs", type=int, default=3); ap.add_argument("--scheduler", choices=["none", "cosine"], default="cosine")
     ap.add_argument("--selection-metric", default="val_action_ce")
     ap.add_argument("--seed", type=int, default=2026); ap.add_argument("--amp", action="store_true")
@@ -213,6 +229,7 @@ def main() -> None:
     collate_fn = partial(collate, cfg=cfg_a)
     ds = None
     compact_train = None
+    compact_index_loader = None
     if args.compact_cache_dir:
         if args.max_scenarios_per_split:
             raise ValueError("--compact-cache-dir does not support --max-scenarios-per-split; use the full cache or raw DataLoader for subset probes")
@@ -231,6 +248,15 @@ def main() -> None:
             seed=args.seed,
             pin_memory=True,
             prefetch=args.compact_prefetch,
+            shuffle_mode=args.compact_shuffle_mode,
+            block_size=args.compact_block_size,
+            limit=limit,
+        )
+        compact_index_loader = CompactIndexLoader(
+            len(compact_train),
+            batch_size=batch_size,
+            shuffle=True,
+            seed=args.seed,
             shuffle_mode=args.compact_shuffle_mode,
             block_size=args.compact_block_size,
             limit=limit,
@@ -298,13 +324,51 @@ def main() -> None:
     sch_b = _make_scheduler(opt_b, scheduler_name=args.scheduler, epochs=epochs, warmup_epochs=args.warmup_epochs)
     sc_a, sc_b = _make_scaler(dev_a, args.amp), _make_scaler(dev_b, args.amp)
 
+    device_cache_a = device_cache_b = None
+    if compact_train is not None and args.compact_device_cache != "off":
+        # Load the already-parsed numeric compact cache, never the raw NPZ archive.
+        # In auto mode both sides must fit; otherwise fall back to the existing
+        # pinned-host mmap path so pair semantics remain symmetric.
+        device_cache_a = DeviceCompactExternalCache.load(
+            compact_train, dev_a,
+            float_dtype=args.compact_device_float_dtype,
+            reserve_gib=args.compact_device_reserve_gib,
+            mode=args.compact_device_cache,
+        )
+        device_cache_b = DeviceCompactExternalCache.load(
+            compact_train, dev_b,
+            float_dtype=args.compact_device_float_dtype,
+            reserve_gib=args.compact_device_reserve_gib,
+            mode=args.compact_device_cache,
+        )
+        if (device_cache_a is None) != (device_cache_b is None):
+            # Release a one-sided cache and keep the previous shared host loader.
+            device_cache_a = None; device_cache_b = None
+            torch.cuda.empty_cache()
+            print("[compact-device-cache] asymmetric fit; falling back to pinned mmap on both GPUs", flush=True)
+        elif device_cache_a is not None:
+            assert compact_index_loader is not None
+            loader = compact_index_loader
+            print(
+                f"[pair-data] device_resident=1 dtype={args.compact_device_float_dtype} "
+                f"batches={len(loader)} random_gather_on_gpu=1",
+                flush=True,
+            )
+
     budget = int((cfg_a.get("evidence", {}) or {}).get("budget", -1))
     print(
         f"[pair-train-init] A={var_a}@cuda:0 params={sum(p.numel() for p in model_a.parameters())} "
         f"B={var_b}@cuda:1 params={sum(p.numel() for p in model_b.parameters())} budget={budget} "
         f"samples={train_count} batch={batch_size} workers_shared={args.num_workers} amp={args.amp} compile={args.compile} "
+        f"device_cache={device_cache_a is not None} device_cache_dtype={args.compact_device_float_dtype if device_cache_a is not None else 'n/a'} "
         f"refineA={(cfg_a.get('external_baseline', {}) or {}).get('refinement_mode', 'legacy_repeated_encoder')} "
         f"refineB={(cfg_b.get('external_baseline', {}) or {}).get('refinement_mode', 'legacy_repeated_encoder')}", flush=True,
+    )
+    ma0, mr0, mp0 = _cuda_mem(dev_a); mb0, mrb0, mpb0 = _cuda_mem(dev_b)
+    print(
+        f"[pair-cuda-mem] phase=init cuda0_alloc={ma0:.2f}GiB cuda0_reserved={mr0:.2f}GiB cuda0_peak={mp0:.2f}GiB "
+        f"cuda1_alloc={mb0:.2f}GiB cuda1_reserved={mrb0:.2f}GiB cuda1_peak={mpb0:.2f}GiB",
+        flush=True,
     )
 
     def manifest(cfg: dict[str, Any], variant: str, cfg_path: str) -> dict[str, Any]:
@@ -330,6 +394,8 @@ def main() -> None:
                          "val_every_n_epochs": args.val_every_n_epochs, "val_max_scenarios": args.val_max_scenarios,
                          "torch_compile": bool(args.compile),
                          "compact_mmap_cache": compact_train is not None,
+                         "compact_device_cache": device_cache_a is not None,
+                         "compact_device_float_dtype": args.compact_device_float_dtype if device_cache_a is not None else None,
                          "compact_shuffle_mode": args.compact_shuffle_mode if compact_train is not None else None},
         }
     man_a, man_b = manifest(cfg_a, var_a, args.config_a), manifest(cfg_b, var_b, args.config_b)
@@ -348,7 +414,11 @@ def main() -> None:
         opt_a.zero_grad(set_to_none=True); opt_b.zero_grad(set_to_none=True)
         print(f"[pair-epoch-start] A={var_a} B={var_b} budget={budget} epoch={epoch+1}/{epochs} batches={total}", flush=True)
         for step, host_batch in enumerate(loader, start=1):
-            ba = _to_device(host_batch, dev_a); bb = _to_device(host_batch, dev_b)
+            if device_cache_a is not None and device_cache_b is not None:
+                ba = device_cache_a.make_batch(host_batch, budget=budget)
+                bb = device_cache_b.make_batch(host_batch, budget=budget)
+            else:
+                ba = _to_device(host_batch, dev_a); bb = _to_device(host_batch, dev_b)
             group_start = ((step - 1) // grad_accum) * grad_accum
             group_size = min(grad_accum, total - group_start)
             with _amp_context(dev_a, args.amp):
@@ -367,12 +437,14 @@ def main() -> None:
                 cea = float(la["action_ce"].detach().cpu()); ceb = float(lb["action_ce"].detach().cpu())
                 propa = float(la["proposal_bce"].detach().cpu()); propb = float(lb["proposal_bce"].detach().cpu())
                 elapsed = max(time.perf_counter() - epoch_start, 1e-9); seen = min(step * batch_size, train_count)
+                mem_a, _, peak_a = _cuda_mem(dev_a); mem_b, _, peak_b = _cuda_mem(dev_b)
                 print(
                     f"[pair-train-progress] A={var_a} lossA={lva:.4f} ceA={cea:.4f} propA={propa:.4f} "
                     f"B={var_b} lossB={lvb:.4f} ceB={ceb:.4f} propB={propb:.4f} budget={budget} "
                     f"epoch={epoch+1}/{epochs} step={step}/{total} ({100*step/max(total,1):.1f}%) samples~={seen}/{train_count} "
                     f"lrA={opt_a.param_groups[0]['lr']:.2e} lrB={opt_b.param_groups[0]['lr']:.2e} "
-                    f"rate={step/elapsed:.2f} shared_batch/s elapsed={elapsed:.1f}s", flush=True,
+                    f"rate={step/elapsed:.2f} shared_batch/s elapsed={elapsed:.1f}s "
+                    f"cuda_memA={mem_a:.2f}/{peak_a:.2f}GiB cuda_memB={mem_b:.2f}/{peak_b:.2f}GiB", flush=True,
                 )
 
         met_a, met_b = _finalize_meters(ma, total), _finalize_meters(mb, total)
