@@ -38,6 +38,9 @@ external_baseline:
   budget: 16
   hidden_dim: 256
   transformer_layers: 4
+  refinement_mode: shared_encoder_light_refine
+  refinement_layers_per_stage: 1
+  refinement_ff_dim: 512
   attention_heads: 8
   reasoning_levels: 3
   lr: 0.0001

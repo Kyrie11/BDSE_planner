@@ -34,8 +34,8 @@ EXTERNAL_BASELINE_REFERENCES: dict[str, dict[str, str]] = {
         "fidelity": "partial: hierarchical level-k refinement retained; joint multi-agent prediction/decoder omitted",
     },
     "dtpp": {
-        "paper": "DTPP: Differentiable Joint Conditional Prediction and Cost Evaluation for Tree Policy Planning in Autonomous Driving (2023)",
-        "source": "https://research.nvidia.com/labs/avg/publication/huang.karkus.etal.arxiv2023/",
+        "paper": "DTPP: Differentiable Joint Conditional Prediction and Cost Evaluation for Tree Policy Planning in Autonomous Driving (ICRA 2024)",
+        "source": "https://github.com/MCZhi/DTPP",
         "implementation_label": "DTPP-inspired budget adapter",
         "fidelity": "partial: maneuver/tree branch scoring retained; ego-conditioned prediction and scenario tree omitted",
     },
@@ -58,10 +58,10 @@ EXTERNAL_BASELINE_REFERENCES: dict[str, dict[str, str]] = {
         "fidelity": "low: centerline/progress/comfort/safety prior retained; official proposal generation, IDM rollout and scoring stack omitted",
     },
     "ppad": {
-        "paper": "PPAD-style iterative policy refinement adapter",
-        "source": "repository-local adapter",
+        "paper": "PPAD: Iterative Interactions of Prediction and Planning for End-to-end Autonomous Driving (ECCV 2024)",
+        "source": "https://github.com/zlichen/PPAD",
         "implementation_label": "PPAD-inspired budget adapter",
-        "fidelity": "partial",
+        "fidelity": "partial: iterative policy refinement retained; original timestep-wise ego-agent/map/BEV prediction-planning interaction stack omitted",
     },
 }
 
@@ -271,6 +271,12 @@ class ExternalBaselineModel(nn.Module):
         self.state_dropout = float(self.ecfg.get("state_dropout", 0.0))
         self.reasoning_levels = int(self.ecfg.get("reasoning_levels", 3))
         self.tree_depth = int(self.ecfg.get("tree_depth", 2))
+        # Legacy checkpoints/configs keep the historical repeated-full-encoder
+        # graph. New fixed-budget configs opt into the faster architecture that
+        # encodes the scene once and applies lightweight per-stage refinement,
+        # which is also closer to the encoder + hierarchical/tree decoder split
+        # in the reference GameFormer/DTPP papers.
+        self.refinement_mode = str(self.ecfg.get("refinement_mode", "legacy_repeated_encoder")).strip().lower()
         self.step_s = float(cfg.get("candidate", {}).get("step_s", 0.1))
         self.budget = int(self.ecfg.get("budget", cfg.get("evidence", {}).get("budget", 16)))
         self.unit_cost = bool(cfg.get("evidence", {}).get("unit_cost", True))
@@ -319,6 +325,19 @@ class ExternalBaselineModel(nn.Module):
         enc_layer = nn.TransformerEncoderLayer(d_model=h, nhead=heads, dim_feedforward=ff, dropout=self.dropout_p, batch_first=True, norm_first=True)
         self.scene_transformer = nn.TransformerEncoder(enc_layer, num_layers=max(1, layers))
         self.cross_attn = nn.MultiheadAttention(h, heads, dropout=self.dropout_p, batch_first=True)
+        self.stage_refiners = nn.ModuleList()
+        if self.variant in {"gameformer", "dtpp"} and self.refinement_mode in {
+            "shared_encoder_light_refine", "shared_encoder", "light_refine", "fast"
+        }:
+            stage_count = max(1, self.reasoning_levels if self.variant == "gameformer" else self.tree_depth)
+            refine_layers = max(1, int(self.ecfg.get("refinement_layers_per_stage", 1)))
+            refine_ff = int(self.ecfg.get("refinement_ff_dim", max(2 * h, h)))
+            for _ in range(stage_count):
+                layer = nn.TransformerEncoderLayer(
+                    d_model=h, nhead=heads, dim_feedforward=refine_ff,
+                    dropout=self.dropout_p, batch_first=True, norm_first=True,
+                )
+                self.stage_refiners.append(nn.TransformerEncoder(layer, num_layers=refine_layers))
         self.update_gru = nn.GRUCell(h, h)
         self.scene_token = nn.Parameter(torch.zeros(1, 1, h))
         self.cost_head = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h), nn.ReLU(), nn.Linear(h, 1))
@@ -571,28 +590,55 @@ class ExternalBaselineModel(nn.Module):
                 # good longitudinally but fail laterally near route/corridor.
                 j = j + self.long_head(cand_enc).squeeze(-1) + self.lat_head(cand_enc).squeeze(-1)
         elif self.variant == "gameformer":
-            cand_ctx = cand
             cand_padding = torch.cat([torch.zeros((valid.shape[0], 1), dtype=torch.bool, device=valid.device), candidate_padding], dim=1)
-            for _ in range(max(1, self.reasoning_levels)):
-                attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
-                cand_ctx = cand_ctx + attn
-                cand_ctx = self.scene_transformer(torch.cat([scene_tok, cand_ctx], dim=1), src_key_padding_mask=cand_padding)[:, 1:]
-                auxiliary_costs.append(self.cost_head(cand_ctx).squeeze(-1))
+            if self.stage_refiners:
+                # Encode the static scene/candidate context once.  Each hierarchy
+                # level then performs the interaction update plus one lightweight
+                # decoder/refinement block instead of rerunning all scene layers.
+                base_enc = self.scene_transformer(torch.cat([scene_tok, cand], dim=1), src_key_padding_mask=cand_padding)
+                scene_ctx, cand_ctx = base_enc[:, 0], base_enc[:, 1:]
+                for refiner in self.stage_refiners:
+                    attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
+                    stage = refiner(
+                        torch.cat([scene_ctx[:, None, :], cand_ctx + attn], dim=1),
+                        src_key_padding_mask=cand_padding,
+                    )
+                    scene_ctx, cand_ctx = stage[:, 0], stage[:, 1:]
+                    auxiliary_costs.append(self.cost_head(cand_ctx).squeeze(-1))
+            else:
+                # Exact legacy graph for existing checkpoints.
+                cand_ctx = cand
+                for _ in range(max(1, self.reasoning_levels)):
+                    attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
+                    cand_ctx = cand_ctx + attn
+                    cand_ctx = self.scene_transformer(torch.cat([scene_tok, cand_ctx], dim=1), src_key_padding_mask=cand_padding)[:, 1:]
+                    auxiliary_costs.append(self.cost_head(cand_ctx).squeeze(-1))
             j = auxiliary_costs[-1]
         elif self.variant == "dtpp":
             mid = batch.get("candidate_maneuver_ids", torch.zeros(valid.shape, dtype=torch.long, device=valid.device)).long().clamp_min(0).clamp_max(self.maneuver_head[-1].out_features - 1)
-            cand_ctx = cand
-            scene_ctx = scene_tok[:, 0]
             cand_padding = torch.cat([torch.zeros((valid.shape[0], 1), dtype=torch.bool, device=valid.device), candidate_padding], dim=1)
-            for depth, branch_head in enumerate(self.dtpp_branch_heads):
-                # A budget-compatible tree-policy analogue: each stage updates the
-                # candidate branch state from selected interaction evidence, then
-                # adds a maneuver-level branch cost and trajectory refinement cost.
-                attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
-                enc = self.scene_transformer(torch.cat([scene_ctx[:, None, :], cand_ctx + attn], dim=1), src_key_padding_mask=cand_padding)
-                scene_ctx, cand_ctx = enc[:, 0], enc[:, 1:]
-                maneuver_cost = torch.gather(branch_head(scene_ctx), 1, mid)
-                auxiliary_costs.append(maneuver_cost + self.cost_head(cand_ctx).squeeze(-1))
+            if self.stage_refiners:
+                base_enc = self.scene_transformer(torch.cat([scene_tok, cand], dim=1), src_key_padding_mask=cand_padding)
+                scene_ctx, cand_ctx = base_enc[:, 0], base_enc[:, 1:]
+                for branch_head, refiner in zip(self.dtpp_branch_heads, self.stage_refiners):
+                    attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
+                    stage = refiner(
+                        torch.cat([scene_ctx[:, None, :], cand_ctx + attn], dim=1),
+                        src_key_padding_mask=cand_padding,
+                    )
+                    scene_ctx, cand_ctx = stage[:, 0], stage[:, 1:]
+                    maneuver_cost = torch.gather(branch_head(scene_ctx), 1, mid)
+                    auxiliary_costs.append(maneuver_cost + self.cost_head(cand_ctx).squeeze(-1))
+            else:
+                # Exact legacy graph for existing checkpoints.
+                cand_ctx = cand
+                scene_ctx = scene_tok[:, 0]
+                for depth, branch_head in enumerate(self.dtpp_branch_heads):
+                    attn, _ = self.cross_attn(cand_ctx, ev_sel, ev_sel, key_padding_mask=selected_padding, need_weights=False)
+                    enc = self.scene_transformer(torch.cat([scene_ctx[:, None, :], cand_ctx + attn], dim=1), src_key_padding_mask=cand_padding)
+                    scene_ctx, cand_ctx = enc[:, 0], enc[:, 1:]
+                    maneuver_cost = torch.gather(branch_head(scene_ctx), 1, mid)
+                    auxiliary_costs.append(maneuver_cost + self.cost_head(cand_ctx).squeeze(-1))
             j = auxiliary_costs[-1]
         elif self.variant == "ppad":
             iters = int(self.ecfg.get("iterations", 4))

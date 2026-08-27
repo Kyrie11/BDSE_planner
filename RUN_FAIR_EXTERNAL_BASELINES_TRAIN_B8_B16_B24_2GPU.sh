@@ -12,6 +12,11 @@ export GPUS="${GPUS:-0,1}"
 export BUDGETS="${BUDGETS:-8 16 24}"
 export PROPOSAL_TOP_M="${PROPOSAL_TOP_M:-24}"
 export NUM_WORKERS_PER_JOB="${NUM_WORKERS_PER_JOB:-6}"
+export SHARED_DATALOADER="${SHARED_DATALOADER:-1}"
+# 1 = corrected/faster shared-encoder hierarchical refinement for GameFormer/DTPP.
+# 0 = exact legacy repeated-full-encoder graph (checkpoint-compatible).
+export FAST_REFINEMENT="${FAST_REFINEMENT:-1}"
+export NUM_WORKERS_SHARED="${NUM_WORKERS_SHARED:-10}"
 export PREFETCH_FACTOR="${PREFETCH_FACTOR:-4}"
 export TORCH_COMPILE="${TORCH_COMPILE:-0}"
 export TORCH_COMPILE_MODE="${TORCH_COMPILE_MODE:-reduce-overhead}"
@@ -45,11 +50,26 @@ python -m bdse.tools.prepare_external_fixed_budget_configs \
   --budgets $BUDGETS \
   --proposal-top-m "$PROPOSAL_TOP_M"
 
+if [[ "$FAST_REFINEMENT" != "1" && "$FAST_REFINEMENT" != "true" ]]; then
+  echo "[train-config] FAST_REFINEMENT=0: forcing legacy_repeated_encoder for checkpoint-compatible GameFormer/DTPP"
+  python - "$EXTERNAL_OUT_ROOT/configs" $BUDGETS <<'PY'
+from pathlib import Path
+import sys, yaml
+root = Path(sys.argv[1])
+for B in map(int, sys.argv[2:]):
+    for name in ("gameformer", "dtpp"):
+        p = root / f"B{B}" / f"external_{name}_budgeted.yaml"
+        cfg = yaml.safe_load(p.read_text())
+        cfg.setdefault("external_baseline", {})["refinement_mode"] = "legacy_repeated_encoder"
+        p.write_text(yaml.safe_dump(cfg, sort_keys=False))
+PY
+fi
+
 IFS=',' read -r -a GPU_ARR <<< "$GPUS"
 [[ ${#GPU_ARR[@]} -ge 2 ]] || { echo "This script expects two GPUs, e.g. GPUS=0,1" >&2; exit 2; }
 GPU0="${GPU_ARR[0]}"; GPU1="${GPU_ARR[1]}"
 
-echo "[train-launch] GPUs=$GPUS budgets=[$BUDGETS] compile=$TORCH_COMPILE workers_per_job=$NUM_WORKERS_PER_JOB"
+echo "[train-launch] GPUs=$GPUS budgets=[$BUDGETS] compile=$TORCH_COMPILE shared_dataloader=$SHARED_DATALOADER fast_refinement=$FAST_REFINEMENT workers_shared=$NUM_WORKERS_SHARED workers_per_job=$NUM_WORKERS_PER_JOB"
 CUDA_VISIBLE_DEVICES="$GPU0,$GPU1" python - <<'PY'
 import os
 import torch
@@ -147,9 +167,72 @@ run_model_all_budgets() {
   done
 }
 
+run_pair_shared() {
+  local left="$1" right="$2"
+  echo "=== shared-loader pair: GPU$GPU0->$left | GPU$GPU1->$right ==="
+  for B in $BUDGETS; do
+    local cfg_l="$EXTERNAL_OUT_ROOT/configs/B${B}/external_${left}_budgeted.yaml"
+    local cfg_r="$EXTERNAL_OUT_ROOT/configs/B${B}/external_${right}_budgeted.yaml"
+    local outdir="$EXTERNAL_OUT_ROOT/B${B}"
+    mkdir -p "$outdir"
+    local marker_l="$outdir/.${left}_B${B}.run_started.$$"
+    local marker_r="$outdir/.${right}_B${B}.run_started.$$"
+    : > "$marker_l"; : > "$marker_r"
+
+    local batch=32 accum=1
+    if [[ "$left" == "plantf" || "$left" == "pluto" || "$right" == "plantf" || "$right" == "pluto" ]]; then
+      batch="${PLAN_BATCH_SIZE:-128}"
+      accum="${PLAN_GRAD_ACCUM:-1}"
+    fi
+    local compile_args=()
+    if [[ "$TORCH_COMPILE" == "1" || "$TORCH_COMPILE" == "true" ]]; then
+      compile_args+=(--compile --compile-mode "$TORCH_COMPILE_MODE" --compile-fallback)
+    fi
+    local run_args=()
+    if (( TRAIN_MAX_SCENARIOS > 0 )); then run_args+=(--max-scenarios "$TRAIN_MAX_SCENARIOS"); fi
+    if (( TRAIN_MAX_SCENARIOS_PER_SPLIT > 0 )); then run_args+=(--max-scenarios-per-split "$TRAIN_MAX_SCENARIOS_PER_SPLIT"); fi
+    if (( EPOCHS_OVERRIDE > 0 )); then run_args+=(--epochs "$EPOCHS_OVERRIDE"); fi
+
+    echo "[pair-train] START systems=$left,$right B=$B batch=$batch accum=$accum shared_workers=$NUM_WORKERS_SHARED"
+    set +e
+    CUDA_VISIBLE_DEVICES="$GPU0,$GPU1" python -u -m bdse.external_baselines.train_pair \
+      --config-a "$cfg_l" --config-b "$cfg_r" \
+      --output-a "$outdir/${left}_budgeted.pt" --output-b "$outdir/${right}_budgeted.pt" \
+      --log-file-a "$outdir/${left}.train_log.jsonl" --log-file-b "$outdir/${right}.train_log.jsonl" \
+      --split train_boston train_pittsburgh train_singapore train_vegas_2 \
+      --preprocessed-dir "$BDSE_TRAIN_CACHE" \
+      "${run_args[@]}" \
+      --batch-size "$batch" --grad-accum-steps "$accum" \
+      --num-workers "$NUM_WORKERS_SHARED" --prefetch-factor "$PREFETCH_FACTOR" --amp \
+      --val-preprocessed-dir "$BDSE_VAL_CACHE" --val-split val \
+      --val-max-scenarios "$VAL_MAX_SCENARIOS" --val-every-n-epochs "$VAL_EVERY_N_EPOCHS" \
+      --warmup-epochs 3 --scheduler cosine --selection-metric val_action_ce \
+      --log-every-n-steps "$LOG_EVERY_N_STEPS" \
+      "${compile_args[@]}" \
+      2>&1 | tee "$outdir/${left}_${right}.pair.train.out"
+    local pipe_status=("${PIPESTATUS[@]}")
+    local py_rc=${pipe_status[0]:-1}; local tee_rc=${pipe_status[1]:-1}
+    set -e
+    if (( py_rc != 0 || tee_rc != 0 )); then
+      echo "[pair-train] FAILED systems=$left,$right B=$B python_exit=$py_rc tee_exit=$tee_rc" >&2
+      tail -n 100 "$outdir/${left}_${right}.pair.train.out" >&2 || true
+      rm -f "$marker_l" "$marker_r"
+      if (( py_rc != 0 )); then return "$py_rc"; else return "$tee_rc"; fi
+    fi
+    [[ -s "$outdir/${left}_budgeted.best.pt" && "$outdir/${left}_budgeted.best.pt" -nt "$marker_l" ]] || { echo "missing fresh $left best checkpoint B=$B" >&2; return 3; }
+    [[ -s "$outdir/${right}_budgeted.best.pt" && "$outdir/${right}_budgeted.best.pt" -nt "$marker_r" ]] || { echo "missing fresh $right best checkpoint B=$B" >&2; return 3; }
+    rm -f "$marker_l" "$marker_r"
+    echo "[pair-train] DONE systems=$left,$right B=$B"
+  done
+}
+
 run_pair() {
   local left="$1" right="$2"
-  echo "=== pair: GPU$GPU0->$left | GPU$GPU1->$right ==="
+  if [[ "$SHARED_DATALOADER" == "1" || "$SHARED_DATALOADER" == "true" ]]; then
+    run_pair_shared "$left" "$right"
+    return
+  fi
+  echo "=== legacy two-process pair: GPU$GPU0->$left | GPU$GPU1->$right ==="
   run_model_all_budgets "$GPU0" "$left" & local p0=$!
   run_model_all_budgets "$GPU1" "$right" & local p1=$!
   local failed=0

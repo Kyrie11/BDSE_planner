@@ -154,3 +154,41 @@ def test_external_train_main_does_not_shadow_module_torch():
                 if alias.name == "torch" or alias.name.startswith("torch."):
                     shadowing_imports.append(alias.name)
     assert shadowing_imports == []
+
+
+def test_external_vectorized_oracle_matches_reference_randomized():
+    import numpy as np
+    from bdse.external_baselines.data import _greedy_cover_from_pair_delta_vectorized
+    from bdse.planner.selector import _greedy_cover_from_pair_delta
+
+    rng = np.random.default_rng(2026)
+    for _ in range(50):
+        E, P = 32, 64
+        atom_delta = rng.normal(0.0, 0.25, size=(E, P)).astype(np.float32)
+        base = rng.normal(0.0, 0.5, size=(P,)).astype(np.float32)
+        caps = rng.uniform(0.0, 1.5, size=(P,)).astype(np.float32)
+        weights = rng.uniform(0.1, 2.0, size=(P,)).astype(np.float32)
+        costs = rng.choice(np.array([1.0, 2.0, 3.0], dtype=np.float32), size=(E,)).astype(np.float32)
+        active = rng.random(E) > 0.15
+        budget = float(rng.choice([4, 8, 16]))
+        ref = _greedy_cover_from_pair_delta(atom_delta, base, caps, weights, costs, budget, active)
+        fast = _greedy_cover_from_pair_delta_vectorized(atom_delta, base, caps, weights, costs, budget, active)
+        assert ref[0] == fast[0]
+        assert abs(ref[1] - fast[1]) < 1e-5
+        assert abs(ref[2] - fast[2]) < 1e-6
+
+
+def test_external_fast_refinement_forward(synthetic_sample):
+    for variant in ("gameformer", "dtpp"):
+        cfg = _cfg_for_variant(variant)
+        cfg["external_baseline"]["refinement_mode"] = "shared_encoder_light_refine"
+        cfg["external_baseline"]["refinement_layers_per_stage"] = 1
+        cfg["external_baseline"]["refinement_ff_dim"] = 128
+        model = ExternalBaselineModel(cfg)
+        assert len(model.stage_refiners) == (model.reasoning_levels if variant == "gameformer" else model.tree_depth)
+        batch = sample_to_model_inputs(synthetic_sample, cfg, include_teacher=True, include_dense_query=False)
+        batch = {k: v.unsqueeze(0) for k, v in batch.items()}
+        out = model(batch)
+        losses = compute_external_baseline_losses(out, batch, cfg)
+        assert out["J0"].shape == (1, 32)
+        assert torch.isfinite(losses["loss"])

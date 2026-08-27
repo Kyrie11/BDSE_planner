@@ -441,6 +441,90 @@ def expert_candidate_targets(sample: Sample) -> tuple[int, np.ndarray]:
     return int(np.nanargmin(ade)), ade
 
 
+def _greedy_cover_from_pair_delta_vectorized(
+    atom_delta: np.ndarray,
+    base_margin: np.ndarray,
+    caps: np.ndarray,
+    pair_weights: np.ndarray,
+    atom_budget_costs: np.ndarray,
+    budget: float,
+    atom_active_mask: np.ndarray | None = None,
+) -> tuple[list[int], float, float]:
+    """Exact greedy certificate selection with vectorized gain evaluation.
+
+    This preserves :func:`bdse.planner.selector._greedy_cover_from_pair_delta`
+    semantics (including ratio/gain/index tie breaking), but evaluates all
+    currently feasible atoms in one NumPy operation instead of one Python
+    reduction per atom.  The external-baseline proposal label is recomputed for
+    every sample and every epoch, so removing the E-times-P Python hot loop is a
+    material DataLoader optimization without changing the supervision target.
+    """
+    margin = np.asarray(base_margin, dtype=np.float32).reshape(-1).copy()
+    caps = np.asarray(caps, dtype=np.float32).reshape(-1)
+    weights = np.asarray(pair_weights, dtype=np.float32).reshape(-1)
+    delta = np.asarray(atom_delta, dtype=np.float32)
+    E = int(delta.shape[0]) if delta.ndim == 2 else int(np.asarray(atom_budget_costs).shape[0])
+    if delta.ndim != 2 or delta.shape[1] != margin.shape[0]:
+        delta = np.zeros((E, margin.shape[0]), dtype=np.float32)
+    if caps.shape[0] != margin.shape[0]:
+        caps = np.zeros((margin.shape[0],), dtype=np.float32)
+    if weights.shape[0] != margin.shape[0]:
+        weights = np.ones((margin.shape[0],), dtype=np.float32)
+
+    active = np.ones((E,), dtype=bool) if atom_active_mask is None else np.asarray(atom_active_mask, dtype=bool).reshape(-1).copy()
+    if active.shape[0] < E:
+        active = np.pad(active, (0, E - active.shape[0]), constant_values=False)
+    active = active[:E]
+    costs = np.asarray(atom_budget_costs, dtype=np.float32).reshape(-1)
+    if costs.shape[0] < E:
+        costs = np.pad(costs, (0, E - costs.shape[0]), constant_values=np.inf)
+    costs = costs[:E]
+
+    def value(m: np.ndarray) -> float:
+        return float(np.sum(weights * np.minimum(caps, np.maximum(m, 0.0)), dtype=np.float64))
+
+    current = value(margin)
+    selected: list[int] = []
+    spent = 0.0
+    budget_f = float(budget)
+    while bool(active.any()):
+        feasible = np.flatnonzero(active & np.isfinite(costs) & ((spent + costs) <= budget_f + 1e-6))
+        if feasible.size == 0:
+            break
+        # [F, P].  NumPy performs the expensive clipped weighted reductions in C.
+        trial = margin[None, :] + delta[feasible]
+        vals = np.sum(
+            weights[None, :] * np.minimum(caps[None, :], np.maximum(trial, 0.0)),
+            axis=1,
+            dtype=np.float64,
+        )
+        gains = vals - current
+        ratios = gains / np.maximum(costs[feasible].astype(np.float64), 1e-6)
+
+        # Reference tie-break key is (gain/cost, gain, -idx).  Do the final tiny
+        # comparison in Python so ties follow the exact original ordering rule.
+        best_pos = 0
+        best_idx = int(feasible[0])
+        best_gain = float(gains[0])
+        best_key = (float(ratios[0]), best_gain, -best_idx)
+        for pos in range(1, int(feasible.size)):
+            idx = int(feasible[pos])
+            gain = float(gains[pos])
+            key = (float(ratios[pos]), gain, -idx)
+            if key > best_key:
+                best_pos, best_idx, best_gain, best_key = pos, idx, gain, key
+
+        if best_gain <= 1e-9:
+            break
+        c = float(costs[best_idx])
+        selected.append(best_idx)
+        active[best_idx] = False
+        spent += c
+        margin += delta[best_idx]
+        current += best_gain
+    return selected, float(current), float(spent)
+
+
 def _oracle_selected_mask(sample: Sample, cfg: dict[str, Any]) -> np.ndarray:
     """Exact selected-mask subset of the generic BDSE teacher tensorizer.
 
@@ -473,7 +557,7 @@ def _oracle_selected_mask(sample: Sample, cfg: dict[str, Any]) -> np.ndarray:
     e_active = np.zeros((Emax,), dtype=bool)
     src_active = np.asarray(sample.evidence_bank.active_mask, dtype=bool)
     e_active[: min(Emax, len(src_active))] = src_active[:Emax]
-    selected, _, _ = _greedy_cover_from_pair_delta(
+    selected, _, _ = _greedy_cover_from_pair_delta_vectorized(
         atom_delta,
         base_delta,
         caps,

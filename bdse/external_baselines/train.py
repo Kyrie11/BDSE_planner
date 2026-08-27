@@ -697,11 +697,16 @@ def main() -> None:
                 elif args.progress_style == "lines":
                     elapsed = max(time.perf_counter() - epoch_started, 1e-9)
                     seen = min(step * batch_size, len(train_ds))
+                    current_ce = float(losses["action_ce"].detach().cpu())
+                    current_reg = float(losses["cost_reg"].detach().cpu())
+                    current_prop = float(losses["proposal_bce"].detach().cpu())
+                    current_deep = float(losses["deep_action_ce"].detach().cpu())
                     print(
                         f"[train-progress] variant={variant} B={budget} epoch={epoch + 1}/{epochs} "
                         f"step={step}/{total_steps} ({100.0 * step / max(total_steps, 1):.1f}%) "
-                        f"samples~={seen}/{len(train_ds)} loss={current_loss:.4f} lr={optimizer.param_groups[0]['lr']:.2e} "
-                        f"rate={step / elapsed:.2f} batch/s elapsed={elapsed:.1f}s",
+                        f"samples~={seen}/{len(train_ds)} loss={current_loss:.4f} action_ce={current_ce:.4f} "
+                        f"cost_reg={current_reg:.4f} proposal_bce={current_prop:.4f} deep_ce={current_deep:.4f} "
+                        f"lr={optimizer.param_groups[0]['lr']:.2e} rate={step / elapsed:.2f} batch/s elapsed={elapsed:.1f}s",
                         flush=True,
                     )
 
