@@ -22,6 +22,7 @@ from bdse.config import load_config
 from bdse.data.cache_schema import Sample
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
 from bdse.external_baselines.data import external_sample_to_model_inputs, load_external_training_sample_npz
+from bdse.external_baselines.compact_cache import CompactBatchLoader, CompactExternalCache, CompactSampleDataset
 from bdse.external_baselines.losses import compute_external_baseline_losses
 from bdse.external_baselines.models import ExternalBaselineModel, external_reference, external_variant
 from bdse.metrics.bdse_metrics import aggregate_metric_results, compute_bdse_diagnostics
@@ -349,7 +350,7 @@ def validation_open_loop(
 def _startup_training_preflight(
     *,
     model: torch.nn.Module,
-    dataset: ExternalBaselineDataset,
+    dataset: Dataset,
     cfg: dict[str, Any],
     device: torch.device,
     amp: bool,
@@ -377,7 +378,10 @@ def _startup_training_preflight(
     cuda_rng_states = torch.cuda.get_rng_state_all() if device.type == "cuda" else None
     try:
         samples = [dataset[i] for i in range(n)]
-        batch = collate(samples, cfg)
+        if samples and isinstance(samples[0], dict):
+            batch = {k: torch.stack([s[k] for s in samples], dim=0) for k in samples[0]}
+        else:
+            batch = collate(samples, cfg)  # type: ignore[arg-type]
         batch = {k: v.to(device, non_blocking=False) for k, v in batch.items()}
         model.train()
         model.zero_grad(set_to_none=True)
@@ -441,6 +445,11 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--prefetch-factor", type=int, default=4)
+    parser.add_argument("--compact-cache-dir", type=str, default=None)
+    parser.add_argument("--val-compact-cache-dir", type=str, default=None)
+    parser.add_argument("--compact-shuffle-mode", choices=["global", "block", "none"], default="global")
+    parser.add_argument("--compact-block-size", type=int, default=4096)
+    parser.add_argument("--compact-prefetch", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--warmup-epochs", type=int, default=3)
@@ -516,55 +525,98 @@ def main() -> None:
     else:
         print(f"[train-env] torch={torch.__version__} device={device}", flush=True)
 
-    train_source = PreprocessedBDSEDataset(
-        args.preprocessed_dir,
-        split=args.split,
-        max_scenarios=args.max_scenarios,
-        max_scenarios_per_split=args.max_scenarios_per_split,
-    )
     use_label_future = _planner_supervision(cfg) == "expert_imitation"
-    train_ds = ExternalBaselineDataset(train_source, include_label_future=use_label_future)
-    generator = torch.Generator()
-    generator.manual_seed(args.seed)
     collate_fn = partial(collate, cfg=cfg)
-    loader_kwargs: dict[str, Any] = {
-        "batch_size": batch_size,
-        "shuffle": True,
-        "num_workers": num_workers,
-        "pin_memory": device.type == "cuda",
-        "persistent_workers": num_workers > 0,
-        "collate_fn": collate_fn,
-        "worker_init_fn": _seed_worker,
-        "generator": generator,
-    }
-    if num_workers > 0:
-        loader_kwargs["prefetch_factor"] = max(1, int(args.prefetch_factor))
-    loader = DataLoader(train_ds, **loader_kwargs)
+    budget = int((cfg.get("evidence", {}) or {}).get("budget", (cfg.get("external_baseline", {}) or {}).get("budget", -1)))
+    compact_train = None
+    if args.compact_cache_dir:
+        if args.max_scenarios_per_split:
+            raise ValueError("--compact-cache-dir does not support --max-scenarios-per-split")
+        compact_train = CompactExternalCache.open(args.compact_cache_dir)
+        compact_train.assert_compatible(cfg)
+        limit = int(args.max_scenarios) if args.max_scenarios is not None and int(args.max_scenarios) > 0 else None
+        train_ds = CompactSampleDataset(compact_train, budget=budget, limit=limit)
+        loader = CompactBatchLoader(
+            compact_train, budget=budget, batch_size=batch_size, shuffle=True, seed=args.seed,
+            pin_memory=device.type == "cuda", prefetch=args.compact_prefetch,
+            shuffle_mode=args.compact_shuffle_mode, block_size=args.compact_block_size, limit=limit,
+        )
+        print(
+            f"[train-data] compact_mmap=1 path={compact_train.root} samples={len(train_ds)} "
+            f"shuffle={args.compact_shuffle_mode} prefetch={args.compact_prefetch}", flush=True,
+        )
+    else:
+        train_source = PreprocessedBDSEDataset(
+            args.preprocessed_dir,
+            split=args.split,
+            max_scenarios=args.max_scenarios,
+            max_scenarios_per_split=args.max_scenarios_per_split,
+        )
+        train_ds = ExternalBaselineDataset(train_source, include_label_future=use_label_future)
+        generator = torch.Generator()
+        generator.manual_seed(args.seed)
+        loader_kwargs: dict[str, Any] = {
+            "batch_size": batch_size,
+            "shuffle": True,
+            "num_workers": num_workers,
+            "pin_memory": device.type == "cuda",
+            "persistent_workers": num_workers > 0,
+            "collate_fn": collate_fn,
+            "worker_init_fn": _seed_worker,
+            "generator": generator,
+        }
+        if num_workers > 0:
+            loader_kwargs["prefetch_factor"] = max(1, int(args.prefetch_factor))
+        loader = DataLoader(train_ds, **loader_kwargs)
 
     val_loader = None
     val_dataset = None
-    val_ds_for_manifest: ExternalBaselineDataset | None = None
+    val_ds_for_manifest = None
+    compact_val = None
     if args.val_mode != "none" and args.val_preprocessed_dir:
         val_max_scenarios = None if args.val_max_scenarios is not None and int(args.val_max_scenarios) <= 0 else args.val_max_scenarios
-        val_source = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=val_max_scenarios)
         if args.val_mode == "loss":
-            val_ds_for_manifest = ExternalBaselineDataset(val_source, include_label_future=use_label_future)
-            val_workers = max(0, min(num_workers, 6))
-            val_kwargs: dict[str, Any] = {
-                "batch_size": batch_size,
-                "shuffle": False,
-                "num_workers": val_workers,
-                "pin_memory": device.type == "cuda",
-                "persistent_workers": val_workers > 0,
-                "collate_fn": collate_fn,
-                "worker_init_fn": _seed_worker,
-            }
-            if val_workers > 0:
-                val_kwargs["prefetch_factor"] = max(1, int(args.prefetch_factor))
-            val_loader = DataLoader(val_ds_for_manifest, **val_kwargs)
+            if args.val_compact_cache_dir:
+                compact_val = CompactExternalCache.open(args.val_compact_cache_dir)
+                compact_val.assert_compatible(cfg)
+                val_ds_for_manifest = CompactSampleDataset(compact_val, budget=budget, limit=val_max_scenarios)
+                val_loader = CompactBatchLoader(
+                    compact_val, budget=budget, batch_size=batch_size, shuffle=False, seed=args.seed,
+                    pin_memory=device.type == "cuda", prefetch=args.compact_prefetch,
+                    shuffle_mode="none", block_size=args.compact_block_size, limit=val_max_scenarios,
+                )
+                print(f"[val-data] compact_mmap=1 path={compact_val.root} samples={len(val_ds_for_manifest)}", flush=True)
+            else:
+                val_source = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=val_max_scenarios)
+                val_ds_for_manifest = ExternalBaselineDataset(val_source, include_label_future=use_label_future)
+                val_workers = max(0, min(num_workers, 6))
+                val_kwargs: dict[str, Any] = {
+                    "batch_size": batch_size,
+                    "shuffle": False,
+                    "num_workers": val_workers,
+                    "pin_memory": device.type == "cuda",
+                    "persistent_workers": val_workers > 0,
+                    "collate_fn": collate_fn,
+                    "worker_init_fn": _seed_worker,
+                }
+                if val_workers > 0:
+                    val_kwargs["prefetch_factor"] = max(1, int(args.prefetch_factor))
+                val_loader = DataLoader(val_ds_for_manifest, **val_kwargs)
         else:
+            val_source = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=val_max_scenarios)
             val_dataset = val_source
             val_ds_for_manifest = ExternalBaselineDataset(val_source, include_label_future=use_label_future)
+
+    if compact_train is not None:
+        train_manifest = compact_train.source_manifest()
+    else:
+        train_manifest = _dataset_manifest(train_ds.paths, args.preprocessed_dir, list(args.split))
+    if compact_val is not None:
+        validation_manifest = compact_val.source_manifest()
+    elif val_ds_for_manifest is not None and hasattr(val_ds_for_manifest, "paths"):
+        validation_manifest = _dataset_manifest(val_ds_for_manifest.paths, args.val_preprocessed_dir or "", list(args.val_split))
+    else:
+        validation_manifest = None
 
     training_manifest: dict[str, Any] = {
         "schema_version": 1,
@@ -573,8 +625,8 @@ def main() -> None:
         "seed": int(args.seed),
         "config_path": str(Path(args.config).resolve()),
         "config_sha256": _config_sha256(args.config),
-        "train": _dataset_manifest(train_ds.paths, args.preprocessed_dir, list(args.split)),
-        "validation": None if val_ds_for_manifest is None else _dataset_manifest(val_ds_for_manifest.paths, args.val_preprocessed_dir or "", list(args.val_split)),
+        "train": train_manifest,
+        "validation": validation_manifest,
         "protocol": {
             "max_scenarios": args.max_scenarios,
             "max_scenarios_per_split": args.max_scenarios_per_split,
@@ -591,6 +643,8 @@ def main() -> None:
             "val_every_n_epochs": args.val_every_n_epochs,
             "torch_compile": bool(args.compile),
             "torch_compile_mode": args.compile_mode if args.compile else "disabled",
+            "compact_mmap_cache": compact_train is not None,
+            "compact_shuffle_mode": args.compact_shuffle_mode if compact_train is not None else None,
             "val_max_scenarios": None if args.val_max_scenarios is not None and int(args.val_max_scenarios) <= 0 else args.val_max_scenarios,
         },
     }
@@ -601,7 +655,6 @@ def main() -> None:
     # Keep `model` as the canonical eager module for optimizer/checkpoint state.
     # `runtime_model` may be an OptimizedModule but shares the same parameters.
     model: torch.nn.Module = ExternalBaselineModel(cfg).to(device)
-    budget = int((cfg.get("evidence", {}) or {}).get("budget", (cfg.get("external_baseline", {}) or {}).get("budget", -1)))
     param_count = int(sum(int(p.numel()) for p in model.parameters()))
     print(
         f"[train-init] variant={variant} B={budget} device={device} CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')} "

@@ -192,3 +192,46 @@ def test_external_fast_refinement_forward(synthetic_sample):
         losses = compute_external_baseline_losses(out, batch, cfg)
         assert out["J0"].shape == (1, 32)
         assert torch.isfinite(losses["loss"])
+
+
+def test_external_compact_mmap_cache_preserves_tensor_contract(tmp_path, synthetic_sample):
+    import numpy as np
+    from bdse.data.cache_schema import save_sample_npz
+    from bdse.external_baselines.compact_cache import build_compact_cache, CompactBatchLoader, CompactExternalCache
+    from bdse.external_baselines.data import external_sample_to_model_inputs
+
+    cfg = _cfg_for_variant("gameformer")
+    cfg["external_baseline"]["planner_supervision"] = "expert_imitation"
+    cfg["external_baseline"]["loss_weights"] = {
+        "action": 1.0, "cost": 0.5, "pair": 0.0, "proposal": 0.25, "deep_supervision": 0.25,
+    }
+    raw_root = tmp_path / "raw"
+    sample_dir = raw_root / "train_boston" / "t0"
+    sample_dir.mkdir(parents=True)
+    for i in range(4):
+        synthetic_sample.scenario_token = f"compact-{i}"
+        synthetic_sample.timestamp_us = i
+        save_sample_npz(synthetic_sample, sample_dir / f"{i:04d}.npz", compressed=False)
+
+    cache_dir = tmp_path / "compact"
+    build_compact_cache(
+        cfg=cfg, preprocessed_dir=raw_root, split=["train_boston"], output_dir=cache_dir,
+        budgets=[4, 8], num_workers=0, batch_size=2, log_every=100,
+    )
+    cache = CompactExternalCache.open(cache_dir)
+    cache.assert_compatible(cfg)
+    loader = CompactBatchLoader(
+        cache, budget=4, batch_size=2, shuffle=False, seed=2026,
+        pin_memory=False, prefetch=False,
+    )
+    cached = next(iter(loader))
+    direct = external_sample_to_model_inputs(synthetic_sample, cfg)
+    for key, target in direct.items():
+        assert key in cached
+        got = cached[key][0]
+        if target.dtype.is_floating_point:
+            assert torch.allclose(got, target, atol=1e-6, rtol=1e-6), key
+        else:
+            assert torch.equal(got, target), key
+    assert cache.budgets == (4, 8)
+    assert cached["oracle_selected_mask"].shape == (2, 32)

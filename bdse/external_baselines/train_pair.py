@@ -32,6 +32,7 @@ from bdse.config import load_config
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
 from bdse.external_baselines.losses import compute_external_baseline_losses
 from bdse.external_baselines.models import ExternalBaselineModel, external_reference, external_variant
+from bdse.external_baselines.compact_cache import CompactBatchLoader, CompactExternalCache
 from bdse.external_baselines.train import (
     ExternalBaselineDataset,
     _accumulate,
@@ -160,6 +161,11 @@ def main() -> None:
     ap.add_argument("--max-scenarios", type=int, default=None); ap.add_argument("--max-scenarios-per-split", type=int, default=None)
     ap.add_argument("--epochs", type=int, default=None); ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--num-workers", type=int, default=10); ap.add_argument("--prefetch-factor", type=int, default=4)
+    ap.add_argument("--compact-cache-dir", default=None)
+    ap.add_argument("--val-compact-cache-dir", default=None)
+    ap.add_argument("--compact-shuffle-mode", choices=["global", "block", "none"], default="global")
+    ap.add_argument("--compact-block-size", type=int, default=4096)
+    ap.add_argument("--compact-prefetch", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--warmup-epochs", type=int, default=3); ap.add_argument("--scheduler", choices=["none", "cosine"], default="cosine")
     ap.add_argument("--selection-metric", default="val_action_ce")
     ap.add_argument("--seed", type=int, default=2026); ap.add_argument("--amp", action="store_true")
@@ -204,27 +210,77 @@ def main() -> None:
     gc_a = float(args.grad_clip if args.grad_clip is not None else hp(cfg_a, "grad_clip", 5.0))
     gc_b = float(args.grad_clip if args.grad_clip is not None else hp(cfg_b, "grad_clip", 5.0))
 
-    src = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios, max_scenarios_per_split=args.max_scenarios_per_split)
-    ds = ExternalBaselineDataset(src, include_label_future=use_label_future)
-    gen = torch.Generator(); gen.manual_seed(args.seed)
     collate_fn = partial(collate, cfg=cfg_a)
-    loader_kwargs: dict[str, Any] = dict(
-        batch_size=batch_size, shuffle=True, num_workers=max(0, args.num_workers), pin_memory=True,
-        persistent_workers=args.num_workers > 0, collate_fn=collate_fn, worker_init_fn=_seed_worker, generator=gen,
-    )
-    if args.num_workers > 0: loader_kwargs["prefetch_factor"] = max(1, args.prefetch_factor)
-    loader = DataLoader(ds, **loader_kwargs)
+    ds = None
+    compact_train = None
+    if args.compact_cache_dir:
+        if args.max_scenarios_per_split:
+            raise ValueError("--compact-cache-dir does not support --max-scenarios-per-split; use the full cache or raw DataLoader for subset probes")
+        compact_train = CompactExternalCache.open(args.compact_cache_dir)
+        compact_train.assert_compatible(cfg_a)
+        compact_train.assert_compatible(cfg_b)
+        if budget := int((cfg_a.get("evidence", {}) or {}).get("budget", -1)):
+            if budget not in compact_train.budgets:
+                raise ValueError(f"training compact cache lacks B={budget}: {compact_train.root} budgets={compact_train.budgets}")
+        limit = int(args.max_scenarios) if args.max_scenarios is not None and int(args.max_scenarios) > 0 else None
+        loader = CompactBatchLoader(
+            compact_train,
+            budget=int((cfg_a.get("evidence", {}) or {}).get("budget", -1)),
+            batch_size=batch_size,
+            shuffle=True,
+            seed=args.seed,
+            pin_memory=True,
+            prefetch=args.compact_prefetch,
+            shuffle_mode=args.compact_shuffle_mode,
+            block_size=args.compact_block_size,
+            limit=limit,
+        )
+        train_count = loader.count
+        print(
+            f"[pair-data] compact_mmap=1 path={compact_train.root} samples={train_count} "
+            f"shuffle={args.compact_shuffle_mode} prefetch={args.compact_prefetch}",
+            flush=True,
+        )
+    else:
+        src = PreprocessedBDSEDataset(args.preprocessed_dir, split=args.split, max_scenarios=args.max_scenarios, max_scenarios_per_split=args.max_scenarios_per_split)
+        ds = ExternalBaselineDataset(src, include_label_future=use_label_future)
+        gen = torch.Generator(); gen.manual_seed(args.seed)
+        loader_kwargs: dict[str, Any] = dict(
+            batch_size=batch_size, shuffle=True, num_workers=max(0, args.num_workers), pin_memory=True,
+            persistent_workers=args.num_workers > 0, collate_fn=collate_fn, worker_init_fn=_seed_worker, generator=gen,
+        )
+        if args.num_workers > 0: loader_kwargs["prefetch_factor"] = max(1, args.prefetch_factor)
+        loader = DataLoader(ds, **loader_kwargs)
+        train_count = len(ds)
 
-    val_ds = None; val_loader = None
+    val_ds = None; val_loader = None; compact_val = None
     if args.val_preprocessed_dir:
         val_max = None if args.val_max_scenarios <= 0 else args.val_max_scenarios
-        vsrc = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=val_max)
-        val_ds = ExternalBaselineDataset(vsrc, include_label_future=use_label_future)
-        vw = max(0, min(args.num_workers, 8))
-        vkw: dict[str, Any] = dict(batch_size=batch_size, shuffle=False, num_workers=vw, pin_memory=True,
-                                   persistent_workers=vw > 0, collate_fn=collate_fn, worker_init_fn=_seed_worker)
-        if vw > 0: vkw["prefetch_factor"] = max(1, args.prefetch_factor)
-        val_loader = DataLoader(val_ds, **vkw)
+        if args.val_compact_cache_dir:
+            compact_val = CompactExternalCache.open(args.val_compact_cache_dir)
+            compact_val.assert_compatible(cfg_a)
+            compact_val.assert_compatible(cfg_b)
+            val_loader = CompactBatchLoader(
+                compact_val,
+                budget=int((cfg_a.get("evidence", {}) or {}).get("budget", -1)),
+                batch_size=batch_size,
+                shuffle=False,
+                seed=args.seed,
+                pin_memory=True,
+                prefetch=args.compact_prefetch,
+                shuffle_mode="none",
+                block_size=args.compact_block_size,
+                limit=val_max,
+            )
+            print(f"[pair-val-data] compact_mmap=1 path={compact_val.root} samples={val_loader.count}", flush=True)
+        else:
+            vsrc = PreprocessedBDSEDataset(args.val_preprocessed_dir, split=args.val_split, max_scenarios=val_max)
+            val_ds = ExternalBaselineDataset(vsrc, include_label_future=use_label_future)
+            vw = max(0, min(args.num_workers, 8))
+            vkw: dict[str, Any] = dict(batch_size=batch_size, shuffle=False, num_workers=vw, pin_memory=True,
+                                       persistent_workers=vw > 0, collate_fn=collate_fn, worker_init_fn=_seed_worker)
+            if vw > 0: vkw["prefetch_factor"] = max(1, args.prefetch_factor)
+            val_loader = DataLoader(val_ds, **vkw)
 
     # Match the legacy two-process protocol: each model process used the same
     # global seed before construction. Reset between constructions so pairing
@@ -246,22 +302,35 @@ def main() -> None:
     print(
         f"[pair-train-init] A={var_a}@cuda:0 params={sum(p.numel() for p in model_a.parameters())} "
         f"B={var_b}@cuda:1 params={sum(p.numel() for p in model_b.parameters())} budget={budget} "
-        f"samples={len(ds)} batch={batch_size} workers_shared={args.num_workers} amp={args.amp} compile={args.compile} "
+        f"samples={train_count} batch={batch_size} workers_shared={args.num_workers} amp={args.amp} compile={args.compile} "
         f"refineA={(cfg_a.get('external_baseline', {}) or {}).get('refinement_mode', 'legacy_repeated_encoder')} "
         f"refineB={(cfg_b.get('external_baseline', {}) or {}).get('refinement_mode', 'legacy_repeated_encoder')}", flush=True,
     )
 
     def manifest(cfg: dict[str, Any], variant: str, cfg_path: str) -> dict[str, Any]:
+        if compact_train is not None:
+            train_manifest = compact_train.source_manifest()
+        else:
+            assert ds is not None
+            train_manifest = _dataset_manifest(ds.paths, args.preprocessed_dir, list(args.split))
+        if compact_val is not None:
+            validation_manifest = compact_val.source_manifest()
+        elif val_ds is not None:
+            validation_manifest = _dataset_manifest(val_ds.paths, args.val_preprocessed_dir or "", list(args.val_split))
+        else:
+            validation_manifest = None
         return {
             "schema_version": 2, "variant": variant, "implementation": external_reference(variant), "seed": args.seed,
             "config_path": str(Path(cfg_path).resolve()), "config_sha256": _config_sha256(cfg_path),
-            "train": _dataset_manifest(ds.paths, args.preprocessed_dir, list(args.split)),
-            "validation": None if val_ds is None else _dataset_manifest(val_ds.paths, args.val_preprocessed_dir or "", list(args.val_split)),
+            "train": train_manifest,
+            "validation": validation_manifest,
             "protocol": {"paired_shared_dataloader": True, "batch_size": batch_size, "grad_accum_steps": grad_accum,
                          "epochs": epochs, "warmup_epochs": args.warmup_epochs, "scheduler": args.scheduler,
                          "selection_metric": args.selection_metric, "planner_supervision": sup,
                          "val_every_n_epochs": args.val_every_n_epochs, "val_max_scenarios": args.val_max_scenarios,
-                         "torch_compile": bool(args.compile)},
+                         "torch_compile": bool(args.compile),
+                         "compact_mmap_cache": compact_train is not None,
+                         "compact_shuffle_mode": args.compact_shuffle_mode if compact_train is not None else None},
         }
     man_a, man_b = manifest(cfg_a, var_a, args.config_a), manifest(cfg_b, var_b, args.config_b)
     for out, man in ((args.output_a, man_a), (args.output_b, man_b)):
@@ -297,11 +366,11 @@ def main() -> None:
                 lva = float(la["loss"].detach().cpu()); lvb = float(lb["loss"].detach().cpu())
                 cea = float(la["action_ce"].detach().cpu()); ceb = float(lb["action_ce"].detach().cpu())
                 propa = float(la["proposal_bce"].detach().cpu()); propb = float(lb["proposal_bce"].detach().cpu())
-                elapsed = max(time.perf_counter() - epoch_start, 1e-9); seen = min(step * batch_size, len(ds))
+                elapsed = max(time.perf_counter() - epoch_start, 1e-9); seen = min(step * batch_size, train_count)
                 print(
                     f"[pair-train-progress] A={var_a} lossA={lva:.4f} ceA={cea:.4f} propA={propa:.4f} "
                     f"B={var_b} lossB={lvb:.4f} ceB={ceb:.4f} propB={propb:.4f} budget={budget} "
-                    f"epoch={epoch+1}/{epochs} step={step}/{total} ({100*step/max(total,1):.1f}%) samples~={seen}/{len(ds)} "
+                    f"epoch={epoch+1}/{epochs} step={step}/{total} ({100*step/max(total,1):.1f}%) samples~={seen}/{train_count} "
                     f"lrA={opt_a.param_groups[0]['lr']:.2e} lrB={opt_b.param_groups[0]['lr']:.2e} "
                     f"rate={step/elapsed:.2f} shared_batch/s elapsed={elapsed:.1f}s", flush=True,
                 )

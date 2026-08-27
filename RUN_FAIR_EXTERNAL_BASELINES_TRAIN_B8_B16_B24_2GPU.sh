@@ -18,6 +18,13 @@ export SHARED_DATALOADER="${SHARED_DATALOADER:-1}"
 export FAST_REFINEMENT="${FAST_REFINEMENT:-1}"
 export NUM_WORKERS_SHARED="${NUM_WORKERS_SHARED:-10}"
 export PREFETCH_FACTOR="${PREFETCH_FACTOR:-4}"
+export USE_COMPACT_CACHE="${USE_COMPACT_CACHE:-1}"
+export AUTO_BUILD_COMPACT_CACHE="${AUTO_BUILD_COMPACT_CACHE:-1}"
+export COMPACT_BUILD_WORKERS="${COMPACT_BUILD_WORKERS:-$NUM_WORKERS_SHARED}"
+export COMPACT_BUILD_BATCH_SIZE="${COMPACT_BUILD_BATCH_SIZE:-32}"
+export COMPACT_SHUFFLE_MODE="${COMPACT_SHUFFLE_MODE:-global}"
+export COMPACT_BLOCK_SIZE="${COMPACT_BLOCK_SIZE:-4096}"
+export COMPACT_PREFETCH="${COMPACT_PREFETCH:-1}"
 export TORCH_COMPILE="${TORCH_COMPILE:-0}"
 export TORCH_COMPILE_MODE="${TORCH_COMPILE_MODE:-reduce-overhead}"
 export LOG_EVERY_N_STEPS="${LOG_EVERY_N_STEPS:-100}"
@@ -65,6 +72,49 @@ for B in map(int, sys.argv[2:]):
 PY
 fi
 
+# The raw BDSE cache is one NPZ per frame.  Profiling on the target A30 host can
+# show >95% of step time in NPZ/JSON decode/tensorization.  Build one persistent
+# mmap cache of the *exact compact external tensor contract* and reuse it across
+# all four trainable baselines and all requested budgets.  Checkpoint/output paths
+# below are intentionally unchanged.
+COMPACT_BUDGET_TAG="$(echo "$BUDGETS" | tr -s ' ' '_' | sed 's/^_//;s/_$//')"
+export TRAIN_COMPACT_CACHE="${TRAIN_COMPACT_CACHE:-${BDSE_TRAIN_CACHE}_external_compact_v2_B${COMPACT_BUDGET_TAG}}"
+export VAL_COMPACT_CACHE="${VAL_COMPACT_CACHE:-${BDSE_VAL_CACHE}_external_compact_v2_B${COMPACT_BUDGET_TAG}}"
+
+compact_bool_args=()
+if [[ "$COMPACT_PREFETCH" == "0" || "$COMPACT_PREFETCH" == "false" ]]; then
+  compact_bool_args+=(--no-compact-prefetch)
+fi
+
+if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
+  FIRST_BUDGET="${BUDGETS%% *}"
+  CACHE_CFG="$EXTERNAL_OUT_ROOT/configs/B${FIRST_BUDGET}/external_gameformer_budgeted.yaml"
+  if [[ "$AUTO_BUILD_COMPACT_CACHE" == "1" || "$AUTO_BUILD_COMPACT_CACHE" == "true" ]]; then
+    echo "[compact-cache] ensuring TRAIN cache: $TRAIN_COMPACT_CACHE"
+    python -u -m bdse.external_baselines.compact_cache build \
+      --config "$CACHE_CFG" \
+      --preprocessed-dir "$BDSE_TRAIN_CACHE" \
+      --split train_boston train_pittsburgh train_singapore train_vegas_2 \
+      --output-dir "$TRAIN_COMPACT_CACHE" \
+      --budgets $BUDGETS \
+      --num-workers "$COMPACT_BUILD_WORKERS" \
+      --prefetch-factor "$PREFETCH_FACTOR" \
+      --batch-size "$COMPACT_BUILD_BATCH_SIZE"
+    echo "[compact-cache] ensuring VAL cache: $VAL_COMPACT_CACHE"
+    python -u -m bdse.external_baselines.compact_cache build \
+      --config "$CACHE_CFG" \
+      --preprocessed-dir "$BDSE_VAL_CACHE" \
+      --split val \
+      --output-dir "$VAL_COMPACT_CACHE" \
+      --budgets $BUDGETS \
+      --num-workers "$COMPACT_BUILD_WORKERS" \
+      --prefetch-factor "$PREFETCH_FACTOR" \
+      --batch-size "$COMPACT_BUILD_BATCH_SIZE"
+  fi
+  [[ -f "$TRAIN_COMPACT_CACHE/compact_manifest.json" ]] || { echo "missing compact train cache: $TRAIN_COMPACT_CACHE" >&2; exit 2; }
+  [[ -f "$VAL_COMPACT_CACHE/compact_manifest.json" ]] || { echo "missing compact val cache: $VAL_COMPACT_CACHE" >&2; exit 2; }
+fi
+
 IFS=',' read -r -a GPU_ARR <<< "$GPUS"
 [[ ${#GPU_ARR[@]} -ge 2 ]] || { echo "This script expects two GPUs, e.g. GPUS=0,1" >&2; exit 2; }
 GPU0="${GPU_ARR[0]}"; GPU1="${GPU_ARR[1]}"
@@ -109,6 +159,12 @@ run_one_budget() {
   if (( TRAIN_MAX_SCENARIOS > 0 )); then run_args+=(--max-scenarios "$TRAIN_MAX_SCENARIOS"); fi
   if (( TRAIN_MAX_SCENARIOS_PER_SPLIT > 0 )); then run_args+=(--max-scenarios-per-split "$TRAIN_MAX_SCENARIOS_PER_SPLIT"); fi
   if (( EPOCHS_OVERRIDE > 0 )); then run_args+=(--epochs "$EPOCHS_OVERRIDE"); fi
+  local compact_args=()
+  if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
+    compact_args+=(--compact-cache-dir "$TRAIN_COMPACT_CACHE" --val-compact-cache-dir "$VAL_COMPACT_CACHE")
+    compact_args+=(--compact-shuffle-mode "$COMPACT_SHUFFLE_MODE" --compact-block-size "$COMPACT_BLOCK_SIZE")
+    compact_args+=("${compact_bool_args[@]}")
+  fi
 
   echo "[train] START gpu=$gpu system=$name B=$B batch=$batch accum=$accum workers=$NUM_WORKERS_PER_JOB compile=$TORCH_COMPILE progress=$TRAIN_PROGRESS_STYLE"
   echo "[train] log=$outdir/${name}.train.out checkpoint=$outdir/${name}_budgeted.best.pt"
@@ -135,6 +191,7 @@ run_one_budget() {
     --log-every-n-steps "$LOG_EVERY_N_STEPS" \
     --progress-style "$TRAIN_PROGRESS_STYLE" \
     --startup-preflight-samples "$STARTUP_PREFLIGHT_SAMPLES" \
+    "${compact_args[@]}" \
     "${compile_args[@]}" \
     --log-file "$outdir/${name}.train_log.jsonl" \
     --output "$outdir/${name}_budgeted.pt" \
@@ -192,6 +249,12 @@ run_pair_shared() {
     if (( TRAIN_MAX_SCENARIOS > 0 )); then run_args+=(--max-scenarios "$TRAIN_MAX_SCENARIOS"); fi
     if (( TRAIN_MAX_SCENARIOS_PER_SPLIT > 0 )); then run_args+=(--max-scenarios-per-split "$TRAIN_MAX_SCENARIOS_PER_SPLIT"); fi
     if (( EPOCHS_OVERRIDE > 0 )); then run_args+=(--epochs "$EPOCHS_OVERRIDE"); fi
+    local compact_args=()
+    if [[ "$USE_COMPACT_CACHE" == "1" || "$USE_COMPACT_CACHE" == "true" ]]; then
+      compact_args+=(--compact-cache-dir "$TRAIN_COMPACT_CACHE" --val-compact-cache-dir "$VAL_COMPACT_CACHE")
+      compact_args+=(--compact-shuffle-mode "$COMPACT_SHUFFLE_MODE" --compact-block-size "$COMPACT_BLOCK_SIZE")
+      compact_args+=("${compact_bool_args[@]}")
+    fi
 
     echo "[pair-train] START systems=$left,$right B=$B batch=$batch accum=$accum shared_workers=$NUM_WORKERS_SHARED"
     set +e
@@ -208,6 +271,7 @@ run_pair_shared() {
       --val-max-scenarios "$VAL_MAX_SCENARIOS" --val-every-n-epochs "$VAL_EVERY_N_EPOCHS" \
       --warmup-epochs 3 --scheduler cosine --selection-metric val_action_ce \
       --log-every-n-steps "$LOG_EVERY_N_STEPS" \
+      "${compact_args[@]}" \
       "${compile_args[@]}" \
       2>&1 | tee "$outdir/${left}_${right}.pair.train.out"
     local pipe_status=("${PIPESTATUS[@]}")
