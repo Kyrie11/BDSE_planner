@@ -1,0 +1,14 @@
+# V64.3.48.2 provenance-repaired OCRR rerun
+cd bdse_v64_3_48_2_eaf_icer_ocrr_provenance_repair
+bash RUN_V64_3_48_2_EAF_ICER_OCRR_SCREEN_2GPU.sh
+
+# If historical roots/cache differ, set them explicitly, e.g.:
+# V44_ROOT=/path/to/outputs_v64_3_44_eaf_icer_pcor_screen_2gpu_v1 \
+# V47_ROOT=/path/to/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+# EAF_V64_3_13_ROOT=/path/to/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+# BDSE_VAL_CACHE=/path/to/bdse_val_v2 \
+# EAF_CKPT=/path/to/checkpoint.pt \
+# bash RUN_V64_3_48_2_EAF_ICER_OCRR_SCREEN_2GPU.sh
+
+# Do not run official closed-loop before both newly selected untouched A500 and B500
+# independently pass the unchanged V48 preregistered screen.

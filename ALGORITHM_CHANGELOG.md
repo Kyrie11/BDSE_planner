@@ -11936,3 +11936,53 @@ Candidate paper mechanism, conditional on untouched A/B and frozen closed-loop v
 > **Selection–Valuation–Operator Sufficiency under a Bounded Auditable Planner Interface.**
 >
 > Bounded EAF evidence can be sufficient for ordinal extremal selection, while absolute incumbent-exit valuation requires consequence-specific statistics and an explicit conditioning on the extremal selection operator. Prediction sufficiency, representation identifiability, and post-selection decision sufficiency are empirically distinct.
+
+---
+
+# V64.3.48 uploaded-result provenance audit -> V64.3.48.2 engineering rerun repair
+
+## Reliability decision
+
+The uploaded V64.3.48 experiment is **not eligible for scientific attribution in this iteration** because the uploaded source package cannot be proven byte-identical to the source tree that produced the uploaded results.
+
+The server-side log records `896/896` source-manifest checks as `OK` before the V48 scientific run. However, independently checking the uploaded `bdse.zip` against its own `V64_3_48_SOURCE_MANIFEST.sha256` yields **17 checksum mismatches**. The drift is not confined to documentation or unused external baselines: it includes `bdse/experiments/evaluate_open_loop.py` and `bdse/planner/nuplan_planner.py`, and the V48 launcher invokes `python -m bdse.experiments.evaluate_open_loop` for every untouched A/B scientific arm. Consequently, the exact evaluation semantics of the uploaded result cannot be independently reconstructed from the uploaded code artifact.
+
+Per the preregistered fail-closed discipline, **no A/B metric from this upload is used to promote, reject, tune, or redesign OCRR**, and no V64.3.49 scientific mechanism is introduced from these results.
+
+## What remains byte-locked
+
+The current package still exactly matches the preregistered V48 hashes for the OCRR scientific core:
+
+- `bdse/planner/tournament.py`;
+- `bdse/planner/operator_conditioned_risk_retention.py`;
+- `bdse/tools/fit_v64_3_48_eaf_icer_ocrr.py`;
+- `bdse/tools/check_v64_3_48_eaf_icer_ocrr_split.py`;
+- `bdse/tools/check_v64_3_48_eaf_icer_ocrr_screen.py`.
+
+V64.3.48.2 therefore changes **engineering/provenance only**. It does not change the OCRR hypothesis, features, pairwise objective, `lambda=1`, capture-derived calibration rule, arm definitions, RSMR winner, no-fallback containment, or preregistered scientific gates.
+
+## V64.3.48.2 provenance repair
+
+V64.3.48.2 introduces four hard protections:
+
+1. **Current-release full source lock.** `V64_3_48_2_SOURCE_MANIFEST.sha256` is regenerated from the actual rerun package and is checked before prerequisites, tests, fitting, or fresh selection.
+2. **OCRR science lock.** `V64_3_48_OCRR_SCIENCE_LOCK.sha256` separately pins the five preregistered V48 scientific-core files to their original V48 hashes. Infrastructure/source cleanup therefore cannot silently change the mechanism.
+3. **Permanent old-fresh consumption ledger.** The 1000 tokens consumed by the uploaded V48 A/B run are frozen in `bdse/configs/v64_3_48_consumed_fresh1000_tokens.txt`, byte-locked, and added to every future fresh-selection exclusion set.
+4. **New label-free fresh seed.** The rerun uses `v64.3.48.2-eaf-icer-ocrr-double-fresh-v1`, so the repaired run obtains a new independent A500+B500 after the unchanged TRAIN gate passes.
+
+The old V48 A/B results remain useful only as a provenance incident record. They are **not** treated as development labels for V48.2 and must not be used to change `K`, its transform, the retention threshold, the pairwise loss, `lambda`, class weights, features, or promotion gates.
+
+## Scientific branch remains unchanged
+
+After a clean V64.3.48.2 rerun:
+
+- if the repaired result fails engineering/source identity, repair again and do no attribution;
+- if engineering passes, judge OCRR strictly using the already frozen V48 preregistration;
+- if either new untouched A500 or B500 fails, scientific STOP and close OCRR without tuning from fresh data;
+- only if both untouched blocks independently pass may OCRR be promoted to full validation/official closed-loop evaluation.
+
+No V64.3.49 scientific mechanism is preregistered in this repair. Designing V49 before a byte-reproducible V48 rerun would violate the explicit reliability-first rule and contaminate the causal interpretation of the next branch.
+
+### Additional packaging repair found by full-repository regression
+
+Full-repository fail-fast testing found that the uploaded archive also omitted `V64_SAQA_BCC_NEXT_COMMANDS.sh`, reproducing a historical packaging failure already documented in the changelog. Because exact legacy experiment bytes are unavailable, V64.3.48.2 restores the previously established policy: a syntactically valid **fail-closed compatibility entrypoint** that refuses to invent or run legacy semantics and points to the preserved review-artifact instructions. This file is unrelated to OCRR runtime and does not alter any scientific mechanism.

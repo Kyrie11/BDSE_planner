@@ -1,0 +1,32 @@
+V64.3.48.2 EAF-ICER-OCRR provenance-repair engineering validation
+
+SCIENTIFIC STATUS
+- Uploaded V64.3.48 result attribution: STOP (uploaded source/result byte identity not reproducible).
+- OCRR scientific mechanism changed in V64.3.48.2: NO.
+- V64.3.49 scientific mechanism designed from uploaded A/B: NO.
+
+PROVENANCE
+- Current-release source manifest: 900/900 PASS.
+- Original OCRR scientific-core hash lock: 5/5 PASS.
+- Old V48 consumed-fresh ledger: 1000/1000 unique, byte-locked.
+- New fresh seed: v64.3.48.2-eaf-icer-ocrr-double-fresh-v1.
+- Old V48 launcher: disabled in repaired release.
+- Historical V64_SAQA_BCC_NEXT_COMMANDS.sh: fail-closed compatibility entrypoint restored; not used by OCRR.
+
+STATIC / TEST VALIDATION
+- Python compileall: PASS.
+- New launcher bash -n: PASS.
+- V48 + V48.2 focused: 10/10 PASS.
+- V13 -> V48.2 targeted: 235/235 PASS (2 Transformer warnings).
+- Full repository current tests: 572/572 PASS, executed as four mutually exhaustive file partitions:
+  - partition 1: 94/94 PASS
+  - partition 2: 122/122 PASS
+  - partition 3: 187/187 PASS
+  - partition 4: 169/169 PASS
+- Full-test warnings: 38 Transformer nested-tensor/norm_first UserWarnings in the current source tree; no test failure.
+
+RERUN DISCIPLINE
+- Do not use the already consumed V48 A/B metrics for OCRR promotion or V49 design.
+- New fresh selection excludes design tokens, frozen TRAIN tokens, and all 1000 previously consumed V48 A/B tokens.
+- Judge the repaired rerun using the unchanged V48 preregistered gates.
+- If either newly selected A500 or B500 fails, scientific STOP; do not tune K/transform/threshold/loss/lambda/class weights/features from fresh outcomes.
