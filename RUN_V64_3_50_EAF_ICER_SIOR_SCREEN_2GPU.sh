@@ -134,11 +134,27 @@ r=json.loads(paths[0].read_text()); n=r.get('nested_crossfit',{})
 if n.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='selection_interventional_risk_does_not_outperform_observational_selected_risk_close_current_offline_selected_risk_family':
     raise SystemExit('STOP V50: V49 preregistered TRAIN failure signature changed')
 ident=n.get('risk_identification',{})
-
+# V49 writes a flat risk_identification schema:
+#   aggregate_{ego_ref,obs_sign,siir}_auc, siir_better_*_fold_count, identified.
+# Do NOT lock a duplicated floating-point constant here. The five V49 artifacts
+# above are already byte-locked by SHA256; this secondary check validates the
+# preregistered *failure semantics* and protects against schema/logic drift.
+try:
+    ego_auc=float(ident['aggregate_ego_ref_auc']); obs_auc=float(ident['aggregate_obs_sign_auc']); siir_auc=float(ident['aggregate_siir_auc'])
+    better_ego=int(ident['siir_better_ego_fold_count']); better_obs=int(ident['siir_better_obs_fold_count'])
+    identified=ident['identified']
+except (KeyError,TypeError,ValueError) as e:
+    raise SystemExit(f'STOP V50: V49 risk-identification schema changed: {e}')
+import math
+if not all(math.isfinite(x) for x in (ego_auc,obs_auc,siir_auc)):
+    raise SystemExit('STOP V50: V49 risk-identification AUC is non-finite')
+recomputed=bool(siir_auc>max(ego_auc,obs_auc)+1e-12 and better_ego>=4 and better_obs>=4)
+if identified is not False or recomputed:
+    raise SystemExit(f'STOP V50: V49 preregistered SIIR identification-failure semantics changed: identified={identified} aucs={(ego_auc,obs_auc,siir_auc)} folds={(better_ego,better_obs)}')
 scene=paths[1].read_text().splitlines(); cand=paths[2].read_text().splitlines(); tests=paths[4].read_text(errors='replace')
 if len(scene)!=783 or len(cand)!=782: raise SystemExit(f'STOP V50: V49 audit cardinality changed scene={len(scene)-1} candidate={len(cand)}')
 if '242 passed' not in tests: raise SystemExit('STOP V50: V49 server targeted regression signature changed')
-print('PASS V50 prerequisite: exact uploaded V49 scientific failure + 782-scene audits + 242-pass server regression locked')
+print(f'PASS V50 prerequisite: exact uploaded V49 scientific failure locked; AUC ego={ego_auc:.12f} obs={obs_auc:.12f} siir={siir_auc:.12f}; folds(siir>ego,siir>obs)=({better_ego},{better_obs}); 782-scene audits + 242-pass server regression locked')
 PY
 stage_end
 

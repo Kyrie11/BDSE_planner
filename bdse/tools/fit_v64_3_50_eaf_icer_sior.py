@@ -124,9 +124,27 @@ def _check_v49(report: Path) -> dict[str, Any]:
     if n.get("train_gate_pass") is not False or n.get("failure_diagnosis") != V49_FAILURE:
         raise RuntimeError("V50 ENGINEERING STOP: V49 preregistered offline-family failure signature changed")
     ident=n.get("risk_identification",{})
-    got=float(ident.get("siir",{}).get("aggregate_nonpositive_risk_auc",float("nan")))
-    if abs(got-0.6081222524597028)>1e-12:
-        raise RuntimeError(f"V50 ENGINEERING STOP: V49 SIIR AUC signature changed: {got}")
+    # V49's persisted schema is flat. The V49 artifacts are byte-locked by the
+    # launcher, so V50 only needs to verify that the preregistered identification
+    # failure remains semantically true; duplicating one exact AUC constant here
+    # is redundant and previously used the wrong nested schema.
+    try:
+        ego_auc=float(ident["aggregate_ego_ref_auc"])
+        obs_auc=float(ident["aggregate_obs_sign_auc"])
+        siir_auc=float(ident["aggregate_siir_auc"])
+        better_ego=int(ident["siir_better_ego_fold_count"])
+        better_obs=int(ident["siir_better_obs_fold_count"])
+        identified=ident["identified"]
+    except (KeyError,TypeError,ValueError) as e:
+        raise RuntimeError(f"V50 ENGINEERING STOP: V49 risk-identification schema changed: {e}") from e
+    if not all(math.isfinite(x) for x in (ego_auc,obs_auc,siir_auc)):
+        raise RuntimeError("V50 ENGINEERING STOP: V49 risk-identification AUC is non-finite")
+    recomputed=bool(siir_auc>max(ego_auc,obs_auc)+1.0e-12 and better_ego>=4 and better_obs>=4)
+    if identified is not False or recomputed:
+        raise RuntimeError(
+            "V50 ENGINEERING STOP: V49 preregistered SIIR identification-failure semantics changed: "
+            f"identified={identified} aucs={(ego_auc,obs_auc,siir_auc)} folds={(better_ego,better_obs)}"
+        )
     return r
 
 

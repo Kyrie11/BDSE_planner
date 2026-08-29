@@ -111,14 +111,35 @@ def test_v50_fit_hard_locks_v49_preregistered_failure(tmp_path: Path) -> None:
     p.write_text(json.dumps({"nested_crossfit": {
         "train_gate_pass": False,
         "failure_diagnosis": V49_FAILURE,
-        "risk_identification": {"siir": {"aggregate_nonpositive_risk_auc": 0.6081222524597028}},
+        "risk_identification": {
+            "aggregate_ego_ref_auc": 0.6298288272330558,
+            "aggregate_obs_sign_auc": 0.6139192605594113,
+            "aggregate_siir_auc": 0.6081222524597028,
+            "siir_better_ego_fold_count": 1,
+            "siir_better_obs_fold_count": 3,
+            "identified": False,
+        },
     }}))
     _check_v49(p)
     bad = json.loads(p.read_text()); bad["nested_crossfit"]["train_gate_pass"] = True
     p.write_text(json.dumps(bad))
     with pytest.raises(RuntimeError, match="V49 preregistered offline-family failure signature changed"):
         _check_v49(p)
+    bad = json.loads(p.read_text()); bad["nested_crossfit"]["train_gate_pass"] = False
+    bad["nested_crossfit"]["risk_identification"]["identified"] = True
+    p.write_text(json.dumps(bad))
+    with pytest.raises(RuntimeError, match="SIIR identification-failure semantics changed"):
+        _check_v49(p)
     assert ALPHA_RET == pytest.approx(0.0779185520361991)
+
+
+def test_v50_v49_prerequisite_lock_uses_persisted_flat_risk_identification_schema() -> None:
+    p = ROOT / "RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh"
+    text = p.read_text()
+    assert "aggregate_siir_auc" in text
+    assert "aggregate_obs_sign_auc" in text
+    assert "aggregate_ego_ref_auc" in text
+    assert "aggregate_nonpositive_risk_auc" not in text
 
 
 def test_v50_launcher_is_closed_loop_evidence_source_and_stops_before_fresh_on_fit_failure() -> None:

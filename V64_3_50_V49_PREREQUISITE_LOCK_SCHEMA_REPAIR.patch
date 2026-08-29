@@ -1,0 +1,107 @@
+--- /mnt/data/v50_sig_orig/bdse_v64_3_50_eaf_icer_sior/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 15:55:53.000000000 +0000
++++ /mnt/data/v50_sig_debug/bdse_v64_3_50_eaf_icer_sior/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 16:20:15.781241247 +0000
+@@ -134,12 +134,27 @@
+ if n.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='selection_interventional_risk_does_not_outperform_observational_selected_risk_close_current_offline_selected_risk_family':
+     raise SystemExit('STOP V50: V49 preregistered TRAIN failure signature changed')
+ ident=n.get('risk_identification',{})
+-if abs(float(ident.get('siir',{}).get('aggregate_nonpositive_risk_auc',-1))-0.6081222524597028)>1e-12:
+-    raise SystemExit('STOP V50: V49 SIIR AUC signature changed')
++# V49 writes a flat risk_identification schema:
++#   aggregate_{ego_ref,obs_sign,siir}_auc, siir_better_*_fold_count, identified.
++# Do NOT lock a duplicated floating-point constant here. The five V49 artifacts
++# above are already byte-locked by SHA256; this secondary check validates the
++# preregistered *failure semantics* and protects against schema/logic drift.
++try:
++    ego_auc=float(ident['aggregate_ego_ref_auc']); obs_auc=float(ident['aggregate_obs_sign_auc']); siir_auc=float(ident['aggregate_siir_auc'])
++    better_ego=int(ident['siir_better_ego_fold_count']); better_obs=int(ident['siir_better_obs_fold_count'])
++    identified=ident['identified']
++except (KeyError,TypeError,ValueError) as e:
++    raise SystemExit(f'STOP V50: V49 risk-identification schema changed: {e}')
++import math
++if not all(math.isfinite(x) for x in (ego_auc,obs_auc,siir_auc)):
++    raise SystemExit('STOP V50: V49 risk-identification AUC is non-finite')
++recomputed=bool(siir_auc>max(ego_auc,obs_auc)+1e-12 and better_ego>=4 and better_obs>=4)
++if identified is not False or recomputed:
++    raise SystemExit(f'STOP V50: V49 preregistered SIIR identification-failure semantics changed: identified={identified} aucs={(ego_auc,obs_auc,siir_auc)} folds={(better_ego,better_obs)}')
+ scene=paths[1].read_text().splitlines(); cand=paths[2].read_text().splitlines(); tests=paths[4].read_text(errors='replace')
+ if len(scene)!=783 or len(cand)!=782: raise SystemExit(f'STOP V50: V49 audit cardinality changed scene={len(scene)-1} candidate={len(cand)}')
+ if '242 passed' not in tests: raise SystemExit('STOP V50: V49 server targeted regression signature changed')
+-print('PASS V50 prerequisite: exact uploaded V49 scientific failure + 782-scene audits + 242-pass server regression locked')
++print(f'PASS V50 prerequisite: exact uploaded V49 scientific failure locked; AUC ego={ego_auc:.12f} obs={obs_auc:.12f} siir={siir_auc:.12f}; folds(siir>ego,siir>obs)=({better_ego},{better_obs}); 782-scene audits + 242-pass server regression locked')
+ PY
+ stage_end
+ 
+--- /mnt/data/v50_sig_orig/bdse_v64_3_50_eaf_icer_sior/bdse/tools/fit_v64_3_50_eaf_icer_sior.py	2026-08-29 15:04:56.000000000 +0000
++++ /mnt/data/v50_sig_debug/bdse_v64_3_50_eaf_icer_sior/bdse/tools/fit_v64_3_50_eaf_icer_sior.py	2026-08-29 16:17:28.762495339 +0000
+@@ -124,9 +124,27 @@
+     if n.get("train_gate_pass") is not False or n.get("failure_diagnosis") != V49_FAILURE:
+         raise RuntimeError("V50 ENGINEERING STOP: V49 preregistered offline-family failure signature changed")
+     ident=n.get("risk_identification",{})
+-    got=float(ident.get("siir",{}).get("aggregate_nonpositive_risk_auc",float("nan")))
+-    if abs(got-0.6081222524597028)>1e-12:
+-        raise RuntimeError(f"V50 ENGINEERING STOP: V49 SIIR AUC signature changed: {got}")
++    # V49's persisted schema is flat. The V49 artifacts are byte-locked by the
++    # launcher, so V50 only needs to verify that the preregistered identification
++    # failure remains semantically true; duplicating one exact AUC constant here
++    # is redundant and previously used the wrong nested schema.
++    try:
++        ego_auc=float(ident["aggregate_ego_ref_auc"])
++        obs_auc=float(ident["aggregate_obs_sign_auc"])
++        siir_auc=float(ident["aggregate_siir_auc"])
++        better_ego=int(ident["siir_better_ego_fold_count"])
++        better_obs=int(ident["siir_better_obs_fold_count"])
++        identified=ident["identified"]
++    except (KeyError,TypeError,ValueError) as e:
++        raise RuntimeError(f"V50 ENGINEERING STOP: V49 risk-identification schema changed: {e}") from e
++    if not all(math.isfinite(x) for x in (ego_auc,obs_auc,siir_auc)):
++        raise RuntimeError("V50 ENGINEERING STOP: V49 risk-identification AUC is non-finite")
++    recomputed=bool(siir_auc>max(ego_auc,obs_auc)+1.0e-12 and better_ego>=4 and better_obs>=4)
++    if identified is not False or recomputed:
++        raise RuntimeError(
++            "V50 ENGINEERING STOP: V49 preregistered SIIR identification-failure semantics changed: "
++            f"identified={identified} aucs={(ego_auc,obs_auc,siir_auc)} folds={(better_ego,better_obs)}"
++        )
+     return r
+ 
+ 
+--- /mnt/data/v50_sig_orig/bdse_v64_3_50_eaf_icer_sior/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-29 15:51:35.000000000 +0000
++++ /mnt/data/v50_sig_debug/bdse_v64_3_50_eaf_icer_sior/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-29 16:18:08.360017075 +0000
+@@ -111,16 +111,37 @@
+     p.write_text(json.dumps({"nested_crossfit": {
+         "train_gate_pass": False,
+         "failure_diagnosis": V49_FAILURE,
+-        "risk_identification": {"siir": {"aggregate_nonpositive_risk_auc": 0.6081222524597028}},
++        "risk_identification": {
++            "aggregate_ego_ref_auc": 0.6298288272330558,
++            "aggregate_obs_sign_auc": 0.6139192605594113,
++            "aggregate_siir_auc": 0.6081222524597028,
++            "siir_better_ego_fold_count": 1,
++            "siir_better_obs_fold_count": 3,
++            "identified": False,
++        },
+     }}))
+     _check_v49(p)
+     bad = json.loads(p.read_text()); bad["nested_crossfit"]["train_gate_pass"] = True
+     p.write_text(json.dumps(bad))
+     with pytest.raises(RuntimeError, match="V49 preregistered offline-family failure signature changed"):
+         _check_v49(p)
++    bad = json.loads(p.read_text()); bad["nested_crossfit"]["train_gate_pass"] = False
++    bad["nested_crossfit"]["risk_identification"]["identified"] = True
++    p.write_text(json.dumps(bad))
++    with pytest.raises(RuntimeError, match="SIIR identification-failure semantics changed"):
++        _check_v49(p)
+     assert ALPHA_RET == pytest.approx(0.0779185520361991)
+ 
+ 
++def test_v50_v49_prerequisite_lock_uses_persisted_flat_risk_identification_schema() -> None:
++    p = ROOT / "RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh"
++    text = p.read_text()
++    assert "aggregate_siir_auc" in text
++    assert "aggregate_obs_sign_auc" in text
++    assert "aggregate_ego_ref_auc" in text
++    assert "aggregate_nonpositive_risk_auc" not in text
++
++
+ def test_v50_launcher_is_closed_loop_evidence_source_and_stops_before_fresh_on_fit_failure() -> None:
+     p = ROOT / "RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh"
+     if not p.exists():

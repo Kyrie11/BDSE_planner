@@ -12229,3 +12229,30 @@ Final delivery hardening adds fail-closed paired hard-metric schema validation (
 - Added tests locking the current server layout and direct-flat-DB compatibility.
 
 This repair is intentionally kept under **V64.3.50** rather than creating V64.3.51 because it changes no scientific mechanism or preregistered branch.
+
+### V64.3.50 engineering-only V49 prerequisite-lock schema repair (2026-08-29)
+
+**Scientific algorithm/version unchanged.** This repair fixes a blocking prerequisite validation bug discovered when launching V50 after a valid V49 run.
+
+Root cause:
+
+- V49 persists selected-risk identification in a flat schema under `nested_crossfit.risk_identification`, with fields `aggregate_ego_ref_auc`, `aggregate_obs_sign_auc`, `aggregate_siir_auc`, `siir_better_ego_fold_count`, `siir_better_obs_fold_count`, and `identified`.
+- The initial V50 launcher and `fit_v64_3_50_eaf_icer_sior.py` incorrectly attempted to read the nonexistent nested field `risk_identification.siir.aggregate_nonpositive_risk_auc` and therefore obtained the default value `-1`, causing `STOP V50: V49 SIIR AUC signature changed` even when the byte-locked V49 artifacts were valid.
+- This was an engineering schema mismatch, not a scientific rejection of V49/V50.
+
+Repair:
+
+- Keep the five exact V49 prerequisite artifact SHA256 locks unchanged.
+- Keep the exact V49 preregistered `train_gate_pass=False` and failure-diagnosis lock unchanged.
+- Replace the redundant hard-coded single-AUC equality check with validation of V49's actual persisted flat schema and preregistered identification-failure semantics: finite AUCs, consistent fold counts, `identified=False`, and recomputed SIIR identification gate remains false.
+- Apply the same repair in the V50 fit tool so the launcher and later nested fit use one consistent prerequisite contract.
+- Add tests that lock the real V49 schema and reject a contradictory `identified=True` report.
+
+Historical manifest clarification:
+
+- V48.2/V49 source manifests are manifests of those historical source trees, not of the later V50 tree.
+- V50 intentionally modifies `bdse/planner/nuplan_planner.py` to support the one-shot selected-outcome probe. Therefore `V64_3_48_2_SOURCE_MANIFEST.sha256` and `V64_3_49_SOURCE_MANIFEST.sha256` each report exactly one mismatch (`bdse/planner/nuplan_planner.py`) when run against the V50 tree. This is expected and must not be "fixed" by rewriting historical manifests.
+- The current V50 source tree is validated only by the regenerated `V64_3_50_SOURCE_MANIFEST.sha256`.
+- Manually editing the current V50 launcher after manifest generation will itself produce a V50 checksum mismatch because the launcher is included in the V50 manifest.
+
+This repair remains under **V64.3.50** because no selector, Q/P/E state, paired intervention definition, risk estimator, gate, calibration rule, or runtime policy is changed.

@@ -110,3 +110,10 @@ Do NOT do yet
 - Do not tune Q/P/E, ranker loss, lambda, threshold/calibration, safety weights,
   treatment duration, challenge, seed/prefix, or add new future observables based
   on this TRAIN run.
+
+PREREQUISITE-LOCK / CHECKSUM TROUBLESHOOTING
+--------------------------------------------
+1. Do not delete the V50 source-manifest check or edit the launcher in place. The launcher itself is part of `V64_3_50_SOURCE_MANIFEST.sha256`; editing it will intentionally create a checksum mismatch.
+2. Do not validate the V50 tree with `V64_3_49_SOURCE_MANIFEST.sha256` or `V64_3_48_2_SOURCE_MANIFEST.sha256`. Those historical manifests expect the historical `bdse/planner/nuplan_planner.py`; V50 modifies that file for its one-shot paired probe, so one historical mismatch is expected.
+3. The repaired V50 prerequisite checker keeps exact SHA locks on the V49 result artifacts, but reads the actual flat V49 risk-identification schema and verifies the preregistered failure semantics instead of a stale/nonexistent nested AUC field.
+4. Use a clean extraction of this repaired V50 package and run the launcher unchanged.
