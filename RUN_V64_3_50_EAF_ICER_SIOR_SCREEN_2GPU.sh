@@ -11,7 +11,7 @@ export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
 export NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}"
 export NUPLAN_MAP_ROOT="${NUPLAN_MAP_ROOT:-$/data0/senzeyu2/dataset/CapPlan/data/nuplan/maps}"
 export NUPLAN_EXP_ROOT="${NUPLAN_EXP_ROOT:-$NUPLAN_ROOT/exp}"
-export NUPLAN_DB_ROOT="${NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train}"
+export NUPLAN_DB_ROOT="${NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/}"
 export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_reactive_agents}"
 export PYTHONUNBUFFERED=1
 
