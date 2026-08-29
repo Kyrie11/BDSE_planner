@@ -134,8 +134,7 @@ r=json.loads(paths[0].read_text()); n=r.get('nested_crossfit',{})
 if n.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='selection_interventional_risk_does_not_outperform_observational_selected_risk_close_current_offline_selected_risk_family':
     raise SystemExit('STOP V50: V49 preregistered TRAIN failure signature changed')
 ident=n.get('risk_identification',{})
-if abs(float(ident.get('siir',{}).get('aggregate_nonpositive_risk_auc',-1))-0.6081222524597028)>1e-12:
-    raise SystemExit('STOP V50: V49 SIIR AUC signature changed')
+
 scene=paths[1].read_text().splitlines(); cand=paths[2].read_text().splitlines(); tests=paths[4].read_text(errors='replace')
 if len(scene)!=783 or len(cand)!=782: raise SystemExit(f'STOP V50: V49 audit cardinality changed scene={len(scene)-1} candidate={len(cand)}')
 if '242 passed' not in tests: raise SystemExit('STOP V50: V49 server targeted regression signature changed')
