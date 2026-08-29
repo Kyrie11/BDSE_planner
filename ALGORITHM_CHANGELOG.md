@@ -12142,8 +12142,9 @@ This is a one-shot causal probe, not the final repeated deployment policy. It is
 
 Hard engineering invariants:
 
-- first proposal must be planner iteration 0;
-- control/treatment proposal, incumbent and frozen selected action identities must match;
+- first **live** proposal does not have to be absolute planner iteration 0; CONTROL/TREATMENT must reach the first proposal at identical iteration/time with identical pre-intervention action traces;
+- live proposal, incumbent and frozen V49 full-set RSMR winner identities must match;
+- Q/P/E coordinate definitions stay frozen but are evaluated at the exact live pre-intervention proposal state and must match across CONTROL/TREATMENT;
 - treatment action must equal the actual full-set RSMR action;
 - treatment executes exactly one intervention;
 - control executes zero interventions;
@@ -12256,3 +12257,22 @@ Historical manifest clarification:
 - Manually editing the current V50 launcher after manifest generation will itself produce a V50 checksum mismatch because the launcher is included in the V50 manifest.
 
 This repair remains under **V64.3.50** because no selector, Q/P/E state, paired intervention definition, risk estimator, gate, calibration rule, or runtime policy is changed.
+
+
+## V64.3.50 engineering repair — live proposal event-state alignment
+
+The first server attempt of the V50 paired collector stopped on token `03dac455f9ec5792` because the first synchronized runtime RSMR proposal appeared at planner iteration `7/7`, while the initial collector hard-coded `iteration==0`.  This was an engineering/protocol-assumption failure, not a V50 scientific rejection.  The collector raised before committing any row to `paired_selected_outcomes.csv`; no paired score or hard-metric outcome was consumed for this repair.
+
+The unsafe workaround is **not** to delete the assertion.  Doing so would attach a later closed-loop treatment outcome to stale V49 offline Q/P/E values from the initial cached state.  The repair therefore makes the causal event explicit:
+
+- CONTROL and TREATMENT remain identical from the same scenario start until the first live RSMR proposal; the complete pre-intervention action/time trace is checked.
+- the first proposal may occur at any nonnegative planner iteration, but the iteration and simulation time must match across arms;
+- the live pre-post-selection proposal must equal the frozen V49 `full_selected_action` for that token;
+- historical V49 post-selection may only keep that proposal or veto to incumbent; it is never allowed to rerank to a third action;
+- the frozen Q/P/E **coordinate family** is instrumented at that same live pre-intervention state, and CONTROL/TREATMENT values must agree;
+- CONTROL returns incumbent, TREATMENT executes the exact proposal once, later proposals return incumbent;
+- downstream SIOR fits the paired closed-loop label against the aligned live Q/P/E state; persisted V49 offline Q/P/E and risk are retained only for audit/baseline reconstruction;
+- the V49 full-set proposal audit remains byte-locked and every one of the 502 live proposal actions must match it;
+- incomplete per-token nuPlan outputs are deleted and re-run before resume, so the failed pre-repair token cannot contaminate the repaired dataset.
+
+This is an outcome-blind V50 engineering preregistration repair.  It changes neither the RSMR selector, candidate bank, Q/P/E definitions, pairwise SIOR model class, `lambda=1`, retention budget, nor same-winner/incumbent no-fallback deployment operator.  It only removes the invalid assumption that nuPlan must expose the first direct proposal at absolute iteration zero and restores state/label alignment required for a valid selected-outcome intervention.

@@ -117,3 +117,35 @@ PREREQUISITE-LOCK / CHECKSUM TROUBLESHOOTING
 2. Do not validate the V50 tree with `V64_3_49_SOURCE_MANIFEST.sha256` or `V64_3_48_2_SOURCE_MANIFEST.sha256`. Those historical manifests expect the historical `bdse/planner/nuplan_planner.py`; V50 modifies that file for its one-shot paired probe, so one historical mismatch is expected.
 3. The repaired V50 prerequisite checker keeps exact SHA locks on the V49 result artifacts, but reads the actual flat V49 risk-identification schema and verifies the preregistered failure semantics instead of a stale/nonexistent nested AUC field.
 4. Use a clean extraction of this repaired V50 package and run the launcher unchanged.
+
+V64.3.50 EVENT-STATE ALIGNMENT ENGINEERING REPAIR
+--------------------------------------------------
+The first pre-repair paired attempt stopped before committing a paired row because
+03dac455f9ec5792 exposed its first synchronized live RSMR proposal at planner
+iteration 7/7 rather than the invalid hard-coded 0/0 assumption.
+
+Use the repaired package without editing the launcher:
+
+  cd bdse_v64_3_50_eaf_icer_sior
+  bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+The collector is resumable, but it skips a token only after that token has a
+complete committed row in paired_train/paired_selected_outcomes.csv.  Incomplete
+per-token nuPlan output directories are deleted and rerun, so the failed first
+attempt cannot be mixed into the repaired dataset.  If you prefer maximal
+provenance hygiene, remove only the old V50 paired_train directory before rerun;
+do NOT remove or rerun the frozen V49 output root.
+
+The repaired causal contract is:
+  * CONTROL/TREATMENT same scenario start;
+  * identical pre-intervention planner/deployed action/time trace;
+  * first live RSMR proposal at the same iteration/time in both arms (not forced
+    to absolute iteration zero);
+  * live proposal action exactly equals the frozen V49 full-set RSMR winner;
+  * same frozen Q/P/E coordinate definitions evaluated at that same live event,
+    with C/T values equal before intervention;
+  * CONTROL -> incumbent; TREATMENT -> exact proposal once; no rerank/fallback.
+
+Do not bypass any of these checks.  A later STOP on frozen-action mismatch or
+C/T state mismatch is a real engineering/scientific alignment failure and must
+be diagnosed rather than disabled.

@@ -1,0 +1,1423 @@
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/ALGORITHM_CHANGELOG.md /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/ALGORITHM_CHANGELOG.md
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/ALGORITHM_CHANGELOG.md	2026-08-29 16:18:44.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/ALGORITHM_CHANGELOG.md	2026-08-29 23:21:02.621825614 +0000
+@@ -12142,8 +12142,9 @@
+ 
+ Hard engineering invariants:
+ 
+-- first proposal must be planner iteration 0;
+-- control/treatment proposal, incumbent and frozen selected action identities must match;
++- first **live** proposal does not have to be absolute planner iteration 0; CONTROL/TREATMENT must reach the first proposal at identical iteration/time with identical pre-intervention action traces;
++- live proposal, incumbent and frozen V49 full-set RSMR winner identities must match;
++- Q/P/E coordinate definitions stay frozen but are evaluated at the exact live pre-intervention proposal state and must match across CONTROL/TREATMENT;
+ - treatment action must equal the actual full-set RSMR action;
+ - treatment executes exactly one intervention;
+ - control executes zero interventions;
+@@ -12256,3 +12257,22 @@
+ - Manually editing the current V50 launcher after manifest generation will itself produce a V50 checksum mismatch because the launcher is included in the V50 manifest.
+ 
+ This repair remains under **V64.3.50** because no selector, Q/P/E state, paired intervention definition, risk estimator, gate, calibration rule, or runtime policy is changed.
++
++
++## V64.3.50 engineering repair — live proposal event-state alignment
++
++The first server attempt of the V50 paired collector stopped on token `03dac455f9ec5792` because the first synchronized runtime RSMR proposal appeared at planner iteration `7/7`, while the initial collector hard-coded `iteration==0`.  This was an engineering/protocol-assumption failure, not a V50 scientific rejection.  The collector raised before committing any row to `paired_selected_outcomes.csv`; no paired score or hard-metric outcome was consumed for this repair.
++
++The unsafe workaround is **not** to delete the assertion.  Doing so would attach a later closed-loop treatment outcome to stale V49 offline Q/P/E values from the initial cached state.  The repair therefore makes the causal event explicit:
++
++- CONTROL and TREATMENT remain identical from the same scenario start until the first live RSMR proposal; the complete pre-intervention action/time trace is checked.
++- the first proposal may occur at any nonnegative planner iteration, but the iteration and simulation time must match across arms;
++- the live pre-post-selection proposal must equal the frozen V49 `full_selected_action` for that token;
++- historical V49 post-selection may only keep that proposal or veto to incumbent; it is never allowed to rerank to a third action;
++- the frozen Q/P/E **coordinate family** is instrumented at that same live pre-intervention state, and CONTROL/TREATMENT values must agree;
++- CONTROL returns incumbent, TREATMENT executes the exact proposal once, later proposals return incumbent;
++- downstream SIOR fits the paired closed-loop label against the aligned live Q/P/E state; persisted V49 offline Q/P/E and risk are retained only for audit/baseline reconstruction;
++- the V49 full-set proposal audit remains byte-locked and every one of the 502 live proposal actions must match it;
++- incomplete per-token nuPlan outputs are deleted and re-run before resume, so the failed pre-repair token cannot contaminate the repaired dataset.
++
++This is an outcome-blind V50 engineering preregistration repair.  It changes neither the RSMR selector, candidate bank, Q/P/E definitions, pairwise SIOR model class, `lambda=1`, retention budget, nor same-winner/incumbent no-fallback deployment operator.  It only removes the invalid assumption that nuPlan must expose the first direct proposal at absolute iteration zero and restores state/label alignment required for a valid selected-outcome intervention.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt	2026-08-29 16:18:44.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt	2026-08-29 23:23:49.577429810 +0000
+@@ -117,3 +117,35 @@
+ 2. Do not validate the V50 tree with `V64_3_49_SOURCE_MANIFEST.sha256` or `V64_3_48_2_SOURCE_MANIFEST.sha256`. Those historical manifests expect the historical `bdse/planner/nuplan_planner.py`; V50 modifies that file for its one-shot paired probe, so one historical mismatch is expected.
+ 3. The repaired V50 prerequisite checker keeps exact SHA locks on the V49 result artifacts, but reads the actual flat V49 risk-identification schema and verifies the preregistered failure semantics instead of a stale/nonexistent nested AUC field.
+ 4. Use a clean extraction of this repaired V50 package and run the launcher unchanged.
++
++V64.3.50 EVENT-STATE ALIGNMENT ENGINEERING REPAIR
++--------------------------------------------------
++The first pre-repair paired attempt stopped before committing a paired row because
++03dac455f9ec5792 exposed its first synchronized live RSMR proposal at planner
++iteration 7/7 rather than the invalid hard-coded 0/0 assumption.
++
++Use the repaired package without editing the launcher:
++
++  cd bdse_v64_3_50_eaf_icer_sior
++  bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++
++The collector is resumable, but it skips a token only after that token has a
++complete committed row in paired_train/paired_selected_outcomes.csv.  Incomplete
++per-token nuPlan output directories are deleted and rerun, so the failed first
++attempt cannot be mixed into the repaired dataset.  If you prefer maximal
++provenance hygiene, remove only the old V50 paired_train directory before rerun;
++do NOT remove or rerun the frozen V49 output root.
++
++The repaired causal contract is:
++  * CONTROL/TREATMENT same scenario start;
++  * identical pre-intervention planner/deployed action/time trace;
++  * first live RSMR proposal at the same iteration/time in both arms (not forced
++    to absolute iteration zero);
++  * live proposal action exactly equals the frozen V49 full-set RSMR winner;
++  * same frozen Q/P/E coordinate definitions evaluated at that same live event,
++    with C/T values equal before intervention;
++  * CONTROL -> incumbent; TREATMENT -> exact proposal once; no rerank/fallback.
++
++Do not bypass any of these checks.  A later STOP on frozen-action mismatch or
++C/T state mismatch is a real engineering/scientific alignment failure and must
++be diagnosed rather than disabled.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 16:20:15.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 23:16:06.378759103 +0000
+@@ -4,7 +4,6 @@
+ 
+ export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
+ export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
+-export V47_ROOT="${V47_ROOT:-outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1}"
+ export V49_ROOT="${V49_ROOT:-outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
+ export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1}"
+ export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
+@@ -66,7 +65,6 @@
+   NUPLAN_DB_ARGS=(--nuplan-db-files "${NUPLAN_TRAIN_DB_DIRS[@]}")
+ fi
+ 
+-V47_RSMR="$V47_ROOT/provenance/v64_3_47_rsmr.yaml"
+ V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
+ V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
+ V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
+@@ -77,7 +75,7 @@
+ stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
+ stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >>"$TIMING"; }
+ 
+-for f in V64_3_50_SOURCE_MANIFEST.sha256 "$EAF_TRAIN_LOG" "$V47_RSMR" "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CFG" "$V49_SERVER_TEST"; do
++for f in V64_3_50_SOURCE_MANIFEST.sha256 "$EAF_TRAIN_LOG" "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CFG" "$V49_SERVER_TEST"; do
+   [[ -s "$f" ]] || { echo "STOP V50 missing $f" >&2; exit 2; }
+ done
+ # NPZ caches are NOT consumed by the V50 paired ScenarioBuilder path.  Keep
+@@ -178,13 +176,13 @@
+ CONTROL_CFG="$OUT_ROOT/provenance/v64_3_50_sior_probe_control.yaml"
+ TREATMENT_CFG="$OUT_ROOT/provenance/v64_3_50_sior_probe_treatment.yaml"
+ python -m bdse.tools.select_v64_3_50_sior_train_tokens --v49-scene-audit "$V49_SCENE" --output "$TRAIN_TOKENS" | tee "$OUT_ROOT/logs/v64_3_50_freeze_train_population.out"
+-python -m bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs --rsmr-config "$V47_RSMR" --control-output "$CONTROL_CFG" --treatment-output "$TREATMENT_CFG" | tee "$OUT_ROOT/logs/v64_3_50_prepare_probe_configs.out"
++python -m bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs --source-config "$V49_CFG" --control-output "$CONTROL_CFG" --treatment-output "$TREATMENT_CFG" | tee "$OUT_ROOT/logs/v64_3_50_prepare_probe_configs.out"
+ stage_end
+ 
+ stage_start paired_closed_loop_selected_outcome_collection
+ python -m bdse.tools.run_v64_3_50_paired_selected_outcome_collection \
+   --control-config "$CONTROL_CFG" --treatment-config "$TREATMENT_CFG" --checkpoint "$EAF_CKPT" \
+-  --scenario-token-file "$TRAIN_TOKENS" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
++  --scenario-token-file "$TRAIN_TOKENS" --frozen-proposal-audit "$V49_CAND" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
+   --challenge "$CL_CHALLENGE" --nuplan-data-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" \
+   --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume \
+   2>&1 | tee "$OUT_ROOT/logs/v64_3_50_paired_closed_loop_collection.out"
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md	2026-08-29 15:01:34.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md	2026-08-29 23:21:02.618449927 +0000
+@@ -316,8 +316,10 @@
+ 
+ The implementation hard-checks:
+ 
+-- both arms expose exactly the same first proposal/baseline/selected action identity;
+-- the first proposal is planner iteration `0`, matching the frozen Q/P/E state;
++- both arms expose exactly the same first **live** pre-post-selection RSMR proposal/baseline identity;
++- the first proposal may occur after planner iteration `0`; CONTROL and TREATMENT must reach it at the exact same iteration/time with identical pre-intervention action traces;
++- the live proposal action must equal the byte-locked V49 full-set RSMR winner for that scenario;
++- the same frozen Q/P/E coordinate definitions are evaluated at that exact live pre-intervention state in both arms and must match numerically before treatment;
+ - CONTROL executes zero interventions;
+ - TREATMENT executes exactly one intervention;
+ - TREATMENT action equals the actual full-set RSMR proposal;
+@@ -325,6 +327,20 @@
+ - fallback is disabled;
+ - any mismatch is an engineering STOP.
+ 
++### V50 event-state alignment engineering repair (pre-outcome protocol correction)
++
++The first attempted paired run exposed an invalid implementation assumption before any paired row was committed: token `03dac455f9ec5792` reached the first synchronized live RSMR proposal at planner iteration `7/7`, not `0/0`.  The old collector therefore stopped before writing a causal label.  No treatment/control score, hard metric, or SIOR fit result was used to design this repair.
++
++Simply deleting the `iteration==0` assertion would be scientifically invalid, because the old fit would then pair a later closed-loop treatment outcome with stale V49 offline Q/P/E values from a different state.  The repaired protocol instead aligns **treatment, proposal identity, and covariates at one live pre-intervention event**:
++
++1. CONTROL and TREATMENT start from the identical nuPlan scenario start and must have identical planner/deployed action traces before the first proposal.
++2. The first proposal iteration/time must match exactly across the two arms; it need not be absolute iteration zero.
++3. The proposal action must equal the frozen V49 full-set RSMR winner; otherwise the scene is an ENGINEERING STOP rather than a silently changed treatment.
++4. Q/P/E keep the previously frozen coordinate definitions and are recorded at that same live event in both arms; any C/T state mismatch is an ENGINEERING STOP.
++5. CONTROL vetoes to the incumbent; TREATMENT executes that exact proposal once.  No runner-up/fallback is introduced.
++
++This is an **outcome-blind engineering amendment** needed to make the selected-action intervention well-defined under the actual nuPlan runtime.  It does not constitute V50 evidence and does not relax any promotion gate.  The incomplete first token outputs must be discarded/re-run; the resumable collector only skips tokens after a complete paired row is committed.
++
+ ## 10.3 Outcome label
+ 
+ Let `S_T` and `S_C` be the official nuPlan aggregate scores for treatment and control on the same scenario.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_ENGINEERING_VALIDATION.txt /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_ENGINEERING_VALIDATION.txt
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_ENGINEERING_VALIDATION.txt	2026-08-29 16:20:42.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_ENGINEERING_VALIDATION.txt	2026-08-29 23:24:04.296671317 +0000
+@@ -1,69 +1,51 @@
+-V64.3.50 EAF-ICER-SIOR — DATA-LAYOUT ENGINEERING COMPATIBILITY VALIDATION
+-=========================================================================== 
++V64.3.50 EAF-ICER-SIOR — event-state alignment engineering repair validation
+ 
+-Scope
+------
+-Engineering-only repair for the user's server dataset layout. Scientific V64.3.50 SIOR mechanism, preregistered paired outcome label, risk state/model, retention gates, RSMR selector, treatment policy, and no-fallback containment are unchanged.
+-
+-Resolved default layout
+------------------------
+-BDSE NPZ caches (offline/preprocessed only):
+-  BDSE_CACHE_ROOT=/data0/senzeyu2/dataset/nuplan/data/cache
+-  BDSE_TRAIN_CACHE=$BDSE_CACHE_ROOT/bdse_train_v2
+-  BDSE_VAL_CACHE=$BDSE_CACHE_ROOT/bdse_val_v2
+-  BDSE_TEST_CACHE=$BDSE_CACHE_ROOT/bdse_test_2
+-
+-Native nuPlan closed-loop inputs:
+-  NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan
+-  NUPLAN_MAP_ROOT=$NUPLAN_ROOT/maps
+-  NUPLAN_SPLITS_ROOT=$NUPLAN_ROOT/nuplan-v1.1/splits
+-  TRAIN db_files directories:
+-    train_boston
+-    train_pittsburgh
+-    train_singapore
+-    train_vegas
+-  val/test are intentionally not loaded into V50 TRAIN paired supervision.
++Trigger
++-------
++First server pair stopped before a paired row was committed:
++  token=03dac455f9ec5792
++  first synchronized live RSMR proposal iteration=7/7
++Old code incorrectly required absolute planner iteration 0.
+ 
+-NUPLAN_EXP_ROOT defaults to an output-local writable path:
+-  $SCRIPT_DIR/$OUT_ROOT/nuplan_exp
++Root cause
++----------
++The old collector conflated "same pre-intervention state in CONTROL/TREATMENT"
++with "absolute nuPlan planner iteration must equal zero".  Removing only that
++assertion would have been unsafe because the downstream fit still paired a later
++closed-loop outcome with stale V49 offline Q/P/E covariates.
++
++Repair
++------
++- first live proposal may occur at any nonnegative iteration;
++- CONTROL/TREATMENT must match on first-proposal iteration/time;
++- complete pre-intervention probe time/planner-action/deployed-action traces must match;
++- live proposal action must equal frozen V49 full_selected_action;
++- historical V49 post-selection may only keep proposal or veto to incumbent;
++- frozen Q/P/E coordinate definitions are recorded at the same live event and
++  must match between CONTROL/TREATMENT;
++- CONTROL preserves incumbent, TREATMENT executes exact proposal once;
++- SIOR fits event-aligned live Q/P/E rather than stale offline Q/P/E;
++- V49 offline Q/P/E/risk retained only for audit/comparator reconstruction;
++- incomplete token output is deleted before rerun; resume skips only committed rows.
+ 
+ Validation
+ ----------
+-- bash -n RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh: PASS
+-- python compile run_v64_3_50_paired_selected_outcome_collection.py: PASS
+-- V64_3_50_SOURCE_MANIFEST.sha256: 914/914 PASS
+-- V50 focused tests: 11/11 PASS
+-- V50 + closed-loop DB path compatibility tests: 27/27 PASS
+-  (includes direct flat *.db directories and nested-root expansion contracts)
+-
+-A broad historical targeted regression was also started in the constrained local execution window but did not finish before the tool timeout; it is NOT reported as a PASS here. The unchanged V50 server launcher still runs the full historical targeted regression before any paired closed-loop scientific collection, so server execution remains fail-closed on historical regression drift.
+-
+-Key behavior
+-------------
+-- NPZ caches are logged separately and are non-blocking because this V50 paired closed-loop stage does not consume them; they can never be passed as the default nuPlan ScenarioBuilder DB source.
+-- Default V50 TRAIN closed-loop passes the four native city TRAIN directories through --nuplan-db-files.
+-- Each native city directory is fail-closed checked for at least one direct *.db file.
+-- Map root must contain nuplan-maps-v1.0.json.
+-- Backward compatible NUPLAN_DB_ROOT remains supported.
+-- NUPLAN_TRAIN_DB_ROOTS can override the four-city list as a colon-separated directory list.
+-
+-Scientific status
+------------------
+-No new scientific result is claimed. This remains V64.3.50, not V64.3.51.
+-
+-V49 prerequisite-lock schema repair
+------------------------------------
+-PASS  Root cause reproduced: V49 persists flat risk_identification fields, while the original V50 prerequisite checker addressed a nonexistent nested `siir.aggregate_nonpositive_risk_auc` field and therefore defaulted to -1.
+-PASS  V50 launcher now consumes `aggregate_ego_ref_auc`, `aggregate_obs_sign_auc`, `aggregate_siir_auc`, `siir_better_ego_fold_count`, `siir_better_obs_fold_count`, and `identified`.
+-PASS  Exact SHA256 locks on the five V49 prerequisite artifacts remain in place.
+-PASS  Exact V49 preregistered TRAIN-failure diagnosis remains in place.
+-PASS  The duplicated exact floating-point AUC constant is removed; the secondary checker now recomputes the preregistered identification-failure semantics from the persisted schema.
+-PASS  The same semantic prerequisite check is used by `fit_v64_3_50_eaf_icer_sior.py`.
+-PASS  V50 focused tests after repair: 12/12.
+-
+-Historical-manifest note
+-------------------------
+-Running the V48.2 or V49 source manifest against the V50 source tree is expected to report one mismatch: `bdse/planner/nuplan_planner.py`. V50 deliberately modifies this shared source file for the selected-outcome one-shot probe. Historical manifests must remain immutable and are only valid against their corresponding historical source trees. The V50 launcher uses `V64_3_50_SOURCE_MANIFEST.sha256` for the current tree. Manually editing the V50 launcher after manifest generation also invalidates the V50 manifest by design.
+-PASS  V48/V48.2/V49/V50 adjacent-version focused regression after lock repair: 29/29.
+-PASS  Regenerated current V50 source manifest after the lock repair: 914/914.
+-NOTE  A broad historical targeted regression was started but exceeded the local execution window before completion; it is not claimed as PASS here. The server launcher retains the full targeted regression before any V50 paired scientific collection.
++Python compileall: PASS
++launcher bash -n: PASS
++V50 focused: 14/14 PASS
++V48 + V48.2 + V49 + V50 adjacent focused: 31/31 PASS
++V13 -> V50 exact launcher targeted regression: 256/256 PASS
++Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class.
++
++A whole-repository pytest invocation was also attempted.  It reached 96% with no
++reported failure before the local execution window timed out, so it is deliberately
++NOT claimed as a completed PASS.  The exact historical targeted suite used by the
++server launcher completed successfully as reported above.
++
++Scientific non-change
++---------------------
++No change to RSMR, EAF, candidate bank, Q/P/E coordinate definitions, SIOR
++zero-bias pairwise ranker class, lambda=1, alpha_ret, same-winner/incumbent
++operator, no-rerank/no-second-best/no-fallback constraints, or promotion gates.
++This is an outcome-blind state/label alignment repair made after the first pair
++raised before any paired row was committed.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md	2026-08-29 23:23:49.583103228 +0000
+@@ -0,0 +1,60 @@
++# V64.3.50 first-live-proposal event-state alignment repair
++
++## Trigger
++
++The first V50 paired collection attempt stopped on `03dac455f9ec5792` with:
++
++`first RSMR proposal must occur at planner iteration 0, got 7/7`.
++
++The important fact is that CONTROL and TREATMENT agreed (`7/7`).  The old code
++had encoded an implementation assumption—"a selected scene must expose its
++first runtime proposal at absolute nuPlan iteration zero"—as if it were a causal
++invariant.  It is not.
++
++The exception occurs before `paired_selected_outcomes.csv` is updated, so no
++paired causal row was committed.  This repair was made without consuming the
++pair's score/hard-metric outcome as algorithm evidence.
++
++## Why deleting the check is unsafe
++
++The original fit consumed V49 offline Q/P/E values.  If a closed-loop treatment
++actually occurs at iteration 7, merely accepting the row would pair a later
++intervention outcome with covariates from a different state.  That creates a
++state/label mismatch and invalidates the selected-outcome interpretation.
++
++## Repaired invariant
++
++The intervention event is now the first synchronized **live pre-post-selection
++RSMR proposal**.  It may occur at any non-negative planner iteration.  The pair
++is accepted only if:
++
++1. CONTROL/TREATMENT have identical probe time/action traces before intervention;
++2. first proposal iteration and simulation time match exactly;
++3. the live proposal action equals the byte-locked V49 `full_selected_action`;
++4. historical post-selection can only have kept that proposal or vetoed it to
++   incumbent—any third action is a no-rerank violation;
++5. frozen Q/P/E coordinate definitions are evaluated at this exact live event
++   and match across the two arms before treatment;
++6. CONTROL preserves incumbent and TREATMENT executes the exact proposal once;
++7. control executes zero interventions and treatment exactly one;
++8. all previously frozen hard-metric and no-fallback checks remain active.
++
++The SIOR fit consumes these event-aligned live Q/P/E values.  V49 offline Q/P/E
++and persisted risk are retained only as provenance/audit information.  The
++historical observational sign model is reconstructed from its frozen training
++population and evaluated on the same live Q/P/E test state, so the comparator is
++not advantaged or disadvantaged by a state mismatch.
++
++## Scientific status
++
++This is a pre-result engineering/protocol repair, not a promotion.  It does not
++change RSMR, the candidate bank, Q/P/E coordinate definitions, SIOR model class,
++`lambda=1`, retention budget, or the same-winner/incumbent no-fallback operator.
++It replaces an invalid absolute-iteration assumption with the actual causal
++requirement: treatment, proposal identity, and covariates must describe the same
++pre-intervention state.
++
++A future STOP because the live proposal does not equal the frozen V49 winner is
++not eligible to be bypassed.  Such a failure would mean the offline selected
++population does not transport to the closed-loop runtime selector and would
++need a separate scientific diagnosis.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.patch /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.patch
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.patch	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.patch	2026-08-29 23:24:09.789916580 +0000
+@@ -0,0 +1,341 @@
++diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/ALGORITHM_CHANGELOG.md /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/ALGORITHM_CHANGELOG.md
++--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/ALGORITHM_CHANGELOG.md	2026-08-29 16:18:44.000000000 +0000
+++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/ALGORITHM_CHANGELOG.md	2026-08-29 23:21:02.621825614 +0000
++@@ -12142,8 +12142,9 @@
++ 
++ Hard engineering invariants:
++ 
++-- first proposal must be planner iteration 0;
++-- control/treatment proposal, incumbent and frozen selected action identities must match;
+++- first **live** proposal does not have to be absolute planner iteration 0; CONTROL/TREATMENT must reach the first proposal at identical iteration/time with identical pre-intervention action traces;
+++- live proposal, incumbent and frozen V49 full-set RSMR winner identities must match;
+++- Q/P/E coordinate definitions stay frozen but are evaluated at the exact live pre-intervention proposal state and must match across CONTROL/TREATMENT;
++ - treatment action must equal the actual full-set RSMR action;
++ - treatment executes exactly one intervention;
++ - control executes zero interventions;
++@@ -12256,3 +12257,22 @@
++ - Manually editing the current V50 launcher after manifest generation will itself produce a V50 checksum mismatch because the launcher is included in the V50 manifest.
++ 
++ This repair remains under **V64.3.50** because no selector, Q/P/E state, paired intervention definition, risk estimator, gate, calibration rule, or runtime policy is changed.
+++
+++
+++## V64.3.50 engineering repair — live proposal event-state alignment
+++
+++The first server attempt of the V50 paired collector stopped on token `03dac455f9ec5792` because the first synchronized runtime RSMR proposal appeared at planner iteration `7/7`, while the initial collector hard-coded `iteration==0`.  This was an engineering/protocol-assumption failure, not a V50 scientific rejection.  The collector raised before committing any row to `paired_selected_outcomes.csv`; no paired score or hard-metric outcome was consumed for this repair.
+++
+++The unsafe workaround is **not** to delete the assertion.  Doing so would attach a later closed-loop treatment outcome to stale V49 offline Q/P/E values from the initial cached state.  The repair therefore makes the causal event explicit:
+++
+++- CONTROL and TREATMENT remain identical from the same scenario start until the first live RSMR proposal; the complete pre-intervention action/time trace is checked.
+++- the first proposal may occur at any nonnegative planner iteration, but the iteration and simulation time must match across arms;
+++- the live pre-post-selection proposal must equal the frozen V49 `full_selected_action` for that token;
+++- historical V49 post-selection may only keep that proposal or veto to incumbent; it is never allowed to rerank to a third action;
+++- the frozen Q/P/E **coordinate family** is instrumented at that same live pre-intervention state, and CONTROL/TREATMENT values must agree;
+++- CONTROL returns incumbent, TREATMENT executes the exact proposal once, later proposals return incumbent;
+++- downstream SIOR fits the paired closed-loop label against the aligned live Q/P/E state; persisted V49 offline Q/P/E and risk are retained only for audit/baseline reconstruction;
+++- the V49 full-set proposal audit remains byte-locked and every one of the 502 live proposal actions must match it;
+++- incomplete per-token nuPlan outputs are deleted and re-run before resume, so the failed pre-repair token cannot contaminate the repaired dataset.
+++
+++This is an outcome-blind V50 engineering preregistration repair.  It changes neither the RSMR selector, candidate bank, Q/P/E definitions, pairwise SIOR model class, `lambda=1`, retention budget, nor same-winner/incumbent no-fallback deployment operator.  It only removes the invalid assumption that nuPlan must expose the first direct proposal at absolute iteration zero and restores state/label alignment required for a valid selected-outcome intervention.
++diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt
++--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt	2026-08-29 16:18:44.000000000 +0000
+++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt	2026-08-29 23:23:49.577429810 +0000
++@@ -117,3 +117,35 @@
++ 2. Do not validate the V50 tree with `V64_3_49_SOURCE_MANIFEST.sha256` or `V64_3_48_2_SOURCE_MANIFEST.sha256`. Those historical manifests expect the historical `bdse/planner/nuplan_planner.py`; V50 modifies that file for its one-shot paired probe, so one historical mismatch is expected.
++ 3. The repaired V50 prerequisite checker keeps exact SHA locks on the V49 result artifacts, but reads the actual flat V49 risk-identification schema and verifies the preregistered failure semantics instead of a stale/nonexistent nested AUC field.
++ 4. Use a clean extraction of this repaired V50 package and run the launcher unchanged.
+++
+++V64.3.50 EVENT-STATE ALIGNMENT ENGINEERING REPAIR
+++--------------------------------------------------
+++The first pre-repair paired attempt stopped before committing a paired row because
+++03dac455f9ec5792 exposed its first synchronized live RSMR proposal at planner
+++iteration 7/7 rather than the invalid hard-coded 0/0 assumption.
+++
+++Use the repaired package without editing the launcher:
+++
+++  cd bdse_v64_3_50_eaf_icer_sior
+++  bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+++
+++The collector is resumable, but it skips a token only after that token has a
+++complete committed row in paired_train/paired_selected_outcomes.csv.  Incomplete
+++per-token nuPlan output directories are deleted and rerun, so the failed first
+++attempt cannot be mixed into the repaired dataset.  If you prefer maximal
+++provenance hygiene, remove only the old V50 paired_train directory before rerun;
+++do NOT remove or rerun the frozen V49 output root.
+++
+++The repaired causal contract is:
+++  * CONTROL/TREATMENT same scenario start;
+++  * identical pre-intervention planner/deployed action/time trace;
+++  * first live RSMR proposal at the same iteration/time in both arms (not forced
+++    to absolute iteration zero);
+++  * live proposal action exactly equals the frozen V49 full-set RSMR winner;
+++  * same frozen Q/P/E coordinate definitions evaluated at that same live event,
+++    with C/T values equal before intervention;
+++  * CONTROL -> incumbent; TREATMENT -> exact proposal once; no rerank/fallback.
+++
+++Do not bypass any of these checks.  A later STOP on frozen-action mismatch or
+++C/T state mismatch is a real engineering/scientific alignment failure and must
+++be diagnosed rather than disabled.
++diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 16:20:15.000000000 +0000
+++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 23:16:06.378759103 +0000
++@@ -4,7 +4,6 @@
++ 
++ export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++ export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++-export V47_ROOT="${V47_ROOT:-outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1}"
++ export V49_ROOT="${V49_ROOT:-outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
++ export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1}"
++ export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
++@@ -66,7 +65,6 @@
++   NUPLAN_DB_ARGS=(--nuplan-db-files "${NUPLAN_TRAIN_DB_DIRS[@]}")
++ fi
++ 
++-V47_RSMR="$V47_ROOT/provenance/v64_3_47_rsmr.yaml"
++ V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
++ V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
++ V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
++@@ -77,7 +75,7 @@
++ stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
++ stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >>"$TIMING"; }
++ 
++-for f in V64_3_50_SOURCE_MANIFEST.sha256 "$EAF_TRAIN_LOG" "$V47_RSMR" "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CFG" "$V49_SERVER_TEST"; do
+++for f in V64_3_50_SOURCE_MANIFEST.sha256 "$EAF_TRAIN_LOG" "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CFG" "$V49_SERVER_TEST"; do
++   [[ -s "$f" ]] || { echo "STOP V50 missing $f" >&2; exit 2; }
++ done
++ # NPZ caches are NOT consumed by the V50 paired ScenarioBuilder path.  Keep
++@@ -178,13 +176,13 @@
++ CONTROL_CFG="$OUT_ROOT/provenance/v64_3_50_sior_probe_control.yaml"
++ TREATMENT_CFG="$OUT_ROOT/provenance/v64_3_50_sior_probe_treatment.yaml"
++ python -m bdse.tools.select_v64_3_50_sior_train_tokens --v49-scene-audit "$V49_SCENE" --output "$TRAIN_TOKENS" | tee "$OUT_ROOT/logs/v64_3_50_freeze_train_population.out"
++-python -m bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs --rsmr-config "$V47_RSMR" --control-output "$CONTROL_CFG" --treatment-output "$TREATMENT_CFG" | tee "$OUT_ROOT/logs/v64_3_50_prepare_probe_configs.out"
+++python -m bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs --source-config "$V49_CFG" --control-output "$CONTROL_CFG" --treatment-output "$TREATMENT_CFG" | tee "$OUT_ROOT/logs/v64_3_50_prepare_probe_configs.out"
++ stage_end
++ 
++ stage_start paired_closed_loop_selected_outcome_collection
++ python -m bdse.tools.run_v64_3_50_paired_selected_outcome_collection \
++   --control-config "$CONTROL_CFG" --treatment-config "$TREATMENT_CFG" --checkpoint "$EAF_CKPT" \
++-  --scenario-token-file "$TRAIN_TOKENS" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
+++  --scenario-token-file "$TRAIN_TOKENS" --frozen-proposal-audit "$V49_CAND" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
++   --challenge "$CL_CHALLENGE" --nuplan-data-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" \
++   --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume \
++   2>&1 | tee "$OUT_ROOT/logs/v64_3_50_paired_closed_loop_collection.out"
++diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md
++--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md	2026-08-29 15:01:34.000000000 +0000
+++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md	2026-08-29 23:21:02.618449927 +0000
++@@ -316,8 +316,10 @@
++ 
++ The implementation hard-checks:
++ 
++-- both arms expose exactly the same first proposal/baseline/selected action identity;
++-- the first proposal is planner iteration `0`, matching the frozen Q/P/E state;
+++- both arms expose exactly the same first **live** pre-post-selection RSMR proposal/baseline identity;
+++- the first proposal may occur after planner iteration `0`; CONTROL and TREATMENT must reach it at the exact same iteration/time with identical pre-intervention action traces;
+++- the live proposal action must equal the byte-locked V49 full-set RSMR winner for that scenario;
+++- the same frozen Q/P/E coordinate definitions are evaluated at that exact live pre-intervention state in both arms and must match numerically before treatment;
++ - CONTROL executes zero interventions;
++ - TREATMENT executes exactly one intervention;
++ - TREATMENT action equals the actual full-set RSMR proposal;
++@@ -325,6 +327,20 @@
++ - fallback is disabled;
++ - any mismatch is an engineering STOP.
++ 
+++### V50 event-state alignment engineering repair (pre-outcome protocol correction)
+++
+++The first attempted paired run exposed an invalid implementation assumption before any paired row was committed: token `03dac455f9ec5792` reached the first synchronized live RSMR proposal at planner iteration `7/7`, not `0/0`.  The old collector therefore stopped before writing a causal label.  No treatment/control score, hard metric, or SIOR fit result was used to design this repair.
+++
+++Simply deleting the `iteration==0` assertion would be scientifically invalid, because the old fit would then pair a later closed-loop treatment outcome with stale V49 offline Q/P/E values from a different state.  The repaired protocol instead aligns **treatment, proposal identity, and covariates at one live pre-intervention event**:
+++
+++1. CONTROL and TREATMENT start from the identical nuPlan scenario start and must have identical planner/deployed action traces before the first proposal.
+++2. The first proposal iteration/time must match exactly across the two arms; it need not be absolute iteration zero.
+++3. The proposal action must equal the frozen V49 full-set RSMR winner; otherwise the scene is an ENGINEERING STOP rather than a silently changed treatment.
+++4. Q/P/E keep the previously frozen coordinate definitions and are recorded at that same live event in both arms; any C/T state mismatch is an ENGINEERING STOP.
+++5. CONTROL vetoes to the incumbent; TREATMENT executes that exact proposal once.  No runner-up/fallback is introduced.
+++
+++This is an **outcome-blind engineering amendment** needed to make the selected-action intervention well-defined under the actual nuPlan runtime.  It does not constitute V50 evidence and does not relax any promotion gate.  The incomplete first token outputs must be discarded/re-run; the resumable collector only skips tokens after a complete paired row is committed.
+++
++ ## 10.3 Outcome label
++ 
++ Let `S_T` and `S_C` be the official nuPlan aggregate scores for treatment and control on the same scenario.
++diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_ENGINEERING_VALIDATION.txt /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_ENGINEERING_VALIDATION.txt
++--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_ENGINEERING_VALIDATION.txt	2026-08-29 16:20:42.000000000 +0000
+++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_ENGINEERING_VALIDATION.txt	2026-08-29 23:24:04.296671317 +0000
++@@ -1,69 +1,51 @@
++-V64.3.50 EAF-ICER-SIOR — DATA-LAYOUT ENGINEERING COMPATIBILITY VALIDATION
++-=========================================================================== 
+++V64.3.50 EAF-ICER-SIOR — event-state alignment engineering repair validation
++ 
++-Scope
++------
++-Engineering-only repair for the user's server dataset layout. Scientific V64.3.50 SIOR mechanism, preregistered paired outcome label, risk state/model, retention gates, RSMR selector, treatment policy, and no-fallback containment are unchanged.
++-
++-Resolved default layout
++------------------------
++-BDSE NPZ caches (offline/preprocessed only):
++-  BDSE_CACHE_ROOT=/data0/senzeyu2/dataset/nuplan/data/cache
++-  BDSE_TRAIN_CACHE=$BDSE_CACHE_ROOT/bdse_train_v2
++-  BDSE_VAL_CACHE=$BDSE_CACHE_ROOT/bdse_val_v2
++-  BDSE_TEST_CACHE=$BDSE_CACHE_ROOT/bdse_test_2
++-
++-Native nuPlan closed-loop inputs:
++-  NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan
++-  NUPLAN_MAP_ROOT=$NUPLAN_ROOT/maps
++-  NUPLAN_SPLITS_ROOT=$NUPLAN_ROOT/nuplan-v1.1/splits
++-  TRAIN db_files directories:
++-    train_boston
++-    train_pittsburgh
++-    train_singapore
++-    train_vegas
++-  val/test are intentionally not loaded into V50 TRAIN paired supervision.
+++Trigger
+++-------
+++First server pair stopped before a paired row was committed:
+++  token=03dac455f9ec5792
+++  first synchronized live RSMR proposal iteration=7/7
+++Old code incorrectly required absolute planner iteration 0.
++ 
++-NUPLAN_EXP_ROOT defaults to an output-local writable path:
++-  $SCRIPT_DIR/$OUT_ROOT/nuplan_exp
+++Root cause
+++----------
+++The old collector conflated "same pre-intervention state in CONTROL/TREATMENT"
+++with "absolute nuPlan planner iteration must equal zero".  Removing only that
+++assertion would have been unsafe because the downstream fit still paired a later
+++closed-loop outcome with stale V49 offline Q/P/E covariates.
+++
+++Repair
+++------
+++- first live proposal may occur at any nonnegative iteration;
+++- CONTROL/TREATMENT must match on first-proposal iteration/time;
+++- complete pre-intervention probe time/planner-action/deployed-action traces must match;
+++- live proposal action must equal frozen V49 full_selected_action;
+++- historical V49 post-selection may only keep proposal or veto to incumbent;
+++- frozen Q/P/E coordinate definitions are recorded at the same live event and
+++  must match between CONTROL/TREATMENT;
+++- CONTROL preserves incumbent, TREATMENT executes exact proposal once;
+++- SIOR fits event-aligned live Q/P/E rather than stale offline Q/P/E;
+++- V49 offline Q/P/E/risk retained only for audit/comparator reconstruction;
+++- incomplete token output is deleted before rerun; resume skips only committed rows.
++ 
++ Validation
++ ----------
++-- bash -n RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh: PASS
++-- python compile run_v64_3_50_paired_selected_outcome_collection.py: PASS
++-- V64_3_50_SOURCE_MANIFEST.sha256: 914/914 PASS
++-- V50 focused tests: 11/11 PASS
++-- V50 + closed-loop DB path compatibility tests: 27/27 PASS
++-  (includes direct flat *.db directories and nested-root expansion contracts)
++-
++-A broad historical targeted regression was also started in the constrained local execution window but did not finish before the tool timeout; it is NOT reported as a PASS here. The unchanged V50 server launcher still runs the full historical targeted regression before any paired closed-loop scientific collection, so server execution remains fail-closed on historical regression drift.
++-
++-Key behavior
++-------------
++-- NPZ caches are logged separately and are non-blocking because this V50 paired closed-loop stage does not consume them; they can never be passed as the default nuPlan ScenarioBuilder DB source.
++-- Default V50 TRAIN closed-loop passes the four native city TRAIN directories through --nuplan-db-files.
++-- Each native city directory is fail-closed checked for at least one direct *.db file.
++-- Map root must contain nuplan-maps-v1.0.json.
++-- Backward compatible NUPLAN_DB_ROOT remains supported.
++-- NUPLAN_TRAIN_DB_ROOTS can override the four-city list as a colon-separated directory list.
++-
++-Scientific status
++------------------
++-No new scientific result is claimed. This remains V64.3.50, not V64.3.51.
++-
++-V49 prerequisite-lock schema repair
++------------------------------------
++-PASS  Root cause reproduced: V49 persists flat risk_identification fields, while the original V50 prerequisite checker addressed a nonexistent nested `siir.aggregate_nonpositive_risk_auc` field and therefore defaulted to -1.
++-PASS  V50 launcher now consumes `aggregate_ego_ref_auc`, `aggregate_obs_sign_auc`, `aggregate_siir_auc`, `siir_better_ego_fold_count`, `siir_better_obs_fold_count`, and `identified`.
++-PASS  Exact SHA256 locks on the five V49 prerequisite artifacts remain in place.
++-PASS  Exact V49 preregistered TRAIN-failure diagnosis remains in place.
++-PASS  The duplicated exact floating-point AUC constant is removed; the secondary checker now recomputes the preregistered identification-failure semantics from the persisted schema.
++-PASS  The same semantic prerequisite check is used by `fit_v64_3_50_eaf_icer_sior.py`.
++-PASS  V50 focused tests after repair: 12/12.
++-
++-Historical-manifest note
++-------------------------
++-Running the V48.2 or V49 source manifest against the V50 source tree is expected to report one mismatch: `bdse/planner/nuplan_planner.py`. V50 deliberately modifies this shared source file for the selected-outcome one-shot probe. Historical manifests must remain immutable and are only valid against their corresponding historical source trees. The V50 launcher uses `V64_3_50_SOURCE_MANIFEST.sha256` for the current tree. Manually editing the V50 launcher after manifest generation also invalidates the V50 manifest by design.
++-PASS  V48/V48.2/V49/V50 adjacent-version focused regression after lock repair: 29/29.
++-PASS  Regenerated current V50 source manifest after the lock repair: 914/914.
++-NOTE  A broad historical targeted regression was started but exceeded the local execution window before completion; it is not claimed as PASS here. The server launcher retains the full targeted regression before any V50 paired scientific collection.
+++Python compileall: PASS
+++launcher bash -n: PASS
+++V50 focused: 14/14 PASS
+++V48 + V48.2 + V49 + V50 adjacent focused: 31/31 PASS
+++V13 -> V50 exact launcher targeted regression: 256/256 PASS
+++Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class.
+++
+++A whole-repository pytest invocation was also attempted.  It reached 96% with no
+++reported failure before the local execution window timed out, so it is deliberately
+++NOT claimed as a completed PASS.  The exact historical targeted suite used by the
+++server launcher completed successfully as reported above.
+++
+++Scientific non-change
+++---------------------
+++No change to RSMR, EAF, candidate bank, Q/P/E coordinate definitions, SIOR
+++zero-bias pairwise ranker class, lambda=1, alpha_ret, same-winner/incumbent
+++operator, no-rerank/no-second-best/no-fallback constraints, or promotion gates.
+++This is an outcome-blind state/label alignment repair made after the first pair
+++raised before any paired row was committed.
++diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md
++--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md	1970-01-01 00:00:00.000000000 +0000
+++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/V64_3_50_FIRST_LIVE_PROPOSAL_EVENT_ALIGNMENT_REPAIR.md	2026-08-29 23:23:49.583103228 +0000
++@@ -0,0 +1,60 @@
+++# V64.3.50 first-live-proposal event-state alignment repair
+++
+++## Trigger
+++
+++The first V50 paired collection attempt stopped on `03dac455f9ec5792` with:
+++
+++`first RSMR proposal must occur at planner iteration 0, got 7/7`.
+++
+++The important fact is that CONTROL and TREATMENT agreed (`7/7`).  The old code
+++had encoded an implementation assumption—"a selected scene must expose its
+++first runtime proposal at absolute nuPlan iteration zero"—as if it were a causal
+++invariant.  It is not.
+++
+++The exception occurs before `paired_selected_outcomes.csv` is updated, so no
+++paired causal row was committed.  This repair was made without consuming the
+++pair's score/hard-metric outcome as algorithm evidence.
+++
+++## Why deleting the check is unsafe
+++
+++The original fit consumed V49 offline Q/P/E values.  If a closed-loop treatment
+++actually occurs at iteration 7, merely accepting the row would pair a later
+++intervention outcome with covariates from a different state.  That creates a
+++state/label mismatch and invalidates the selected-outcome interpretation.
+++
+++## Repaired invariant
+++
+++The intervention event is now the first synchronized **live pre-post-selection
+++RSMR proposal**.  It may occur at any non-negative planner iteration.  The pair
+++is accepted only if:
+++
+++1. CONTROL/TREATMENT have identical probe time/action traces before intervention;
+++2. first proposal iteration and simulation time match exactly;
+++3. the live proposal action equals the byte-locked V49 `full_selected_action`;
+++4. historical post-selection can only have kept that proposal or vetoed it to
+++   incumbent—any third action is a no-rerank violation;
+++5. frozen Q/P/E coordinate definitions are evaluated at this exact live event
+++   and match across the two arms before treatment;
+++6. CONTROL preserves incumbent and TREATMENT executes the exact proposal once;
+++7. control executes zero interventions and treatment exactly one;
+++8. all previously frozen hard-metric and no-fallback checks remain active.
+++
+++The SIOR fit consumes these event-aligned live Q/P/E values.  V49 offline Q/P/E
+++and persisted risk are retained only as provenance/audit information.  The
+++historical observational sign model is reconstructed from its frozen training
+++population and evaluated on the same live Q/P/E test state, so the comparator is
+++not advantaged or disadvantaged by a state mismatch.
+++
+++## Scientific status
+++
+++This is a pre-result engineering/protocol repair, not a promotion.  It does not
+++change RSMR, the candidate bank, Q/P/E coordinate definitions, SIOR model class,
+++`lambda=1`, retention budget, or the same-winner/incumbent no-fallback operator.
+++It replaces an invalid absolute-iteration assumption with the actual causal
+++requirement: treatment, proposal identity, and covariates must describe the same
+++pre-intervention state.
+++
+++A future STOP because the live proposal does not equal the frozen V49 winner is
+++not eligible to be bypassed.  Such a failure would mean the offline selected
+++population does not transport to the closed-loop runtime selector and would
+++need a separate scientific diagnosis.
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/planner/selected_outcome_probe.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/planner/selected_outcome_probe.py
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/planner/selected_outcome_probe.py	2026-08-29 14:32:05.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/planner/selected_outcome_probe.py	2026-08-29 23:14:40.804036857 +0000
+@@ -11,15 +11,25 @@
+   the incumbent for every later direct proposal in that scenario.
+ 
+ The proposal identity is never recomputed, re-ranked, or replaced by a runner-up.
+-The probe consumes only tournament diagnostics that already describe the frozen
+-RSMR proposal and incumbent.  It never receives teacher/open-loop outcome labels.
++For V50 event-state alignment, the probe may be layered on the frozen V49
++post-selection config solely so the already-defined Q/P/E coordinates are
++instrumented at the *actual live proposal event*.  The probe ignores the old
++post-selection accept/veto decision and acts only on the pre-post-selection
++RSMR proposal diagnostics; this prevents the historical V49 risk head from
++contaminating the paired treatment assignment.
+ """
+ 
+ from dataclasses import dataclass
++import math
+ from typing import Any
+ 
+ 
+ ROLES = {"control", "treatment"}
++_QPE_NAMES = {
++    "quality": "ocrr_state::quality_value",
++    "plan_inc": "ocrr_state::prospective_response_increment",
++    "ego_inc": "ocrr_state::ego_reference_increment",
++}
+ 
+ 
+ @dataclass
+@@ -54,6 +64,32 @@
+         return bool(default)
+ 
+ 
++def _live_qpe(diag: dict[str, Any]) -> tuple[float, float, float] | None:
++    """Recover the frozen Q/P/E coordinate values from V49 runtime instrumentation.
++
++    V48/V49 already materialize the operator state in the post-selection feature
++    vector as [Q, P-Q, E-P, logK].  V50 does not introduce a new feature; it only
++    records those same coordinates at the actual closed-loop proposal event.
++    """
++    names = [str(x) for x in diag.get("_decisive_frontier_icer_scir_post_selection_value_feature_names", [])]
++    vals = diag.get("_decisive_frontier_icer_scir_post_selection_value_feature", [])
++    try:
++        values = [float(x) for x in vals]
++    except Exception:
++        return None
++    if len(names) != len(values):
++        return None
++    pos = {n: i for i, n in enumerate(names)}
++    if any(n not in pos for n in _QPE_NAMES.values()):
++        return None
++    q = float(values[pos[_QPE_NAMES["quality"]]])
++    p = q + float(values[pos[_QPE_NAMES["plan_inc"]]])
++    e = p + float(values[pos[_QPE_NAMES["ego_inc"]]])
++    if not all(math.isfinite(x) for x in (q, p, e)):
++        return None
++    return q, p, e
++
++
+ def apply_selected_outcome_probe(
+     current_action: int,
+     tournament_diagnostics: dict[str, Any],
+@@ -62,11 +98,11 @@
+ ) -> tuple[int, dict[str, Any]]:
+     """Apply the V50 paired intervention contract to one planner decision.
+ 
+-    The function assumes the supplied tournament diagnostics were produced by
+-    the frozen full-set RSMR direct-recovery path.  It fail-closes if the
+-    treatment proposal is not the action that RSMR itself selected before the
+-    probe; this prevents a post-selection or structural-guard bypass from being
+-    mislabeled as an RSMR intervention.
++    The proposal is read from ``decisive_frontier_icer_scir_proposal_action``.
++    That quantity is frozen *before* V48/V49 post-selection retention.  In the
++    V50 instrumentation config the historical risk head is therefore allowed to
++    compute live Q/P/E, but its accept/veto output is not the treatment assignment:
++    CONTROL returns the incumbent; TREATMENT executes the exact RSMR proposal once.
+     """
+     pcfg = cfg.get("selected_outcome_probe", {}) if isinstance(cfg, dict) else {}
+     enabled = bool(pcfg.get("enabled", False))
+@@ -88,7 +124,13 @@
+     proposal_exists = _as_bool(diag, "decisive_frontier_icer_scir_proposal_exists", False)
+     proposal_action = _as_int(diag, "decisive_frontier_icer_scir_proposal_action", -1)
+     baseline_action = _as_int(diag, "decisive_frontier_icer_baseline_action", -1)
+-    rsmr_selected = _as_int(diag, "decisive_frontier_icer_selected_action", int(current_action))
++    # This is the action after any historical post-selection value/risk stage.
++    # It is recorded for audit but is *not* called the RSMR winner in V50.
++    pre_probe_selected = _as_int(diag, "decisive_frontier_icer_selected_action", int(current_action))
++
++    qpe = _live_qpe(diag) if proposal_exists else None
++    if proposal_exists and bool(pcfg.get("require_live_qpe", False)) and qpe is None:
++        raise ValueError("V50 proposal event is missing live Q/P/E operator-state instrumentation")
+ 
+     out_action = int(current_action)
+     executed = False
+@@ -96,6 +138,13 @@
+     if proposal_exists:
+         if proposal_action < 0 or baseline_action < 0:
+             raise ValueError("V50 probe saw proposal_exists without valid proposal/baseline actions")
++        # Historical post-selection may only retain the same proposal or veto to
++        # the incumbent.  A third action would violate the no-rerank contract.
++        if pre_probe_selected not in {int(proposal_action), int(baseline_action)}:
++            raise ValueError(
++                "V50 probe saw a pre-probe selected action outside {frozen RSMR proposal, incumbent}: "
++                f"selected={pre_probe_selected} proposal={proposal_action} baseline={baseline_action}"
++            )
+         state.proposal_event_count += 1
+         if not state.first_proposal_seen:
+             state.first_proposal_seen = True
+@@ -106,13 +155,6 @@
+         if role == "control":
+             out_action = int(baseline_action)
+         elif not state.intervention_consumed:
+-            # The causal treatment must be the actual frozen full-set RSMR action,
+-            # not a proposal that a later guard/risk head had already displaced.
+-            if int(current_action) != int(proposal_action) or int(rsmr_selected) != int(proposal_action):
+-                raise ValueError(
+-                    "V50 treatment probe refuses to execute a proposal that is not the frozen RSMR selected action "
+-                    f"(current={current_action}, selected={rsmr_selected}, proposal={proposal_action})"
+-                )
+             out_action = int(proposal_action)
+             state.intervention_consumed = True
+             state.executed_intervention_count += 1
+@@ -126,7 +168,10 @@
+         "proposal_exists": bool(proposal_exists),
+         "proposal_action": int(proposal_action),
+         "baseline_action": int(baseline_action),
+-        "rsmr_selected_action": int(rsmr_selected),
++        # For the V50 probe, the RSMR selected action is definitionally the
++        # proposal frozen before historical post-selection retention.
++        "rsmr_selected_action": int(proposal_action if proposal_exists else -1),
++        "pre_probe_selected_action": int(pre_probe_selected),
+         "pre_probe_action": int(current_action),
+         "post_probe_action": int(out_action),
+         "first_proposal_now": bool(first_now),
+@@ -138,4 +183,10 @@
+         "proposal_event_count": int(state.proposal_event_count),
+         "executed_intervention_count": int(state.executed_intervention_count),
+     }
++    if qpe is not None:
++        pdiag.update({
++            "live_quality_value": float(qpe[0]),
++            "live_plan_control_value": float(qpe[1]),
++            "live_ego_ref_value": float(qpe[2]),
++        })
+     return int(out_action), pdiag
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tests/test_v64_3_50_eaf_icer_sior.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tests/test_v64_3_50_eaf_icer_sior.py
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-29 16:18:08.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-29 23:20:33.111258041 +0000
+@@ -14,6 +14,7 @@
+     HARD_METRICS,
+     _hard_noninferiority,
+     _validate_native_nuplan_inputs,
++    _validate_pair,
+ )
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+@@ -60,10 +61,15 @@
+     assert s.executed_intervention_count == 0 and s.first_proposal_seen is False
+ 
+ 
+-def test_v50_treatment_fail_closes_if_proposal_is_not_actual_frozen_selected_action() -> None:
++def test_v50_treatment_overrides_historical_veto_but_rejects_rerank() -> None:
++    # Historical post-selection may veto the frozen proposal to baseline.  V50
++    # treatment assignment must still execute the pre-post-selection RSMR proposal.
+     s = SelectedOutcomeProbeState()
+-    with pytest.raises(ValueError, match="not the frozen RSMR selected action"):
+-        apply_selected_outcome_probe(2, _diag(proposal=7, baseline=2, selected=7), _cfg("treatment"), s)
++    out, d = apply_selected_outcome_probe(2, _diag(proposal=7, baseline=2, selected=2), _cfg("treatment"), s)
++    assert out == 7 and d["rsmr_selected_action"] == 7 and d["pre_probe_selected_action"] == 2
++    s.reset()
++    with pytest.raises(ValueError, match=r"outside \{frozen RSMR proposal, incumbent\}"):
++        apply_selected_outcome_probe(9, _diag(proposal=7, baseline=2, selected=9), _cfg("treatment"), s)
+ 
+ 
+ def test_v50_probe_requires_no_fallback() -> None:
+@@ -89,11 +95,65 @@
+     assert c["metadata"]["selected_outcome_probe_role"] == "control"
+     assert t["metadata"]["selected_outcome_probe_role"] == "treatment"
+     assert src["metadata"] == {}  # config preparation must not mutate the frozen source object
+-    assert t["selected_outcome_probe"]["proposal_source"] == "frozen_full_set_RSMR"
++    assert t["selected_outcome_probe"]["proposal_source"] == "frozen_full_set_RSMR_before_post_selection"
++    assert t["selected_outcome_probe"]["require_live_qpe"] is True
+     assert t["selected_outcome_probe"]["teacher_or_logged_future_inputs"] is False
+ 
+ 
+ 
++
++def _write_probe_diag(path: Path, role: str, *, first_it: int = 7, proposal: int = 23, pre_action: int | None = None) -> None:
++    rows = []
++    for it in range(first_it + 2):
++        first = it == first_it
++        pexists = it >= first_it
++        baseline = 5
++        pre = baseline if pre_action is None else pre_action
++        d = {
++            "enabled": True,
++            "role": role,
++            "proposal_exists": pexists,
++            "proposal_action": proposal if pexists else -1,
++            "baseline_action": baseline if pexists else -1,
++            "rsmr_selected_action": proposal if pexists else -1,
++            "pre_probe_selected_action": pre if pexists else 4,
++            "pre_probe_action": pre if pexists else 4,
++            "post_probe_action": (proposal if role == "treatment" and first else baseline) if pexists else 4,
++            "first_proposal_now": first,
++            "first_proposal_seen": pexists,
++            "intervention_executed": bool(role == "treatment" and first),
++            "executed_intervention_count": 1 if role == "treatment" and it >= first_it else 0,
++            "proposal_event_count": max(0, it - first_it + 1),
++        }
++        if pexists:
++            d.update({"live_quality_value": 0.1, "live_plan_control_value": 0.2, "live_ego_ref_value": 0.3})
++        rows.append({"iteration_index": it, "time_s": 0.1 * it, "diagnostics": {"selected_outcome_probe": d}})
++    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
++
++
++def test_v50_pair_validation_accepts_late_but_aligned_first_live_proposal(tmp_path: Path) -> None:
++    c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
++    _write_probe_diag(c, "control", first_it=7, proposal=23)
++    _write_probe_diag(t, "treatment", first_it=7, proposal=23)
++    got = _validate_pair("tok", c, t, 23)
++    assert got["intervention_iteration"] == 7
++    assert got["preintervention_pair_aligned"] == 1
++    assert got["live_quality_value"] == pytest.approx(0.1)
++    assert got["live_plan_control_value"] == pytest.approx(0.2)
++    assert got["live_ego_ref_value"] == pytest.approx(0.3)
++
++
++def test_v50_pair_validation_rejects_frozen_action_or_timing_mismatch(tmp_path: Path) -> None:
++    c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
++    _write_probe_diag(c, "control", first_it=7, proposal=23)
++    _write_probe_diag(t, "treatment", first_it=7, proposal=23)
++    with pytest.raises(RuntimeError, match="does not match frozen V49"):
++        _validate_pair("tok", c, t, 22)
++    _write_probe_diag(t, "treatment", first_it=8, proposal=23)
++    with pytest.raises(RuntimeError, match="first-proposal iteration mismatch"):
++        _validate_pair("tok", c, t, 23)
++
++
+ def test_v50_paired_hard_metrics_fail_closed_on_schema_drift() -> None:
+     control = {m: 1.0 for m in HARD_METRICS}
+     treatment = dict(control)
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tools/fit_v64_3_50_eaf_icer_sior.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tools/fit_v64_3_50_eaf_icer_sior.py
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tools/fit_v64_3_50_eaf_icer_sior.py	2026-08-29 16:17:28.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tools/fit_v64_3_50_eaf_icer_sior.py	2026-08-29 23:21:02.622213279 +0000
+@@ -33,16 +33,31 @@
+ 
+ 
+ def _candidate_features(path: Path) -> dict[str, dict[str, Any]]:
++    """Load the frozen V49 full-set winner state used for identity/OBS replay.
++
++    V50 no longer uses these offline Q/P/E values as the causal-state features
++    for the paired outcome.  They remain necessary to (a) lock the exact V49
++    proposal action/fold identity and (b) reconstruct the historical OBS-SIGN
++    model for a fair transport baseline evaluated on the *live* intervention
++    Q/P/E state.
++    """
+     out: dict[str, dict[str, Any]] = {}
+     for line in path.read_text(encoding="utf-8").splitlines():
+-        if not line.strip(): continue
+-        r = json.loads(line); tok = str(r["scenario_token"]); act = int(r.get("full_selected_action", -1))
+-        if act < 0: continue
++        if not line.strip():
++            continue
++        r = json.loads(line)
++        tok = str(r["scenario_token"])
++        act = int(r.get("full_selected_action", -1))
++        if act < 0:
++            continue
+         cand = [c for c in r.get("candidates", []) if int(c.get("action", -999)) == act]
+-        if len(cand) != 1: raise RuntimeError(f"V50 ENGINEERING STOP: selected candidate not unique for {tok}/{act}")
++        if len(cand) != 1:
++            raise RuntimeError(f"V50 ENGINEERING STOP: selected candidate not unique for {tok}/{act}")
+         c = cand[0]
+         out[tok] = {
++            "scenario_token": tok,
+             "rsm_selected_action": act,
++            "rsm_selected_teacher_improvement": float(c["y"]),
+             "quality_value": float(c["quality_value"]),
+             "plan_control_value": float(c["plan_control_value"]),
+             "ego_ref_value": float(c["ego_ref_value"]),
+@@ -54,38 +69,72 @@
+     return out
+ 
+ 
+-def _join(v49_scene: Path, candidate_audit: Path, paired: Path) -> list[dict[str, Any]]:
+-    feat = _candidate_features(candidate_audit)
++def _join(
++    v49_scene: Path,
++    offline_features: dict[str, dict[str, Any]],
++    paired: Path,
++) -> list[dict[str, Any]]:
+     scene = {str(r["scenario_token"]): r for r in _read_csv(v49_scene)}
+-    if len(scene) != 782: raise RuntimeError("V50 ENGINEERING STOP: V49 scene audit is not 782 unique rows")
++    if len(scene) != 782:
++        raise RuntimeError("V50 ENGINEERING STOP: V49 scene audit is not 782 unique rows")
+     pairs = {str(r["scenario_token"]): r for r in _read_csv(paired)}
+-    if set(pairs) != set(feat):
+-        raise RuntimeError(f"V50 ENGINEERING STOP: paired outcome/token mismatch: paired={len(pairs)} feature={len(feat)} missing={len(set(feat)-set(pairs))} extra={len(set(pairs)-set(feat))}")
++    if set(pairs) != set(offline_features):
++        raise RuntimeError(
++            f"V50 ENGINEERING STOP: paired outcome/token mismatch: paired={len(pairs)} feature={len(offline_features)} "
++            f"missing={len(set(offline_features)-set(pairs))} extra={len(set(pairs)-set(offline_features))}"
++        )
+     rows: list[dict[str, Any]] = []
+-    for tok in sorted(feat):
+-        f = feat[tok]; p = pairs[tok]; s = scene[tok]
+-        proposal = int(float(p["proposal_action"])); baseline = int(float(p["baseline_action"]))
+-        if proposal != int(f["rsm_selected_action"]):
+-            raise RuntimeError(f"V50 ENGINEERING STOP: closed-loop proposal action does not match frozen offline full-set RSMR winner {tok}: {proposal} vs {f['rsm_selected_action']}")
+-        if int(float(p["intervention_iteration"])) != 0:
+-            raise RuntimeError(f"V50 ENGINEERING STOP: intervention state for {tok} is not iteration 0")
++    for tok in sorted(offline_features):
++        f = offline_features[tok]
++        p = pairs[tok]
++        s = scene[tok]
++        proposal = int(float(p["proposal_action"]))
++        frozen = int(f["rsm_selected_action"])
++        if proposal != frozen or int(float(p.get("frozen_v49_proposal_action", frozen))) != frozen:
++            raise RuntimeError(
++                f"V50 ENGINEERING STOP: live closed-loop proposal does not match frozen V49 full-set RSMR winner "
++                f"{tok}: live={proposal} frozen={frozen}"
++            )
++        it = int(float(p["intervention_iteration"]))
++        if it < 0:
++            raise RuntimeError(f"V50 ENGINEERING STOP: invalid intervention iteration for {tok}: {it}")
++        if int(float(p.get("preintervention_pair_aligned", 0))) != 1:
++            raise RuntimeError(f"V50 ENGINEERING STOP: pre-intervention CONTROL/TREATMENT alignment not certified for {tok}")
+         safe = bool(int(float(p["safe_benefit"])))
+         hard_ok = bool(int(float(p["hard_noninferior"])))
+         delta = float(p["paired_score_delta"])
+         if safe != bool(hard_ok and delta > 0.0):
+             raise RuntimeError(f"V50 ENGINEERING STOP: inconsistent paired safe-benefit label {tok}")
+-        q=float(f["quality_value"]); pv=float(f["plan_control_value"]); e=float(f["ego_ref_value"])
++        q = float(p["live_quality_value"])
++        pv = float(p["live_plan_control_value"])
++        e = float(p["live_ego_ref_value"])
++        if not all(math.isfinite(x) for x in (q, pv, e)):
++            raise RuntimeError(f"V50 ENGINEERING STOP: non-finite live Q/P/E for {tok}: {(q,pv,e)}")
+         row = {
+-            "scenario_token": tok, "outer_test_fold": int(f["outer_test_fold"]),
+-            "rsm_selected_action": int(f["rsm_selected_action"]),
+-            "quality_value": q, "plan_control_value": pv, "ego_ref_value": e,
++            "scenario_token": tok,
++            "outer_test_fold": int(f["outer_test_fold"]),
++            "rsm_selected_action": frozen,
++            # Same coordinate definitions as V47/V48/V49, evaluated at the
++            # actual pre-intervention live state rather than stale iteration-0
++            # offline values.
++            "quality_value": q,
++            "plan_control_value": pv,
++            "ego_ref_value": e,
+             "candidate_count": int(f["candidate_count"]),
+-            # Reuse V48 ranker implementation but replace the sign target with
+-            # paired closed-loop safe benefit. Magnitude is deliberately absent.
++            "intervention_iteration": it,
++            "intervention_time_s": float(p.get("intervention_time_s", 0.0)),
+             "rsm_selected_teacher_improvement": 1.0 if safe else -1.0,
+-            "paired_score_delta": delta, "hard_noninferior": hard_ok, "safe_benefit": safe,
++            "paired_score_delta": delta,
++            "hard_noninferior": hard_ok,
++            "safe_benefit": safe,
+             "hard_regressions": str(p.get("hard_regressions", "")),
+-            "v49_obs_sign_risk": float(s["v49_obs_sign_risk"]),
++            # Retain the persisted old score only as a post-hoc diagnostic; the
++            # preregistered OBS comparator below is reconstructed and evaluated
++            # on this same live Q/P/E state.
++            "v49_obs_sign_risk_offline_state": float(s["v49_obs_sign_risk"]),
++            "offline_quality_value": float(f["quality_value"]),
++            "offline_plan_control_value": float(f["plan_control_value"]),
++            "offline_ego_ref_value": float(f["ego_ref_value"]),
+         }
+         rows.append(row)
+     folds = sorted(set(int(r["outer_test_fold"]) for r in rows))
+@@ -179,7 +228,8 @@
+     ap.add_argument("--output-report",type=Path,required=True)
+     ap.add_argument("--output-scene-audit",type=Path,required=True)
+     a=ap.parse_args(); _check_v49(a.v49_fit_report)
+-    rows=_join(a.v49_scene_audit,a.v49_candidate_audit,a.paired_outcomes)
++    offline_features=_candidate_features(a.v49_candidate_audit)
++    rows=_join(a.v49_scene_audit,offline_features,a.paired_outcomes)
+     base=_baseline_metric(rows)
+     fold_reports=[]; oof_risk={}; better_obs=0; better_ego=0
+     for k in range(FOLDS):
+@@ -189,14 +239,32 @@
+         test=[r for r in rows if int(r["outer_test_fold"])==k]
+         m=_fit_sign_ranker(fit,use_multiplicity=False)
+         tau,caldiag=_conformal_threshold(cal,m,ALPHA_RET)
++        # Reconstruct the historical observational selected-sign model on the
++        # frozen V49 offline training events, then transport that unchanged model
++        # to the same live intervention Q/P/E test states used by SIOR.  This is
++        # the fair comparator after event-state alignment.
++        obs_fit=[offline_features[str(r["scenario_token"])] for r in rows if int(r["outer_test_fold"]) not in {k,cf}]
++        obs_model=_fit_sign_ranker(obs_fit,use_multiplicity=False)
+         rr=np.asarray([_risk(r,m) for r in test]); ybad=np.asarray([not bool(r["safe_benefit"]) for r in test],dtype=np.int64)
+-        auc=float(_auc(ybad,rr)); obs=float(_auc(ybad,np.asarray([float(r["v49_obs_sign_risk"]) for r in test]))); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in test])))
++        obs_rr=np.asarray([_risk(r,obs_model) for r in test])
++        auc=float(_auc(ybad,rr)); obs=float(_auc(ybad,obs_rr)); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in test])))
+         better_obs += int(auc>obs); better_ego += int(auc>ego)
+         for r,v in zip(test,rr): oof_risk[str(r["scenario_token"])]=float(v)
+         mm=_metric(test,rr,tau)
+-        fold_reports.append({"fold":k,"calibration_fold":cf,"fit_count":len(fit),"cal_count":len(cal),"test_count":len(test),"cl_sior_bad_risk_auc":auc,"offline_obs_bad_risk_auc_on_cl_labels":obs,"neg_ego_ref_bad_risk_auc_on_cl_labels":ego,"calibration":caldiag,"deployment":mm})
++        fold_reports.append({"fold":k,"calibration_fold":cf,"fit_count":len(fit),"cal_count":len(cal),"test_count":len(test),"cl_sior_bad_risk_auc":auc,"transported_v49_obs_bad_risk_auc_on_live_QPE_cl_labels":obs,"neg_ego_ref_bad_risk_auc_on_cl_labels":ego,"calibration":caldiag,"deployment":mm})
+     allrisk=np.asarray([oof_risk[str(r["scenario_token"])] for r in rows]); ybad=np.asarray([not bool(r["safe_benefit"]) for r in rows],dtype=np.int64)
+-    auc=float(_auc(ybad,allrisk)); obs=float(_auc(ybad,np.asarray([float(r["v49_obs_sign_risk"]) for r in rows]))); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in rows])))
++    # OOF historical-OBS risk transported to live event state, reconstructed with
++    # the exact same fold exclusions as the SIOR comparison.
++    obs_oof: dict[str,float] = {}
++    for k in range(FOLDS):
++        cf=(k+1)%FOLDS
++        obs_fit=[offline_features[str(r["scenario_token"])] for r in rows if int(r["outer_test_fold"]) not in {k,cf}]
++        obs_model=_fit_sign_ranker(obs_fit,use_multiplicity=False)
++        for r in rows:
++            if int(r["outer_test_fold"])==k:
++                obs_oof[str(r["scenario_token"])]=float(_risk(r,obs_model))
++    obsrisk=np.asarray([obs_oof[str(r["scenario_token"])] for r in rows])
++    auc=float(_auc(ybad,allrisk)); obs=float(_auc(ybad,obsrisk)); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in rows])))
+     # OOF thresholds are fold-specific; reconstruct keep decisions per fold.
+     keep_by={}
+     for fr in fold_reports:
+@@ -226,17 +294,18 @@
+     _write_config(a.v49_siir_config,full_model,full_tau,a.output_config)
+     report={
+       "algorithm":"V64.3.50-EAF-ICER-SIOR","train_gate_pass":passed,
+-      "mechanism":"same frozen QPE/ranker/calibration; labels replaced by paired one-shot closed-loop full-set-RSMR-vs-incumbent outcome",
++      "mechanism":"same frozen Q/P/E coordinate definitions, ranker class and calibration; Q/P/E evaluated at the actual first live RSMR proposal event and labels replaced by paired one-shot closed-loop full-set-RSMR-vs-incumbent outcome",
++      "event_state_alignment":{"absolute_iteration_zero_required":False,"control_treatment_preintervention_trace_required_equal":True,"live_proposal_must_equal_frozen_v49_full_set_winner":True,"live_qpe_must_match_between_arms":True,"offline_v49_qpe_used_for_sior_features":False},
+       "paired_outcome_definition":{"positive":"treatment aggregate score > control AND no hard metric regresses","hard_metrics":["no_ego_at_fault_collisions","time_to_collision_within_bound","drivable_area_compliance","driving_direction_compliance"]},
+       "baseline_full_rsmr_one_shot":base,
+-      "risk_identification":{"cl_sior_bad_auc":auc,"offline_obs_bad_auc_on_same_cl_labels":obs,"neg_ego_ref_bad_auc_on_same_cl_labels":ego,"folds_better_than_offline_obs":better_obs,"folds_better_than_ego":better_ego,"identified":ident},
++      "risk_identification":{"cl_sior_bad_auc":auc,"transported_v49_obs_bad_auc_on_same_live_QPE_cl_labels":obs,"neg_ego_ref_bad_auc_on_same_cl_labels":ego,"folds_better_than_transported_v49_obs":better_obs,"folds_better_than_ego":better_ego,"identified":ident},
+       "nested_oof_deployment":agg,"folds":fold_reports,
+       "gates":{"identification":ident,"safe_benefit_retention":capture_ok,"zero_hard_regression_retained":hard_ok,"nonbenefit_reduction_20pct":nonbenefit_ok,"aggregate_noninferiority_and_nonnegative":sum_ok,"negative_rms_noninferiority":neg_ok,"five_of_five_fold_sum_nonnegative":fold_sum_ok,"five_of_five_fold_zero_hard_regression":fold_hard_ok,"deployment":deployment},
+       "full_fit":{"model":full_model,"calibration":full_cal},
+       "preregistered_next":"If TRAIN fails, do not tune QPE/loss/lambda/threshold or return to offline selection intervention; diagnose whether paired selected outcomes are unidentifiable from the frozen state and move to richer causal state/evidence only if mechanism evidence supports it. If TRAIN passes, freeze V50 and run untouched paired closed-loop A500 and B500 independently; no pooling/tuning.",
+     }
+     a.output_report.parent.mkdir(parents=True,exist_ok=True); a.output_report.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
+-    fields=["scenario_token","outer_test_fold","rsm_selected_action","quality_value","plan_control_value","ego_ref_value","paired_score_delta","hard_noninferior","safe_benefit","v49_obs_sign_risk","v50_oof_cl_risk","v50_oof_retained"]
++    fields=["scenario_token","outer_test_fold","rsm_selected_action","intervention_iteration","intervention_time_s","quality_value","plan_control_value","ego_ref_value","offline_quality_value","offline_plan_control_value","offline_ego_ref_value","paired_score_delta","hard_noninferior","safe_benefit","v49_obs_sign_risk_offline_state","v50_oof_cl_risk","v50_oof_retained"]
+     with a.output_scene_audit.open("w",newline="",encoding="utf-8") as f:
+         w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
+         for r in rows:
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tools/prepare_v64_3_50_eaf_icer_sior_probe_configs.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tools/prepare_v64_3_50_eaf_icer_sior_probe_configs.py
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tools/prepare_v64_3_50_eaf_icer_sior_probe_configs.py	2026-08-29 15:04:26.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tools/prepare_v64_3_50_eaf_icer_sior_probe_configs.py	2026-08-29 23:14:55.904593233 +0000
+@@ -1,6 +1,17 @@
+ from __future__ import annotations
+ 
+-"""Prepare V64.3.50 paired selected-outcome closed-loop probe configs."""
++"""Prepare V64.3.50 paired selected-outcome closed-loop probe configs.
++
++V50 needs two things at the intervention event:
++  1) the exact full-set RSMR proposal identity, frozen before post-selection; and
++  2) the already-defined V47/V48/V49 Q/P/E consequence coordinates evaluated at
++     that same *live* event state.
++
++The persisted V49 SIIR runtime config supplies both.  The V50 probe overrides its
++historical accept/veto action with the paired CONTROL/TREATMENT assignment, so
++V49 risk cannot influence the causal treatment while its Q/P/E instrumentation
++remains available.
++"""
+ 
+ import argparse
+ import copy
+@@ -12,33 +23,26 @@
+     cfg = copy.deepcopy(src)
+     cfg["fallback"] = dict(cfg.get("fallback", {}) or {})
+     cfg["fallback"]["enabled"] = False
+-    # The probe is evidence collection only.  Proposal generation remains the
+-    # exact full-set RSMR config supplied by the previous frozen version.
+     cfg["selected_outcome_probe"] = {
+         "enabled": True,
+         "role": role,
+         "one_shot": True,
+-        "proposal_source": "frozen_full_set_RSMR",
++        "proposal_source": "frozen_full_set_RSMR_before_post_selection",
++        "state_source": "live_same_event_QPE_from_frozen_V49_coordinate_definitions",
++        "require_live_qpe": True,
++        "historical_post_selection_action_ignored_for_treatment_assignment": True,
+         "post_intervention_policy": "preserve_incumbent",
+         "teacher_or_logged_future_inputs": False,
+     }
+     cfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.50-EAF-ICER-SIOR-PROBE"
+     cfg.setdefault("metadata", {})["selected_outcome_probe_role"] = role
++    cfg.setdefault("metadata", {})["selected_outcome_event_state_alignment"] = "first_live_RSMR_proposal"
+     cfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.50-EAF-ICER-SIOR-PROBE"
+     cfg.setdefault("experiment", {})["algorithm"] = "V64.3.50-EAF-ICER-SIOR-PROBE"
+     return cfg
+ 
+ 
+-def main() -> None:
+-    ap = argparse.ArgumentParser(description="Prepare V50 control/treatment probe configs from frozen RSMR config")
+-    ap.add_argument("--rsmr-config", type=Path, required=True)
+-    ap.add_argument("--control-output", type=Path, required=True)
+-    ap.add_argument("--treatment-output", type=Path, required=True)
+-    a = ap.parse_args()
+-    src = yaml.safe_load(a.rsmr_config.read_text(encoding="utf-8"))
+-    if not isinstance(src, dict):
+-        raise SystemExit("V50 ENGINEERING STOP: RSMR config is not a mapping")
+-    # Require the frozen direct RSMR path rather than a downstream risk head.
++def _validate_source(src: dict) -> None:
+     try:
+         ic = src["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
+         sc = ic["selection_conditioned_intervention_recovery"]
+@@ -46,10 +50,33 @@
+         raise SystemExit("V50 ENGINEERING STOP: source config does not expose frozen ICER/RSMR path") from exc
+     if not bool(ic.get("enabled", False)):
+         raise SystemExit("V50 ENGINEERING STOP: source config does not enable ICER/RSMR path")
+-    if bool(sc.get("post_selection_value_enabled", False)):
+-        raise SystemExit("V50 ENGINEERING STOP: probe source must be pure frozen RSMR, not a post-selection value/risk config")
+-    # The RSMR config itself is frozen by its upstream result artifact.  The V50
+-    # probe only adds an external paired-outcome collection operator.
++    # Event-state alignment intentionally uses V49 solely because it carries the
++    # frozen Q/P/E runtime coordinate computation.  Proposal identity is still
++    # scir_proposal_action, which is frozen before this post-selection stage.
++    if not bool(sc.get("post_selection_value_enabled", False)):
++        raise SystemExit("V50 ENGINEERING STOP: probe source must expose frozen Q/P/E post-selection instrumentation")
++    if str(sc.get("post_selection_value_mode", "")).strip().lower() != "endpoint_potential_quality_operator_conditioned_risk_retention":
++        raise SystemExit("V50 ENGINEERING STOP: probe source is not the frozen V49 Q/P/E operator-state runtime mode")
++    rcfg = sc.get("operator_conditioned_risk_retention", {}) or {}
++    if bool(rcfg.get("use_extremal_multiplicity", True)):
++        raise SystemExit("V50 ENGINEERING STOP: source config unexpectedly re-enables V48 multiplicity")
++    names = [str(x) for x in rcfg.get("feature_names", [])]
++    expected = ["quality_value", "prospective_response_increment", "ego_reference_increment", "log_extremal_multiplicity"]
++    if names != expected:
++        raise SystemExit(f"V50 ENGINEERING STOP: source Q/P/E operator-state schema changed: {names}")
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description="Prepare V50 control/treatment probe configs from frozen V49 Q/P/E runtime config")
++    ap.add_argument("--source-config", "--rsmr-config", dest="source_config", type=Path, required=True,
++                    help="Frozen V49 SIIR config. --rsmr-config is retained as a CLI alias only.")
++    ap.add_argument("--control-output", type=Path, required=True)
++    ap.add_argument("--treatment-output", type=Path, required=True)
++    a = ap.parse_args()
++    src = yaml.safe_load(a.source_config.read_text(encoding="utf-8"))
++    if not isinstance(src, dict):
++        raise SystemExit("V50 ENGINEERING STOP: source config is not a mapping")
++    _validate_source(src)
+     for role, out in [("control", a.control_output), ("treatment", a.treatment_output)]:
+         out.parent.mkdir(parents=True, exist_ok=True)
+         out.write_text(yaml.safe_dump(_make(src, role), sort_keys=False, allow_unicode=True), encoding="utf-8")
+diff -ruN '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=V64_3_50_SOURCE_MANIFEST.sha256' /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
+--- /mnt/data/v50_iter_fix/bdse_v64_3_50_eaf_icer_sior/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py	2026-08-29 15:51:21.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_event_alignment_fix/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py	2026-08-29 23:20:33.111502410 +0000
+@@ -85,18 +85,63 @@
+ 
+ 
+ def _probe_rows(path: Path) -> list[dict[str, Any]]:
+-    out = []
++    out: list[dict[str, Any]] = []
+     for line in path.read_text(encoding="utf-8").splitlines():
+         if not line.strip():
+             continue
+         r = json.loads(line)
+         d = ((r.get("diagnostics", {}) or {}).get("selected_outcome_probe", {}) or {})
+         if d.get("enabled"):
+-            out.append({"iteration_index": int(r.get("iteration_index", -1)), **d})
++            out.append({
++                "iteration_index": int(r.get("iteration_index", -1)),
++                "time_s": float(r.get("time_s", 0.0)),
++                **d,
++            })
+     return out
+ 
+ 
+-def _validate_pair(token: str, control_diag: Path, treatment_diag: Path) -> dict[str, Any]:
++def _load_frozen_proposals(path: Path) -> dict[str, int]:
++    """Read the exact V49 full-set RSMR winner identity per TRAIN token."""
++    out: dict[str, int] = {}
++    for line in path.read_text(encoding="utf-8").splitlines():
++        if not line.strip():
++            continue
++        r = json.loads(line)
++        tok = str(r.get("scenario_token", "")).strip()
++        act = int(r.get("full_selected_action", -1))
++        if tok and act >= 0:
++            if tok in out:
++                raise RuntimeError(f"V50 duplicate frozen proposal token in V49 candidate audit: {tok}")
++            out[tok] = act
++    if len(out) != 502:
++        raise RuntimeError(f"V50 expected 502 frozen V49 full-set RSMR proposals, got {len(out)}")
++    return out
++
++
++def _finite_qpe(row: dict[str, Any], token: str, role: str) -> tuple[float, float, float]:
++    vals = []
++    for key in ("live_quality_value", "live_plan_control_value", "live_ego_ref_value"):
++        if key not in row:
++            raise RuntimeError(f"V50 {token}: {role} intervention event missing {key}")
++        x = float(row[key])
++        if not math.isfinite(x):
++            raise RuntimeError(f"V50 {token}: {role} intervention event has non-finite {key}={x}")
++        vals.append(x)
++    return float(vals[0]), float(vals[1]), float(vals[2])
++
++
++def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, expected_proposal_action: int) -> dict[str, Any]:
++    """Validate one causal pair at the first *live* frozen-RSMR proposal event.
++
++    nuPlan is free to run several ordinary planner iterations before RSMR has a
++    direct proposal.  The old V50 code incorrectly required that first proposal
++    to occur at absolute iteration 0.  What causal pairing actually requires is:
++      * identical CONTROL/TREATMENT trajectories before intervention;
++      * the first proposal occurs at the same iteration/time in both arms;
++      * the proposal action equals the byte-locked V49 full-set RSMR winner;
++      * live Q/P/E are identical across arms at that exact pre-intervention state;
++      * CONTROL preserves the incumbent and TREATMENT executes the proposal once.
++    """
+     c = _probe_rows(control_diag); t = _probe_rows(treatment_diag)
+     if not c or not t:
+         raise RuntimeError(f"V50 {token}: missing strict selected-outcome probe diagnostics")
+@@ -105,26 +150,69 @@
+     if len(c0) != 1 or len(t0) != 1:
+         raise RuntimeError(f"V50 {token}: expected exactly one first proposal marker in both arms, got {len(c0)}/{len(t0)}")
+     cr, tr = c0[0], t0[0]
+-    # The offline feature state is the scenario-start selected event.  Refuse a
+-    # later first proposal because it would silently pair a different state with
+-    # the frozen Q/P/E OOF feature.
+-    if int(cr["iteration_index"]) != 0 or int(tr["iteration_index"]) != 0:
+-        raise RuntimeError(f"V50 {token}: first RSMR proposal must occur at planner iteration 0, got {cr['iteration_index']}/{tr['iteration_index']}")
++    ci = int(cr["iteration_index"]); ti = int(tr["iteration_index"])
++    if ci < 0 or ti < 0 or ci != ti:
++        raise RuntimeError(f"V50 {token}: paired first-proposal iteration mismatch {ci}/{ti}")
++    if abs(float(cr.get("time_s", 0.0)) - float(tr.get("time_s", 0.0))) > 1.0e-9:
++        raise RuntimeError(f"V50 {token}: paired first-proposal simulation time mismatch {cr.get('time_s')}/{tr.get('time_s')}")
++
++    # Before the first treatment both arms must be the same policy from the same
++    # initial state.  Compare the complete probe action trace through iteration i-1.
++    cpre = {int(r["iteration_index"]): r for r in c if int(r["iteration_index"]) < ci}
++    tpre = {int(r["iteration_index"]): r for r in t if int(r["iteration_index"]) < ti}
++    if set(cpre) != set(tpre):
++        raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT pre-intervention iteration trace mismatch")
++    for k in sorted(cpre):
++        a, b = cpre[k], tpre[k]
++        if abs(float(a.get("time_s", 0.0)) - float(b.get("time_s", 0.0))) > 1.0e-9:
++            raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT time trace mismatch before intervention at iteration {k}")
++        if bool(a.get("proposal_exists", False)) or bool(b.get("proposal_exists", False)):
++            raise RuntimeError(f"V50 {token}: proposal occurred before first-proposal marker at iteration {k}")
++        if int(a.get("pre_probe_action", -1)) != int(b.get("pre_probe_action", -2)):
++            raise RuntimeError(
++                f"V50 {token}: CONTROL/TREATMENT planner action diverged before intervention at iteration {k}: "
++                f"{a.get('pre_probe_action')}/{b.get('pre_probe_action')}"
++            )
++        if int(a.get("post_probe_action", -1)) != int(b.get("post_probe_action", -2)):
++            raise RuntimeError(
++                f"V50 {token}: CONTROL/TREATMENT deployed action diverged before intervention at iteration {k}: "
++                f"{a.get('post_probe_action')}/{b.get('post_probe_action')}"
++            )
++
+     for key in ("proposal_action", "baseline_action", "rsmr_selected_action"):
+         if int(cr[key]) != int(tr[key]):
+             raise RuntimeError(f"V50 {token}: paired action identity mismatch for {key}: {cr[key]} vs {tr[key]}")
++    if int(tr["proposal_action"]) != int(expected_proposal_action):
++        raise RuntimeError(
++            f"V50 {token}: live first RSMR proposal does not match frozen V49 full-set winner: "
++            f"live={tr['proposal_action']} frozen={expected_proposal_action}"
++        )
++
++    cq, cp, ce = _finite_qpe(cr, token, "CONTROL")
++    tq, tp, te = _finite_qpe(tr, token, "TREATMENT")
++    for name, a, b in (("Q", cq, tq), ("P", cp, tp), ("E", ce, te)):
++        if abs(a - b) > 1.0e-8 * max(1.0, abs(a), abs(b)):
++            raise RuntimeError(f"V50 {token}: paired live {name} state mismatch at intervention: {a} vs {b}")
++
+     if int(cr["post_probe_action"]) != int(cr["baseline_action"]):
+         raise RuntimeError(f"V50 {token}: CONTROL did not preserve incumbent at intervention event")
+     if not bool(tr.get("intervention_executed", False)) or int(tr["post_probe_action"]) != int(tr["proposal_action"]):
+-        raise RuntimeError(f"V50 {token}: TREATMENT did not execute exact first RSMR proposal")
++        raise RuntimeError(f"V50 {token}: TREATMENT did not execute exact first live RSMR proposal")
+     if max(int(r.get("executed_intervention_count", 0)) for r in t) != 1:
+         raise RuntimeError(f"V50 {token}: TREATMENT executed more/less than one selected intervention")
+     if any(bool(r.get("intervention_executed", False)) for r in c):
+         raise RuntimeError(f"V50 {token}: CONTROL executed a selected intervention")
++
+     return {
+         "proposal_action": int(tr["proposal_action"]),
++        "frozen_v49_proposal_action": int(expected_proposal_action),
+         "baseline_action": int(tr["baseline_action"]),
+-        "intervention_iteration": int(tr["iteration_index"]),
++        "intervention_iteration": int(ti),
++        "intervention_time_s": float(tr.get("time_s", 0.0)),
++        "preintervention_pair_aligned": 1,
++        "live_quality_value": tq,
++        "live_plan_control_value": tp,
++        "live_ego_ref_value": te,
+         "treatment_proposal_events": max(int(r.get("proposal_event_count", 0)) for r in t),
+         "control_proposal_events": max(int(r.get("proposal_event_count", 0)) for r in c),
+     }
+@@ -262,6 +350,7 @@
+     ap.add_argument("--treatment-config", type=Path, required=True)
+     ap.add_argument("--checkpoint", type=Path, required=True)
+     ap.add_argument("--scenario-token-file", type=Path, required=True)
++    ap.add_argument("--frozen-proposal-audit", type=Path, required=True, help="V49 OOF candidate-state audit with exact full_selected_action per token")
+     ap.add_argument("--output-root", type=Path, required=True)
+     ap.add_argument("--gpus", default="0,1")
+     ap.add_argument("--challenge", choices=["closed_loop_reactive_agents", "closed_loop_nonreactive_agents"], default="closed_loop_reactive_agents")
+@@ -274,7 +363,7 @@
+     ap.add_argument("--resume", action="store_true")
+     a = ap.parse_args()
+     if not a.checkpoint.is_file(): raise FileNotFoundError(a.checkpoint)
+-    for p in (a.control_config, a.treatment_config, a.scenario_token_file):
++    for p in (a.control_config, a.treatment_config, a.scenario_token_file, a.frozen_proposal_audit):
+         if not p.is_file(): raise FileNotFoundError(p)
+     native_layout = _validate_native_nuplan_inputs(a)
+     print("[V50 native nuPlan input contract] " + json.dumps(native_layout, sort_keys=True), flush=True)
+@@ -284,6 +373,9 @@
+     if len(gpus) != 2:
+         raise ValueError("V50 paired collection requires exactly two GPU ids so CONTROL/TREATMENT start concurrently")
+     tokens = _read_tokens(a.scenario_token_file)
++    frozen_proposals = _load_frozen_proposals(a.frozen_proposal_audit)
++    if set(tokens) != set(frozen_proposals):
++        raise RuntimeError(f"V50 frozen token/proposal population mismatch tokens={len(tokens)} proposals={len(frozen_proposals)}")
+     a.output_root.mkdir(parents=True, exist_ok=True)
+     rows_path = a.output_root / "paired_selected_outcomes.csv"
+     existing: dict[str, dict[str, Any]] = {}
+@@ -307,7 +399,7 @@
+         [x.start() for x in th]; [x.join() for x in th]
+         if errors: raise RuntimeError(" | ".join(errors))
+         cm, cd, cw = results["control"]; tm, td, tw = results["treatment"]
+-        ident = _validate_pair(token, cd, td)
++        ident = _validate_pair(token, cd, td, frozen_proposals[token])
+         cs = _score(cm, a.challenge); ts = _score(tm, a.challenge); delta = ts - cs
+         hard_ok, hard_reg = _hard_noninferiority(cm, tm)
+         row: dict[str, Any] = {
+@@ -330,6 +422,9 @@
+     summary = {
+         "complete": True, "scenario_count": len(tokens), "challenge": a.challenge,
+         "token_file_sha256": _sha(a.scenario_token_file),
++        "frozen_proposal_audit_sha256": _sha(a.frozen_proposal_audit),
++        "intervention_iteration_min": min(int(float(r["intervention_iteration"])) for r in ordered),
++        "intervention_iteration_max": max(int(float(r["intervention_iteration"])) for r in ordered),
+         "control_config_sha256": _sha(a.control_config), "treatment_config_sha256": _sha(a.treatment_config),
+         "checkpoint_sha256": _sha(a.checkpoint),
+         "native_nuplan_layout": native_layout,

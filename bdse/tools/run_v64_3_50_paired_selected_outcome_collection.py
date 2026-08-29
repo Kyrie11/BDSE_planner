@@ -85,18 +85,63 @@ def _hard_noninferiority(control: dict[str, float], treatment: dict[str, float])
 
 
 def _probe_rows(path: Path) -> list[dict[str, Any]]:
-    out = []
+    out: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         r = json.loads(line)
         d = ((r.get("diagnostics", {}) or {}).get("selected_outcome_probe", {}) or {})
         if d.get("enabled"):
-            out.append({"iteration_index": int(r.get("iteration_index", -1)), **d})
+            out.append({
+                "iteration_index": int(r.get("iteration_index", -1)),
+                "time_s": float(r.get("time_s", 0.0)),
+                **d,
+            })
     return out
 
 
-def _validate_pair(token: str, control_diag: Path, treatment_diag: Path) -> dict[str, Any]:
+def _load_frozen_proposals(path: Path) -> dict[str, int]:
+    """Read the exact V49 full-set RSMR winner identity per TRAIN token."""
+    out: dict[str, int] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        tok = str(r.get("scenario_token", "")).strip()
+        act = int(r.get("full_selected_action", -1))
+        if tok and act >= 0:
+            if tok in out:
+                raise RuntimeError(f"V50 duplicate frozen proposal token in V49 candidate audit: {tok}")
+            out[tok] = act
+    if len(out) != 502:
+        raise RuntimeError(f"V50 expected 502 frozen V49 full-set RSMR proposals, got {len(out)}")
+    return out
+
+
+def _finite_qpe(row: dict[str, Any], token: str, role: str) -> tuple[float, float, float]:
+    vals = []
+    for key in ("live_quality_value", "live_plan_control_value", "live_ego_ref_value"):
+        if key not in row:
+            raise RuntimeError(f"V50 {token}: {role} intervention event missing {key}")
+        x = float(row[key])
+        if not math.isfinite(x):
+            raise RuntimeError(f"V50 {token}: {role} intervention event has non-finite {key}={x}")
+        vals.append(x)
+    return float(vals[0]), float(vals[1]), float(vals[2])
+
+
+def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, expected_proposal_action: int) -> dict[str, Any]:
+    """Validate one causal pair at the first *live* frozen-RSMR proposal event.
+
+    nuPlan is free to run several ordinary planner iterations before RSMR has a
+    direct proposal.  The old V50 code incorrectly required that first proposal
+    to occur at absolute iteration 0.  What causal pairing actually requires is:
+      * identical CONTROL/TREATMENT trajectories before intervention;
+      * the first proposal occurs at the same iteration/time in both arms;
+      * the proposal action equals the byte-locked V49 full-set RSMR winner;
+      * live Q/P/E are identical across arms at that exact pre-intervention state;
+      * CONTROL preserves the incumbent and TREATMENT executes the proposal once.
+    """
     c = _probe_rows(control_diag); t = _probe_rows(treatment_diag)
     if not c or not t:
         raise RuntimeError(f"V50 {token}: missing strict selected-outcome probe diagnostics")
@@ -105,26 +150,69 @@ def _validate_pair(token: str, control_diag: Path, treatment_diag: Path) -> dict
     if len(c0) != 1 or len(t0) != 1:
         raise RuntimeError(f"V50 {token}: expected exactly one first proposal marker in both arms, got {len(c0)}/{len(t0)}")
     cr, tr = c0[0], t0[0]
-    # The offline feature state is the scenario-start selected event.  Refuse a
-    # later first proposal because it would silently pair a different state with
-    # the frozen Q/P/E OOF feature.
-    if int(cr["iteration_index"]) != 0 or int(tr["iteration_index"]) != 0:
-        raise RuntimeError(f"V50 {token}: first RSMR proposal must occur at planner iteration 0, got {cr['iteration_index']}/{tr['iteration_index']}")
+    ci = int(cr["iteration_index"]); ti = int(tr["iteration_index"])
+    if ci < 0 or ti < 0 or ci != ti:
+        raise RuntimeError(f"V50 {token}: paired first-proposal iteration mismatch {ci}/{ti}")
+    if abs(float(cr.get("time_s", 0.0)) - float(tr.get("time_s", 0.0))) > 1.0e-9:
+        raise RuntimeError(f"V50 {token}: paired first-proposal simulation time mismatch {cr.get('time_s')}/{tr.get('time_s')}")
+
+    # Before the first treatment both arms must be the same policy from the same
+    # initial state.  Compare the complete probe action trace through iteration i-1.
+    cpre = {int(r["iteration_index"]): r for r in c if int(r["iteration_index"]) < ci}
+    tpre = {int(r["iteration_index"]): r for r in t if int(r["iteration_index"]) < ti}
+    if set(cpre) != set(tpre):
+        raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT pre-intervention iteration trace mismatch")
+    for k in sorted(cpre):
+        a, b = cpre[k], tpre[k]
+        if abs(float(a.get("time_s", 0.0)) - float(b.get("time_s", 0.0))) > 1.0e-9:
+            raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT time trace mismatch before intervention at iteration {k}")
+        if bool(a.get("proposal_exists", False)) or bool(b.get("proposal_exists", False)):
+            raise RuntimeError(f"V50 {token}: proposal occurred before first-proposal marker at iteration {k}")
+        if int(a.get("pre_probe_action", -1)) != int(b.get("pre_probe_action", -2)):
+            raise RuntimeError(
+                f"V50 {token}: CONTROL/TREATMENT planner action diverged before intervention at iteration {k}: "
+                f"{a.get('pre_probe_action')}/{b.get('pre_probe_action')}"
+            )
+        if int(a.get("post_probe_action", -1)) != int(b.get("post_probe_action", -2)):
+            raise RuntimeError(
+                f"V50 {token}: CONTROL/TREATMENT deployed action diverged before intervention at iteration {k}: "
+                f"{a.get('post_probe_action')}/{b.get('post_probe_action')}"
+            )
+
     for key in ("proposal_action", "baseline_action", "rsmr_selected_action"):
         if int(cr[key]) != int(tr[key]):
             raise RuntimeError(f"V50 {token}: paired action identity mismatch for {key}: {cr[key]} vs {tr[key]}")
+    if int(tr["proposal_action"]) != int(expected_proposal_action):
+        raise RuntimeError(
+            f"V50 {token}: live first RSMR proposal does not match frozen V49 full-set winner: "
+            f"live={tr['proposal_action']} frozen={expected_proposal_action}"
+        )
+
+    cq, cp, ce = _finite_qpe(cr, token, "CONTROL")
+    tq, tp, te = _finite_qpe(tr, token, "TREATMENT")
+    for name, a, b in (("Q", cq, tq), ("P", cp, tp), ("E", ce, te)):
+        if abs(a - b) > 1.0e-8 * max(1.0, abs(a), abs(b)):
+            raise RuntimeError(f"V50 {token}: paired live {name} state mismatch at intervention: {a} vs {b}")
+
     if int(cr["post_probe_action"]) != int(cr["baseline_action"]):
         raise RuntimeError(f"V50 {token}: CONTROL did not preserve incumbent at intervention event")
     if not bool(tr.get("intervention_executed", False)) or int(tr["post_probe_action"]) != int(tr["proposal_action"]):
-        raise RuntimeError(f"V50 {token}: TREATMENT did not execute exact first RSMR proposal")
+        raise RuntimeError(f"V50 {token}: TREATMENT did not execute exact first live RSMR proposal")
     if max(int(r.get("executed_intervention_count", 0)) for r in t) != 1:
         raise RuntimeError(f"V50 {token}: TREATMENT executed more/less than one selected intervention")
     if any(bool(r.get("intervention_executed", False)) for r in c):
         raise RuntimeError(f"V50 {token}: CONTROL executed a selected intervention")
+
     return {
         "proposal_action": int(tr["proposal_action"]),
+        "frozen_v49_proposal_action": int(expected_proposal_action),
         "baseline_action": int(tr["baseline_action"]),
-        "intervention_iteration": int(tr["iteration_index"]),
+        "intervention_iteration": int(ti),
+        "intervention_time_s": float(tr.get("time_s", 0.0)),
+        "preintervention_pair_aligned": 1,
+        "live_quality_value": tq,
+        "live_plan_control_value": tp,
+        "live_ego_ref_value": te,
         "treatment_proposal_events": max(int(r.get("proposal_event_count", 0)) for r in t),
         "control_proposal_events": max(int(r.get("proposal_event_count", 0)) for r in c),
     }
@@ -262,6 +350,7 @@ def main() -> None:
     ap.add_argument("--treatment-config", type=Path, required=True)
     ap.add_argument("--checkpoint", type=Path, required=True)
     ap.add_argument("--scenario-token-file", type=Path, required=True)
+    ap.add_argument("--frozen-proposal-audit", type=Path, required=True, help="V49 OOF candidate-state audit with exact full_selected_action per token")
     ap.add_argument("--output-root", type=Path, required=True)
     ap.add_argument("--gpus", default="0,1")
     ap.add_argument("--challenge", choices=["closed_loop_reactive_agents", "closed_loop_nonreactive_agents"], default="closed_loop_reactive_agents")
@@ -274,7 +363,7 @@ def main() -> None:
     ap.add_argument("--resume", action="store_true")
     a = ap.parse_args()
     if not a.checkpoint.is_file(): raise FileNotFoundError(a.checkpoint)
-    for p in (a.control_config, a.treatment_config, a.scenario_token_file):
+    for p in (a.control_config, a.treatment_config, a.scenario_token_file, a.frozen_proposal_audit):
         if not p.is_file(): raise FileNotFoundError(p)
     native_layout = _validate_native_nuplan_inputs(a)
     print("[V50 native nuPlan input contract] " + json.dumps(native_layout, sort_keys=True), flush=True)
@@ -284,6 +373,9 @@ def main() -> None:
     if len(gpus) != 2:
         raise ValueError("V50 paired collection requires exactly two GPU ids so CONTROL/TREATMENT start concurrently")
     tokens = _read_tokens(a.scenario_token_file)
+    frozen_proposals = _load_frozen_proposals(a.frozen_proposal_audit)
+    if set(tokens) != set(frozen_proposals):
+        raise RuntimeError(f"V50 frozen token/proposal population mismatch tokens={len(tokens)} proposals={len(frozen_proposals)}")
     a.output_root.mkdir(parents=True, exist_ok=True)
     rows_path = a.output_root / "paired_selected_outcomes.csv"
     existing: dict[str, dict[str, Any]] = {}
@@ -307,7 +399,7 @@ def main() -> None:
         [x.start() for x in th]; [x.join() for x in th]
         if errors: raise RuntimeError(" | ".join(errors))
         cm, cd, cw = results["control"]; tm, td, tw = results["treatment"]
-        ident = _validate_pair(token, cd, td)
+        ident = _validate_pair(token, cd, td, frozen_proposals[token])
         cs = _score(cm, a.challenge); ts = _score(tm, a.challenge); delta = ts - cs
         hard_ok, hard_reg = _hard_noninferiority(cm, tm)
         row: dict[str, Any] = {
@@ -330,6 +422,9 @@ def main() -> None:
     summary = {
         "complete": True, "scenario_count": len(tokens), "challenge": a.challenge,
         "token_file_sha256": _sha(a.scenario_token_file),
+        "frozen_proposal_audit_sha256": _sha(a.frozen_proposal_audit),
+        "intervention_iteration_min": min(int(float(r["intervention_iteration"])) for r in ordered),
+        "intervention_iteration_max": max(int(float(r["intervention_iteration"])) for r in ordered),
         "control_config_sha256": _sha(a.control_config), "treatment_config_sha256": _sha(a.treatment_config),
         "checkpoint_sha256": _sha(a.checkpoint),
         "native_nuplan_layout": native_layout,

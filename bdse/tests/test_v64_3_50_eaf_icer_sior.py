@@ -14,6 +14,7 @@ from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
     HARD_METRICS,
     _hard_noninferiority,
     _validate_native_nuplan_inputs,
+    _validate_pair,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -60,10 +61,15 @@ def test_v50_treatment_executes_exact_frozen_winner_once_then_incumbent() -> Non
     assert s.executed_intervention_count == 0 and s.first_proposal_seen is False
 
 
-def test_v50_treatment_fail_closes_if_proposal_is_not_actual_frozen_selected_action() -> None:
+def test_v50_treatment_overrides_historical_veto_but_rejects_rerank() -> None:
+    # Historical post-selection may veto the frozen proposal to baseline.  V50
+    # treatment assignment must still execute the pre-post-selection RSMR proposal.
     s = SelectedOutcomeProbeState()
-    with pytest.raises(ValueError, match="not the frozen RSMR selected action"):
-        apply_selected_outcome_probe(2, _diag(proposal=7, baseline=2, selected=7), _cfg("treatment"), s)
+    out, d = apply_selected_outcome_probe(2, _diag(proposal=7, baseline=2, selected=2), _cfg("treatment"), s)
+    assert out == 7 and d["rsmr_selected_action"] == 7 and d["pre_probe_selected_action"] == 2
+    s.reset()
+    with pytest.raises(ValueError, match=r"outside \{frozen RSMR proposal, incumbent\}"):
+        apply_selected_outcome_probe(9, _diag(proposal=7, baseline=2, selected=9), _cfg("treatment"), s)
 
 
 def test_v50_probe_requires_no_fallback() -> None:
@@ -89,9 +95,63 @@ def test_v50_probe_config_is_evidence_collection_only() -> None:
     assert c["metadata"]["selected_outcome_probe_role"] == "control"
     assert t["metadata"]["selected_outcome_probe_role"] == "treatment"
     assert src["metadata"] == {}  # config preparation must not mutate the frozen source object
-    assert t["selected_outcome_probe"]["proposal_source"] == "frozen_full_set_RSMR"
+    assert t["selected_outcome_probe"]["proposal_source"] == "frozen_full_set_RSMR_before_post_selection"
+    assert t["selected_outcome_probe"]["require_live_qpe"] is True
     assert t["selected_outcome_probe"]["teacher_or_logged_future_inputs"] is False
 
+
+
+
+def _write_probe_diag(path: Path, role: str, *, first_it: int = 7, proposal: int = 23, pre_action: int | None = None) -> None:
+    rows = []
+    for it in range(first_it + 2):
+        first = it == first_it
+        pexists = it >= first_it
+        baseline = 5
+        pre = baseline if pre_action is None else pre_action
+        d = {
+            "enabled": True,
+            "role": role,
+            "proposal_exists": pexists,
+            "proposal_action": proposal if pexists else -1,
+            "baseline_action": baseline if pexists else -1,
+            "rsmr_selected_action": proposal if pexists else -1,
+            "pre_probe_selected_action": pre if pexists else 4,
+            "pre_probe_action": pre if pexists else 4,
+            "post_probe_action": (proposal if role == "treatment" and first else baseline) if pexists else 4,
+            "first_proposal_now": first,
+            "first_proposal_seen": pexists,
+            "intervention_executed": bool(role == "treatment" and first),
+            "executed_intervention_count": 1 if role == "treatment" and it >= first_it else 0,
+            "proposal_event_count": max(0, it - first_it + 1),
+        }
+        if pexists:
+            d.update({"live_quality_value": 0.1, "live_plan_control_value": 0.2, "live_ego_ref_value": 0.3})
+        rows.append({"iteration_index": it, "time_s": 0.1 * it, "diagnostics": {"selected_outcome_probe": d}})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+def test_v50_pair_validation_accepts_late_but_aligned_first_live_proposal(tmp_path: Path) -> None:
+    c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
+    _write_probe_diag(c, "control", first_it=7, proposal=23)
+    _write_probe_diag(t, "treatment", first_it=7, proposal=23)
+    got = _validate_pair("tok", c, t, 23)
+    assert got["intervention_iteration"] == 7
+    assert got["preintervention_pair_aligned"] == 1
+    assert got["live_quality_value"] == pytest.approx(0.1)
+    assert got["live_plan_control_value"] == pytest.approx(0.2)
+    assert got["live_ego_ref_value"] == pytest.approx(0.3)
+
+
+def test_v50_pair_validation_rejects_frozen_action_or_timing_mismatch(tmp_path: Path) -> None:
+    c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
+    _write_probe_diag(c, "control", first_it=7, proposal=23)
+    _write_probe_diag(t, "treatment", first_it=7, proposal=23)
+    with pytest.raises(RuntimeError, match="does not match frozen V49"):
+        _validate_pair("tok", c, t, 22)
+    _write_probe_diag(t, "treatment", first_it=8, proposal=23)
+    with pytest.raises(RuntimeError, match="first-proposal iteration mismatch"):
+        _validate_pair("tok", c, t, 23)
 
 
 def test_v50_paired_hard_metrics_fail_closed_on_schema_drift() -> None:

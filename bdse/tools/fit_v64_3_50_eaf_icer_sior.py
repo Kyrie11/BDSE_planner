@@ -33,16 +33,31 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def _candidate_features(path: Path) -> dict[str, dict[str, Any]]:
+    """Load the frozen V49 full-set winner state used for identity/OBS replay.
+
+    V50 no longer uses these offline Q/P/E values as the causal-state features
+    for the paired outcome.  They remain necessary to (a) lock the exact V49
+    proposal action/fold identity and (b) reconstruct the historical OBS-SIGN
+    model for a fair transport baseline evaluated on the *live* intervention
+    Q/P/E state.
+    """
     out: dict[str, dict[str, Any]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip(): continue
-        r = json.loads(line); tok = str(r["scenario_token"]); act = int(r.get("full_selected_action", -1))
-        if act < 0: continue
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        tok = str(r["scenario_token"])
+        act = int(r.get("full_selected_action", -1))
+        if act < 0:
+            continue
         cand = [c for c in r.get("candidates", []) if int(c.get("action", -999)) == act]
-        if len(cand) != 1: raise RuntimeError(f"V50 ENGINEERING STOP: selected candidate not unique for {tok}/{act}")
+        if len(cand) != 1:
+            raise RuntimeError(f"V50 ENGINEERING STOP: selected candidate not unique for {tok}/{act}")
         c = cand[0]
         out[tok] = {
+            "scenario_token": tok,
             "rsm_selected_action": act,
+            "rsm_selected_teacher_improvement": float(c["y"]),
             "quality_value": float(c["quality_value"]),
             "plan_control_value": float(c["plan_control_value"]),
             "ego_ref_value": float(c["ego_ref_value"]),
@@ -54,38 +69,72 @@ def _candidate_features(path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _join(v49_scene: Path, candidate_audit: Path, paired: Path) -> list[dict[str, Any]]:
-    feat = _candidate_features(candidate_audit)
+def _join(
+    v49_scene: Path,
+    offline_features: dict[str, dict[str, Any]],
+    paired: Path,
+) -> list[dict[str, Any]]:
     scene = {str(r["scenario_token"]): r for r in _read_csv(v49_scene)}
-    if len(scene) != 782: raise RuntimeError("V50 ENGINEERING STOP: V49 scene audit is not 782 unique rows")
+    if len(scene) != 782:
+        raise RuntimeError("V50 ENGINEERING STOP: V49 scene audit is not 782 unique rows")
     pairs = {str(r["scenario_token"]): r for r in _read_csv(paired)}
-    if set(pairs) != set(feat):
-        raise RuntimeError(f"V50 ENGINEERING STOP: paired outcome/token mismatch: paired={len(pairs)} feature={len(feat)} missing={len(set(feat)-set(pairs))} extra={len(set(pairs)-set(feat))}")
+    if set(pairs) != set(offline_features):
+        raise RuntimeError(
+            f"V50 ENGINEERING STOP: paired outcome/token mismatch: paired={len(pairs)} feature={len(offline_features)} "
+            f"missing={len(set(offline_features)-set(pairs))} extra={len(set(pairs)-set(offline_features))}"
+        )
     rows: list[dict[str, Any]] = []
-    for tok in sorted(feat):
-        f = feat[tok]; p = pairs[tok]; s = scene[tok]
-        proposal = int(float(p["proposal_action"])); baseline = int(float(p["baseline_action"]))
-        if proposal != int(f["rsm_selected_action"]):
-            raise RuntimeError(f"V50 ENGINEERING STOP: closed-loop proposal action does not match frozen offline full-set RSMR winner {tok}: {proposal} vs {f['rsm_selected_action']}")
-        if int(float(p["intervention_iteration"])) != 0:
-            raise RuntimeError(f"V50 ENGINEERING STOP: intervention state for {tok} is not iteration 0")
+    for tok in sorted(offline_features):
+        f = offline_features[tok]
+        p = pairs[tok]
+        s = scene[tok]
+        proposal = int(float(p["proposal_action"]))
+        frozen = int(f["rsm_selected_action"])
+        if proposal != frozen or int(float(p.get("frozen_v49_proposal_action", frozen))) != frozen:
+            raise RuntimeError(
+                f"V50 ENGINEERING STOP: live closed-loop proposal does not match frozen V49 full-set RSMR winner "
+                f"{tok}: live={proposal} frozen={frozen}"
+            )
+        it = int(float(p["intervention_iteration"]))
+        if it < 0:
+            raise RuntimeError(f"V50 ENGINEERING STOP: invalid intervention iteration for {tok}: {it}")
+        if int(float(p.get("preintervention_pair_aligned", 0))) != 1:
+            raise RuntimeError(f"V50 ENGINEERING STOP: pre-intervention CONTROL/TREATMENT alignment not certified for {tok}")
         safe = bool(int(float(p["safe_benefit"])))
         hard_ok = bool(int(float(p["hard_noninferior"])))
         delta = float(p["paired_score_delta"])
         if safe != bool(hard_ok and delta > 0.0):
             raise RuntimeError(f"V50 ENGINEERING STOP: inconsistent paired safe-benefit label {tok}")
-        q=float(f["quality_value"]); pv=float(f["plan_control_value"]); e=float(f["ego_ref_value"])
+        q = float(p["live_quality_value"])
+        pv = float(p["live_plan_control_value"])
+        e = float(p["live_ego_ref_value"])
+        if not all(math.isfinite(x) for x in (q, pv, e)):
+            raise RuntimeError(f"V50 ENGINEERING STOP: non-finite live Q/P/E for {tok}: {(q,pv,e)}")
         row = {
-            "scenario_token": tok, "outer_test_fold": int(f["outer_test_fold"]),
-            "rsm_selected_action": int(f["rsm_selected_action"]),
-            "quality_value": q, "plan_control_value": pv, "ego_ref_value": e,
+            "scenario_token": tok,
+            "outer_test_fold": int(f["outer_test_fold"]),
+            "rsm_selected_action": frozen,
+            # Same coordinate definitions as V47/V48/V49, evaluated at the
+            # actual pre-intervention live state rather than stale iteration-0
+            # offline values.
+            "quality_value": q,
+            "plan_control_value": pv,
+            "ego_ref_value": e,
             "candidate_count": int(f["candidate_count"]),
-            # Reuse V48 ranker implementation but replace the sign target with
-            # paired closed-loop safe benefit. Magnitude is deliberately absent.
+            "intervention_iteration": it,
+            "intervention_time_s": float(p.get("intervention_time_s", 0.0)),
             "rsm_selected_teacher_improvement": 1.0 if safe else -1.0,
-            "paired_score_delta": delta, "hard_noninferior": hard_ok, "safe_benefit": safe,
+            "paired_score_delta": delta,
+            "hard_noninferior": hard_ok,
+            "safe_benefit": safe,
             "hard_regressions": str(p.get("hard_regressions", "")),
-            "v49_obs_sign_risk": float(s["v49_obs_sign_risk"]),
+            # Retain the persisted old score only as a post-hoc diagnostic; the
+            # preregistered OBS comparator below is reconstructed and evaluated
+            # on this same live Q/P/E state.
+            "v49_obs_sign_risk_offline_state": float(s["v49_obs_sign_risk"]),
+            "offline_quality_value": float(f["quality_value"]),
+            "offline_plan_control_value": float(f["plan_control_value"]),
+            "offline_ego_ref_value": float(f["ego_ref_value"]),
         }
         rows.append(row)
     folds = sorted(set(int(r["outer_test_fold"]) for r in rows))
@@ -179,7 +228,8 @@ def main() -> None:
     ap.add_argument("--output-report",type=Path,required=True)
     ap.add_argument("--output-scene-audit",type=Path,required=True)
     a=ap.parse_args(); _check_v49(a.v49_fit_report)
-    rows=_join(a.v49_scene_audit,a.v49_candidate_audit,a.paired_outcomes)
+    offline_features=_candidate_features(a.v49_candidate_audit)
+    rows=_join(a.v49_scene_audit,offline_features,a.paired_outcomes)
     base=_baseline_metric(rows)
     fold_reports=[]; oof_risk={}; better_obs=0; better_ego=0
     for k in range(FOLDS):
@@ -189,14 +239,32 @@ def main() -> None:
         test=[r for r in rows if int(r["outer_test_fold"])==k]
         m=_fit_sign_ranker(fit,use_multiplicity=False)
         tau,caldiag=_conformal_threshold(cal,m,ALPHA_RET)
+        # Reconstruct the historical observational selected-sign model on the
+        # frozen V49 offline training events, then transport that unchanged model
+        # to the same live intervention Q/P/E test states used by SIOR.  This is
+        # the fair comparator after event-state alignment.
+        obs_fit=[offline_features[str(r["scenario_token"])] for r in rows if int(r["outer_test_fold"]) not in {k,cf}]
+        obs_model=_fit_sign_ranker(obs_fit,use_multiplicity=False)
         rr=np.asarray([_risk(r,m) for r in test]); ybad=np.asarray([not bool(r["safe_benefit"]) for r in test],dtype=np.int64)
-        auc=float(_auc(ybad,rr)); obs=float(_auc(ybad,np.asarray([float(r["v49_obs_sign_risk"]) for r in test]))); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in test])))
+        obs_rr=np.asarray([_risk(r,obs_model) for r in test])
+        auc=float(_auc(ybad,rr)); obs=float(_auc(ybad,obs_rr)); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in test])))
         better_obs += int(auc>obs); better_ego += int(auc>ego)
         for r,v in zip(test,rr): oof_risk[str(r["scenario_token"])]=float(v)
         mm=_metric(test,rr,tau)
-        fold_reports.append({"fold":k,"calibration_fold":cf,"fit_count":len(fit),"cal_count":len(cal),"test_count":len(test),"cl_sior_bad_risk_auc":auc,"offline_obs_bad_risk_auc_on_cl_labels":obs,"neg_ego_ref_bad_risk_auc_on_cl_labels":ego,"calibration":caldiag,"deployment":mm})
+        fold_reports.append({"fold":k,"calibration_fold":cf,"fit_count":len(fit),"cal_count":len(cal),"test_count":len(test),"cl_sior_bad_risk_auc":auc,"transported_v49_obs_bad_risk_auc_on_live_QPE_cl_labels":obs,"neg_ego_ref_bad_risk_auc_on_cl_labels":ego,"calibration":caldiag,"deployment":mm})
     allrisk=np.asarray([oof_risk[str(r["scenario_token"])] for r in rows]); ybad=np.asarray([not bool(r["safe_benefit"]) for r in rows],dtype=np.int64)
-    auc=float(_auc(ybad,allrisk)); obs=float(_auc(ybad,np.asarray([float(r["v49_obs_sign_risk"]) for r in rows]))); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in rows])))
+    # OOF historical-OBS risk transported to live event state, reconstructed with
+    # the exact same fold exclusions as the SIOR comparison.
+    obs_oof: dict[str,float] = {}
+    for k in range(FOLDS):
+        cf=(k+1)%FOLDS
+        obs_fit=[offline_features[str(r["scenario_token"])] for r in rows if int(r["outer_test_fold"]) not in {k,cf}]
+        obs_model=_fit_sign_ranker(obs_fit,use_multiplicity=False)
+        for r in rows:
+            if int(r["outer_test_fold"])==k:
+                obs_oof[str(r["scenario_token"])]=float(_risk(r,obs_model))
+    obsrisk=np.asarray([obs_oof[str(r["scenario_token"])] for r in rows])
+    auc=float(_auc(ybad,allrisk)); obs=float(_auc(ybad,obsrisk)); ego=float(_auc(ybad,np.asarray([-float(r["ego_ref_value"]) for r in rows])))
     # OOF thresholds are fold-specific; reconstruct keep decisions per fold.
     keep_by={}
     for fr in fold_reports:
@@ -226,17 +294,18 @@ def main() -> None:
     _write_config(a.v49_siir_config,full_model,full_tau,a.output_config)
     report={
       "algorithm":"V64.3.50-EAF-ICER-SIOR","train_gate_pass":passed,
-      "mechanism":"same frozen QPE/ranker/calibration; labels replaced by paired one-shot closed-loop full-set-RSMR-vs-incumbent outcome",
+      "mechanism":"same frozen Q/P/E coordinate definitions, ranker class and calibration; Q/P/E evaluated at the actual first live RSMR proposal event and labels replaced by paired one-shot closed-loop full-set-RSMR-vs-incumbent outcome",
+      "event_state_alignment":{"absolute_iteration_zero_required":False,"control_treatment_preintervention_trace_required_equal":True,"live_proposal_must_equal_frozen_v49_full_set_winner":True,"live_qpe_must_match_between_arms":True,"offline_v49_qpe_used_for_sior_features":False},
       "paired_outcome_definition":{"positive":"treatment aggregate score > control AND no hard metric regresses","hard_metrics":["no_ego_at_fault_collisions","time_to_collision_within_bound","drivable_area_compliance","driving_direction_compliance"]},
       "baseline_full_rsmr_one_shot":base,
-      "risk_identification":{"cl_sior_bad_auc":auc,"offline_obs_bad_auc_on_same_cl_labels":obs,"neg_ego_ref_bad_auc_on_same_cl_labels":ego,"folds_better_than_offline_obs":better_obs,"folds_better_than_ego":better_ego,"identified":ident},
+      "risk_identification":{"cl_sior_bad_auc":auc,"transported_v49_obs_bad_auc_on_same_live_QPE_cl_labels":obs,"neg_ego_ref_bad_auc_on_same_cl_labels":ego,"folds_better_than_transported_v49_obs":better_obs,"folds_better_than_ego":better_ego,"identified":ident},
       "nested_oof_deployment":agg,"folds":fold_reports,
       "gates":{"identification":ident,"safe_benefit_retention":capture_ok,"zero_hard_regression_retained":hard_ok,"nonbenefit_reduction_20pct":nonbenefit_ok,"aggregate_noninferiority_and_nonnegative":sum_ok,"negative_rms_noninferiority":neg_ok,"five_of_five_fold_sum_nonnegative":fold_sum_ok,"five_of_five_fold_zero_hard_regression":fold_hard_ok,"deployment":deployment},
       "full_fit":{"model":full_model,"calibration":full_cal},
       "preregistered_next":"If TRAIN fails, do not tune QPE/loss/lambda/threshold or return to offline selection intervention; diagnose whether paired selected outcomes are unidentifiable from the frozen state and move to richer causal state/evidence only if mechanism evidence supports it. If TRAIN passes, freeze V50 and run untouched paired closed-loop A500 and B500 independently; no pooling/tuning.",
     }
     a.output_report.parent.mkdir(parents=True,exist_ok=True); a.output_report.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
-    fields=["scenario_token","outer_test_fold","rsm_selected_action","quality_value","plan_control_value","ego_ref_value","paired_score_delta","hard_noninferior","safe_benefit","v49_obs_sign_risk","v50_oof_cl_risk","v50_oof_retained"]
+    fields=["scenario_token","outer_test_fold","rsm_selected_action","intervention_iteration","intervention_time_s","quality_value","plan_control_value","ego_ref_value","offline_quality_value","offline_plan_control_value","offline_ego_ref_value","paired_score_delta","hard_noninferior","safe_benefit","v49_obs_sign_risk_offline_state","v50_oof_cl_risk","v50_oof_retained"]
     with a.output_scene_audit.open("w",newline="",encoding="utf-8") as f:
         w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
         for r in rows:

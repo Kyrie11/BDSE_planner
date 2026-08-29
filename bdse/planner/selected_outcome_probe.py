@@ -11,15 +11,25 @@ already frozen full-set RSMR proposal:
   the incumbent for every later direct proposal in that scenario.
 
 The proposal identity is never recomputed, re-ranked, or replaced by a runner-up.
-The probe consumes only tournament diagnostics that already describe the frozen
-RSMR proposal and incumbent.  It never receives teacher/open-loop outcome labels.
+For V50 event-state alignment, the probe may be layered on the frozen V49
+post-selection config solely so the already-defined Q/P/E coordinates are
+instrumented at the *actual live proposal event*.  The probe ignores the old
+post-selection accept/veto decision and acts only on the pre-post-selection
+RSMR proposal diagnostics; this prevents the historical V49 risk head from
+contaminating the paired treatment assignment.
 """
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 
 ROLES = {"control", "treatment"}
+_QPE_NAMES = {
+    "quality": "ocrr_state::quality_value",
+    "plan_inc": "ocrr_state::prospective_response_increment",
+    "ego_inc": "ocrr_state::ego_reference_increment",
+}
 
 
 @dataclass
@@ -54,6 +64,32 @@ def _as_bool(diag: dict[str, Any], key: str, default: bool = False) -> bool:
         return bool(default)
 
 
+def _live_qpe(diag: dict[str, Any]) -> tuple[float, float, float] | None:
+    """Recover the frozen Q/P/E coordinate values from V49 runtime instrumentation.
+
+    V48/V49 already materialize the operator state in the post-selection feature
+    vector as [Q, P-Q, E-P, logK].  V50 does not introduce a new feature; it only
+    records those same coordinates at the actual closed-loop proposal event.
+    """
+    names = [str(x) for x in diag.get("_decisive_frontier_icer_scir_post_selection_value_feature_names", [])]
+    vals = diag.get("_decisive_frontier_icer_scir_post_selection_value_feature", [])
+    try:
+        values = [float(x) for x in vals]
+    except Exception:
+        return None
+    if len(names) != len(values):
+        return None
+    pos = {n: i for i, n in enumerate(names)}
+    if any(n not in pos for n in _QPE_NAMES.values()):
+        return None
+    q = float(values[pos[_QPE_NAMES["quality"]]])
+    p = q + float(values[pos[_QPE_NAMES["plan_inc"]]])
+    e = p + float(values[pos[_QPE_NAMES["ego_inc"]]])
+    if not all(math.isfinite(x) for x in (q, p, e)):
+        return None
+    return q, p, e
+
+
 def apply_selected_outcome_probe(
     current_action: int,
     tournament_diagnostics: dict[str, Any],
@@ -62,11 +98,11 @@ def apply_selected_outcome_probe(
 ) -> tuple[int, dict[str, Any]]:
     """Apply the V50 paired intervention contract to one planner decision.
 
-    The function assumes the supplied tournament diagnostics were produced by
-    the frozen full-set RSMR direct-recovery path.  It fail-closes if the
-    treatment proposal is not the action that RSMR itself selected before the
-    probe; this prevents a post-selection or structural-guard bypass from being
-    mislabeled as an RSMR intervention.
+    The proposal is read from ``decisive_frontier_icer_scir_proposal_action``.
+    That quantity is frozen *before* V48/V49 post-selection retention.  In the
+    V50 instrumentation config the historical risk head is therefore allowed to
+    compute live Q/P/E, but its accept/veto output is not the treatment assignment:
+    CONTROL returns the incumbent; TREATMENT executes the exact RSMR proposal once.
     """
     pcfg = cfg.get("selected_outcome_probe", {}) if isinstance(cfg, dict) else {}
     enabled = bool(pcfg.get("enabled", False))
@@ -88,7 +124,13 @@ def apply_selected_outcome_probe(
     proposal_exists = _as_bool(diag, "decisive_frontier_icer_scir_proposal_exists", False)
     proposal_action = _as_int(diag, "decisive_frontier_icer_scir_proposal_action", -1)
     baseline_action = _as_int(diag, "decisive_frontier_icer_baseline_action", -1)
-    rsmr_selected = _as_int(diag, "decisive_frontier_icer_selected_action", int(current_action))
+    # This is the action after any historical post-selection value/risk stage.
+    # It is recorded for audit but is *not* called the RSMR winner in V50.
+    pre_probe_selected = _as_int(diag, "decisive_frontier_icer_selected_action", int(current_action))
+
+    qpe = _live_qpe(diag) if proposal_exists else None
+    if proposal_exists and bool(pcfg.get("require_live_qpe", False)) and qpe is None:
+        raise ValueError("V50 proposal event is missing live Q/P/E operator-state instrumentation")
 
     out_action = int(current_action)
     executed = False
@@ -96,6 +138,13 @@ def apply_selected_outcome_probe(
     if proposal_exists:
         if proposal_action < 0 or baseline_action < 0:
             raise ValueError("V50 probe saw proposal_exists without valid proposal/baseline actions")
+        # Historical post-selection may only retain the same proposal or veto to
+        # the incumbent.  A third action would violate the no-rerank contract.
+        if pre_probe_selected not in {int(proposal_action), int(baseline_action)}:
+            raise ValueError(
+                "V50 probe saw a pre-probe selected action outside {frozen RSMR proposal, incumbent}: "
+                f"selected={pre_probe_selected} proposal={proposal_action} baseline={baseline_action}"
+            )
         state.proposal_event_count += 1
         if not state.first_proposal_seen:
             state.first_proposal_seen = True
@@ -106,13 +155,6 @@ def apply_selected_outcome_probe(
         if role == "control":
             out_action = int(baseline_action)
         elif not state.intervention_consumed:
-            # The causal treatment must be the actual frozen full-set RSMR action,
-            # not a proposal that a later guard/risk head had already displaced.
-            if int(current_action) != int(proposal_action) or int(rsmr_selected) != int(proposal_action):
-                raise ValueError(
-                    "V50 treatment probe refuses to execute a proposal that is not the frozen RSMR selected action "
-                    f"(current={current_action}, selected={rsmr_selected}, proposal={proposal_action})"
-                )
             out_action = int(proposal_action)
             state.intervention_consumed = True
             state.executed_intervention_count += 1
@@ -126,7 +168,10 @@ def apply_selected_outcome_probe(
         "proposal_exists": bool(proposal_exists),
         "proposal_action": int(proposal_action),
         "baseline_action": int(baseline_action),
-        "rsmr_selected_action": int(rsmr_selected),
+        # For the V50 probe, the RSMR selected action is definitionally the
+        # proposal frozen before historical post-selection retention.
+        "rsmr_selected_action": int(proposal_action if proposal_exists else -1),
+        "pre_probe_selected_action": int(pre_probe_selected),
         "pre_probe_action": int(current_action),
         "post_probe_action": int(out_action),
         "first_proposal_now": bool(first_now),
@@ -138,4 +183,10 @@ def apply_selected_outcome_probe(
         "proposal_event_count": int(state.proposal_event_count),
         "executed_intervention_count": int(state.executed_intervention_count),
     }
+    if qpe is not None:
+        pdiag.update({
+            "live_quality_value": float(qpe[0]),
+            "live_plan_control_value": float(qpe[1]),
+            "live_ego_ref_value": float(qpe[2]),
+        })
     return int(out_action), pdiag

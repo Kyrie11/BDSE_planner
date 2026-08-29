@@ -1,69 +1,51 @@
-V64.3.50 EAF-ICER-SIOR — DATA-LAYOUT ENGINEERING COMPATIBILITY VALIDATION
-=========================================================================== 
+V64.3.50 EAF-ICER-SIOR — event-state alignment engineering repair validation
 
-Scope
------
-Engineering-only repair for the user's server dataset layout. Scientific V64.3.50 SIOR mechanism, preregistered paired outcome label, risk state/model, retention gates, RSMR selector, treatment policy, and no-fallback containment are unchanged.
+Trigger
+-------
+First server pair stopped before a paired row was committed:
+  token=03dac455f9ec5792
+  first synchronized live RSMR proposal iteration=7/7
+Old code incorrectly required absolute planner iteration 0.
 
-Resolved default layout
------------------------
-BDSE NPZ caches (offline/preprocessed only):
-  BDSE_CACHE_ROOT=/data0/senzeyu2/dataset/nuplan/data/cache
-  BDSE_TRAIN_CACHE=$BDSE_CACHE_ROOT/bdse_train_v2
-  BDSE_VAL_CACHE=$BDSE_CACHE_ROOT/bdse_val_v2
-  BDSE_TEST_CACHE=$BDSE_CACHE_ROOT/bdse_test_2
+Root cause
+----------
+The old collector conflated "same pre-intervention state in CONTROL/TREATMENT"
+with "absolute nuPlan planner iteration must equal zero".  Removing only that
+assertion would have been unsafe because the downstream fit still paired a later
+closed-loop outcome with stale V49 offline Q/P/E covariates.
 
-Native nuPlan closed-loop inputs:
-  NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan
-  NUPLAN_MAP_ROOT=$NUPLAN_ROOT/maps
-  NUPLAN_SPLITS_ROOT=$NUPLAN_ROOT/nuplan-v1.1/splits
-  TRAIN db_files directories:
-    train_boston
-    train_pittsburgh
-    train_singapore
-    train_vegas
-  val/test are intentionally not loaded into V50 TRAIN paired supervision.
-
-NUPLAN_EXP_ROOT defaults to an output-local writable path:
-  $SCRIPT_DIR/$OUT_ROOT/nuplan_exp
+Repair
+------
+- first live proposal may occur at any nonnegative iteration;
+- CONTROL/TREATMENT must match on first-proposal iteration/time;
+- complete pre-intervention probe time/planner-action/deployed-action traces must match;
+- live proposal action must equal frozen V49 full_selected_action;
+- historical V49 post-selection may only keep proposal or veto to incumbent;
+- frozen Q/P/E coordinate definitions are recorded at the same live event and
+  must match between CONTROL/TREATMENT;
+- CONTROL preserves incumbent, TREATMENT executes exact proposal once;
+- SIOR fits event-aligned live Q/P/E rather than stale offline Q/P/E;
+- V49 offline Q/P/E/risk retained only for audit/comparator reconstruction;
+- incomplete token output is deleted before rerun; resume skips only committed rows.
 
 Validation
 ----------
-- bash -n RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh: PASS
-- python compile run_v64_3_50_paired_selected_outcome_collection.py: PASS
-- V64_3_50_SOURCE_MANIFEST.sha256: 914/914 PASS
-- V50 focused tests: 11/11 PASS
-- V50 + closed-loop DB path compatibility tests: 27/27 PASS
-  (includes direct flat *.db directories and nested-root expansion contracts)
+Python compileall: PASS
+launcher bash -n: PASS
+V50 focused: 14/14 PASS
+V48 + V48.2 + V49 + V50 adjacent focused: 31/31 PASS
+V13 -> V50 exact launcher targeted regression: 256/256 PASS
+Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class.
 
-A broad historical targeted regression was also started in the constrained local execution window but did not finish before the tool timeout; it is NOT reported as a PASS here. The unchanged V50 server launcher still runs the full historical targeted regression before any paired closed-loop scientific collection, so server execution remains fail-closed on historical regression drift.
+A whole-repository pytest invocation was also attempted.  It reached 96% with no
+reported failure before the local execution window timed out, so it is deliberately
+NOT claimed as a completed PASS.  The exact historical targeted suite used by the
+server launcher completed successfully as reported above.
 
-Key behavior
-------------
-- NPZ caches are logged separately and are non-blocking because this V50 paired closed-loop stage does not consume them; they can never be passed as the default nuPlan ScenarioBuilder DB source.
-- Default V50 TRAIN closed-loop passes the four native city TRAIN directories through --nuplan-db-files.
-- Each native city directory is fail-closed checked for at least one direct *.db file.
-- Map root must contain nuplan-maps-v1.0.json.
-- Backward compatible NUPLAN_DB_ROOT remains supported.
-- NUPLAN_TRAIN_DB_ROOTS can override the four-city list as a colon-separated directory list.
-
-Scientific status
------------------
-No new scientific result is claimed. This remains V64.3.50, not V64.3.51.
-
-V49 prerequisite-lock schema repair
------------------------------------
-PASS  Root cause reproduced: V49 persists flat risk_identification fields, while the original V50 prerequisite checker addressed a nonexistent nested `siir.aggregate_nonpositive_risk_auc` field and therefore defaulted to -1.
-PASS  V50 launcher now consumes `aggregate_ego_ref_auc`, `aggregate_obs_sign_auc`, `aggregate_siir_auc`, `siir_better_ego_fold_count`, `siir_better_obs_fold_count`, and `identified`.
-PASS  Exact SHA256 locks on the five V49 prerequisite artifacts remain in place.
-PASS  Exact V49 preregistered TRAIN-failure diagnosis remains in place.
-PASS  The duplicated exact floating-point AUC constant is removed; the secondary checker now recomputes the preregistered identification-failure semantics from the persisted schema.
-PASS  The same semantic prerequisite check is used by `fit_v64_3_50_eaf_icer_sior.py`.
-PASS  V50 focused tests after repair: 12/12.
-
-Historical-manifest note
-------------------------
-Running the V48.2 or V49 source manifest against the V50 source tree is expected to report one mismatch: `bdse/planner/nuplan_planner.py`. V50 deliberately modifies this shared source file for the selected-outcome one-shot probe. Historical manifests must remain immutable and are only valid against their corresponding historical source trees. The V50 launcher uses `V64_3_50_SOURCE_MANIFEST.sha256` for the current tree. Manually editing the V50 launcher after manifest generation also invalidates the V50 manifest by design.
-PASS  V48/V48.2/V49/V50 adjacent-version focused regression after lock repair: 29/29.
-PASS  Regenerated current V50 source manifest after the lock repair: 914/914.
-NOTE  A broad historical targeted regression was started but exceeded the local execution window before completion; it is not claimed as PASS here. The server launcher retains the full targeted regression before any V50 paired scientific collection.
+Scientific non-change
+---------------------
+No change to RSMR, EAF, candidate bank, Q/P/E coordinate definitions, SIOR
+zero-bias pairwise ranker class, lambda=1, alpha_ret, same-winner/incumbent
+operator, no-rerank/no-second-best/no-fallback constraints, or promotion gates.
+This is an outcome-blind state/label alignment repair made after the first pair
+raised before any paired row was committed.

@@ -4,7 +4,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
 
 export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
 export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
-export V47_ROOT="${V47_ROOT:-outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1}"
 export V49_ROOT="${V49_ROOT:-outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
 export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1}"
 export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
@@ -66,7 +65,6 @@ else
   NUPLAN_DB_ARGS=(--nuplan-db-files "${NUPLAN_TRAIN_DB_DIRS[@]}")
 fi
 
-V47_RSMR="$V47_ROOT/provenance/v64_3_47_rsmr.yaml"
 V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
 V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
 V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
@@ -77,7 +75,7 @@ TIMING="$OUT_ROOT/provenance/v64_3_50_stage_timing.tsv"; :>"$TIMING"; ALL_START=
 stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
 stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >>"$TIMING"; }
 
-for f in V64_3_50_SOURCE_MANIFEST.sha256 "$EAF_TRAIN_LOG" "$V47_RSMR" "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CFG" "$V49_SERVER_TEST"; do
+for f in V64_3_50_SOURCE_MANIFEST.sha256 "$EAF_TRAIN_LOG" "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CFG" "$V49_SERVER_TEST"; do
   [[ -s "$f" ]] || { echo "STOP V50 missing $f" >&2; exit 2; }
 done
 # NPZ caches are NOT consumed by the V50 paired ScenarioBuilder path.  Keep
@@ -178,13 +176,13 @@ TRAIN_TOKENS="$OUT_ROOT/provenance/v64_3_50_frozen_rsmr_selected_train502_tokens
 CONTROL_CFG="$OUT_ROOT/provenance/v64_3_50_sior_probe_control.yaml"
 TREATMENT_CFG="$OUT_ROOT/provenance/v64_3_50_sior_probe_treatment.yaml"
 python -m bdse.tools.select_v64_3_50_sior_train_tokens --v49-scene-audit "$V49_SCENE" --output "$TRAIN_TOKENS" | tee "$OUT_ROOT/logs/v64_3_50_freeze_train_population.out"
-python -m bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs --rsmr-config "$V47_RSMR" --control-output "$CONTROL_CFG" --treatment-output "$TREATMENT_CFG" | tee "$OUT_ROOT/logs/v64_3_50_prepare_probe_configs.out"
+python -m bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs --source-config "$V49_CFG" --control-output "$CONTROL_CFG" --treatment-output "$TREATMENT_CFG" | tee "$OUT_ROOT/logs/v64_3_50_prepare_probe_configs.out"
 stage_end
 
 stage_start paired_closed_loop_selected_outcome_collection
 python -m bdse.tools.run_v64_3_50_paired_selected_outcome_collection \
   --control-config "$CONTROL_CFG" --treatment-config "$TREATMENT_CFG" --checkpoint "$EAF_CKPT" \
-  --scenario-token-file "$TRAIN_TOKENS" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
+  --scenario-token-file "$TRAIN_TOKENS" --frozen-proposal-audit "$V49_CAND" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
   --challenge "$CL_CHALLENGE" --nuplan-data-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" \
   --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume \
   2>&1 | tee "$OUT_ROOT/logs/v64_3_50_paired_closed_loop_collection.out"

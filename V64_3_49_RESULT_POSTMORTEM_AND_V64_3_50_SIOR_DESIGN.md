@@ -316,14 +316,30 @@ This is a deliberate one-shot treatment. It isolates the causal effect of the se
 
 The implementation hard-checks:
 
-- both arms expose exactly the same first proposal/baseline/selected action identity;
-- the first proposal is planner iteration `0`, matching the frozen Q/P/E state;
+- both arms expose exactly the same first **live** pre-post-selection RSMR proposal/baseline identity;
+- the first proposal may occur after planner iteration `0`; CONTROL and TREATMENT must reach it at the exact same iteration/time with identical pre-intervention action traces;
+- the live proposal action must equal the byte-locked V49 full-set RSMR winner for that scenario;
+- the same frozen Q/P/E coordinate definitions are evaluated at that exact live pre-intervention state in both arms and must match numerically before treatment;
 - CONTROL executes zero interventions;
 - TREATMENT executes exactly one intervention;
 - TREATMENT action equals the actual full-set RSMR proposal;
 - after the intervention, the probe never chooses a runner-up;
 - fallback is disabled;
 - any mismatch is an engineering STOP.
+
+### V50 event-state alignment engineering repair (pre-outcome protocol correction)
+
+The first attempted paired run exposed an invalid implementation assumption before any paired row was committed: token `03dac455f9ec5792` reached the first synchronized live RSMR proposal at planner iteration `7/7`, not `0/0`.  The old collector therefore stopped before writing a causal label.  No treatment/control score, hard metric, or SIOR fit result was used to design this repair.
+
+Simply deleting the `iteration==0` assertion would be scientifically invalid, because the old fit would then pair a later closed-loop treatment outcome with stale V49 offline Q/P/E values from a different state.  The repaired protocol instead aligns **treatment, proposal identity, and covariates at one live pre-intervention event**:
+
+1. CONTROL and TREATMENT start from the identical nuPlan scenario start and must have identical planner/deployed action traces before the first proposal.
+2. The first proposal iteration/time must match exactly across the two arms; it need not be absolute iteration zero.
+3. The proposal action must equal the frozen V49 full-set RSMR winner; otherwise the scene is an ENGINEERING STOP rather than a silently changed treatment.
+4. Q/P/E keep the previously frozen coordinate definitions and are recorded at that same live event in both arms; any C/T state mismatch is an ENGINEERING STOP.
+5. CONTROL vetoes to the incumbent; TREATMENT executes that exact proposal once.  No runner-up/fallback is introduced.
+
+This is an **outcome-blind engineering amendment** needed to make the selected-action intervention well-defined under the actual nuPlan runtime.  It does not constitute V50 evidence and does not relax any promotion gate.  The incomplete first token outputs must be discarded/re-run; the resumable collector only skips tokens after a complete paired row is committed.
 
 ## 10.3 Outcome label
 
