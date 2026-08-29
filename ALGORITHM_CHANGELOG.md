@@ -11986,3 +11986,51 @@ No V64.3.49 scientific mechanism is preregistered in this repair. Designing V49 
 ### Additional packaging repair found by full-repository regression
 
 Full-repository fail-fast testing found that the uploaded archive also omitted `V64_SAQA_BCC_NEXT_COMMANDS.sh`, reproducing a historical packaging failure already documented in the changelog. Because exact legacy experiment bytes are unavailable, V64.3.48.2 restores the previously established policy: a syntactically valid **fail-closed compatibility entrypoint** that refuses to invent or run legacy semantics and points to the preserved review-artifact instructions. This file is unrelated to OCRR runtime and does not alter any scientific mechanism.
+
+
+# V64.3.49 EAF-ICER-SIIR — Selection-Interventional Invariant Retention
+
+## Trigger: clean V64.3.48.2 double-fresh falsifies OCRR multiplicity
+
+V64.3.48.2 closes the V48 provenance incident: the repaired package passes its 900-file current-source manifest, the 5-file OCRR science lock, server 232/232 targeted regression, and an independent local 232/232 replay.  The new label-free fresh1000 is disjoint from the old consumed V48 fresh1000 and A/B are disjoint.  The result is therefore eligible for scientific attribution.
+
+Strict V48 preregistration fails on **both** untouched blocks.  SIGN-MULT/OCRR has A: `86 selected / 27 positive / capture 22.314% / sum -1.4678 / 5 catastrophes`; B: `87 / 39 / 30.709% / +3.3763 / 6 catastrophes`.  Both split mechanism gates and both endpoint non-inferiority gates fail; direct incumbent opportunity capture also drops versus preserve by about 17.75pp (A) and 13.25pp (B).  The combined screen is the preregistered `STOP_no_promotion_do_not_pool_A_B_or_tune`.
+
+The causal NOMULT-vs-MULT ablation is especially damaging to multiplicity: on A, NOMULT-only contributes `13 scenes / +2.2828 / 2 material positives / 0 catastrophe`, whereas MULT-only contributes `4 / -1.2584 / 0 material / 1 catastrophe`.  TRAIN associated good proposals with larger K (`~13.84` vs `~12.08` for bad); fresh A has no relation (`22.50` vs `22.53`) and fresh B reverses it (`20.84` vs `21.98`).  Hence **close `log K` / realized extremal multiplicity as a core operator-conditioning variable**.
+
+A postmortem-only oracle threshold check finds no threshold on SIGN-MULT, SIGN-NOMULT, or EGO-REF that can simultaneously reach the frozen capture requirement and zero catastrophe on either fresh split.  Therefore do **not** repair V48 by threshold/lambda/K-transform/calibration tuning.  The failure is risk-ordering / selection-regime transport, not a scalar offset.
+
+## Dominant bottleneck
+
+The dominant bottleneck is now **selection-regime transportability of the post-selection outcome law**.  V48's problem formulation—learn risk only after the RSMR winner is frozen—remains useful, but observational full-set selected-risk plus realized multiplicity is not invariant across fresh selection regimes.  The next experiment must change identification of the selected-risk law, not add future-state representation.
+
+## V49 mechanism
+
+V49 removes multiplicity **dependence** from the retention law and changes only the TRAIN identification population.  To preserve the byte-locked V48 runtime, the old API still receives `selection_multiplicity`, but `use_extremal_multiplicity=False` forces the fourth state coordinate to zero before risk evaluation; a V49 test proves identical output for `K=2` and `K=999`.  For every TRAIN scene, candidate action IDs are hash-permuted using fixed seed `v64.3.49-siir-train-intervention-v1`; one prefix length in `1..K` is deterministically selected by the same label-free hash, and only that prefix is exposed to the already-frozen RSMR selector.  The intervention selector receives only action IDs plus frozen RSMR score/support/margin/utility-prior quantities; it has no teacher label/value input.
+
+The risk model is intentionally unchanged from V48 SIGN-NOMULT: state `[Q, P-Q, E-P]`, zero-bias pairwise sign-risk, `lambda=1`, same positive calibration rule derived from the frozen capture tolerance.  At deployment the intervention disappears: the full candidate bank and full-set RSMR winner are restored, and V49 can only retain that exact winner or the incumbent.  The actual runtime implementation reuses the byte-locked V48 NOMULT path; `tournament.py` is not modified.
+
+The only scientific ablation is:
+
+- `OBS-SIGN`: exact V48 SIGN-NOMULT replay, fitted on observational full-set winners;
+- `SIIR`: identical state/loss/calibration/runtime, fitted on TRAIN selection-interventional winners.
+
+A hard replay gate requires OBS-SIGN aggregate and AUC to match V48 exactly.  SIIR identification requires its nonpositive-risk AUC on **actual full-set OOF winners** to exceed both OBS-SIGN and the `-EGO-REF` baseline in aggregate and in at least 4/5 folds versus each.  Promotion additionally requires the unchanged selected-policy deployment gate.
+
+Only if nested TRAIN passes may a new untouched A500+B500 be selected with seed `v64.3.49-eaf-icer-siir-double-fresh-v1`; exclusions include design/TRAIN, the original V48 consumed fresh1000, and the V48.2 consumed fresh1000.  Fresh A/B are never pooled.
+
+## Preregistered no-repeat / STOP
+
+V49 explicitly forbids: tuning intervention seed or prefix law; trying multiple intervention distributions; `K`, `log K`, K-bins, K interactions or alternative multiplicity transforms; pairwise-loss/lambda/class/focal/catastrophe weighting; retention-threshold/calibration sweeps; new future observables or a bigger selected-risk MLP; V46 variance/profile; V47 AGENT-2D; CVaR; selected translation; standalone catastrophe veto; candidate-count/top-K sweeps; RSMR changes; reranking, second-best or fallback; A/B pooling; and any use of fresh labels for V49 redesign.
+
+If nested TRAIN fails, V49 stops **before consuming fresh** and closes the current offline selected-risk family.  If TRAIN passes but either fresh A or B fails, close the same family without tuning.  The next evidence source must then be genuinely on-policy / closed-loop / interventional selected-outcome evidence rather than another offline feature/loss variant.
+
+## Engineering validation
+
+- V49 focused + V48/V48.2 lock tests: `17/17 PASS`;
+- V13→V49 targeted: `242/242 PASS`;
+- full repository: 125 test files, four independent shards, `579/579 PASS`;
+- Python compile: PASS; launcher `bash -n`: PASS;
+- V48 science-locked `tournament.py` hash remains `291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044`.
+
+V49 scientific efficacy is **not** claimed by these engineering tests; it remains preregistered until the server nested TRAIN and, only if eligible, untouched double-fresh run complete.
