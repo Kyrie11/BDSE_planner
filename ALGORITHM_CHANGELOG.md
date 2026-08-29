@@ -12034,3 +12034,179 @@ If nested TRAIN fails, V49 stops **before consuming fresh** and closes the curre
 - V48 science-locked `tournament.py` hash remains `291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044`.
 
 V49 scientific efficacy is **not** claimed by these engineering tests; it remains preregistered until the server nested TRAIN and, only if eligible, untouched double-fresh run complete.
+
+# V64.3.49 uploaded TRAIN result audit -> V64.3.50 EAF-ICER-SIOR
+
+## V49 reliability decision
+
+The uploaded V49 code ZIP SHA256 is `81212d1798634b9d6ba1d7f40eebc29d3d060cc8faeffdf527945448a36a2c73`; the uploaded V49 result ZIP SHA256 is `62e454ff9305b885c75da6a9d6ce792342d11d04b48cede44b0bb9660e60fbf9`.
+
+The result-side V49 source manifest contains **907** entries. Independent comparison against the uploaded code finds **0 missing and 0 SHA mismatch**. The result also passes the V48 science lock, reports **242/242 PASS** targeted regression, contains **782/782 unique** direct scientific scenes and all **5/5** nested outer folds, exactly replays V48 OBS-SIGN, and stops on the registered TRAIN failure before any new fresh A/B token selection.
+
+Decision: **V49 is engineering-valid for TRAIN-level attribution. No V49.1 repair is required.**
+
+## V49 preregistered scientific verdict
+
+V49's only permitted causal factor was the TRAIN selected-event measure: OBS-SIGN fits on observational full-set winners; SIIR fits the same zero-bias pairwise sign-risk (`[Q,P-Q,E-P]`, `lambda=1`, same calibration/runtime) on label-free hash-prefix selection-interventional winners.
+
+Risk identification on actual full-set OOF winners is:
+
+- `-EGO-REF AUC = 0.6298288`;
+- `OBS-SIGN AUC = 0.6139193`;
+- `SIIR AUC = 0.6081223`;
+- SIIR beats OBS in only **3/5** folds;
+- SIIR beats `-EGO-REF` in only **1/5** folds.
+
+Therefore the registered identification gate is false. The launcher terminates with:
+
+`selection_interventional_risk_does_not_outperform_observational_selected_risk_close_current_offline_selected_risk_family`.
+
+Deployment aggregates are:
+
+- RSMR: `502 / 221 / capture 38.5017% / +43.2941 / 28 cats / 107 no-op / NegRMS .355688`;
+- EGO-REF: `251 / 136 / 23.6934% / +59.5327 / 9 / 45 / .223314`;
+- OBS-SIGN: `411 / 187 / 32.5784% / +53.4956 / 18 / 78 / .270655`;
+- SIIR: `464 / 208 / 36.2369% / +53.4681 / 21 / 93 / .279267`.
+
+SIIR's count capture is above the historical floor, but the full `existence_and_capture` gate fails because no-positive-opportunity false interventions rise to 93, and the mechanism already fails its independent identification gate.
+
+Formal decision: **V49 SIIR is falsified and the current offline selected-risk family is closed exactly as preregistered. Fresh remains unconsumed.**
+
+## V49 mechanism diagnosis
+
+OBS-SIGN -> SIIR rotation on the exact 502 frozen RSMR proposals:
+
+- common: `405 scenes / +53.4961 / 43 material positives / 18 catastrophes`;
+- OBS-only: `6 / -0.00056 / 0 material / 0 catastrophe`;
+- SIIR-only: **`59 / -0.0281 / 4 material / 3 catastrophes`**;
+- neither: `32 / -10.1735 / 3 material / 7 catastrophes`.
+
+SIIR is therefore broadly more permissive rather than selectively better ordered. Relative to OBS, it lowers risk on `18/28` catastrophes and `184/253` non-catastrophic nonpositive proposals.
+
+The candidate-level intervention audit exposes the structural cause. Full-set RSMR selects in 502 scenes; the prefix intervention selects only 356 events. Of those, 277 equal the deployment full-set winner but **79 switch to another winner**. Those 79 switched intervention events have `sum ΔT = -1.959`, `39 positive / 40 nonpositive`, and **10 catastrophes**. Another 146 full-set selected events disappear under the sampled prefix. Thus V49's offline selection intervention changes the proposal identity/rank under an artificial exposed-candidate regime while reusing the same offline teacher outcome source. It does **not** observe the outcome of actually executing the deployed full-set winner.
+
+### Updated dominant bottleneck
+
+The dominant layer is now:
+
+**selected-outcome causal observability / treatment-effect identification for the actual deployed full-set RSMR winner.**
+
+The deployment estimand is conceptually closer to
+
+`tau(x,b*) = E[Y(do(b*)) - Y(do(i)) | x, b*=S_full(x)]`
+
+than to another observational `P(Y_selected<=0 | Z,S=selected)` fit.
+
+V49 establishes the new distinction:
+
+`offline selection-measure intervention != selected-action outcome intervention`.
+
+## Mature / frozen layers after V49
+
+Permanently protect:
+
+- B16/M24 bounded planner interface;
+- EAF complete frontier and exact attribution;
+- support/admissibility;
+- RSMR ordinal extremal selector;
+- incumbent/no-fallback containment;
+- EPV/QUALITY partial consequence mediators;
+- V44 ungated full-horizon prospective occupancy;
+- V45 agent-local longitudinal response / low-capacity plan-conditioned mean;
+- V47 EGO-REF supporting consequence coordinate.
+
+Closed after previous evidence and not to be reopened in V50:
+
+- V46 response second moment and handcrafted temporal profile;
+- V47 constant-drift AGENT-2D;
+- V48 K/logK/multiplicity;
+- V49 hash-prefix selection intervention;
+- the current offline selected-risk family.
+
+Continue all historical no-repeat constraints: no RSMR/B/M/candidate-count/top-K sweep; no bigger selected-risk MLP; no K transform; no prefix/seed sweep; no pairwise-loss/lambda/class/focal/catastrophe weighting; no threshold/calibration sweep; no CVaR/translation; no standalone catastrophe veto; no rerank/second-best/fallback; no A/B pooling; no deployment logged future.
+
+# V64.3.50 EAF-ICER-SIOR
+
+Full name: **Selected-Interventional Outcome Retention**.
+
+V50 obeys the V49 preregistered STOP: it changes the **outcome evidence source**, not another offline estimator feature or hyperparameter.
+
+## Paired one-shot selected-outcome intervention
+
+Freeze the exact 502 TRAIN scenes where the full-set RSMR selector emits a proposal. For each scene, run two nuPlan simulations from the identical scenario start under `closed_loop_reactive_agents` by default:
+
+- **CONTROL:** whenever the direct RSMR proposal exists, preserve the incumbent;
+- **TREATMENT:** execute the first exact full-set RSMR proposal once, then preserve the incumbent for all later direct proposals.
+
+This is a one-shot causal probe, not the final repeated deployment policy. It isolates the selected intervention effect while preserving the same-winner/no-fallback structure.
+
+Hard engineering invariants:
+
+- first proposal must be planner iteration 0;
+- control/treatment proposal, incumbent and frozen selected action identities must match;
+- treatment action must equal the actual full-set RSMR action;
+- treatment executes exactly one intervention;
+- control executes zero interventions;
+- fallback disabled;
+- probe state reset at every scenario initialization;
+- all four preregistered hard-safety aggregate metrics must be present and finite in both paired arms; missing/schema-drift metrics are ENGINEERING STOP;
+- any violation is ENGINEERING STOP.
+
+The runtime planner path is unchanged when the probe is disabled.
+
+## Paired outcome label
+
+Let `delta_CL = official_aggregate_score(TREATMENT) - official_aggregate_score(CONTROL)`.
+
+`safe_benefit = 1` iff:
+
+- `delta_CL > 0`, and
+- treatment is non-inferior on all of `no_ego_at_fault_collisions`, `time_to_collision_within_bound`, `drivable_area_compliance`, and `driving_direction_compliance`.
+
+Logged/open-loop teacher future does not define this label. The selected outcome is generated by paired closed-loop simulation. This is simulator-interventional supervision only and must not be overclaimed as real-world causal identification.
+
+## Frozen risk model and state
+
+Keep exactly:
+
+- state `[Q, P-Q, E-P]`;
+- zero-bias pairwise sign-risk;
+- `lambda=1`;
+- no multiplicity;
+- V48 capture-derived `alpha_ret = 0.0779185520361991`;
+- full-set RSMR deployment winner;
+- SIOR can only keep that same winner or the incumbent.
+
+The only causal factor is offline teacher/selection-measure labels -> paired closed-loop selected-outcome labels.
+
+## V50 preregistered TRAIN gates
+
+Five fixed outer folds and one independent calibration fold per test fold remain. On the **same paired closed-loop labels**, SIOR identification must satisfy:
+
+- aggregate `AUC_SIOR > AUC_V49_OBS`;
+- aggregate `AUC_SIOR > AUC_-EGOREF`;
+- >=4/5 folds better than each baseline.
+
+Nested OOF retention must simultaneously:
+
+- retain at least `1-alpha_ret ~= 92.208%` of `safe_benefit` events;
+- retain zero hard-regression events;
+- reduce retained nonbenefit events by >=20%;
+- retain paired score sum >= `max(0, all-RSMR one-shot sum)`;
+- have non-worse paired negative RMS than all one-shot RSMR interventions;
+- have 5/5 nonnegative retained paired sums;
+- have 5/5 zero retained hard-regression events.
+
+TRAIN passes only if both identification and deployment gates pass.
+
+## V50 branch logic / no-repeat
+
+If V50 TRAIN fails: STOP before any fresh paired block. Do not tune Q/P/E, loss, lambda, threshold, calibration, safety weights, probe policy, challenge, or treatment duration; do not return to prefix selection interventions; do not add a generic future feature block. Diagnose whether the **paired selected outcome is identifiable from the frozen state**. Only evidence of causal-state insufficiency may justify a later causal-state representation branch.
+
+If V50 TRAIN passes: freeze V50, then select independent untouched paired closed-loop A500 and B500. They must pass independently without pooling/tuning. Only after both pass may the final repeated-policy official closed-loop evaluation be run.
+
+Candidate paper line: **Selection–Valuation–Intervention Sufficiency under a Bounded Auditable Planner Interface.** Structural containment and statistical/interventional identification are distinct: no-fallback guarantees no new action path, but does not by itself make the selected outcome law identifiable.
+
+### V64.3.50 engineering delivery status
+
+Final delivery hardening adds fail-closed paired hard-metric schema validation (all four preregistered hard metrics must be present and finite), deep-copy isolation when preparing CONTROL/TREATMENT configs, stale partial-output deletion before any retried token, and restoration of an independent final calibration fold (fit folds 1--4, calibration fold 0). V50 source manifest is **914/914 PASS**; final V50 focused tests are **9/9 PASS**, V48/V48.2/V49/V50 focused tests are **26/26 PASS**, and full-repository logical coverage is **588/588** across 126 test files. A synthetic code-path falsification in which the new label is deliberately made identical to the old teacher sign returns SIOR AUC exactly to OBS (`0.6139192605594113`) and scientific-STOPs, confirming that the V50 path does not create an artificial promotion when the evidence source carries no new selected-outcome information. No real V50 scientific claim is made until the paired nuPlan closed-loop collection is executed on the server.

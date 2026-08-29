@@ -308,11 +308,21 @@ def runtime_query_diagnostics(
     }
 
 
+from bdse.planner.selected_outcome_probe import (
+    SelectedOutcomeProbeState,
+    apply_selected_outcome_probe,
+)
+
+
 class BDSEPlannerCore:
     def __init__(self, model: Any | None = None, cfg: dict[str, Any] | None = None, inference_lock: threading.RLock | None = None):
         self.cfg = cfg or load_config()
         self.model = model
         self.inference_lock = inference_lock
+        self._selected_outcome_probe_state = SelectedOutcomeProbeState()
+
+    def reset_selected_outcome_probe(self) -> None:
+        self._selected_outcome_probe_state.reset()
 
     def __getstate__(self) -> dict[str, Any]:
         # nuPlan's SimulationLogCallback pickles the planner at the end of every
@@ -1575,6 +1585,15 @@ class BDSEPlannerCore:
         safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
         if profile_enabled:
             timing_core["final_safety_flags_s"] = float(time.perf_counter() - t_post)
+
+        # V64.3.50 TRAIN/fresh evidence probe.  This changes no deployed V49
+        # science path because it is disabled unless an explicit probe config is
+        # supplied.  With fallback disabled it creates a single paired intervention
+        # on the already frozen full-set RSMR proposal: treatment executes the
+        # first proposal exactly once; control always preserves the incumbent.
+        action, selected_outcome_probe_diag = apply_selected_outcome_probe(
+            action, dict(tournament.diagnostics), cfg_stage, self._selected_outcome_probe_state
+        )
         recovery_diag: dict[str, Any] = {}
         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
             from bdse.planner.fallback import (
@@ -1660,6 +1679,7 @@ class BDSEPlannerCore:
             "fallback_reason": self._fallback_reason(tournament, cfg_stage),
             "fallback_stage_records": stage_records,
             "recovery": recovery_diag,
+            "selected_outcome_probe": selected_outcome_probe_diag,
             **({"timing_core": timing_core} if profile_enabled else {}),
         }
         return action, trajectory, diagnostics
@@ -1783,6 +1803,14 @@ class BDSEnuPlanPlanner(AbstractPlanner):
 
     def initialize(self, initialization: Any) -> None:
         self.initialization = initialization
+        # A nuPlan planner instance can be reused across scenarios.  The V50
+        # one-shot intervention state is scenario-local and must never leak.
+        self.core.reset_selected_outcome_probe()
+        self._cached_local_trajectory = None
+        self._cached_action_index = 0
+        self._cached_replan_iteration_index = None
+        self._cached_replan_time_s = None
+        self._cached_replan_ego_pose = None
 
     def _current_iteration_index(self, current_input: Any) -> int:
         iteration = getattr(current_input, "iteration", None)

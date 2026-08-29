@@ -1,0 +1,65 @@
+V64.3.50 EAF-ICER-SIOR ENGINEERING VALIDATION
+==============================================
+
+Scientific status
+-----------------
+- V49 uploaded result reliability: PASS for TRAIN attribution.
+- V49 SIIR scientific verdict: preregistered TRAIN FAIL; fresh was not selected/consumed.
+- V50 scientific result: NOT YET RUN on real paired nuPlan closed-loop outcomes in this workspace.
+- Therefore this package claims engineering/preregistration readiness only, not V50 scientific success.
+
+Source / provenance locks
+-------------------------
+- V50 current-source manifest: 914 / 914 PASS.
+- V49 exact result locks required by the V50 launcher:
+  * v64_3_49_siir_fit.json
+    805c4f8088051413edeb568623bc6d225d1b3c301c52612f89109216b38be296
+  * v64_3_49_siir_train_scene_audit.csv
+    7243d1b4a07094ca691b4e0ba13ebd0a8ec1ad08d4da0b512a3714e1a9b5cd80
+  * v64_3_49_siir_oof_candidate_state_audit.jsonl
+    e51b8d38ec262a15a0b969e40e130a900984e9435d1cd2ae9c3d23bfd23f8f6c
+  * v64_3_49_siir.yaml
+    bde69241cb44da2e605a0e9e3897d024df7a1724868ba15a2e25cdc238dee405
+  * V49 server targeted_regression.out
+    403dd6d1fff0ad36eefc65a2afc4120c3f7dd72c30f0803baa663b068819cab0
+- Uploaded V49 result source manifest: 907 entries; independently matched to uploaded code with 0 missing / 0 mismatch.
+
+Code validation
+---------------
+- Python compileall: PASS.
+- RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh bash -n: PASS.
+- V50 focused unit tests: 9 / 9 PASS.
+- V48 + V48.2 + V49 + V50 focused: 26 / 26 PASS.
+- Full repository coverage: 126 test files, 588 logical tests PASS.
+  Evidence: complete sharded repository run was 587/587 before the final added V50 hard-metric-schema fail-closed test; the only final source changes were V50-only collection/config/fit/test paths. The affected V50 paths were rerun at 9/9 and the cross-version focused set at 26/26, giving final logical coverage 588/588. Historical PyTorch nested-tensor warnings only; no new warning class observed.
+
+V50-specific invariants tested / hard-checked
+---------------------------------------------
+- Probe disabled => exact no-op.
+- CONTROL => preserves incumbent at a frozen RSMR proposal.
+- TREATMENT => executes the exact frozen full-set RSMR proposal once, then preserves incumbent.
+- Treatment refuses a proposal that is not the actual frozen RSMR-selected action.
+- Fallback must be disabled for paired evidence collection.
+- Probe state resets per scenario.
+- Control/treatment configs are deep-copied; frozen source config is not mutated.
+- First paired proposal must occur at planner iteration 0.
+- CONTROL/TREATMENT proposal, incumbent, and frozen selected action identities must match.
+- Treatment executes exactly one selected intervention; control executes zero.
+- All four preregistered hard-safety aggregate metrics must exist and be finite in both arms; missing metric/schema drift is ENGINEERING STOP, never implicit PASS.
+- Incomplete/retried token outputs are deleted before rerun so stale parquet cannot be reused.
+- Paired collection is resumable only after a completed paired CSV row is committed.
+- V50 launcher never calls fresh-token selection; a TRAIN fit failure exits before untouched evidence can be consumed.
+- Final runtime fit preserves an independent calibration fold: folds 1-4 fit the ranker, fold 0 calibrates the retention threshold.
+
+Synthetic code-path falsification check (NOT scientific evidence)
+-----------------------------------------------------------------
+A synthetic paired-outcome file was created only to exercise the complete V50 fit path by setting the closed-loop safe-benefit sign equal to the old V49 teacher sign. The fit completed, wrote report/config/audit, and correctly SCIENTIFIC STOPPED:
+- SIOR bad-risk AUC = 0.6139192605594113
+- frozen OBS bad-risk AUC on the same synthetic labels = 0.6139192605594113
+- identification = false
+- full-fit calibration: fit folds [1,2,3,4], calibration fold 0
+This is the desired falsification behavior: if the new evidence source contains no new outcome information, V50 cannot manufacture a promotion.
+
+Real-run limitation in this workspace
+-------------------------------------
+The uploaded artifacts do not provide the server nuPlan TRAIN database/root and resolved checkpoint needed to execute 1004 paired reactive closed-loop simulations (502 CONTROL + 502 TREATMENT). Hence no real V50 outcome or promotion claim is made here. The launcher performs that collection on the server and stops after the nested TRAIN gate even when it passes.
