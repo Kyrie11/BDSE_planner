@@ -12210,3 +12210,22 @@ Candidate paper line: **Selection–Valuation–Intervention Sufficiency under a
 ### V64.3.50 engineering delivery status
 
 Final delivery hardening adds fail-closed paired hard-metric schema validation (all four preregistered hard metrics must be present and finite), deep-copy isolation when preparing CONTROL/TREATMENT configs, stale partial-output deletion before any retried token, and restoration of an independent final calibration fold (fit folds 1--4, calibration fold 0). V50 source manifest is **914/914 PASS**; final V50 focused tests are **9/9 PASS**, V48/V48.2/V49/V50 focused tests are **26/26 PASS**, and full-repository logical coverage is **588/588** across 126 test files. A synthetic code-path falsification in which the new label is deliberately made identical to the old teacher sign returns SIOR AUC exactly to OBS (`0.6139192605594113`) and scientific-STOPs, confirming that the V50 path does not create an artificial promotion when the evidence source carries no new selected-outcome information. No real V50 scientific claim is made until the paired nuPlan closed-loop collection is executed on the server.
+
+### V64.3.50 engineering-only dataset-layout compatibility repair (2026-08-29)
+
+**Scientific algorithm/version unchanged.** This repair only fixes server data-path assumptions in the V50 paired closed-loop launcher/collector; it does not alter RSMR, Q/P/E state, SIOR fitting, paired outcome labels, gates, treatment policy, or any preregistered claim.
+
+- Separate BDSE preprocessed NPZ caches from native nuPlan closed-loop inputs:
+  - `BDSE_CACHE_ROOT=/data0/senzeyu2/dataset/nuplan/data/cache`;
+  - native `NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan`;
+  - native maps from `$NUPLAN_ROOT/maps`.
+- V50 TRAIN closed-loop now passes exactly the four raw TRAIN DB directories as `scenario_builder.db_files`:
+  `train_boston`, `train_pittsburgh`, `train_singapore`, `train_vegas`.
+  The NPZ directory `train_vegas_2` remains an offline cache name only and is intentionally not reused as a raw DB split name.
+- Native `val`/`test` DB directories are not loaded into V50 TRAIN paired supervision.
+- Flat official split directories containing `*.db` directly are treated as the preferred layout; no per-log/vehicle subdirectory is required. Nested DB roots remain supported by the existing `evaluate_closed_loop` expansion logic for backward compatibility.
+- `NUPLAN_EXP_ROOT` now defaults to a writable V50 output-local directory rather than assuming an `exp/` directory exists inside the native dataset root.
+- Added fail-closed validation for map metadata and native DB inputs. NPZ cache paths are logged as provenance but are non-blocking because V50 paired ScenarioBuilder does not consume them. Passing an NPZ directory as a native DB input still stops with an explicit no-`.db` error.
+- Added tests locking the current server layout and direct-flat-DB compatibility.
+
+This repair is intentionally kept under **V64.3.50** rather than creating V64.3.51 because it changes no scientific mechanism or preregistered branch.

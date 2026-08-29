@@ -1,24 +1,74 @@
 V64.3.50 EAF-ICER-SIOR — NEXT SERVER COMMANDS
 =============================================
 
-Default layout
---------------
+Current server dataset layout (supported by this package)
+---------------------------------------------------------
+BDSE preprocessed NPZ caches (offline dataset/cache only):
+  /data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
+    - train_boston/<log>/*.npz
+    - train_pittsburgh/<log>/*.npz
+    - train_singapore/<log>/*.npz
+    - train_vegas_2/<log>/*.npz
+  /data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/val/<log>/*.npz
+  /data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2/public_set_test/<log>/*.npz
+
+Native nuPlan inputs used by V50 paired CLOSED-LOOP only:
+  data root:
+    /data0/senzeyu2/dataset/CapPlan/data/nuplan
+  maps:
+    /data0/senzeyu2/dataset/CapPlan/data/nuplan/maps
+  native TRAIN DB directories (flat *.db files are expected directly here):
+    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_boston
+    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_pittsburgh
+    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_singapore
+    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_vegas
+
+The launcher passes those four native TRAIN DB directories as
+scenario_builder.db_files.  It does NOT use bdse_train_v2 as a nuPlan DB root,
+and it does NOT mix val/test DBs into V50 TRAIN supervision.
+
+Default command
+---------------
 cd bdse_v64_3_50_eaf_icer_sior
 bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
 
-If historical outputs / nuPlan paths are elsewhere
----------------------------------------------------
+The current paths above are now the defaults, so no nuPlan path export is
+required on the described server layout.
+
+If historical outputs / checkpoint are elsewhere
+--------------------------------------------------
 cd bdse_v64_3_50_eaf_icer_sior
 
 V47_ROOT=/path/to/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
 V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
 EAF_V64_3_13_ROOT=/path/to/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
-NUPLAN_ROOT=/path/to/nuplan \
-NUPLAN_MAP_ROOT=/path/to/nuplan/maps \
-NUPLAN_EXP_ROOT=/path/to/nuplan/exp \
-NUPLAN_DB_ROOT=/path/to/nuplan-v1.1/splits/train \
 GPU0=0 GPU1=1 \
 bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+If the native nuPlan dataset is moved
+-------------------------------------
+Preferred: override the native data/splits root while keeping NPZ caches
+separate.
+
+NUPLAN_ROOT=/new/native/nuplan/root \
+NUPLAN_MAP_ROOT=/new/native/nuplan/root/maps \
+NUPLAN_SPLITS_ROOT=/new/native/nuplan/root/nuplan-v1.1/splits \
+BDSE_CACHE_ROOT=/new/bdse/cache/root \
+bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+For a nonstandard TRAIN DB selection, either provide a colon-separated list of
+DB directories:
+
+NUPLAN_TRAIN_DB_ROOTS=/db/train_boston:/db/train_pittsburgh:/db/train_singapore:/db/train_vegas \
+bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+or use the backward-compatible single root:
+
+NUPLAN_DB_ROOT=/path/to/a/root/containing/native/db/files \
+bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+Do NOT set NUPLAN_DB_ROOT to bdse_train_v2/bdse_val_v2/bdse_test_2: those are
+NPZ caches, not nuPlan SQLite log DBs.
 
 If checkpoint auto-resolution fails
 -----------------------------------
@@ -27,21 +77,26 @@ bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
 
 Expected behavior
 -----------------
-1. Verify the 914-file V50 source manifest.
-2. Hard-lock the exact uploaded V49 scientific failure artifacts.
-3. Re-audit frozen V13/EAF prerequisite and run repository targeted regression.
-4. Freeze exactly the 502 TRAIN scenes with a full-set RSMR proposal.
-5. Build CONTROL/TREATMENT configs from the pure frozen V47 RSMR config.
-6. Run paired closed_loop_reactive_agents evidence collection:
+1. Validate the separate BDSE NPZ-cache and native nuPlan DB/maps contracts.
+2. Verify the V50 source manifest.
+3. Hard-lock the exact uploaded V49 scientific failure artifacts.
+4. Re-audit frozen V13/EAF prerequisite and run repository targeted regression.
+5. Freeze exactly the 502 TRAIN scenes with a full-set RSMR proposal.
+6. Build CONTROL/TREATMENT configs from the pure frozen V47 RSMR config.
+7. Run paired closed_loop_reactive_agents evidence collection on ORIGINAL nuPlan
+   SQLite DB logs:
    CONTROL   = preserve incumbent at all RSMR proposals.
    TREATMENT = execute the exact first full-set RSMR winner once, then preserve incumbent.
-7. Fit/evaluate nested SIOR using the frozen [Q, P-Q, E-P] state and existing pairwise risk model.
-8. If TRAIN fails: scientific STOP, nonzero exit, no fresh evidence consumed.
-9. If TRAIN passes: launcher still deliberately STOPS before fresh selection. Freeze and return the result package for analysis first.
+8. Fit/evaluate nested SIOR using the frozen [Q, P-Q, E-P] state and existing pairwise risk model.
+9. If TRAIN fails: scientific STOP, nonzero exit, no fresh evidence consumed.
+10. If TRAIN passes: launcher still deliberately STOPS before fresh selection. Freeze and return the result package for analysis first.
 
 Resume contract
 ---------------
-The paired collection is resumable. Re-run the exact same command. A token is skipped only after its completed paired row exists in paired_train/paired_selected_outcomes.csv. Do not alter configs, token set, challenge, checkpoint, or GPU semantics between resumes.
+The paired collection is resumable. Re-run the exact same command. A token is
+skipped only after its completed paired row exists in
+paired_train/paired_selected_outcomes.csv. Do not alter configs, token set,
+challenge, checkpoint, DB selection, or GPU semantics between resumes.
 
 Return package after the run
 ----------------------------
@@ -52,4 +107,6 @@ Do NOT do yet
 - Do not run any V49 fresh screen.
 - Do not manually select V50 fresh A/B after TRAIN PASS; return the TRAIN package first.
 - Do not run official repeated-policy closed-loop yet.
-- Do not tune Q/P/E, ranker loss, lambda, threshold/calibration, safety weights, treatment duration, challenge, seed/prefix, or add new future observables based on this TRAIN run.
+- Do not tune Q/P/E, ranker loss, lambda, threshold/calibration, safety weights,
+  treatment duration, challenge, seed/prefix, or add new future observables based
+  on this TRAIN run.

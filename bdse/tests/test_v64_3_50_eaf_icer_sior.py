@@ -10,7 +10,11 @@ import yaml
 from bdse.planner.selected_outcome_probe import SelectedOutcomeProbeState, apply_selected_outcome_probe
 from bdse.tools.fit_v64_3_50_eaf_icer_sior import ALPHA_RET, V49_FAILURE, _check_v49
 from bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs import _make
-from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import HARD_METRICS, _hard_noninferiority
+from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
+    HARD_METRICS,
+    _hard_noninferiority,
+    _validate_native_nuplan_inputs,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -127,3 +131,41 @@ def test_v50_launcher_is_closed_loop_evidence_source_and_stops_before_fresh_on_f
     assert "fit_v64_3_50_eaf_icer_sior" in text
     assert "[[ $FIT_STATUS -eq 0 ]] || exit \"$FIT_STATUS\"" in text
     assert "select_fresh_preprocessed_tokens" not in text
+
+
+def test_v50_native_nuplan_layout_accepts_flat_city_db_directories(tmp_path: Path) -> None:
+    data_root = tmp_path / "native_nuplan"
+    map_root = data_root / "maps"
+    split_root = data_root / "nuplan-v1.1" / "splits"
+    map_root.mkdir(parents=True)
+    (map_root / "nuplan-maps-v1.0.json").write_text("{}")
+    db_dirs = []
+    for city in ("train_boston", "train_pittsburgh", "train_singapore", "train_vegas"):
+        d = split_root / city
+        d.mkdir(parents=True)
+        (d / f"{city}.db").write_bytes(b"sqlite-placeholder")
+        db_dirs.append(d)
+    args = type("Args", (), {
+        "nuplan_data_root": data_root,
+        "nuplan_map_root": map_root,
+        "nuplan_exp_root": tmp_path / "exp",
+        "nuplan_db_files": db_dirs,
+        "nuplan_db_root": None,
+    })()
+    out = _validate_native_nuplan_inputs(args)
+    assert out["mode"] == "db_files"
+    assert all(out["direct_db_counts"][str(d)] == 1 for d in db_dirs)
+    assert Path(out["exp_root"]).is_dir()
+
+
+def test_v50_launcher_separates_npz_cache_from_native_closed_loop_db_layout() -> None:
+    p = ROOT / "RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh"
+    text = p.read_text()
+    assert "/data0/senzeyu2/dataset/nuplan/data/cache" in text
+    assert "/data0/senzeyu2/dataset/CapPlan/data/nuplan" in text
+    assert '"$NUPLAN_SPLITS_ROOT/train_boston"' in text
+    assert '"$NUPLAN_SPLITS_ROOT/train_pittsburgh"' in text
+    assert '"$NUPLAN_SPLITS_ROOT/train_singapore"' in text
+    assert '"$NUPLAN_SPLITS_ROOT/train_vegas"' in text
+    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume' in text
+    assert 'NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train' not in text

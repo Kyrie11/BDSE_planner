@@ -184,6 +184,70 @@ def _run_arm(*, token: str, role: str, config: Path, checkpoint: Path, gpu: str,
     return metrics, diag, wall
 
 
+def _validate_native_nuplan_inputs(args: argparse.Namespace) -> dict[str, Any]:
+    """Fail closed on the V50 native nuPlan input contract.
+
+    BDSE NPZ caches are deliberately outside this function.  Closed-loop
+    ScenarioBuilder must consume original nuPlan SQLite log DBs and maps.
+    Flat split directories containing ``*.db`` directly are the preferred
+    layout; nested roots remain supported through evaluate_closed_loop's DB
+    expansion layer.
+    """
+    data_root = Path(args.nuplan_data_root).expanduser()
+    map_root = Path(args.nuplan_map_root).expanduser()
+    exp_root = Path(args.nuplan_exp_root).expanduser()
+    if not data_root.is_dir():
+        raise FileNotFoundError(f"V50 native nuPlan data root not found: {data_root}")
+    if not map_root.is_dir():
+        raise FileNotFoundError(f"V50 nuPlan map root not found: {map_root}")
+    meta = map_root / "nuplan-maps-v1.0.json"
+    if not meta.is_file():
+        raise FileNotFoundError(f"V50 nuPlan map metadata not found: {meta}")
+    exp_root.mkdir(parents=True, exist_ok=True)
+
+    db_inputs: list[Path] = []
+    mode: str
+    if args.nuplan_db_files:
+        mode = "db_files"
+        db_inputs = [Path(x).expanduser() for x in args.nuplan_db_files]
+    elif args.nuplan_db_root is not None:
+        mode = "db_root"
+        db_inputs = [Path(args.nuplan_db_root).expanduser()]
+    else:
+        raise ValueError("provide --nuplan-db-root or --nuplan-db-files")
+
+    missing = [str(p) for p in db_inputs if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"V50 native nuPlan DB input(s) not found: {missing}")
+    direct_db_counts: dict[str, int] = {}
+    recursive_db_counts: dict[str, int] = {}
+    for p in db_inputs:
+        if p.is_file():
+            if p.suffix != ".db":
+                raise ValueError(f"V50 DB file input is not .db: {p}")
+            direct_db_counts[str(p)] = 1
+            recursive_db_counts[str(p)] = 1
+            continue
+        direct = sum(1 for _ in p.glob("*.db"))
+        recursive = direct if direct else sum(1 for _ in p.rglob("*.db"))
+        if recursive <= 0:
+            raise FileNotFoundError(
+                f"V50 found no native nuPlan .db files under {p}. "
+                "Do not pass a BDSE NPZ cache directory to closed-loop ScenarioBuilder."
+            )
+        direct_db_counts[str(p)] = direct
+        recursive_db_counts[str(p)] = recursive
+    return {
+        "mode": mode,
+        "data_root": str(data_root),
+        "map_root": str(map_root),
+        "exp_root": str(exp_root),
+        "db_inputs": [str(p) for p in db_inputs],
+        "direct_db_counts": direct_db_counts,
+        "recursive_db_counts": recursive_db_counts,
+    }
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
@@ -212,8 +276,8 @@ def main() -> None:
     if not a.checkpoint.is_file(): raise FileNotFoundError(a.checkpoint)
     for p in (a.control_config, a.treatment_config, a.scenario_token_file):
         if not p.is_file(): raise FileNotFoundError(p)
-    if not a.nuplan_db_files and a.nuplan_db_root is None:
-        raise ValueError("provide --nuplan-db-root or --nuplan-db-files")
+    native_layout = _validate_native_nuplan_inputs(a)
+    print("[V50 native nuPlan input contract] " + json.dumps(native_layout, sort_keys=True), flush=True)
     if a.metric_aggregator is None:
         a.metric_aggregator = ("closed_loop_reactive_agents_weighted_average" if a.challenge == "closed_loop_reactive_agents" else "closed_loop_nonreactive_agents_weighted_average")
     gpus = [x.strip() for x in a.gpus.split(",") if x.strip()]
@@ -268,6 +332,7 @@ def main() -> None:
         "token_file_sha256": _sha(a.scenario_token_file),
         "control_config_sha256": _sha(a.control_config), "treatment_config_sha256": _sha(a.treatment_config),
         "checkpoint_sha256": _sha(a.checkpoint),
+        "native_nuplan_layout": native_layout,
         "safe_benefit_count": sum(int(float(r["safe_benefit"])) for r in ordered),
         "hard_regression_count": sum(1 for r in ordered if not bool(int(float(r["hard_noninferior"])))),
         "paired_score_delta_sum": sum(float(r["paired_score_delta"]) for r in ordered),

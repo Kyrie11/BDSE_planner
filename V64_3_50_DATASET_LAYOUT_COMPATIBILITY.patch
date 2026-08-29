@@ -1,0 +1,449 @@
+--- /mnt/data/v50_orig/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 14:40:51.000000000 +0000
++++ /mnt/data/v50_fix/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-29 15:55:53.449158721 +0000
+@@ -8,20 +8,71 @@
+ export V49_ROOT="${V49_ROOT:-outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
+ export OUT_ROOT="${OUT_ROOT:-outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1}"
+ export GPU0="${GPU0:-0}"; export GPU1="${GPU1:-1}"
+-export NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}"
++
++# ---------------------------------------------------------------------------
++# Dataset layout contract (engineering-only; V50 science is unchanged)
++# ---------------------------------------------------------------------------
++# BDSE NPZ caches and native nuPlan DB/maps are intentionally separate.
++#
++# User/preprocessed NPZ layout:
++#   /data0/senzeyu2/dataset/nuplan/data/cache/
++#       bdse_train_v2/{train_boston,train_pittsburgh,train_singapore,train_vegas_2}/<log>/*.npz
++#       bdse_val_v2/val/<log>/*.npz
++#       bdse_test_2/public_set_test/<log>/*.npz
++#
++# Native nuPlan layout used ONLY by closed-loop ScenarioBuilder:
++#   /data0/senzeyu2/dataset/CapPlan/data/nuplan/
++#       maps/...
++#       nuplan-v1.1/splits/{train_boston,train_pittsburgh,train_singapore,train_vegas,val,test}/*.db
++#
++# Do not point NUPLAN_DB_* at the NPZ cache. V50 paired closed-loop must run on
++# the original nuPlan SQLite log DBs.
++export BDSE_CACHE_ROOT="${BDSE_CACHE_ROOT:-/data0/senzeyu2/dataset/nuplan/data/cache}"
++export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-$BDSE_CACHE_ROOT/bdse_train_v2}"
++export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-$BDSE_CACHE_ROOT/bdse_val_v2}"
++export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-$BDSE_CACHE_ROOT/bdse_test_2}"
++
++export NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
+ export NUPLAN_MAP_ROOT="${NUPLAN_MAP_ROOT:-$NUPLAN_ROOT/maps}"
+-export NUPLAN_EXP_ROOT="${NUPLAN_EXP_ROOT:-$NUPLAN_ROOT/exp}"
+-export NUPLAN_DB_ROOT="${NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train}"
++export NUPLAN_EXP_ROOT="${NUPLAN_EXP_ROOT:-$SCRIPT_DIR/$OUT_ROOT/nuplan_exp}"
++export NUPLAN_SPLITS_ROOT="${NUPLAN_SPLITS_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits}"
+ export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_reactive_agents}"
+ export PYTHONUNBUFFERED=1
+ 
++# Native TRAIN DB selection.  The user's official DBs are flat inside each
++# city split directory, which is directly consumable by nuPlan.  We therefore
++# pass the four TRAIN directories as scenario_builder.db_files; val/test DBs
++# are never mixed into V50 TRAIN paired supervision.
++#
++# Backward-compatible overrides:
++#   NUPLAN_DB_ROOT=/some/single/root
++# or
++#   NUPLAN_TRAIN_DB_ROOTS=/dir/a:/dir/b:/dir/c
++# The latter takes precedence over the automatic four-city defaults.
++NUPLAN_DB_ARGS=()
++NUPLAN_TRAIN_DB_DIRS=()
++if [[ -n "${NUPLAN_TRAIN_DB_ROOTS:-}" ]]; then
++  IFS=':' read -r -a NUPLAN_TRAIN_DB_DIRS <<< "$NUPLAN_TRAIN_DB_ROOTS"
++  NUPLAN_DB_ARGS=(--nuplan-db-files "${NUPLAN_TRAIN_DB_DIRS[@]}")
++elif [[ -n "${NUPLAN_DB_ROOT:-}" ]]; then
++  NUPLAN_DB_ARGS=(--nuplan-db-root "$NUPLAN_DB_ROOT")
++else
++  NUPLAN_TRAIN_DB_DIRS=(
++    "$NUPLAN_SPLITS_ROOT/train_boston"
++    "$NUPLAN_SPLITS_ROOT/train_pittsburgh"
++    "$NUPLAN_SPLITS_ROOT/train_singapore"
++    "$NUPLAN_SPLITS_ROOT/train_vegas"
++  )
++  NUPLAN_DB_ARGS=(--nuplan-db-files "${NUPLAN_TRAIN_DB_DIRS[@]}")
++fi
++
+ V47_RSMR="$V47_ROOT/provenance/v64_3_47_rsmr.yaml"
+ V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
+ V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
+ V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
+ V49_CFG="$V49_ROOT/provenance/v64_3_49_siir.yaml"
+ V49_SERVER_TEST="$V49_ROOT/logs/targeted_regression.out"
+-mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs" "$OUT_ROOT/paired_train"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs" "$OUT_ROOT/paired_train" "$NUPLAN_EXP_ROOT"
+ TIMING="$OUT_ROOT/provenance/v64_3_50_stage_timing.tsv"; :>"$TIMING"; ALL_START=$(date +%s)
+ stage_start(){ STAGE_NAME="$1"; STAGE_START=$(date +%s); }
+ stage_end(){ printf '%s\t%s\n' "$STAGE_NAME" "$(( $(date +%s)-STAGE_START ))" >>"$TIMING"; }
+@@ -29,7 +80,39 @@
+ for f in V64_3_50_SOURCE_MANIFEST.sha256 "$EAF_TRAIN_LOG" "$V47_RSMR" "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CFG" "$V49_SERVER_TEST"; do
+   [[ -s "$f" ]] || { echo "STOP V50 missing $f" >&2; exit 2; }
+ done
+-[[ -d "$NUPLAN_ROOT" && -d "$NUPLAN_MAP_ROOT" && -d "$NUPLAN_DB_ROOT" ]] || { echo 'STOP V50 missing nuPlan root/maps/TRAIN DB root; override NUPLAN_ROOT/NUPLAN_MAP_ROOT/NUPLAN_DB_ROOT' >&2; exit 2; }
++# NPZ caches are NOT consumed by the V50 paired ScenarioBuilder path.  Keep
++# their canonical locations visible for provenance, but do not fail V50 merely
++# because an unused val/test NPZ cache is absent on a closed-loop worker.
++[[ -d "$NUPLAN_ROOT" ]] || { echo "STOP V50 missing native nuPlan root: $NUPLAN_ROOT" >&2; exit 2; }
++[[ -d "$NUPLAN_MAP_ROOT" ]] || { echo "STOP V50 missing nuPlan maps root: $NUPLAN_MAP_ROOT" >&2; exit 2; }
++[[ -s "$NUPLAN_MAP_ROOT/nuplan-maps-v1.0.json" ]] || { echo "STOP V50 missing nuPlan map metadata: $NUPLAN_MAP_ROOT/nuplan-maps-v1.0.json" >&2; exit 2; }
++
++if [[ ${#NUPLAN_TRAIN_DB_DIRS[@]} -gt 0 ]]; then
++  for d in "${NUPLAN_TRAIN_DB_DIRS[@]}"; do
++    [[ -d "$d" ]] || { echo "STOP V50 missing native TRAIN DB directory: $d" >&2; exit 2; }
++    [[ -n "$(find "$d" -maxdepth 1 -type f -name '*.db' -print -quit 2>/dev/null)" ]] || {
++      echo "STOP V50 native TRAIN DB directory contains no direct .db files: $d" >&2
++      echo "V50 closed-loop needs original nuPlan SQLite DBs, not BDSE NPZ cache files." >&2
++      exit 2
++    }
++  done
++elif [[ -n "${NUPLAN_DB_ROOT:-}" ]]; then
++  [[ -e "$NUPLAN_DB_ROOT" ]] || { echo "STOP V50 missing NUPLAN_DB_ROOT: $NUPLAN_DB_ROOT" >&2; exit 2; }
++fi
++
++echo '[V50 dataset layout] BDSE NPZ caches (offline only):'
++echo "  train=$BDSE_TRAIN_CACHE (present=$([[ -d "$BDSE_TRAIN_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
++echo "  val=$BDSE_VAL_CACHE (present=$([[ -d "$BDSE_VAL_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
++echo "  test=$BDSE_TEST_CACHE (present=$([[ -d "$BDSE_TEST_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
++echo '[V50 dataset layout] native nuPlan closed-loop inputs:'
++echo "  data_root=$NUPLAN_ROOT"
++echo "  map_root=$NUPLAN_MAP_ROOT"
++echo "  exp_root=$NUPLAN_EXP_ROOT"
++if [[ ${#NUPLAN_TRAIN_DB_DIRS[@]} -gt 0 ]]; then
++  printf '  train_db_dir=%s\n' "${NUPLAN_TRAIN_DB_DIRS[@]}"
++else
++  echo "  train_db_root=$NUPLAN_DB_ROOT"
++fi
+ 
+ stage_start source_and_v49_science_lock
+ sha256sum -c V64_3_50_SOURCE_MANIFEST.sha256 | tee "$OUT_ROOT/logs/v64_3_50_source_manifest.out"
+@@ -88,7 +171,7 @@
+   --control-config "$CONTROL_CFG" --treatment-config "$TREATMENT_CFG" --checkpoint "$EAF_CKPT" \
+   --scenario-token-file "$TRAIN_TOKENS" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
+   --challenge "$CL_CHALLENGE" --nuplan-data-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" \
+-  --nuplan-exp-root "$NUPLAN_EXP_ROOT" --nuplan-db-root "$NUPLAN_DB_ROOT" --resume \
++  --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume \
+   2>&1 | tee "$OUT_ROOT/logs/v64_3_50_paired_closed_loop_collection.out"
+ stage_end
+ 
+--- /mnt/data/v50_orig/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py	2026-08-29 15:01:07.000000000 +0000
++++ /mnt/data/v50_fix/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py	2026-08-29 15:51:21.045275120 +0000
+@@ -184,6 +184,70 @@
+     return metrics, diag, wall
+ 
+ 
++def _validate_native_nuplan_inputs(args: argparse.Namespace) -> dict[str, Any]:
++    """Fail closed on the V50 native nuPlan input contract.
++
++    BDSE NPZ caches are deliberately outside this function.  Closed-loop
++    ScenarioBuilder must consume original nuPlan SQLite log DBs and maps.
++    Flat split directories containing ``*.db`` directly are the preferred
++    layout; nested roots remain supported through evaluate_closed_loop's DB
++    expansion layer.
++    """
++    data_root = Path(args.nuplan_data_root).expanduser()
++    map_root = Path(args.nuplan_map_root).expanduser()
++    exp_root = Path(args.nuplan_exp_root).expanduser()
++    if not data_root.is_dir():
++        raise FileNotFoundError(f"V50 native nuPlan data root not found: {data_root}")
++    if not map_root.is_dir():
++        raise FileNotFoundError(f"V50 nuPlan map root not found: {map_root}")
++    meta = map_root / "nuplan-maps-v1.0.json"
++    if not meta.is_file():
++        raise FileNotFoundError(f"V50 nuPlan map metadata not found: {meta}")
++    exp_root.mkdir(parents=True, exist_ok=True)
++
++    db_inputs: list[Path] = []
++    mode: str
++    if args.nuplan_db_files:
++        mode = "db_files"
++        db_inputs = [Path(x).expanduser() for x in args.nuplan_db_files]
++    elif args.nuplan_db_root is not None:
++        mode = "db_root"
++        db_inputs = [Path(args.nuplan_db_root).expanduser()]
++    else:
++        raise ValueError("provide --nuplan-db-root or --nuplan-db-files")
++
++    missing = [str(p) for p in db_inputs if not p.exists()]
++    if missing:
++        raise FileNotFoundError(f"V50 native nuPlan DB input(s) not found: {missing}")
++    direct_db_counts: dict[str, int] = {}
++    recursive_db_counts: dict[str, int] = {}
++    for p in db_inputs:
++        if p.is_file():
++            if p.suffix != ".db":
++                raise ValueError(f"V50 DB file input is not .db: {p}")
++            direct_db_counts[str(p)] = 1
++            recursive_db_counts[str(p)] = 1
++            continue
++        direct = sum(1 for _ in p.glob("*.db"))
++        recursive = direct if direct else sum(1 for _ in p.rglob("*.db"))
++        if recursive <= 0:
++            raise FileNotFoundError(
++                f"V50 found no native nuPlan .db files under {p}. "
++                "Do not pass a BDSE NPZ cache directory to closed-loop ScenarioBuilder."
++            )
++        direct_db_counts[str(p)] = direct
++        recursive_db_counts[str(p)] = recursive
++    return {
++        "mode": mode,
++        "data_root": str(data_root),
++        "map_root": str(map_root),
++        "exp_root": str(exp_root),
++        "db_inputs": [str(p) for p in db_inputs],
++        "direct_db_counts": direct_db_counts,
++        "recursive_db_counts": recursive_db_counts,
++    }
++
++
+ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+     if not rows:
+         return
+@@ -212,8 +276,8 @@
+     if not a.checkpoint.is_file(): raise FileNotFoundError(a.checkpoint)
+     for p in (a.control_config, a.treatment_config, a.scenario_token_file):
+         if not p.is_file(): raise FileNotFoundError(p)
+-    if not a.nuplan_db_files and a.nuplan_db_root is None:
+-        raise ValueError("provide --nuplan-db-root or --nuplan-db-files")
++    native_layout = _validate_native_nuplan_inputs(a)
++    print("[V50 native nuPlan input contract] " + json.dumps(native_layout, sort_keys=True), flush=True)
+     if a.metric_aggregator is None:
+         a.metric_aggregator = ("closed_loop_reactive_agents_weighted_average" if a.challenge == "closed_loop_reactive_agents" else "closed_loop_nonreactive_agents_weighted_average")
+     gpus = [x.strip() for x in a.gpus.split(",") if x.strip()]
+@@ -268,6 +332,7 @@
+         "token_file_sha256": _sha(a.scenario_token_file),
+         "control_config_sha256": _sha(a.control_config), "treatment_config_sha256": _sha(a.treatment_config),
+         "checkpoint_sha256": _sha(a.checkpoint),
++        "native_nuplan_layout": native_layout,
+         "safe_benefit_count": sum(int(float(r["safe_benefit"])) for r in ordered),
+         "hard_regression_count": sum(1 for r in ordered if not bool(int(float(r["hard_noninferior"])))),
+         "paired_score_delta_sum": sum(float(r["paired_score_delta"]) for r in ordered),
+--- /mnt/data/v50_orig/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-29 15:04:26.000000000 +0000
++++ /mnt/data/v50_fix/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-29 15:51:35.178197362 +0000
+@@ -10,7 +10,11 @@
+ from bdse.planner.selected_outcome_probe import SelectedOutcomeProbeState, apply_selected_outcome_probe
+ from bdse.tools.fit_v64_3_50_eaf_icer_sior import ALPHA_RET, V49_FAILURE, _check_v49
+ from bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs import _make
+-from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import HARD_METRICS, _hard_noninferiority
++from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
++    HARD_METRICS,
++    _hard_noninferiority,
++    _validate_native_nuplan_inputs,
++)
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ 
+@@ -127,3 +131,41 @@
+     assert "fit_v64_3_50_eaf_icer_sior" in text
+     assert "[[ $FIT_STATUS -eq 0 ]] || exit \"$FIT_STATUS\"" in text
+     assert "select_fresh_preprocessed_tokens" not in text
++
++
++def test_v50_native_nuplan_layout_accepts_flat_city_db_directories(tmp_path: Path) -> None:
++    data_root = tmp_path / "native_nuplan"
++    map_root = data_root / "maps"
++    split_root = data_root / "nuplan-v1.1" / "splits"
++    map_root.mkdir(parents=True)
++    (map_root / "nuplan-maps-v1.0.json").write_text("{}")
++    db_dirs = []
++    for city in ("train_boston", "train_pittsburgh", "train_singapore", "train_vegas"):
++        d = split_root / city
++        d.mkdir(parents=True)
++        (d / f"{city}.db").write_bytes(b"sqlite-placeholder")
++        db_dirs.append(d)
++    args = type("Args", (), {
++        "nuplan_data_root": data_root,
++        "nuplan_map_root": map_root,
++        "nuplan_exp_root": tmp_path / "exp",
++        "nuplan_db_files": db_dirs,
++        "nuplan_db_root": None,
++    })()
++    out = _validate_native_nuplan_inputs(args)
++    assert out["mode"] == "db_files"
++    assert all(out["direct_db_counts"][str(d)] == 1 for d in db_dirs)
++    assert Path(out["exp_root"]).is_dir()
++
++
++def test_v50_launcher_separates_npz_cache_from_native_closed_loop_db_layout() -> None:
++    p = ROOT / "RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh"
++    text = p.read_text()
++    assert "/data0/senzeyu2/dataset/nuplan/data/cache" in text
++    assert "/data0/senzeyu2/dataset/CapPlan/data/nuplan" in text
++    assert '"$NUPLAN_SPLITS_ROOT/train_boston"' in text
++    assert '"$NUPLAN_SPLITS_ROOT/train_pittsburgh"' in text
++    assert '"$NUPLAN_SPLITS_ROOT/train_singapore"' in text
++    assert '"$NUPLAN_SPLITS_ROOT/train_vegas"' in text
++    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume' in text
++    assert 'NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train' not in text
+--- /mnt/data/v50_orig/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt	2026-08-29 15:06:57.000000000 +0000
++++ /mnt/data/v50_fix/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt	2026-08-29 15:52:34.188310386 +0000
+@@ -1,25 +1,75 @@
+ V64.3.50 EAF-ICER-SIOR — NEXT SERVER COMMANDS
+ =============================================
+ 
+-Default layout
+---------------
++Current server dataset layout (supported by this package)
++---------------------------------------------------------
++BDSE preprocessed NPZ caches (offline dataset/cache only):
++  /data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2
++    - train_boston/<log>/*.npz
++    - train_pittsburgh/<log>/*.npz
++    - train_singapore/<log>/*.npz
++    - train_vegas_2/<log>/*.npz
++  /data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2/val/<log>/*.npz
++  /data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2/public_set_test/<log>/*.npz
++
++Native nuPlan inputs used by V50 paired CLOSED-LOOP only:
++  data root:
++    /data0/senzeyu2/dataset/CapPlan/data/nuplan
++  maps:
++    /data0/senzeyu2/dataset/CapPlan/data/nuplan/maps
++  native TRAIN DB directories (flat *.db files are expected directly here):
++    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_boston
++    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_pittsburgh
++    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_singapore
++    /data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train_vegas
++
++The launcher passes those four native TRAIN DB directories as
++scenario_builder.db_files.  It does NOT use bdse_train_v2 as a nuPlan DB root,
++and it does NOT mix val/test DBs into V50 TRAIN supervision.
++
++Default command
++---------------
+ cd bdse_v64_3_50_eaf_icer_sior
+ bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+ 
+-If historical outputs / nuPlan paths are elsewhere
+----------------------------------------------------
++The current paths above are now the defaults, so no nuPlan path export is
++required on the described server layout.
++
++If historical outputs / checkpoint are elsewhere
++--------------------------------------------------
+ cd bdse_v64_3_50_eaf_icer_sior
+ 
+ V47_ROOT=/path/to/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+ V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+ EAF_V64_3_13_ROOT=/path/to/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+-NUPLAN_ROOT=/path/to/nuplan \
+-NUPLAN_MAP_ROOT=/path/to/nuplan/maps \
+-NUPLAN_EXP_ROOT=/path/to/nuplan/exp \
+-NUPLAN_DB_ROOT=/path/to/nuplan-v1.1/splits/train \
+ GPU0=0 GPU1=1 \
+ bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+ 
++If the native nuPlan dataset is moved
++-------------------------------------
++Preferred: override the native data/splits root while keeping NPZ caches
++separate.
++
++NUPLAN_ROOT=/new/native/nuplan/root \
++NUPLAN_MAP_ROOT=/new/native/nuplan/root/maps \
++NUPLAN_SPLITS_ROOT=/new/native/nuplan/root/nuplan-v1.1/splits \
++BDSE_CACHE_ROOT=/new/bdse/cache/root \
++bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++
++For a nonstandard TRAIN DB selection, either provide a colon-separated list of
++DB directories:
++
++NUPLAN_TRAIN_DB_ROOTS=/db/train_boston:/db/train_pittsburgh:/db/train_singapore:/db/train_vegas \
++bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++
++or use the backward-compatible single root:
++
++NUPLAN_DB_ROOT=/path/to/a/root/containing/native/db/files \
++bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++
++Do NOT set NUPLAN_DB_ROOT to bdse_train_v2/bdse_val_v2/bdse_test_2: those are
++NPZ caches, not nuPlan SQLite log DBs.
++
+ If checkpoint auto-resolution fails
+ -----------------------------------
+ export EAF_CKPT=/path/to/bdse_v64_saqa_bcc.epoch_XXXX.pt
+@@ -27,21 +77,26 @@
+ 
+ Expected behavior
+ -----------------
+-1. Verify the 914-file V50 source manifest.
+-2. Hard-lock the exact uploaded V49 scientific failure artifacts.
+-3. Re-audit frozen V13/EAF prerequisite and run repository targeted regression.
+-4. Freeze exactly the 502 TRAIN scenes with a full-set RSMR proposal.
+-5. Build CONTROL/TREATMENT configs from the pure frozen V47 RSMR config.
+-6. Run paired closed_loop_reactive_agents evidence collection:
++1. Validate the separate BDSE NPZ-cache and native nuPlan DB/maps contracts.
++2. Verify the V50 source manifest.
++3. Hard-lock the exact uploaded V49 scientific failure artifacts.
++4. Re-audit frozen V13/EAF prerequisite and run repository targeted regression.
++5. Freeze exactly the 502 TRAIN scenes with a full-set RSMR proposal.
++6. Build CONTROL/TREATMENT configs from the pure frozen V47 RSMR config.
++7. Run paired closed_loop_reactive_agents evidence collection on ORIGINAL nuPlan
++   SQLite DB logs:
+    CONTROL   = preserve incumbent at all RSMR proposals.
+    TREATMENT = execute the exact first full-set RSMR winner once, then preserve incumbent.
+-7. Fit/evaluate nested SIOR using the frozen [Q, P-Q, E-P] state and existing pairwise risk model.
+-8. If TRAIN fails: scientific STOP, nonzero exit, no fresh evidence consumed.
+-9. If TRAIN passes: launcher still deliberately STOPS before fresh selection. Freeze and return the result package for analysis first.
++8. Fit/evaluate nested SIOR using the frozen [Q, P-Q, E-P] state and existing pairwise risk model.
++9. If TRAIN fails: scientific STOP, nonzero exit, no fresh evidence consumed.
++10. If TRAIN passes: launcher still deliberately STOPS before fresh selection. Freeze and return the result package for analysis first.
+ 
+ Resume contract
+ ---------------
+-The paired collection is resumable. Re-run the exact same command. A token is skipped only after its completed paired row exists in paired_train/paired_selected_outcomes.csv. Do not alter configs, token set, challenge, checkpoint, or GPU semantics between resumes.
++The paired collection is resumable. Re-run the exact same command. A token is
++skipped only after its completed paired row exists in
++paired_train/paired_selected_outcomes.csv. Do not alter configs, token set,
++challenge, checkpoint, DB selection, or GPU semantics between resumes.
+ 
+ Return package after the run
+ ----------------------------
+@@ -52,4 +107,6 @@
+ - Do not run any V49 fresh screen.
+ - Do not manually select V50 fresh A/B after TRAIN PASS; return the TRAIN package first.
+ - Do not run official repeated-policy closed-loop yet.
+-- Do not tune Q/P/E, ranker loss, lambda, threshold/calibration, safety weights, treatment duration, challenge, seed/prefix, or add new future observables based on this TRAIN run.
++- Do not tune Q/P/E, ranker loss, lambda, threshold/calibration, safety weights,
++  treatment duration, challenge, seed/prefix, or add new future observables based
++  on this TRAIN run.
+--- /mnt/data/v50_orig/ALGORITHM_CHANGELOG.md	2026-08-29 15:06:57.000000000 +0000
++++ /mnt/data/v50_fix/ALGORITHM_CHANGELOG.md	2026-08-29 15:55:55.112464022 +0000
+@@ -12210,3 +12210,22 @@
+ ### V64.3.50 engineering delivery status
+ 
+ Final delivery hardening adds fail-closed paired hard-metric schema validation (all four preregistered hard metrics must be present and finite), deep-copy isolation when preparing CONTROL/TREATMENT configs, stale partial-output deletion before any retried token, and restoration of an independent final calibration fold (fit folds 1--4, calibration fold 0). V50 source manifest is **914/914 PASS**; final V50 focused tests are **9/9 PASS**, V48/V48.2/V49/V50 focused tests are **26/26 PASS**, and full-repository logical coverage is **588/588** across 126 test files. A synthetic code-path falsification in which the new label is deliberately made identical to the old teacher sign returns SIOR AUC exactly to OBS (`0.6139192605594113`) and scientific-STOPs, confirming that the V50 path does not create an artificial promotion when the evidence source carries no new selected-outcome information. No real V50 scientific claim is made until the paired nuPlan closed-loop collection is executed on the server.
++
++### V64.3.50 engineering-only dataset-layout compatibility repair (2026-08-29)
++
++**Scientific algorithm/version unchanged.** This repair only fixes server data-path assumptions in the V50 paired closed-loop launcher/collector; it does not alter RSMR, Q/P/E state, SIOR fitting, paired outcome labels, gates, treatment policy, or any preregistered claim.
++
++- Separate BDSE preprocessed NPZ caches from native nuPlan closed-loop inputs:
++  - `BDSE_CACHE_ROOT=/data0/senzeyu2/dataset/nuplan/data/cache`;
++  - native `NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan`;
++  - native maps from `$NUPLAN_ROOT/maps`.
++- V50 TRAIN closed-loop now passes exactly the four raw TRAIN DB directories as `scenario_builder.db_files`:
++  `train_boston`, `train_pittsburgh`, `train_singapore`, `train_vegas`.
++  The NPZ directory `train_vegas_2` remains an offline cache name only and is intentionally not reused as a raw DB split name.
++- Native `val`/`test` DB directories are not loaded into V50 TRAIN paired supervision.
++- Flat official split directories containing `*.db` directly are treated as the preferred layout; no per-log/vehicle subdirectory is required. Nested DB roots remain supported by the existing `evaluate_closed_loop` expansion logic for backward compatibility.
++- `NUPLAN_EXP_ROOT` now defaults to a writable V50 output-local directory rather than assuming an `exp/` directory exists inside the native dataset root.
++- Added fail-closed validation for map metadata and native DB inputs. NPZ cache paths are logged as provenance but are non-blocking because V50 paired ScenarioBuilder does not consume them. Passing an NPZ directory as a native DB input still stops with an explicit no-`.db` error.
++- Added tests locking the current server layout and direct-flat-DB compatibility.
++
++This repair is intentionally kept under **V64.3.50** rather than creating V64.3.51 because it changes no scientific mechanism or preregistered branch.
+--- /mnt/data/v50_orig/V64_3_50_SOURCE_MANIFEST.sha256	2026-08-29 15:06:01.000000000 +0000
++++ /mnt/data/v50_fix/V64_3_50_SOURCE_MANIFEST.sha256	2026-08-29 15:56:15.333877718 +0000
+@@ -905,10 +905,10 @@
+ 8766476a9a8d5c93ad8ab02f32444be9f4dfb01a000b7f5e6ce6e1aa43ee40ac  bdse/tools/check_v64_3_49_eaf_icer_siir_screen.py
+ 01dbedbc3fc85bbed406dcd6930f5d7f099ffdf8b55b683d0be5ce299800c37a  bdse/tools/check_v64_3_49_eaf_icer_siir_split.py
+ 54b9dddb6d402bd8be1ef269b30727ba3bdfc2914b14d687fae00f42a57bee5d  bdse/tools/fit_v64_3_49_eaf_icer_siir.py
+-edcfc08af361584f12c2cdc7d7b7ba1341a4312a15f5c7d9f62807ae59c97c99  RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++7eb640a2c210f86b43763aa82e5b89738e85af7b26b3084e2f6b57a2b42bbec2  RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+ 8f7aeed987990ce72caabff2c9d7dca92d76913652cdf2b8cad3b80d2b787aa3  bdse/planner/selected_outcome_probe.py
+ 1a841f0075003e6d9abe8e5b7eb89d250f9527ffd61cbb19a1d00561676bf629  bdse/tools/prepare_v64_3_50_eaf_icer_sior_probe_configs.py
+ d96a6af7057b94820915f37c68b26ad4b609eb4b198d124b60a3cf0cac757dc7  bdse/tools/select_v64_3_50_sior_train_tokens.py
+-cd92a3ff80f11e33d6ac1e07b89ecfb591908e7eab3dde6aa268807f0ac29805  bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
++070a95b8940021d54ac91907f2d3c8a140f39dd4af05b682fcee36aaf53a1d73  bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
+ 4dbb94463c962433ecc555d97e3e61fee288c7a73103417fb01f47f9df660d1b  bdse/tools/fit_v64_3_50_eaf_icer_sior.py
+-4d47eddf6a04661cb3f06f81a08242568d22e373ea02a16a83c56333a91b7333  bdse/tests/test_v64_3_50_eaf_icer_sior.py
++93272fa175680f6caea16aa609163a206c6d18e2e89ef0f356e45f9de8c1e9f9  bdse/tests/test_v64_3_50_eaf_icer_sior.py
