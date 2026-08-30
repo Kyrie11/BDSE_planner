@@ -1,0 +1,24 @@
+V64.3.50 live-selection eligibility / cohort-semantics repair — intentional source/artifact changes
+
+Algorithm/runtime source
+- bdse/planner/nuplan_planner.py
+  Records pre/post deployed-candidate trajectory fingerprints on every V50 probe tick so no-treatment whole-run equality is auditable.
+- bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
+  Adds explicit live eligibility strata, no-live-proposal audit-only handling, strict asymmetric/divergence stops, protocol-version resume lock, and cohort summary.
+- bdse/tools/fit_v64_3_50_eaf_icer_sior.py
+  Fits only live selected events; audits all 502 discovery scenes; inherited support STOP; full-offline OBS comparator; pair-protocol lock.
+- bdse/tools/select_v64_3_50_sior_train_tokens.py
+  Clarifies the 502 tokens are a frozen offline discovery cohort, not guaranteed treatment events.
+- bdse/tests/test_v64_3_50_eaf_icer_sior.py
+  Adds symmetric no-proposal, asymmetric eligibility, one-shot return-to-incumbent, support, and pair-protocol regression tests.
+
+Protocol / provenance artifacts
+- V64_3_50_SOURCE_MANIFEST.sha256
+- ALGORITHM_CHANGELOG.md
+- V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_SIOR_DESIGN.md
+- NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt
+- V64_3_50_ENGINEERING_VALIDATION.txt
+- V64_3_50_LIVE_SELECTION_ELIGIBILITY_REPAIR.md
+- V64_3_50_LIVE_SELECTION_ELIGIBILITY_REPAIR.patch
+
+Generated build/cache artifacts were removed from the delivered package and are not algorithm changes.

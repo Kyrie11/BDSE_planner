@@ -1,3 +1,5 @@
+> **V50 pre-result protocol amendment (live-selection eligibility):** Native closed-loop execution showed that a V49 offline-selected scene may have no live RSMR proposal in either paired arm. The frozen 502 scenes are therefore treated as an offline discovery cohort; only synchronized live proposal events define selected-action treatments and receive paired SIOR labels. Symmetric no-proposal scenes remain in a transport audit and are excluded from outcome fitting. This amendment is outcome-blind and does not change Q/P/E, the ranker, lambda, calibration budget, or deployment containment. See `V64_3_50_LIVE_SELECTION_ELIGIBILITY_REPAIR.md`.
+
 # V64.3.49 SIIR result postmortem and V64.3.50 SIOR preregistered design
 
 ## Executive decision

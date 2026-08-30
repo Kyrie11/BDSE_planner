@@ -12133,7 +12133,7 @@ V50 obeys the V49 preregistered STOP: it changes the **outcome evidence source**
 
 ## Paired one-shot selected-outcome intervention
 
-Freeze the exact 502 TRAIN scenes where the full-set RSMR selector emits a proposal. For each scene, run two nuPlan simulations from the identical scenario start under `closed_loop_reactive_agents` by default:
+Freeze the exact 502 TRAIN scenes where the **offline V49 instrumentation** emitted a full-set RSMR proposal as an outcome-blind discovery cohort. Native closed-loop replay then determines whether a synchronized **live** RSMR proposal/treatment opportunity actually exists. For each discovery-cohort scene, run two nuPlan simulations from the identical scenario start under `closed_loop_reactive_agents` by default:
 
 - **CONTROL:** whenever the direct RSMR proposal exists, preserve the incumbent;
 - **TREATMENT:** execute the first exact full-set RSMR proposal once, then preserve the incumbent for all later direct proposals.
@@ -12143,7 +12143,7 @@ This is a one-shot causal probe, not the final repeated deployment policy. It is
 Hard engineering invariants:
 
 - first **live** proposal does not have to be absolute planner iteration 0; CONTROL/TREATMENT must reach the first proposal at identical iteration/time with identical pre-intervention action traces;
-- live proposal, incumbent and frozen V49 full-set RSMR winner identities must match;
+- CONTROL/TREATMENT live proposal, incumbent, trajectory fingerprint and maneuver semantics must match at the same live state; the offline V49 integer action slot is provenance only and is not a cross-state identity;
 - Q/P/E coordinate definitions stay frozen but are evaluated at the exact live pre-intervention proposal state and must match across CONTROL/TREATMENT;
 - treatment action must equal the actual full-set RSMR action;
 - treatment executes exactly one intervention;
@@ -12151,7 +12151,11 @@ Hard engineering invariants:
 - fallback disabled;
 - probe state reset at every scenario initialization;
 - all four preregistered hard-safety aggregate metrics must be present and finite in both paired arms; missing/schema-drift metrics are ENGINEERING STOP;
-- any violation is ENGINEERING STOP.
+- any asymmetric proposal eligibility or paired trace/identity violation is ENGINEERING STOP.
+
+A symmetric scene with **no live RSMR proposal in either arm** is not an engineering failure and is not a negative outcome label. It is recorded as `no_live_proposal`, kept in the 502-scene cohort-transport audit, and excluded from SIOR fit/calibration/test because no selected-action treatment exists. The full no-treatment CONTROL/TREATMENT trajectory fingerprint trace and official metrics must remain equivalent.
+
+No post-hoc eligibility-rate threshold is introduced. The live selected-event population is scientifically admissible only if it satisfies the already-frozen estimator minima: >=32 positive/nonpositive events in each nested fit split, >=16 positive events in every calibration fold, and both classes in every held-out fold. Failure is a scientific selection-transport/support STOP before fresh evaluation; no-proposal scenes must never be relabeled to rescue support.
 
 The runtime planner path is unchanged when the probe is disabled.
 
@@ -12300,3 +12304,23 @@ The SIOR model, Q/P/E coordinate definitions, pairwise loss, `lambda=1`, retenti
 Operational consequence: rerunning V49 with the same source/data will not repair `23 != 6`, because the mismatch is caused by comparing state-local candidate slots across different planner states.  A clean server checkout is recommended for provenance hygiene, but it is not a scientific fix for this specific mismatch.
 
 Packaging repair in the same engineering change restores `pyproject.toml` as the package metadata/build source and a minimal `setup.py` compatibility shim.  Server editable installs should use `python -m pip install -e . --no-build-isolation` in offline environments.  V50 launcher now verifies that `import bdse` resolves inside the current checkout so an older editable installation cannot silently execute stale code.
+
+
+## V64.3.50 protocol repair — offline discovery cohort vs live selected-event cohort
+
+**Trigger:** native closed-loop token `04e294754b4d56a6` produced valid strict probe diagnostics in both arms but zero live proposal markers (`0/0`). This occurred after earlier outcome-blind repairs had already shown that absolute iteration and integer action-slot identities do not transport directly from offline V49 instrumentation to native closed-loop states.
+
+**Root diagnosis:** the original V50 implementation incorrectly treated the 502 offline V49 selected scenes as 502 guaranteed live treatment events. The correct causal unit is a synchronized **live RSMR proposal event**. A scene can belong to the frozen offline discovery cohort yet have no live direct proposal during native replay.
+
+**Repair:**
+
+- retain all 502 V49-selected tokens as a frozen discovery/transport cohort;
+- classify each paired replay as `eligible_intervened` or `no_live_proposal`;
+- require whole-trajectory CONTROL/TREATMENT candidate fingerprints to match for the no-proposal stratum;
+- do not create `safe_benefit` / negative labels when no treatment opportunity exists;
+- fit/calibrate/test SIOR only on live-eligible selected events while retaining all 502 rows in the audit;
+- report overall/per-fold live eligibility;
+- fail scientifically, not by estimator tuning, if the live selected-event population does not satisfy the frozen V48/V49 support minima;
+- reconstruct the V49 OBS comparator from the full offline fold population, then evaluate it on the same live Q/P/E states/labels as SIOR, avoiding eligibility leakage into the baseline.
+
+This is an **outcome-blind protocol/estimand correction**, not a new feature, threshold, risk head, or deployment action. The paper claim must distinguish offline discovery coverage from conditional on-policy selected-outcome identification.

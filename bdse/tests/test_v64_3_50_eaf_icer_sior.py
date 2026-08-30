@@ -8,9 +8,10 @@ import pytest
 import yaml
 
 from bdse.planner.selected_outcome_probe import SelectedOutcomeProbeState, apply_selected_outcome_probe
-from bdse.tools.fit_v64_3_50_eaf_icer_sior import ALPHA_RET, V49_FAILURE, _check_v49
+from bdse.tools.fit_v64_3_50_eaf_icer_sior import ALPHA_RET, PAIR_COLLECTION_PROTOCOL_VERSION, V49_FAILURE, _check_v49, _statistical_admissibility
 from bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs import _make
 from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
+    COLLECTION_PROTOCOL_VERSION,
     HARD_METRICS,
     _hard_noninferiority,
     _validate_native_nuplan_inputs,
@@ -125,6 +126,12 @@ def _write_probe_diag(path: Path, role: str, *, first_it: int = 7, proposal: int
             "executed_intervention_count": 1 if role == "treatment" and it >= first_it else 0,
             "proposal_event_count": max(0, it - first_it + 1),
         }
+        d.update({
+            "v50_pre_probe_action_fingerprint": f"pre-{it}-{pre if pexists else 4}",
+            "v50_post_probe_action_fingerprint": (
+                f"post-{it}-{proposal if role == 'treatment' and first else baseline}" if pexists else f"post-{it}-4"
+            ),
+        })
         if pexists:
             d.update({
                 "live_quality_value": 0.1,
@@ -170,6 +177,68 @@ def test_v50_pair_validation_rejects_live_candidate_or_timing_mismatch(tmp_path:
         _validate_pair("tok", c, t, 23)
 
 
+def _write_no_proposal_diag(path: Path, role: str, *, n: int = 10, action: int = 4) -> None:
+    rows = []
+    for it in range(n):
+        d = {
+            "enabled": True,
+            "role": role,
+            "proposal_exists": False,
+            "proposal_action": -1,
+            "baseline_action": -1,
+            "rsmr_selected_action": -1,
+            "pre_probe_selected_action": action,
+            "pre_probe_action": action,
+            "post_probe_action": action,
+            "first_proposal_now": False,
+            "first_proposal_seen": False,
+            "intervention_executed": False,
+            "intervention_consumed": False,
+            "executed_intervention_count": 0,
+            "proposal_event_count": 0,
+            "v50_pre_probe_action_fingerprint": f"same-{it}",
+            "v50_post_probe_action_fingerprint": f"same-{it}",
+        }
+        rows.append({"iteration_index": it, "time_s": 0.1 * it, "diagnostics": {"selected_outcome_probe": d}})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+def test_v50_pair_validation_records_symmetric_no_live_proposal_as_ineligible_not_failure(tmp_path: Path) -> None:
+    c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
+    _write_no_proposal_diag(c, "control")
+    _write_no_proposal_diag(t, "treatment")
+    got = _validate_pair("tok", c, t, 23)
+    assert got["collection_protocol_version"] == COLLECTION_PROTOCOL_VERSION
+    assert got["pair_status"] == "no_live_proposal"
+    assert got["live_intervention_eligible"] == 0
+    assert got["proposal_action"] == -1
+    assert got["intervention_iteration"] == -1
+    assert got["preintervention_pair_aligned"] == 1
+
+
+def test_v50_pair_validation_rejects_asymmetric_live_eligibility(tmp_path: Path) -> None:
+    c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
+    _write_no_proposal_diag(c, "control")
+    _write_probe_diag(t, "treatment", first_it=7, proposal=6)
+    with pytest.raises(RuntimeError, match="asymmetric/malformed first proposal markers"):
+        _validate_pair("tok", c, t, 23)
+
+
+def test_v50_treatment_must_return_to_incumbent_after_first_live_intervention(tmp_path: Path) -> None:
+    c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
+    _write_probe_diag(c, "control", first_it=7, proposal=6)
+    _write_probe_diag(t, "treatment", first_it=7, proposal=6)
+    rows = [json.loads(x) for x in t.read_text().splitlines() if x.strip()]
+    # Corrupt the later proposal event to re-execute the proposal.  The one-shot
+    # counter could still remain 1 in a buggy implementation, so validate the
+    # full post-intervention state machine explicitly.
+    d = rows[-1]["diagnostics"]["selected_outcome_probe"]
+    d["post_probe_action"] = d["proposal_action"]
+    t.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    with pytest.raises(RuntimeError, match="did not return to incumbent"):
+        _validate_pair("tok", c, t, 23)
+
+
 def test_v50_paired_hard_metrics_fail_closed_on_schema_drift() -> None:
     control = {m: 1.0 for m in HARD_METRICS}
     treatment = dict(control)
@@ -181,6 +250,29 @@ def test_v50_paired_hard_metrics_fail_closed_on_schema_drift() -> None:
     missing = dict(treatment); missing.pop(HARD_METRICS[-1])
     with pytest.raises(RuntimeError, match="missing preregistered hard metrics"):
         _hard_noninferiority(control, missing)
+
+def test_v50_live_population_admissibility_uses_frozen_estimator_minima() -> None:
+    rows = []
+    # 100 events/fold with 40 benefits gives every three-fold fit >=120/180
+    # positive/nonpositive and every one-fold calibration >=16 positives.
+    for k in range(5):
+        for i in range(100):
+            rows.append({"outer_test_fold": k, "safe_benefit": i < 40})
+    got = _statistical_admissibility(rows)
+    assert got["pass"] is True
+    # Remove almost all positives from fold 1; it is used as a calibration fold
+    # for outer fold 0 and must fail the inherited >=16-positive requirement.
+    bad = [dict(r) for r in rows]
+    seen = 0
+    for r in bad:
+        if r["outer_test_fold"] == 1 and r["safe_benefit"]:
+            seen += 1
+            if seen > 10:
+                r["safe_benefit"] = False
+    got2 = _statistical_admissibility(bad)
+    assert got2["pass"] is False
+    assert got2["folds"][0]["cal_safe_benefit"] == 10
+
 
 def test_v50_fit_hard_locks_v49_preregistered_failure(tmp_path: Path) -> None:
     p = tmp_path / "v49.json"
@@ -284,3 +376,10 @@ def test_v50_launcher_checks_current_checkout_import_provenance() -> None:
     text = (ROOT / "RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh").read_text(encoding="utf-8")
     assert "PASS V50 import provenance" in text
     assert "python -m pip install -e ." in text
+
+
+def test_v50_fit_locks_live_selection_pair_protocol_version() -> None:
+    assert PAIR_COLLECTION_PROTOCOL_VERSION == COLLECTION_PROTOCOL_VERSION
+    text = (ROOT / "bdse/tools/fit_v64_3_50_eaf_icer_sior.py").read_text(encoding="utf-8")
+    assert "paired outcome protocol version mismatch" in text
+    assert "never mix old and live-eligibility rows" in text

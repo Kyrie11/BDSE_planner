@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Freeze V50 paired-intervention TRAIN tokens from exact V49 full-set RSMR winners")
+    ap = argparse.ArgumentParser(description="Freeze the V49 502-scene offline selected discovery cohort for V50 live-event screening")
     ap.add_argument("--v49-scene-audit", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
@@ -25,7 +25,7 @@ def main() -> None:
         raise SystemExit(f"V50 ENGINEERING STOP: exact frozen RSMR selected population must be 502 unique scenes, got {len(toks)}/{len(set(toks))}")
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text("\n".join(toks) + "\n", encoding="utf-8")
-    print(f"PASS V50 frozen paired-intervention TRAIN population: {len(toks)} unique full-set RSMR winners")
+    print(f"PASS V50 frozen offline discovery cohort: {len(toks)} unique V49 full-set RSMR-selected scenes; live intervention eligibility will be determined label-free in native closed-loop replay")
 
 
 if __name__ == "__main__":

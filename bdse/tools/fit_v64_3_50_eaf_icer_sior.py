@@ -26,6 +26,7 @@ from bdse.tools.fit_v64_3_48_eaf_icer_ocrr import _fit_sign_ranker, _risk, _conf
 
 ALPHA_RET = 0.0779185520361991  # frozen V48 capture-derived false-veto budget
 V49_FAILURE = "selection_interventional_risk_does_not_outperform_observational_selected_risk_close_current_offline_selected_risk_family"
+PAIR_COLLECTION_PROTOCOL_VERSION = "v50-live-selected-event-cohort-v1"
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -73,7 +74,15 @@ def _join(
     v49_scene: Path,
     offline_features: dict[str, dict[str, Any]],
     paired: Path,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Join the frozen offline cohort with V50 live treatment-opportunity status.
+
+    The V49 502-scene population is a discovery cohort, not a guarantee that the
+    native closed-loop RSMR policy will emit a proposal in every replay.  Only
+    synchronized live proposal events have a defined selected-action treatment
+    effect.  Symmetric no-proposal scenes remain in ``cohort_audit`` as a
+    label-free transport stratum but are excluded from SIOR fitting/calibration.
+    """
     scene = {str(r["scenario_token"]): r for r in _read_csv(v49_scene)}
     if len(scene) != 782:
         raise RuntimeError("V50 ENGINEERING STOP: V49 scene audit is not 782 unique rows")
@@ -83,19 +92,75 @@ def _join(
             f"V50 ENGINEERING STOP: paired outcome/token mismatch: paired={len(pairs)} feature={len(offline_features)} "
             f"missing={len(set(offline_features)-set(pairs))} extra={len(set(pairs)-set(offline_features))}"
         )
-    rows: list[dict[str, Any]] = []
+    eligible_rows: list[dict[str, Any]] = []
+    cohort_audit: list[dict[str, Any]] = []
+    per_fold = {k: {"offline_discovery": 0, "live_eligible": 0, "no_live_proposal": 0} for k in range(FOLDS)}
     for tok in sorted(offline_features):
         f = offline_features[tok]
         p = pairs[tok]
-        s = scene[tok]
-        proposal = int(float(p["proposal_action"]))
+        version = str(p.get("collection_protocol_version", "")).strip()
+        if version != PAIR_COLLECTION_PROTOCOL_VERSION:
+            raise RuntimeError(
+                "V50 ENGINEERING STOP: paired outcome protocol version mismatch for "
+                f"{tok}: got={version or 'missing'} expected={PAIR_COLLECTION_PROTOCOL_VERSION}. "
+                "Remove only the V50 paired_train directory and recollect; never mix old and live-eligibility rows."
+            )
+        srow = scene[tok]
+        fold = int(f["outer_test_fold"])
+        per_fold[fold]["offline_discovery"] += 1
+        recorded_offline = int(float(p.get("offline_v49_action_slot", p.get("frozen_v49_proposal_action", f["rsm_selected_action"]))))
         frozen = int(f["rsm_selected_action"])
-        recorded_offline = int(float(p.get("offline_v49_action_slot", p.get("frozen_v49_proposal_action", frozen))))
         if recorded_offline != frozen:
             raise RuntimeError(
                 f"V50 ENGINEERING STOP: offline V49 cohort action-slot provenance changed "
                 f"{tok}: paired_record={recorded_offline} frozen_audit={frozen}"
             )
+        status = str(p.get("pair_status", "")).strip()
+        try:
+            eligible = int(float(p.get("live_intervention_eligible", 1 if status == "eligible_intervened" else 0)))
+        except Exception as exc:
+            raise RuntimeError(f"V50 ENGINEERING STOP: invalid live_intervention_eligible for {tok}") from exc
+        if eligible not in {0, 1}:
+            raise RuntimeError(f"V50 ENGINEERING STOP: invalid live_intervention_eligible={eligible} for {tok}")
+        audit_base: dict[str, Any] = {
+            "scenario_token": tok,
+            "outer_test_fold": fold,
+            "offline_v49_action_slot": frozen,
+            "pair_status": status,
+            "live_intervention_eligible": eligible,
+            "offline_quality_value": float(f["quality_value"]),
+            "offline_plan_control_value": float(f["plan_control_value"]),
+            "offline_ego_ref_value": float(f["ego_ref_value"]),
+            "v49_obs_sign_risk_offline_state": float(srow["v49_obs_sign_risk"]),
+        }
+        if eligible == 0:
+            if status != "no_live_proposal":
+                raise RuntimeError(f"V50 ENGINEERING STOP: ineligible pair has unexpected status for {tok}: {status!r}")
+            if int(float(p.get("proposal_action", -1))) != -1 or int(float(p.get("intervention_iteration", -1))) != -1:
+                raise RuntimeError(f"V50 ENGINEERING STOP: no-live-proposal row carries a fake intervention for {tok}")
+            if int(float(p.get("preintervention_pair_aligned", 0))) != 1:
+                raise RuntimeError(f"V50 ENGINEERING STOP: no-live-proposal pair was not fully aligned for {tok}")
+            if int(float(p.get("no_treatment_metric_equivalent", 0))) != 1:
+                raise RuntimeError(f"V50 ENGINEERING STOP: no-live-proposal metric equivalence not certified for {tok}")
+            per_fold[fold]["no_live_proposal"] += 1
+            cohort_audit.append({
+                **audit_base,
+                "live_rsm_selected_action": -1,
+                "live_proposal_fingerprint": "",
+                "intervention_iteration": -1,
+                "intervention_time_s": "",
+                "quality_value": "",
+                "plan_control_value": "",
+                "ego_ref_value": "",
+                "paired_score_delta": "",
+                "hard_noninferior": "",
+                "safe_benefit": "",
+            })
+            continue
+
+        if status != "eligible_intervened":
+            raise RuntimeError(f"V50 ENGINEERING STOP: live-eligible pair has unexpected status for {tok}: {status!r}")
+        proposal = int(float(p["proposal_action"]))
         if proposal < 0:
             raise RuntimeError(f"V50 ENGINEERING STOP: invalid live RSMR proposal slot for {tok}: {proposal}")
         fp = str(p.get("live_proposal_fingerprint", "")).strip()
@@ -111,22 +176,17 @@ def _join(
         delta = float(p["paired_score_delta"])
         if safe != bool(hard_ok and delta > 0.0):
             raise RuntimeError(f"V50 ENGINEERING STOP: inconsistent paired safe-benefit label {tok}")
-        q = float(p["live_quality_value"])
-        pv = float(p["live_plan_control_value"])
-        e = float(p["live_ego_ref_value"])
+        q = float(p["live_quality_value"]); pv = float(p["live_plan_control_value"]); e = float(p["live_ego_ref_value"])
         if not all(math.isfinite(x) for x in (q, pv, e)):
             raise RuntimeError(f"V50 ENGINEERING STOP: non-finite live Q/P/E for {tok}: {(q,pv,e)}")
         row = {
             "scenario_token": tok,
-            "outer_test_fold": int(f["outer_test_fold"]),
+            "outer_test_fold": fold,
             "rsm_selected_action": frozen,
             "live_rsm_selected_action": proposal,
             "offline_v49_action_slot": frozen,
             "live_vs_offline_action_slot_equal": int(proposal == frozen),
             "live_proposal_fingerprint": fp,
-            # Same coordinate definitions as V47/V48/V49, evaluated at the
-            # actual pre-intervention live state rather than stale iteration-0
-            # offline values.
             "quality_value": q,
             "plan_control_value": pv,
             "ego_ref_value": e,
@@ -138,19 +198,88 @@ def _join(
             "hard_noninferior": hard_ok,
             "safe_benefit": safe,
             "hard_regressions": str(p.get("hard_regressions", "")),
-            # Retain the persisted old score only as a post-hoc diagnostic; the
-            # preregistered OBS comparator below is reconstructed and evaluated
-            # on this same live Q/P/E state.
-            "v49_obs_sign_risk_offline_state": float(s["v49_obs_sign_risk"]),
+            "v49_obs_sign_risk_offline_state": float(srow["v49_obs_sign_risk"]),
             "offline_quality_value": float(f["quality_value"]),
             "offline_plan_control_value": float(f["plan_control_value"]),
             "offline_ego_ref_value": float(f["ego_ref_value"]),
         }
-        rows.append(row)
-    folds = sorted(set(int(r["outer_test_fold"]) for r in rows))
-    if folds != list(range(FOLDS)) or any(_fold(str(r["scenario_token"])) != int(r["outer_test_fold"]) for r in rows):
+        per_fold[fold]["live_eligible"] += 1
+        eligible_rows.append(row)
+        cohort_audit.append({**audit_base, **row, "pair_status": status, "live_intervention_eligible": 1})
+
+    folds = sorted(set(int(r["outer_test_fold"]) for r in cohort_audit))
+    if folds != list(range(FOLDS)) or any(_fold(str(r["scenario_token"])) != int(r["outer_test_fold"]) for r in cohort_audit):
         raise RuntimeError("V50 ENGINEERING STOP: V49/V50 outer-fold identity mismatch")
-    return rows
+    transport = {
+        "offline_discovery_cohort": len(offline_features),
+        "live_intervention_eligible": len(eligible_rows),
+        "no_live_proposal": len(offline_features) - len(eligible_rows),
+        "live_eligibility_rate": float(len(eligible_rows) / max(len(offline_features), 1)),
+        "per_fold": per_fold,
+        "interpretation": "no_live_proposal is a label-free offline-to-live selection-transport stratum, not a negative SIOR outcome",
+    }
+    return eligible_rows, cohort_audit, transport
+
+
+def _statistical_admissibility(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Check only estimator-required support; do not invent an eligibility-rate threshold.
+
+    These counts are inherited from the frozen V48/V49 estimator implementation:
+    pairwise fitting requires >=32 positive and >=32 nonpositive training events,
+    and conformal calibration requires >=16 positives.  AUC additionally requires
+    both outcome classes in every held-out test fold.  Failure is a scientific
+    population-support STOP, not an engineering exception and not a reason to
+    tune the estimator after observing outcomes.
+    """
+    folds: list[dict[str, Any]] = []
+    ok = True
+    for k in range(FOLDS):
+        cf = (k + 1) % FOLDS
+        fit = [r for r in rows if int(r["outer_test_fold"]) not in {k, cf}]
+        cal = [r for r in rows if int(r["outer_test_fold"]) == cf]
+        test = [r for r in rows if int(r["outer_test_fold"]) == k]
+        fp = sum(bool(r["safe_benefit"]) for r in fit); fn = len(fit) - fp
+        cp = sum(bool(r["safe_benefit"]) for r in cal)
+        tp = sum(bool(r["safe_benefit"]) for r in test); tn = len(test) - tp
+        fold_ok = bool(fp >= 32 and fn >= 32 and cp >= 16 and tp >= 1 and tn >= 1)
+        ok = ok and fold_ok
+        folds.append({
+            "fold": k, "calibration_fold": cf,
+            "fit_count": len(fit), "fit_safe_benefit": fp, "fit_nonbenefit": fn,
+            "cal_count": len(cal), "cal_safe_benefit": cp,
+            "test_count": len(test), "test_safe_benefit": tp, "test_nonbenefit": tn,
+            "admissible": fold_ok,
+        })
+    final_fit = [r for r in rows if int(r["outer_test_fold"]) != 0]
+    final_cal = [r for r in rows if int(r["outer_test_fold"]) == 0]
+    fpos = sum(bool(r["safe_benefit"]) for r in final_fit); fneg = len(final_fit) - fpos
+    cpos = sum(bool(r["safe_benefit"]) for r in final_cal)
+    final_ok = bool(fpos >= 32 and fneg >= 32 and cpos >= 16)
+    ok = ok and final_ok
+    return {
+        "pass": bool(ok),
+        "requirements_source": "frozen V48/V49 pairwise-ranker and conformal-calibration minimum support",
+        "folds": folds,
+        "final_fit_count": len(final_fit), "final_fit_safe_benefit": fpos, "final_fit_nonbenefit": fneg,
+        "final_cal_count": len(final_cal), "final_cal_safe_benefit": cpos,
+        "final_fit_admissible": final_ok,
+    }
+
+
+def _write_cohort_audit(path: Path, cohort_rows: list[dict[str, Any]], oof_risk: dict[str, float] | None = None, keep_by: dict[str, bool] | None = None) -> None:
+    oof_risk = oof_risk or {}; keep_by = keep_by or {}
+    enriched = []
+    for r in cohort_rows:
+        tok = str(r["scenario_token"])
+        enriched.append({
+            **r,
+            "v50_oof_cl_risk": oof_risk.get(tok, ""),
+            "v50_oof_retained": int(keep_by[tok]) if tok in keep_by else "",
+        })
+    fields = sorted({k for r in enriched for k in r})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(enriched)
 
 
 def _metric(rows: list[dict[str, Any]], risks: np.ndarray, tau: float) -> dict[str, Any]:
@@ -239,7 +368,18 @@ def main() -> None:
     ap.add_argument("--output-scene-audit",type=Path,required=True)
     a=ap.parse_args(); _check_v49(a.v49_fit_report)
     offline_features=_candidate_features(a.v49_candidate_audit)
-    rows=_join(a.v49_scene_audit,offline_features,a.paired_outcomes)
+    rows, cohort_audit, cohort_transport=_join(a.v49_scene_audit,offline_features,a.paired_outcomes)
+    support=_statistical_admissibility(rows)
+    if not support["pass"]:
+        report={
+          "algorithm":"V64.3.50-EAF-ICER-SIOR", "train_gate_pass":False,
+          "failure_diagnosis":"live_selected_event_population_insufficient_for_frozen_sior_estimator",
+          "cohort_transport":cohort_transport, "statistical_admissibility":support,
+          "preregistered_next":"Scientific STOP before SIOR fitting/fresh. Do not relabel no-live-proposal scenes as negatives or tune estimator minima; diagnose offline-to-live selector transport and evidence-source coverage."
+        }
+        a.output_report.parent.mkdir(parents=True,exist_ok=True); a.output_report.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
+        _write_cohort_audit(a.output_scene_audit,cohort_audit)
+        raise SystemExit("V64.3.50 SIOR live selected-event population is insufficient for the frozen estimator; scientific STOP before fresh")
     base=_baseline_metric(rows)
     fold_reports=[]; oof_risk={}; better_obs=0; better_ego=0
     for k in range(FOLDS):
@@ -253,7 +393,7 @@ def main() -> None:
         # frozen V49 offline training events, then transport that unchanged model
         # to the same live intervention Q/P/E test states used by SIOR.  This is
         # the fair comparator after event-state alignment.
-        obs_fit=[offline_features[str(r["scenario_token"])] for r in rows if int(r["outer_test_fold"]) not in {k,cf}]
+        obs_fit=[r for r in offline_features.values() if int(r["outer_test_fold"]) not in {k,cf}]
         obs_model=_fit_sign_ranker(obs_fit,use_multiplicity=False)
         rr=np.asarray([_risk(r,m) for r in test]); ybad=np.asarray([not bool(r["safe_benefit"]) for r in test],dtype=np.int64)
         obs_rr=np.asarray([_risk(r,obs_model) for r in test])
@@ -268,7 +408,7 @@ def main() -> None:
     obs_oof: dict[str,float] = {}
     for k in range(FOLDS):
         cf=(k+1)%FOLDS
-        obs_fit=[offline_features[str(r["scenario_token"])] for r in rows if int(r["outer_test_fold"]) not in {k,cf}]
+        obs_fit=[r for r in offline_features.values() if int(r["outer_test_fold"]) not in {k,cf}]
         obs_model=_fit_sign_ranker(obs_fit,use_multiplicity=False)
         for r in rows:
             if int(r["outer_test_fold"])==k:
@@ -304,22 +444,20 @@ def main() -> None:
     _write_config(a.v49_siir_config,full_model,full_tau,a.output_config)
     report={
       "algorithm":"V64.3.50-EAF-ICER-SIOR","train_gate_pass":passed,
-      "mechanism":"same frozen Q/P/E coordinate definitions, ranker class and calibration; Q/P/E evaluated at the actual first live RSMR proposal event and labels replaced by paired one-shot closed-loop full-set-RSMR-vs-incumbent outcome",
-      "event_state_alignment":{"absolute_iteration_zero_required":False,"control_treatment_preintervention_trace_required_equal":True,"live_proposal_must_equal_frozen_v49_full_set_winner":True,"live_qpe_must_match_between_arms":True,"offline_v49_qpe_used_for_sior_features":False},
+      "mechanism":"same frozen Q/P/E coordinate definitions, ranker class and calibration; V49 provides a frozen offline discovery cohort, while SIOR labels are generated only for synchronized live RSMR proposal events by paired one-shot closed-loop intervention",
+      "event_state_alignment":{"absolute_iteration_zero_required":False,"control_treatment_preintervention_trace_required_equal":True,"cross_state_offline_action_slot_equality_required":False,"same_live_proposal_fingerprint_required":True,"live_qpe_must_match_between_arms":True,"offline_v49_qpe_used_for_sior_features":False},
+      "cohort_transport":cohort_transport,
+      "statistical_admissibility":support,
       "paired_outcome_definition":{"positive":"treatment aggregate score > control AND no hard metric regresses","hard_metrics":["no_ego_at_fault_collisions","time_to_collision_within_bound","drivable_area_compliance","driving_direction_compliance"]},
       "baseline_full_rsmr_one_shot":base,
       "risk_identification":{"cl_sior_bad_auc":auc,"transported_v49_obs_bad_auc_on_same_live_QPE_cl_labels":obs,"neg_ego_ref_bad_auc_on_same_cl_labels":ego,"folds_better_than_transported_v49_obs":better_obs,"folds_better_than_ego":better_ego,"identified":ident},
       "nested_oof_deployment":agg,"folds":fold_reports,
-      "gates":{"identification":ident,"safe_benefit_retention":capture_ok,"zero_hard_regression_retained":hard_ok,"nonbenefit_reduction_20pct":nonbenefit_ok,"aggregate_noninferiority_and_nonnegative":sum_ok,"negative_rms_noninferiority":neg_ok,"five_of_five_fold_sum_nonnegative":fold_sum_ok,"five_of_five_fold_zero_hard_regression":fold_hard_ok,"deployment":deployment},
+      "gates":{"live_selected_population_statistically_admissible":support["pass"],"identification":ident,"safe_benefit_retention":capture_ok,"zero_hard_regression_retained":hard_ok,"nonbenefit_reduction_20pct":nonbenefit_ok,"aggregate_noninferiority_and_nonnegative":sum_ok,"negative_rms_noninferiority":neg_ok,"five_of_five_fold_sum_nonnegative":fold_sum_ok,"five_of_five_fold_zero_hard_regression":fold_hard_ok,"deployment":deployment},
       "full_fit":{"model":full_model,"calibration":full_cal},
       "preregistered_next":"If TRAIN fails, do not tune QPE/loss/lambda/threshold or return to offline selection intervention; diagnose whether paired selected outcomes are unidentifiable from the frozen state and move to richer causal state/evidence only if mechanism evidence supports it. If TRAIN passes, freeze V50 and run untouched paired closed-loop A500 and B500 independently; no pooling/tuning.",
     }
     a.output_report.parent.mkdir(parents=True,exist_ok=True); a.output_report.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
-    fields=["scenario_token","outer_test_fold","rsm_selected_action","live_rsm_selected_action","offline_v49_action_slot","live_vs_offline_action_slot_equal","live_proposal_fingerprint","intervention_iteration","intervention_time_s","quality_value","plan_control_value","ego_ref_value","offline_quality_value","offline_plan_control_value","offline_ego_ref_value","paired_score_delta","hard_noninferior","safe_benefit","v49_obs_sign_risk_offline_state","v50_oof_cl_risk","v50_oof_retained"]
-    with a.output_scene_audit.open("w",newline="",encoding="utf-8") as f:
-        w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
-        for r in rows:
-            tok=str(r["scenario_token"]);w.writerow({**{k:r[k] for k in fields if k in r},"v50_oof_cl_risk":oof_risk[tok],"v50_oof_retained":int(keep_by[tok])})
+    _write_cohort_audit(a.output_scene_audit,cohort_audit,oof_risk,keep_by)
     print(json.dumps({"train_gate_pass":passed,"risk_identification":report["risk_identification"],"deployment":agg,"gates":report["gates"]},indent=2,sort_keys=True))
     if not passed:
         raise SystemExit("V64.3.50 SIOR nested paired-closed-loop TRAIN gate failed; scientific STOP before untouched fresh closed-loop selection")

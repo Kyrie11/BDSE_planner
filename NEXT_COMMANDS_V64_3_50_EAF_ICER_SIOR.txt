@@ -81,13 +81,13 @@ Expected behavior
 2. Verify the V50 source manifest.
 3. Hard-lock the exact uploaded V49 scientific failure artifacts.
 4. Re-audit frozen V13/EAF prerequisite and run repository targeted regression.
-5. Freeze exactly the 502 TRAIN scenes with a full-set RSMR proposal.
+5. Freeze the 502 V49 offline-RSMR-selected TRAIN scenes as an offline discovery/transport cohort; live treatment eligibility is determined separately in native replay.
 6. Build CONTROL/TREATMENT configs from the byte-locked V49 runtime config solely to expose the frozen RSMR selector and live Q/P/E instrumentation.
 7. Run paired closed_loop_reactive_agents evidence collection on ORIGINAL nuPlan
    SQLite DB logs:
    CONTROL   = preserve incumbent at all RSMR proposals.
    TREATMENT = execute the first live full-set RSMR winner from the frozen selector once, then preserve incumbent.
-8. Fit/evaluate nested SIOR using the frozen [Q, P-Q, E-P] state and existing pairwise risk model.
+8. Audit offline->live eligibility, then fit/evaluate nested SIOR only on synchronized live selected events using the frozen [Q, P-Q, E-P] state and existing pairwise risk model. Symmetric no-live-proposal scenes are audit-only, never negative labels.
 9. If TRAIN fails: scientific STOP, nonzero exit, no fresh evidence consumed.
 10. If TRAIN passes: launcher still deliberately STOPS before fresh selection. Freeze and return the result package for analysis first.
 
@@ -164,3 +164,40 @@ V49 rerun / clean-checkout guidance
 - In an offline server environment after restoring packaging metadata, install
   the current checkout with `python -m pip install -e . --no-build-isolation`.
   The V50 launcher also verifies that `import bdse` resolves inside this checkout.
+
+V64.3.50 LIVE-SELECTION ELIGIBILITY / COHORT REPAIR
+----------------------------------------------------
+The V49 502-scene set is now explicitly treated as an OFFLINE DISCOVERY COHORT,
+not as 502 guaranteed native closed-loop treatment events.
+
+During paired replay, each token is classified as:
+  eligible_intervened
+    both arms reach the same live RSMR proposal event; CONTROL vetoes and
+    TREATMENT executes that same live winner exactly once. This row receives a
+    paired selected-outcome label and may enter SIOR fit/calibration/test.
+
+  no_live_proposal
+    neither arm ever emits a live RSMR proposal. This is a label-free
+    offline-to-live selection-transport observation, NOT a negative SIOR label.
+    The whole C/T deployed-candidate fingerprint trace and official metrics must
+    remain equivalent. The row stays in the 502-scene audit but is excluded from
+    outcome fitting.
+
+If only one arm emits a proposal, or the no-treatment traces/fingerprints differ,
+that remains an ENGINEERING STOP.
+
+Because this changes the paired CSV schema/estimand bookkeeping, do not resume a
+paired_train directory created by an earlier V50 repair. The current collector
+checks `collection_protocol_version` and will refuse to mix old rows. Before the
+first run of this package, remove ONLY V50 paired collection state:
+
+  rm -rf outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/paired_train
+
+Then rerun the normal launcher. Do not delete or rerun V49 outputs.
+
+V50 introduces no post-hoc live-eligibility-rate threshold. Instead the live
+selected-event population must satisfy the already-frozen V48/V49 estimator
+support requirements (>=32 benefit/nonbenefit in every nested fit split, >=16
+benefits in every calibration fold, both classes in every test fold). If not,
+V50 writes the cohort-transport audit and SCIENTIFIC STOPs before SIOR fitting or
+fresh evaluation; do not relabel no-proposal scenes or lower these minima.

@@ -38,6 +38,8 @@ HARD_METRICS = [
     "drivable_area_compliance",
     "driving_direction_compliance",
 ]
+COLLECTION_PROTOCOL_VERSION = "v50-live-selected-event-cohort-v1"
+NO_TREATMENT_SCORE_TOL = 1.0e-9
 
 
 def _sha(path: Path) -> str:
@@ -133,29 +135,113 @@ def _finite_qpe(row: dict[str, Any], token: str, role: str) -> tuple[float, floa
     return float(vals[0]), float(vals[1]), float(vals[2])
 
 
+def _trace_identity(row: dict[str, Any], prefix: str) -> str:
+    value = str(row.get(f"{prefix}_fingerprint", "")).strip()
+    if not value:
+        raise RuntimeError(
+            f"V50 paired trace is missing {prefix}_fingerprint; "
+            "use the current V50 planner instrumentation and rerun this token"
+        )
+    return value
+
+
+def _validate_aligned_trace_prefix(
+    token: str,
+    control: list[dict[str, Any]],
+    treatment: list[dict[str, Any]],
+    *,
+    stop_before_iteration: int | None,
+) -> None:
+    """Certify CONTROL/TREATMENT equality before any causal intervention.
+
+    ``stop_before_iteration=None`` means certify the whole scenario.  This is
+    used for the scientifically valid no-live-proposal stratum, where neither arm
+    ever receives a treatment opportunity and therefore both policies must remain
+    identical for the entire native nuPlan rollout.
+    """
+    crows = [r for r in control if stop_before_iteration is None or int(r["iteration_index"]) < int(stop_before_iteration)]
+    trows = [r for r in treatment if stop_before_iteration is None or int(r["iteration_index"]) < int(stop_before_iteration)]
+    if len(crows) != len(trows):
+        raise RuntimeError(
+            f"V50 {token}: CONTROL/TREATMENT aligned-trace length mismatch "
+            f"{len(crows)}/{len(trows)} before intervention"
+        )
+    for j, (a, b) in enumerate(zip(crows, trows)):
+        ai = int(a["iteration_index"]); bi = int(b["iteration_index"])
+        if ai != bi:
+            raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT iteration mismatch at trace row {j}: {ai}/{bi}")
+        if abs(float(a.get("time_s", 0.0)) - float(b.get("time_s", 0.0))) > 1.0e-9:
+            raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT time mismatch at iteration {ai}")
+        if bool(a.get("proposal_exists", False)) or bool(b.get("proposal_exists", False)):
+            raise RuntimeError(f"V50 {token}: proposal occurred inside certified no-treatment prefix at iteration {ai}")
+        for key in ("pre_probe_action", "post_probe_action"):
+            if int(a.get(key, -1)) != int(b.get(key, -2)):
+                raise RuntimeError(
+                    f"V50 {token}: CONTROL/TREATMENT {key} diverged at iteration {ai}: "
+                    f"{a.get(key)}/{b.get(key)}"
+                )
+        # Integer action slots are state-local.  For same-state paired equality we
+        # additionally require the full quantized trajectory/semantic certificate.
+        for prefix in ("v50_pre_probe_action", "v50_post_probe_action"):
+            if _trace_identity(a, prefix) != _trace_identity(b, prefix):
+                raise RuntimeError(
+                    f"V50 {token}: CONTROL/TREATMENT {prefix} candidate fingerprint diverged at iteration {ai}"
+                )
+        if bool(a.get("intervention_executed", False)) or bool(b.get("intervention_executed", False)):
+            raise RuntimeError(f"V50 {token}: intervention executed inside certified no-treatment prefix at iteration {ai}")
+
+
 def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, offline_v49_action_slot: int) -> dict[str, Any]:
-    """Validate one causal pair at the first live RSMR proposal event.
+    """Validate one V50 pair and classify its live treatment-opportunity stratum.
 
-    nuPlan is free to run several ordinary planner iterations before RSMR has a
-    direct proposal.  The old V50 code incorrectly required that first proposal
-    to occur at absolute iteration 0.  What causal pairing actually requires is:
-      * identical CONTROL/TREATMENT trajectories before intervention;
-      * the first proposal occurs at the same iteration/time in both arms;
-      * both arms see the same live full-set RSMR winner and candidate fingerprint;
-      * live Q/P/E are identical across arms at that exact pre-intervention state;
-      * CONTROL preserves the incumbent and TREATMENT executes the proposal once.
-
-    ``offline_v49_action_slot`` is retained only as frozen cohort provenance.
-    Candidate-bank slots are rebuilt and state-dependently pruned each planner
-    tick, so an offline slot cannot be used as a cross-state proposal identity.
+    The 502 V49 scenes are a frozen *offline discovery cohort*.  Native closed-loop
+    replay can legitimately contain scenes in which the frozen RSMR policy never
+    emits a live direct proposal.  Such scenes have no defined selected-action
+    treatment and must not be mislabeled as negative outcomes.  They are retained
+    as an audited, label-free ``no_live_proposal`` transport stratum and excluded
+    from SIOR outcome fitting.
     """
     c = _probe_rows(control_diag); t = _probe_rows(treatment_diag)
     if not c or not t:
         raise RuntimeError(f"V50 {token}: missing strict selected-outcome probe diagnostics")
     c0 = [r for r in c if bool(r.get("first_proposal_now", False))]
     t0 = [r for r in t if bool(r.get("first_proposal_now", False))]
+
+    # Scientifically valid no-treatment stratum: neither arm ever observes a live
+    # RSMR proposal.  This is not a classifier negative.  Prove the two full
+    # rollouts were the same policy/state trajectory, then record eligibility=0.
+    if len(c0) == 0 and len(t0) == 0:
+        if any(bool(r.get("proposal_exists", False)) for r in c + t):
+            raise RuntimeError(f"V50 {token}: proposal_exists occurred without a first_proposal_now marker")
+        if any(int(r.get("proposal_event_count", 0)) != 0 for r in c + t):
+            raise RuntimeError(f"V50 {token}: nonzero proposal_event_count without a live proposal marker")
+        if any(bool(r.get("intervention_consumed", False)) or bool(r.get("intervention_executed", False)) for r in c + t):
+            raise RuntimeError(f"V50 {token}: intervention state changed although no live proposal existed")
+        _validate_aligned_trace_prefix(token, c, t, stop_before_iteration=None)
+        return {
+            "collection_protocol_version": COLLECTION_PROTOCOL_VERSION,
+            "pair_status": "no_live_proposal",
+            "live_intervention_eligible": 0,
+            "proposal_action": -1,
+            "live_proposal_action": -1,
+            "offline_v49_action_slot": int(offline_v49_action_slot),
+            "frozen_v49_proposal_action": int(offline_v49_action_slot),
+            "live_vs_offline_action_slot_equal": 0,
+            "live_proposal_fingerprint": "",
+            "baseline_action": -1,
+            "intervention_iteration": -1,
+            "intervention_time_s": float("nan"),
+            "preintervention_pair_aligned": 1,
+            "treatment_proposal_events": 0,
+            "control_proposal_events": 0,
+        }
+
+    # One arm seeing a proposal while the other does not is a true paired-runtime
+    # violation, not a valid transport stratum.
     if len(c0) != 1 or len(t0) != 1:
-        raise RuntimeError(f"V50 {token}: expected exactly one first proposal marker in both arms, got {len(c0)}/{len(t0)}")
+        raise RuntimeError(
+            f"V50 {token}: asymmetric/malformed first proposal markers CONTROL/TREATMENT={len(c0)}/{len(t0)}"
+        )
     cr, tr = c0[0], t0[0]
     ci = int(cr["iteration_index"]); ti = int(tr["iteration_index"])
     if ci < 0 or ti < 0 or ci != ti:
@@ -163,28 +249,7 @@ def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, offline
     if abs(float(cr.get("time_s", 0.0)) - float(tr.get("time_s", 0.0))) > 1.0e-9:
         raise RuntimeError(f"V50 {token}: paired first-proposal simulation time mismatch {cr.get('time_s')}/{tr.get('time_s')}")
 
-    # Before the first treatment both arms must be the same policy from the same
-    # initial state.  Compare the complete probe action trace through iteration i-1.
-    cpre = {int(r["iteration_index"]): r for r in c if int(r["iteration_index"]) < ci}
-    tpre = {int(r["iteration_index"]): r for r in t if int(r["iteration_index"]) < ti}
-    if set(cpre) != set(tpre):
-        raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT pre-intervention iteration trace mismatch")
-    for k in sorted(cpre):
-        a, b = cpre[k], tpre[k]
-        if abs(float(a.get("time_s", 0.0)) - float(b.get("time_s", 0.0))) > 1.0e-9:
-            raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT time trace mismatch before intervention at iteration {k}")
-        if bool(a.get("proposal_exists", False)) or bool(b.get("proposal_exists", False)):
-            raise RuntimeError(f"V50 {token}: proposal occurred before first-proposal marker at iteration {k}")
-        if int(a.get("pre_probe_action", -1)) != int(b.get("pre_probe_action", -2)):
-            raise RuntimeError(
-                f"V50 {token}: CONTROL/TREATMENT planner action diverged before intervention at iteration {k}: "
-                f"{a.get('pre_probe_action')}/{b.get('pre_probe_action')}"
-            )
-        if int(a.get("post_probe_action", -1)) != int(b.get("post_probe_action", -2)):
-            raise RuntimeError(
-                f"V50 {token}: CONTROL/TREATMENT deployed action diverged before intervention at iteration {k}: "
-                f"{a.get('post_probe_action')}/{b.get('post_probe_action')}"
-            )
+    _validate_aligned_trace_prefix(token, c, t, stop_before_iteration=ci)
 
     for key in ("proposal_action", "baseline_action", "rsmr_selected_action"):
         if int(cr[key]) != int(tr[key]):
@@ -208,10 +273,10 @@ def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, offline
     cq, cp, ce = _finite_qpe(cr, token, "CONTROL")
     tq, tp, te = _finite_qpe(tr, token, "TREATMENT")
     for name, a, b in (("Q", cq, tq), ("P", cp, tp), ("E", ce, te)):
-        if abs(a - b) > 1.0e-8 * max(1.0, abs(a), abs(b)):
-            raise RuntimeError(f"V50 {token}: paired live {name} state mismatch at intervention: {a} vs {b}")
+        if not math.isclose(a, b, rel_tol=1.0e-8, abs_tol=1.0e-10):
+            raise RuntimeError(f"V50 {token}: CONTROL/TREATMENT live {name} mismatch at intervention event: {a}/{b}")
 
-    if int(cr["post_probe_action"]) != int(cr["baseline_action"]):
+    if bool(cr.get("intervention_executed", False)) or int(cr["post_probe_action"]) != int(cr["baseline_action"]):
         raise RuntimeError(f"V50 {token}: CONTROL did not preserve incumbent at intervention event")
     if not bool(tr.get("intervention_executed", False)) or int(tr["post_probe_action"]) != int(tr["proposal_action"]):
         raise RuntimeError(f"V50 {token}: TREATMENT did not execute exact first live RSMR proposal")
@@ -219,13 +284,26 @@ def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, offline
         raise RuntimeError(f"V50 {token}: TREATMENT executed more/less than one selected intervention")
     if any(bool(r.get("intervention_executed", False)) for r in c):
         raise RuntimeError(f"V50 {token}: CONTROL executed a selected intervention")
+    # Fail closed on the complete one-shot state machine, not only its counter.
+    for r in c:
+        if bool(r.get("proposal_exists", False)) and int(r.get("post_probe_action", -1)) != int(r.get("baseline_action", -2)):
+            raise RuntimeError(f"V50 {token}: CONTROL failed to preserve incumbent at a later proposal event")
+    for r in t:
+        if not bool(r.get("proposal_exists", False)):
+            continue
+        if bool(r.get("first_proposal_now", False)):
+            if int(r.get("post_probe_action", -1)) != int(r.get("proposal_action", -2)):
+                raise RuntimeError(f"V50 {token}: TREATMENT first proposal event did not execute the live winner")
+        elif int(r.get("post_probe_action", -1)) != int(r.get("baseline_action", -2)):
+            raise RuntimeError(f"V50 {token}: TREATMENT did not return to incumbent after the one-shot intervention")
 
     return {
+        "collection_protocol_version": COLLECTION_PROTOCOL_VERSION,
+        "pair_status": "eligible_intervened",
+        "live_intervention_eligible": 1,
         "proposal_action": int(tr["proposal_action"]),
         "live_proposal_action": int(tr["proposal_action"]),
         "offline_v49_action_slot": int(offline_v49_action_slot),
-        # Retained as a compatibility/provenance alias.  It is intentionally
-        # *not* required to equal proposal_action because slots are state-local.
         "frozen_v49_proposal_action": int(offline_v49_action_slot),
         "live_vs_offline_action_slot_equal": int(int(tr["proposal_action"]) == int(offline_v49_action_slot)),
         "live_proposal_fingerprint": tf,
@@ -408,6 +486,13 @@ def main() -> None:
     existing: dict[str, dict[str, Any]] = {}
     if a.resume and rows_path.is_file():
         for r in csv.DictReader(rows_path.open(newline="", encoding="utf-8")):
+            version = str(r.get("collection_protocol_version", "")).strip()
+            if version != COLLECTION_PROTOCOL_VERSION:
+                raise RuntimeError(
+                    "V50 paired output was created by an older protocol revision "
+                    f"({version or 'missing version'}). Remove only the V50 paired_train directory and rerun; "
+                    "do not mix pre-amendment and live-eligibility rows."
+                )
             existing[str(r["scenario_token"])] = dict(r)
     rows: list[dict[str, Any]] = [existing[t] for t in tokens if t in existing]
 
@@ -428,14 +513,37 @@ def main() -> None:
         cm, cd, cw = results["control"]; tm, td, tw = results["treatment"]
         ident = _validate_pair(token, cd, td, frozen_proposals[token])
         cs = _score(cm, a.challenge); ts = _score(tm, a.challenge); delta = ts - cs
-        hard_ok, hard_reg = _hard_noninferiority(cm, tm)
         row: dict[str, Any] = {
             "scenario_token": token, **ident,
             "challenge": a.challenge, "control_score": cs, "treatment_score": ts,
-            "paired_score_delta": delta, "hard_noninferior": int(hard_ok),
-            "safe_benefit": int(hard_ok and delta > 0.0),
-            "hard_regressions": ";".join(hard_reg), "control_wall_s": cw, "treatment_wall_s": tw,
+            "control_wall_s": cw, "treatment_wall_s": tw,
         }
+        if int(ident["live_intervention_eligible"]) == 1:
+            hard_ok, hard_reg = _hard_noninferiority(cm, tm)
+            row.update({
+                "paired_score_delta": delta, "hard_noninferior": int(hard_ok),
+                "safe_benefit": int(hard_ok and delta > 0.0),
+                "hard_regressions": ";".join(hard_reg),
+                "no_treatment_metric_equivalent": "",
+            })
+        else:
+            # With no proposal the probe never changes either arm.  Require the
+            # official score and hard metrics to be numerically identical as a
+            # determinism check, but do NOT create a causal outcome label.
+            hard_same, hard_diff = _hard_noninferiority(cm, tm)
+            reverse_same, reverse_diff = _hard_noninferiority(tm, cm)
+            metric_equiv = bool(
+                abs(delta) <= NO_TREATMENT_SCORE_TOL and hard_same and reverse_same
+            )
+            if not metric_equiv:
+                raise RuntimeError(
+                    f"V50 {token}: no-live-proposal arms should be identical but official metrics diverged: "
+                    f"score_delta={delta} hard_control_to_treatment={hard_diff} hard_treatment_to_control={reverse_diff}"
+                )
+            row.update({
+                "paired_score_delta": "", "hard_noninferior": "", "safe_benefit": "",
+                "hard_regressions": "", "no_treatment_metric_equivalent": 1,
+            })
         for m in HARD_METRICS:
             if m in cm: row[f"control::{m}"] = float(cm[m])
             if m in tm: row[f"treatment::{m}"] = float(tm[m])
@@ -450,14 +558,19 @@ def main() -> None:
         "complete": True, "scenario_count": len(tokens), "challenge": a.challenge,
         "token_file_sha256": _sha(a.scenario_token_file),
         "frozen_proposal_audit_sha256": _sha(a.frozen_proposal_audit),
-        "intervention_iteration_min": min(int(float(r["intervention_iteration"])) for r in ordered),
-        "intervention_iteration_max": max(int(float(r["intervention_iteration"])) for r in ordered),
+        "collection_protocol_version": COLLECTION_PROTOCOL_VERSION,
+        "offline_discovery_cohort_count": len(tokens),
+        "live_intervention_eligible_count": sum(int(float(r.get("live_intervention_eligible", 0))) for r in ordered),
+        "no_live_proposal_count": sum(1 for r in ordered if str(r.get("pair_status", "")) == "no_live_proposal"),
+        "live_intervention_eligibility_rate": float(sum(int(float(r.get("live_intervention_eligible", 0))) for r in ordered) / max(len(tokens), 1)),
+        "intervention_iteration_min": min([int(float(r["intervention_iteration"])) for r in ordered if int(float(r.get("live_intervention_eligible", 0))) == 1], default=-1),
+        "intervention_iteration_max": max([int(float(r["intervention_iteration"])) for r in ordered if int(float(r.get("live_intervention_eligible", 0))) == 1], default=-1),
         "control_config_sha256": _sha(a.control_config), "treatment_config_sha256": _sha(a.treatment_config),
         "checkpoint_sha256": _sha(a.checkpoint),
         "native_nuplan_layout": native_layout,
-        "safe_benefit_count": sum(int(float(r["safe_benefit"])) for r in ordered),
-        "hard_regression_count": sum(1 for r in ordered if not bool(int(float(r["hard_noninferior"])))),
-        "paired_score_delta_sum": sum(float(r["paired_score_delta"]) for r in ordered),
+        "safe_benefit_count": sum(int(float(r["safe_benefit"])) for r in ordered if str(r.get("safe_benefit", "")).strip() != ""),
+        "hard_regression_count": sum(1 for r in ordered if str(r.get("hard_noninferior", "")).strip() != "" and not bool(int(float(r["hard_noninferior"])))),
+        "paired_score_delta_sum_live_eligible": sum(float(r["paired_score_delta"]) for r in ordered if str(r.get("paired_score_delta", "")).strip() != ""),
     }
     (a.output_root / "paired_collection_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(summary, indent=2, sort_keys=True))
