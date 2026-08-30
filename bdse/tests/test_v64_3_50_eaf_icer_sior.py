@@ -50,7 +50,7 @@ def test_v50_control_always_preserves_incumbent_at_rsmr_proposal() -> None:
     assert s.executed_intervention_count == 0
 
 
-def test_v50_treatment_executes_exact_frozen_winner_once_then_incumbent() -> None:
+def test_v50_treatment_executes_exact_live_winner_once_then_incumbent() -> None:
     s = SelectedOutcomeProbeState()
     out1, d1 = apply_selected_outcome_probe(7, _diag(), _cfg("treatment"), s)
     out2, d2 = apply_selected_outcome_probe(7, _diag(), _cfg("treatment"), s)
@@ -68,7 +68,7 @@ def test_v50_treatment_overrides_historical_veto_but_rejects_rerank() -> None:
     out, d = apply_selected_outcome_probe(2, _diag(proposal=7, baseline=2, selected=2), _cfg("treatment"), s)
     assert out == 7 and d["rsmr_selected_action"] == 7 and d["pre_probe_selected_action"] == 2
     s.reset()
-    with pytest.raises(ValueError, match=r"outside \{frozen RSMR proposal, incumbent\}"):
+    with pytest.raises(ValueError, match=r"outside \{live RSMR proposal, incumbent\}"):
         apply_selected_outcome_probe(9, _diag(proposal=7, baseline=2, selected=9), _cfg("treatment"), s)
 
 
@@ -95,7 +95,7 @@ def test_v50_probe_config_is_evidence_collection_only() -> None:
     assert c["metadata"]["selected_outcome_probe_role"] == "control"
     assert t["metadata"]["selected_outcome_probe_role"] == "treatment"
     assert src["metadata"] == {}  # config preparation must not mutate the frozen source object
-    assert t["selected_outcome_probe"]["proposal_source"] == "frozen_full_set_RSMR_before_post_selection"
+    assert t["selected_outcome_probe"]["proposal_source"] == "first_live_full_set_RSMR_winner_from_frozen_selector_before_post_selection"
     assert t["selected_outcome_probe"]["require_live_qpe"] is True
     assert t["selected_outcome_probe"]["teacher_or_logged_future_inputs"] is False
 
@@ -126,30 +126,46 @@ def _write_probe_diag(path: Path, role: str, *, first_it: int = 7, proposal: int
             "proposal_event_count": max(0, it - first_it + 1),
         }
         if pexists:
-            d.update({"live_quality_value": 0.1, "live_plan_control_value": 0.2, "live_ego_ref_value": 0.3})
+            d.update({
+                "live_quality_value": 0.1,
+                "live_plan_control_value": 0.2,
+                "live_ego_ref_value": 0.3,
+                "v50_live_proposal_fingerprint": f"fp-{proposal}",
+                "v50_live_proposal_maneuver_id": 0,
+                "v50_live_proposal_pool_original_index": 11,
+                "v50_live_proposal_maneuver": "keep_follow",
+                "v50_live_proposal_theta": "{}",
+            })
         rows.append({"iteration_index": it, "time_s": 0.1 * it, "diagnostics": {"selected_outcome_probe": d}})
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
 
 
-def test_v50_pair_validation_accepts_late_but_aligned_first_live_proposal(tmp_path: Path) -> None:
+def test_v50_pair_validation_accepts_late_live_winner_with_different_offline_slot(tmp_path: Path) -> None:
     c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
-    _write_probe_diag(c, "control", first_it=7, proposal=23)
-    _write_probe_diag(t, "treatment", first_it=7, proposal=23)
+    # The live candidate slot (6) is state-local and need not equal the frozen
+    # V49 offline cohort slot (23).  Pair validity is established at the live
+    # event by identical timing, live winner, fingerprint, Q/P/E and pretrace.
+    _write_probe_diag(c, "control", first_it=7, proposal=6)
+    _write_probe_diag(t, "treatment", first_it=7, proposal=6)
     got = _validate_pair("tok", c, t, 23)
     assert got["intervention_iteration"] == 7
+    assert got["proposal_action"] == 6
+    assert got["offline_v49_action_slot"] == 23
+    assert got["live_vs_offline_action_slot_equal"] == 0
+    assert got["live_proposal_fingerprint"] == "fp-6"
     assert got["preintervention_pair_aligned"] == 1
     assert got["live_quality_value"] == pytest.approx(0.1)
     assert got["live_plan_control_value"] == pytest.approx(0.2)
     assert got["live_ego_ref_value"] == pytest.approx(0.3)
 
 
-def test_v50_pair_validation_rejects_frozen_action_or_timing_mismatch(tmp_path: Path) -> None:
+def test_v50_pair_validation_rejects_live_candidate_or_timing_mismatch(tmp_path: Path) -> None:
     c = tmp_path / "c.jsonl"; t = tmp_path / "t.jsonl"
-    _write_probe_diag(c, "control", first_it=7, proposal=23)
-    _write_probe_diag(t, "treatment", first_it=7, proposal=23)
-    with pytest.raises(RuntimeError, match="does not match frozen V49"):
-        _validate_pair("tok", c, t, 22)
-    _write_probe_diag(t, "treatment", first_it=8, proposal=23)
+    _write_probe_diag(c, "control", first_it=7, proposal=6)
+    _write_probe_diag(t, "treatment", first_it=7, proposal=7)
+    with pytest.raises(RuntimeError, match="paired action identity mismatch"):
+        _validate_pair("tok", c, t, 23)
+    _write_probe_diag(t, "treatment", first_it=8, proposal=6)
     with pytest.raises(RuntimeError, match="first-proposal iteration mismatch"):
         _validate_pair("tok", c, t, 23)
 
@@ -250,3 +266,21 @@ def test_v50_launcher_separates_npz_cache_from_native_closed_loop_db_layout() ->
     assert '"$NUPLAN_SPLITS_ROOT/train_vegas"' in text
     assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume' in text
     assert 'NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train' not in text
+
+
+def test_v50_packaging_metadata_restored_for_clean_server_checkout() -> None:
+    pyproject = ROOT / "pyproject.toml"
+    setup = ROOT / "setup.py"
+    assert pyproject.is_file() and setup.is_file()
+    ptxt = pyproject.read_text(encoding="utf-8")
+    stxt = setup.read_text(encoding="utf-8")
+    assert 'name = "bdse-planner"' in ptxt
+    assert 'version = "64.3.50"' in ptxt
+    assert 'include = ["bdse*"]' in ptxt
+    assert "setup()" in stxt
+
+
+def test_v50_launcher_checks_current_checkout_import_provenance() -> None:
+    text = (ROOT / "RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh").read_text(encoding="utf-8")
+    assert "PASS V50 import provenance" in text
+    assert "python -m pip install -e ." in text

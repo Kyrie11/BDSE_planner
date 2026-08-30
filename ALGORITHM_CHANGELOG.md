@@ -12276,3 +12276,27 @@ The unsafe workaround is **not** to delete the assertion.  Doing so would attach
 - incomplete per-token nuPlan outputs are deleted and re-run before resume, so the failed pre-repair token cannot contaminate the repaired dataset.
 
 This is an outcome-blind V50 engineering preregistration repair.  It changes neither the RSMR selector, candidate bank, Q/P/E definitions, pairwise SIOR model class, `lambda=1`, retention budget, nor same-winner/incumbent no-fallback deployment operator.  It only removes the invalid assumption that nuPlan must expose the first direct proposal at absolute iteration zero and restores state/label alignment required for a valid selected-outcome intervention.
+
+## V64.3.50 engineering/protocol repair — state-local action-slot semantics (2026-08-29)
+
+The second server attempt stopped on token `03dac455f9ec5792` with `live=6, frozen=23`.  This does **not** indicate an RSMR code drift.  Against the current V50 tree, the V49 source manifest shows that `bdse/planner/candidate_generator.py` and `bdse/planner/tournament.py` are byte-identical to V49; the only expected historical-manifest mismatch is the later V50 probe modification in `bdse/planner/nuplan_planner.py`.
+
+The blocking assumption in the preceding event-alignment repair was nevertheless too strong: it treated a candidate `action` integer as a global proposal identity across two different planner states.  The candidate bank is regenerated every tick and `_prune_candidate_pool()` performs state-dependent pruning/reordering before exposing the final `0..K-1` slots; it explicitly records `pool_original_index`.  Therefore V49 offline slot `23` and a later live-state slot `6` are not semantically comparable proposal IDs.
+
+**Scientific object retained:** the 502 V49 scenes/folds remain the frozen development cohort, the RSMR selector/candidate generator/tournament remain frozen, and V50 still measures the paired outcome of the proposal selected by that frozen RSMR policy.  At the causal event, treatment is now defined as the **first live full-set RSMR winner from the frozen selector**, not “the same integer slot that happened to be selected in the offline cached state.”
+
+Pair validity is strengthened rather than relaxed:
+
+- CONTROL/TREATMENT must have identical pre-intervention action/time traces;
+- their first live proposal iteration and simulation time must match;
+- their live proposal slot, incumbent slot, and RSMR diagnostics must match each other;
+- the live candidate trajectory is quantized and SHA256-fingerprinted, and the candidate fingerprint plus maneuver semantics must match across arms;
+- live Q/P/E must match across arms at the same pre-intervention state;
+- CONTROL preserves incumbent; TREATMENT executes that exact live winner once and only once; later proposals preserve incumbent;
+- V49 offline `full_selected_action` is retained as `offline_v49_action_slot` provenance only and is never used as cross-state proposal identity.
+
+The SIOR model, Q/P/E coordinate definitions, pairwise loss, `lambda=1`, retention budget, no-rerank/no-fallback containment, and TRAIN/fresh gates are unchanged.  This amendment is outcome-blind: it is made after observing only the structural slot mismatch, before any valid paired outcome row is admitted under the corrected contract.
+
+Operational consequence: rerunning V49 with the same source/data will not repair `23 != 6`, because the mismatch is caused by comparing state-local candidate slots across different planner states.  A clean server checkout is recommended for provenance hygiene, but it is not a scientific fix for this specific mismatch.
+
+Packaging repair in the same engineering change restores `pyproject.toml` as the package metadata/build source and a minimal `setup.py` compatibility shim.  Server editable installs should use `python -m pip install -e . --no-build-isolation` in offline environments.  V50 launcher now verifies that `import bdse` resolves inside the current checkout so an older editable installation cannot silently execute stale code.

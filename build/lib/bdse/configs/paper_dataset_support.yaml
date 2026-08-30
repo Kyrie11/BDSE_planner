@@ -1,0 +1,163 @@
+# Dataset-generation overrides for BDSE paper-supportive nuPlan caches.
+# Use this after a quick probe reveals low safe-candidate coverage or overly
+# conservative teacher actions.  It keeps runtime/label separation intact.
+
+preprocess:
+  resume: true
+  scenario_stride: 10
+  scenario_iteration_policy: initial
+  max_scenarios_strategy: uniform_blocks
+  scenario_filter_limit_total_scenarios: null
+  label_agent_future_mode: logged
+  runtime_agent_history_mode: logged
+  candidate_aware_agent_selection: true
+  # Set --materialize-quality-filter to save only samples that can support the
+  # paper's teacher/interface claims.  These thresholds match the training gate.
+  materialize_quality_filter: false
+  quality_filter:
+    require_safe_candidate: true
+    min_valid_candidates: 24
+    reject_missing_quality_metrics: true
+    max_candidate_log_ade_min: 6.0
+    # The paper-support cache should not contain cases where a logged-like safe
+    # candidate exists but the robust teacher chooses a far-away artifact.  This
+    # is a materialization-only label-quality gate, not a runtime input.
+    max_candidate_log_ade_teacher: 3.5
+    max_teacher_to_nearest_log_ade_gap: 2.0
+    max_logged_route_p95: 6.0
+    exclude_teacher_hard: true
+    # Filter samples whose configured runtime evidence interface cannot preserve
+    # the full teacher decision even when given oracle atom costs.  This makes the
+    # quick probe diagnose model/selector learning on supportable scenes instead
+    # of mixing in interface-out-of-support scenes.
+    require_runtime_decision_sufficiency: true
+    min_selector_value_ratio: 0.60
+    max_runtime_teacher_regret: 1.0e-4
+
+runtime:
+  map_radius_m: 120.0
+  agent_radius_m: 90.0
+  max_agents: 32
+  max_route_points: 512
+  # Enable for final labels.  For a fast probe you may still pass
+  # --no-include-drivable-polygons; the fallback corridor below is wider.
+  include_drivable_polygons: true
+  # 32 polygons / 96 vertices is enough for local drivable supervision in the
+  # current BDSE atom design; the route corridor remains a conservative fallback.
+  # This materially reduces teacher-time when --include-drivable-polygons is used.
+  max_drivable_polygons: 32
+  max_polygon_points: 96
+  include_crosswalks: false
+
+candidate:
+  K: 32
+  pool_K: 96
+  prune_pool_to_K: true
+  terminal_progress_count: 18
+  conflict_stop_count: 10
+  prune_preserve_safe: 8
+  prune_preserve_conflict: 8
+  prune_preserve_history: 4
+  repair_low_valid_count: true
+  min_valid_candidates: 24
+  # These counts describe the final K=32 composition.  pool_K expands this
+  # table internally before pruning back to K, so the sum must remain 32.
+  counts:
+    keep_follow: 8
+    decelerate_stop: 7
+    yield_creep: 5
+    lane_change_left: 3
+    lane_change_right: 3
+    route_turn_connector: 2
+    safe_fallback: 4
+
+evidence:
+  max_atoms: 160
+  max_interaction_atoms: 48
+  max_interaction_agents: 16
+  max_map_atoms: 48
+  max_kinematic_atoms: 16
+  budget: 16
+  safety:
+    # Only used when exact drivable polygons are unavailable.  It avoids labeling
+    # adjacent-lane/intersection candidates as hard off-drivable solely because
+    # they leave a narrow route centerline corridor.
+    route_corridor_fallback_width_m: 7.5
+    route_corridor_fallback_hard_slack_m: 1.5
+    collision_shared_frame_fraction: 0.90
+    collision_shared_min_candidates: 4
+    # Ignore unavoidable sub-second overlaps as hard decision evidence.  Soft
+    # occupancy/TTC costs still see these frames; the hard flag should describe
+    # candidate-controllable collision differences, not current-frame artifacts.
+    collision_grace_s: 0.5
+    collision_min_frames: 3
+    off_drivable_slack_m: 1.25
+
+teacher:
+  robust:
+    enabled: true
+  robust_modes:
+    logged: {enabled: true, prob: 0.50}
+    cv: {enabled: true, prob: 0.20}
+    ca: {enabled: true, prob: 0.05}
+    brake: {enabled: true, prob: 0.10}
+    yield: {enabled: true, prob: 0.10}
+    nonyield: {enabled: true, prob: 0.05}
+  risk_aggregation:
+    type: mean_cvar
+    cvar_alpha: 0.9
+    cvar_weight: 0.25
+  feasibility:
+    hard_priority_scale: 4000.0
+    inject_hard_priority_costs: true
+  # Keep the logged ego as a weak prior, but strong enough to prevent the robust
+  # teacher from selecting far-from-log conservative artifacts when a logged-like
+  # safe candidate exists.
+  demo_weight: 8.0
+  demo_scale: 120.0
+  route_weight: 50.0
+  progress_weight: 5.0
+  comfort_global_weight: 1.0
+  atom_normalization_first: true
+  separate_hard_gate: false
+  use_reactive_proxy: true
+  cost_eval_stride: 1
+
+pairs:
+  winner_top_l: 16
+  target_min: 96
+  target_max: 384
+  eta_percentile: 25
+  preserve_safe_unsafe_pairs: true
+  safe_unsafe_weight: 8.0
+
+selector:
+  proposal_top_m: 64
+  lambda_safety: 8.0
+  lambda_near: 2.0
+  eta_pred: 2.0
+  preserve_safety_pairs: true
+  # Fixes a deployment-interface failure mode where the base-cost winner is
+  # always placed first, so evidence that should overturn it has negative signed
+  # deltas and cannot be selected by the greedy budgeted certificate.
+  bidirectional_pairs: true
+  reverse_pair_weight: 1.0
+  runtime_pair_cap_multiplier: 3.0
+
+tournament:
+  L_infer: 31
+
+training:
+  quality_filter:
+    enabled: true
+    require_safe_candidate: true
+    min_valid_candidates: 24
+    reject_missing_quality_metrics: true
+    max_candidate_log_ade_min: 6.0
+    max_candidate_log_ade_teacher: 3.5
+    max_teacher_to_nearest_log_ade_gap: 2.0
+    max_logged_route_p95: 6.0
+    exclude_teacher_hard: true
+    require_runtime_decision_sufficiency: true
+    min_selector_value_ratio: 0.60
+    max_runtime_teacher_regret: 1.0e-4

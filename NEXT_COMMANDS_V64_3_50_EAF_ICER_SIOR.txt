@@ -82,11 +82,11 @@ Expected behavior
 3. Hard-lock the exact uploaded V49 scientific failure artifacts.
 4. Re-audit frozen V13/EAF prerequisite and run repository targeted regression.
 5. Freeze exactly the 502 TRAIN scenes with a full-set RSMR proposal.
-6. Build CONTROL/TREATMENT configs from the pure frozen V47 RSMR config.
+6. Build CONTROL/TREATMENT configs from the byte-locked V49 runtime config solely to expose the frozen RSMR selector and live Q/P/E instrumentation.
 7. Run paired closed_loop_reactive_agents evidence collection on ORIGINAL nuPlan
    SQLite DB logs:
    CONTROL   = preserve incumbent at all RSMR proposals.
-   TREATMENT = execute the exact first full-set RSMR winner once, then preserve incumbent.
+   TREATMENT = execute the first live full-set RSMR winner from the frozen selector once, then preserve incumbent.
 8. Fit/evaluate nested SIOR using the frozen [Q, P-Q, E-P] state and existing pairwise risk model.
 9. If TRAIN fails: scientific STOP, nonzero exit, no fresh evidence consumed.
 10. If TRAIN passes: launcher still deliberately STOPS before fresh selection. Freeze and return the result package for analysis first.
@@ -141,11 +141,26 @@ The repaired causal contract is:
   * identical pre-intervention planner/deployed action/time trace;
   * first live RSMR proposal at the same iteration/time in both arms (not forced
     to absolute iteration zero);
-  * live proposal action exactly equals the frozen V49 full-set RSMR winner;
+  * live proposal action is a state-local slot and is required to match only
+    between CONTROL/TREATMENT at that same live state; the V49 offline slot is
+    retained as provenance, not a cross-state identity constraint;
+  * the live proposal trajectory fingerprint and maneuver semantics must match
+    between CONTROL/TREATMENT;
   * same frozen Q/P/E coordinate definitions evaluated at that same live event,
     with C/T values equal before intervention;
-  * CONTROL -> incumbent; TREATMENT -> exact proposal once; no rerank/fallback.
+  * CONTROL -> incumbent; TREATMENT -> exact live proposal once; no rerank/fallback.
 
-Do not bypass any of these checks.  A later STOP on frozen-action mismatch or
-C/T state mismatch is a real engineering/scientific alignment failure and must
-be diagnosed rather than disabled.
+Do not bypass these same-state checks.  A later STOP on C/T proposal fingerprint,
+state, timing, or pre-intervention trace mismatch is a real alignment failure.
+
+V49 rerun / clean-checkout guidance
+------------------------------------
+- Do NOT rerun V49 to repair a live-slot/offline-slot mismatch. Candidate action
+  integers are local to a state-dependent, pruned candidate bank; rerunning the
+  same V49 offline experiment cannot make those indices globally persistent.
+- A clean clone or `git worktree` is still recommended for server provenance.
+  Keep historical output directories outside the code checkout (or reference
+  them by absolute `V49_ROOT` / `EAF_V64_3_13_ROOT`).
+- In an offline server environment after restoring packaging metadata, install
+  the current checkout with `python -m pip install -e . --no-build-isolation`.
+  The V50 launcher also verifies that `import bdse` resolves inside this checkout.

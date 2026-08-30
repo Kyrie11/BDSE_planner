@@ -1,0 +1,12 @@
+numpy>=1.23
+PyYAML>=6.0
+torch>=1.13
+tqdm>=4.64
+orjson>=3.9
+
+[analysis]
+pandas>=1.5
+matplotlib>=3.6
+
+[dev]
+pytest>=7.0

@@ -1,0 +1,74 @@
+calibration:
+  epsilon_cal: 0.0
+evidence:
+  budget: 16
+fallback:
+  enabled: false
+  max_additional_stages: 0
+model:
+  pair_margin_normalized: true
+pairs:
+  pair_batch_per_scene: 64
+  target_max: 128
+planner:
+  baseline_mode: interaction_only
+preprocess:
+  candidate_aware_agent_selection: false
+runtime:
+  include_drivable_polygons: false
+  skip_candidate_aware_agent_selection: true
+  use_pair_conditioned_margins: true
+selector:
+  force_fill_budget: true
+  force_hard_topm: true
+  mandatory_hard_quota: 6
+  maneuver_pair_count: 4
+  maneuver_rivals: 4
+  min_selected_atoms: 8
+  normalized_eta_pred: 0.1
+  normalized_gamma_max: 5.0
+  progress_pair_count: 4
+  progress_rivals: 4
+  proposal_top_m: 32
+  runtime_pair_cap_multiplier: 1.0
+  structural_safety_include_feasibility: true
+tournament:
+  L_infer: 12
+  epsilon_cal: 0.0
+training:
+  action_conditioned_action_loss_weight: 0.0
+  action_loss_start_epoch: 4
+  decision_weight_hard_crossing_pair: 1.0
+  decision_weight_near_margin: 0.5
+  decision_weight_near_pair: 1.0
+  decision_weight_safety_pairs: true
+  decision_weight_teacher_pair: 2.0
+  epsilon_cal_normalized: 1.0
+  exclude_hard_action_pairs_from_pair_regression: true
+  exclude_safety_atoms_from_pair_regression: true
+  interaction_atom_pair_weight: 2.0
+  loss_weights:
+    action: 4.0
+    atom_cost: 0.05
+    base: 0.2
+    full_action: 5.0
+    full_interface_rank_aux: 3.0
+    full_margin: 3.0
+    hard_feasibility: 2.0
+    pair: 0.5
+    proposal: 4.0
+    residual: 0.25
+    uncertainty: 0.01
+  normalize_atom_cost_loss: true
+  normalize_calibration_loss: true
+  normalize_pair_losses: true
+  normalized_huber_delta: 1.0
+  pair_action_loss_weight: 1.0
+  pair_margin_min_scale: 100.0
+  predicted_selector_start_epoch: 8
+  proposal_decisive_hard_gain_boost: 0.0
+  proposal_decisive_hard_weight: 1.0
+  proposal_focus_interaction_only: true
+  proposal_include_decisive_hard: false
+  proposal_interaction_gain_boost: 1.0
+  upweight_interaction_atoms: true

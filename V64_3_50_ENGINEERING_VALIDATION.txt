@@ -1,51 +1,77 @@
-V64.3.50 EAF-ICER-SIOR — event-state alignment engineering repair validation
+V64.3.50 EAF-ICER-SIOR — live action-slot semantics + packaging repair validation
 
 Trigger
 -------
-First server pair stopped before a paired row was committed:
+After the first-live-event alignment repair, the first pair reached a synchronized
+proposal event at iteration 7/7 but stopped with:
   token=03dac455f9ec5792
-  first synchronized live RSMR proposal iteration=7/7
-Old code incorrectly required absolute planner iteration 0.
+  live proposal slot=6
+  V49 offline full_selected_action slot=23
 
 Root cause
 ----------
-The old collector conflated "same pre-intervention state in CONTROL/TREATMENT"
-with "absolute nuPlan planner iteration must equal zero".  Removing only that
-assertion would have been unsafe because the downstream fit still paired a later
-closed-loop outcome with stale V49 offline Q/P/E covariates.
+The remaining V50 check incorrectly treated candidate action integers as global
+proposal identities across different planner states.  They are not.  The BDSE
+candidate bank is regenerated every tick and `_prune_candidate_pool()` performs
+state-dependent pruning/reordering before exposing final 0..K-1 action slots;
+metadata records `pool_original_index` for exactly this reason.
+
+This is not evidence of RSMR/candidate-generator drift.  Checked against the V49
+source manifest in this package:
+  bdse/planner/candidate_generator.py : exact V49 SHA match
+  bdse/planner/tournament.py          : exact V49 SHA match
+The only expected V49 historical-manifest mismatch in the V50 tree is
+`bdse/planner/nuplan_planner.py`, which V50 intentionally extends with probe
+instrumentation.
 
 Repair
 ------
-- first live proposal may occur at any nonnegative iteration;
-- CONTROL/TREATMENT must match on first-proposal iteration/time;
-- complete pre-intervention probe time/planner-action/deployed-action traces must match;
-- live proposal action must equal frozen V49 full_selected_action;
-- historical V49 post-selection may only keep proposal or veto to incumbent;
-- frozen Q/P/E coordinate definitions are recorded at the same live event and
-  must match between CONTROL/TREATMENT;
-- CONTROL preserves incumbent, TREATMENT executes exact proposal once;
-- SIOR fits event-aligned live Q/P/E rather than stale offline Q/P/E;
-- V49 offline Q/P/E/risk retained only for audit/comparator reconstruction;
-- incomplete token output is deleted before rerun; resume skips only committed rows.
+- Freeze the 502 V49 scene cohort/folds and frozen RSMR selector/config, not a
+  cross-state candidate slot integer.
+- CONTROL/TREATMENT must still have identical pre-intervention action/time traces.
+- Their first live RSMR proposal iteration/time, live proposal slot and incumbent
+  slot must match at the same state.
+- The planner records an instrumentation-only SHA256 fingerprint of the live
+  proposal trajectory (1e-4 quantized) plus maneuver semantics.  Fingerprint,
+  maneuver id, pool-original index, maneuver label and theta must match C/T.
+- Live Q/P/E must match C/T at that same pre-intervention event.
+- CONTROL preserves incumbent; TREATMENT executes the exact live winner once;
+  later proposals preserve incumbent.
+- V49 offline full_selected_action is retained as `offline_v49_action_slot`
+  provenance plus `live_vs_offline_action_slot_equal`; it is not a gate.
+- SIOR fitting consumes live event-aligned Q/P/E and paired closed-loop labels.
+
+Packaging/provenance repair
+---------------------------
+- Restored `pyproject.toml` as canonical packaging/build metadata.
+- Restored minimal `setup.py` setuptools compatibility shim.
+- V50 launcher verifies `import bdse` resolves under the current checkout to
+  prevent a stale editable installation from silently executing another tree.
+- Offline installation path: `python -m pip install -e . --no-build-isolation`.
 
 Validation
 ----------
 Python compileall: PASS
 launcher bash -n: PASS
-V50 focused: 14/14 PASS
-V48 + V48.2 + V49 + V50 adjacent focused: 31/31 PASS
-V13 -> V50 exact launcher targeted regression: 256/256 PASS
-Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class.
+V50 focused: 16/16 PASS
+V48 + V48.2 + V49 + V50 adjacent focused (before the two packaging-only tests): 31/31 PASS
+Candidate repair + frozen RSMR focused tests: 9/9 PASS
+V13 -> V50 exact launcher targeted regression: 258/258 PASS
+Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class
+`python setup.py --name`: PASS (`bdse-planner`)
+PEP-517 wheel build with local build environment (`--no-build-isolation`): PASS
+V50 current source manifest: 916/916 PASS
 
-A whole-repository pytest invocation was also attempted.  It reached 96% with no
-reported failure before the local execution window timed out, so it is deliberately
-NOT claimed as a completed PASS.  The exact historical targeted suite used by the
-server launcher completed successfully as reported above.
+Scientific non-change / protocol clarification
+----------------------------------------------
+No change to EAF/RSMR algorithm, candidate-generation algorithm, tournament
+ordering, Q/P/E definitions, SIOR model/loss, lambda=1, alpha_ret, hard-safety
+label, no-rerank/no-second-best/no-fallback operator, or TRAIN/fresh promotion
+gates.  The corrected estimand is the outcome of the first *live* winner from
+the frozen RSMR selection policy on the frozen V49 scene cohort.  This is the
+appropriate on-policy selected-outcome intervention; forcing an integer slot
+from a different offline state would not identify the same physical proposal.
 
-Scientific non-change
----------------------
-No change to RSMR, EAF, candidate bank, Q/P/E coordinate definitions, SIOR
-zero-bias pairwise ranker class, lambda=1, alpha_ret, same-winner/incumbent
-operator, no-rerank/no-second-best/no-fallback constraints, or promotion gates.
-This is an outcome-blind state/label alignment repair made after the first pair
-raised before any paired row was committed.
+Rerunning V49 is not expected to repair live-slot/offline-slot inequality.
+A clean server checkout/worktree is recommended for provenance hygiene but is
+not a substitute for this action-identity correction.

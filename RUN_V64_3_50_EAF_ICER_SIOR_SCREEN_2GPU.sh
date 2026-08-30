@@ -38,6 +38,25 @@ export NUPLAN_SPLITS_ROOT="${NUPLAN_SPLITS_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits
 export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_reactive_agents}"
 export PYTHONUNBUFFERED=1
 
+# Import provenance: a long-lived server environment may have an older editable
+# BDSE installation.  Running from this repository must import this exact tree;
+# otherwise source manifests can pass while Python executes stale installed code.
+python - <<'PY'
+from pathlib import Path
+import bdse
+root = Path.cwd().resolve()
+loaded = Path(bdse.__file__).resolve()
+expected = (root / "bdse").resolve()
+try:
+    loaded.relative_to(expected)
+except ValueError as exc:
+    raise SystemExit(
+        f"STOP V50: Python imported bdse from {loaded}, expected current checkout under {expected}. "
+        "Activate the intended environment and run `python -m pip install -e .` from this checkout."
+    ) from exc
+print(f"PASS V50 import provenance: {loaded}")
+PY
+
 # Native TRAIN DB selection.  The user's official DBs are flat inside each
 # city split directory, which is directly consumable by nuPlan.  We therefore
 # pass the four TRAIN directories as scenario_builder.db_files; val/test DBs

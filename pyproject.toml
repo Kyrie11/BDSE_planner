@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bdse-planner"
+version = "64.3.50"
+description = "Budgeted Decision-Sufficient Evidence planner research code"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.23",
+  "PyYAML>=6.0",
+  "torch>=1.13",
+  "tqdm>=4.64",
+  "orjson>=3.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+analysis = ["pandas>=1.5", "matplotlib>=3.6"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bdse*"]
+
+[tool.setuptools.package-data]
+bdse = [
+  "configs/*.yaml",
+  "configs/*.txt",
+  "nuplan_config/**/*.yaml",
+]
