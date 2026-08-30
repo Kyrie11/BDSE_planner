@@ -234,3 +234,13 @@ runs CONTROL/TREATMENT on separate GPUs, computes the same official per-scenario
 nuPlan score/hard metrics, and validates every token independently.  See
 V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md for the performance/science
 boundary.
+
+# Timing-instrumented execution engine.
+# Scientific protocol is unchanged, but do not mix rows from the previous engine.
+export V50_BATCH_SIZE="${V50_BATCH_SIZE:-16}"
+export V50_HEARTBEAT_SECONDS="${V50_HEARTBEAT_SECONDS:-30}"
+rm -rf outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/paired_train
+bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+# For denser timing output only (no scientific change):
+# V50_HEARTBEAT_SECONDS=10 bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh

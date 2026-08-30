@@ -42,8 +42,207 @@ HARD_METRICS = [
     "driving_direction_compliance",
 ]
 COLLECTION_PROTOCOL_VERSION = "v50-live-selected-event-cohort-v1"
-COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-v1"
+COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-timing-v2"
 NO_TREATMENT_SCORE_TOL = 1.0e-9
+
+
+class _BatchProgressTracker:
+    """Incrementally summarize child-process progress without touching science state."""
+
+    def __init__(self, *, role: str, diag: Path, log: Path, telemetry: Path, started: float, gpu: str = "") -> None:
+        self.role = str(role)
+        self.diag = Path(diag)
+        self.log = Path(log)
+        self.telemetry = Path(telemetry)
+        self.started = float(started)
+        self.gpu = str(gpu)
+        self.diag_offset = 0
+        self.diag_partial = b""
+        self.log_offset = 0
+        self.log_partial = b""
+        self.rows = 0
+        self.tokens_seen: list[str] = []
+        self._token_set: set[str] = set()
+        self.latest_token = ""
+        self.latest_iteration = -1
+        self.latest_time_s = 0.0
+        self.planner_ready_count = 0
+        self.success_count = -1
+        self.failure_count = -1
+        self.last_log_line = ""
+        self.timing_count = 0
+        self.timing_sums: dict[str, float] = {}
+        self.timing_max: dict[str, float] = {}
+        self.timing_last: dict[str, float] = {}
+
+    @staticmethod
+    def _flatten_numeric(prefix: str, obj: Any, out: dict[str, float]) -> None:
+        if not isinstance(obj, dict):
+            return
+        for key, value in obj.items():
+            if isinstance(value, (int, float)):
+                x = float(value)
+                if math.isfinite(x):
+                    out[f"{prefix}{key}"] = x
+
+    def _poll_diag(self) -> None:
+        if not self.diag.is_file():
+            return
+        with self.diag.open("rb") as f:
+            f.seek(self.diag_offset)
+            data = f.read()
+            self.diag_offset = f.tell()
+        if not data:
+            return
+        data = self.diag_partial + data
+        parts = data.split(b"\n")
+        self.diag_partial = parts.pop()
+        for raw in parts:
+            if not raw.strip():
+                continue
+            try:
+                row = json.loads(raw.decode("utf-8"))
+            except Exception:
+                continue
+            self.rows += 1
+            tok = str(row.get("scenario_token", "") or "")
+            if tok and tok not in self._token_set:
+                self._token_set.add(tok)
+                self.tokens_seen.append(tok)
+            if tok:
+                self.latest_token = tok
+            self.latest_iteration = int(row.get("iteration_index", -1))
+            self.latest_time_s = float(row.get("time_s", 0.0))
+            vt = ((row.get("diagnostics", {}) or {}).get("v50_timing", {}) or {})
+            flat: dict[str, float] = {}
+            self._flatten_numeric("timing.", vt.get("timing", {}), flat)
+            self._flatten_numeric("core.", vt.get("timing_core", {}), flat)
+            self._flatten_numeric("model.", vt.get("model_timing", {}), flat)
+            if flat:
+                self.timing_count += 1
+                self.timing_last = flat
+                for key, value in flat.items():
+                    self.timing_sums[key] = self.timing_sums.get(key, 0.0) + value
+                    self.timing_max[key] = max(self.timing_max.get(key, float("-inf")), value)
+
+    def _poll_log(self) -> None:
+        if not self.log.is_file():
+            return
+        with self.log.open("rb") as f:
+            f.seek(self.log_offset)
+            data = f.read()
+            self.log_offset = f.tell()
+        if not data:
+            return
+        data = self.log_partial + data
+        parts = data.split(b"\n")
+        self.log_partial = parts.pop()
+        for raw in parts:
+            line = raw.decode("utf-8", errors="replace").strip().replace("\r", "")
+            if not line:
+                continue
+            if "[planner-ready]" in line:
+                self.planner_ready_count += 1
+            m = re.search(r"Number of successful simulations:\s*(\d+)", line)
+            if m:
+                self.success_count = int(m.group(1))
+            m = re.search(r"Number of failed simulations:\s*(\d+)", line)
+            if m:
+                self.failure_count = int(m.group(1))
+            self.last_log_line = line[-280:]
+
+    @staticmethod
+    def _process_resources(pid: int) -> dict[str, float]:
+        out: dict[str, float] = {}
+        try:
+            status = Path(f"/proc/{int(pid)}/status").read_text(encoding="utf-8", errors="replace")
+            m = re.search(r"^VmRSS:\s+(\d+)\s+kB", status, flags=re.MULTILINE)
+            if m:
+                out["child_rss_mb"] = float(int(m.group(1))) / 1024.0
+        except Exception:
+            pass
+        try:
+            parts = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8").split()
+            hz = float(os.sysconf(os.sysconf_names["SC_CLK_TCK"]))
+            out["child_cpu_time_s"] = (float(parts[13]) + float(parts[14])) / hz
+        except Exception:
+            pass
+        return out
+
+    def _gpu_resources(self) -> dict[str, float]:
+        if not self.gpu or shutil.which("nvidia-smi") is None:
+            return {}
+        try:
+            q = subprocess.run(
+                ["nvidia-smi", "-i", self.gpu,
+                 "--query-gpu=utilization.gpu,memory.used,memory.total",
+                 "--format=csv,noheader,nounits"],
+                check=False, capture_output=True, text=True, timeout=3.0,
+            )
+            if q.returncode != 0 or not q.stdout.strip():
+                return {}
+            vals = [float(x.strip()) for x in q.stdout.strip().splitlines()[0].split(",")]
+            if len(vals) >= 3:
+                return {"gpu_util_pct": vals[0], "gpu_mem_used_mb": vals[1], "gpu_mem_total_mb": vals[2]}
+        except Exception:
+            pass
+        return {}
+
+    def snapshot(self, *, pid: int, final: bool = False) -> dict[str, Any]:
+        self._poll_diag()
+        self._poll_log()
+        elapsed = float(time.perf_counter() - self.started)
+        mean = {k: v / max(self.timing_count, 1) for k, v in self.timing_sums.items()}
+        snap: dict[str, Any] = {
+            "timestamp_unix": time.time(),
+            "role": self.role,
+            "pid": int(pid),
+            "final": bool(final),
+            "elapsed_s": elapsed,
+            "diag_rows": int(self.rows),
+            "scenarios_seen": int(len(self.tokens_seen)),
+            "latest_token": self.latest_token,
+            "latest_iteration": int(self.latest_iteration),
+            "latest_sim_time_s": float(self.latest_time_s),
+            "planner_ready_count": int(self.planner_ready_count),
+            "successful_simulations_reported": int(self.success_count),
+            "failed_simulations_reported": int(self.failure_count),
+            "diag_bytes": int(self.diag.stat().st_size) if self.diag.is_file() else 0,
+            "log_bytes": int(self.log.stat().st_size) if self.log.is_file() else 0,
+            "last_log_line": self.last_log_line,
+            "timing_samples": int(self.timing_count),
+            "timing_last_s": self.timing_last,
+            "timing_mean_s": mean,
+            "timing_max_s": self.timing_max,
+        }
+        snap.update(self._process_resources(pid))
+        snap.update(self._gpu_resources())
+        self.telemetry.parent.mkdir(parents=True, exist_ok=True)
+        with self.telemetry.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(snap, sort_keys=True) + "\n")
+        return snap
+
+
+def _heartbeat_line(s: dict[str, Any]) -> str:
+    mean = s.get("timing_mean_s", {}) or {}
+    last = s.get("timing_last_s", {}) or {}
+    def val(src: dict[str, Any], key: str) -> str:
+        x = src.get(key)
+        return "-" if x is None else f"{float(x):.3f}"
+    latest = f"{s.get('latest_token','')}@{s.get('latest_iteration',-1)}" if s.get("latest_token") else "pre-first-tick"
+    return (
+        f"[V50 heartbeat] role={s['role']} elapsed={s['elapsed_s']:.0f}s pid={s['pid']} "
+        f"scenes_seen={s['scenarios_seen']} ticks={s['diag_rows']} latest={latest} "
+        f"planner_total(last/mean)={val(last,'timing.compute_planner_trajectory_total_s')}/"
+        f"{val(mean,'timing.compute_planner_trajectory_total_s')}s "
+        f"core={val(mean,'timing.core_plan_s')}s cand={val(mean,'core.candidate_generation_s')}s "
+        f"evidence={val(mean,'core.evidence_enumeration_s')}s cert={val(mean,'core.certificate_stages_s')}s "
+        f"model_ctx={val(mean,'model.model_encode_context_s')}s model_pair={val(mean,'model.model_pair_scoring_s')}s "
+        f"planner_ready={s['planner_ready_count']} cpu={float(s.get('child_cpu_time_s',-1)):.1f}s "
+        f"rss={float(s.get('child_rss_mb',-1)):.0f}MB gpu={float(s.get('gpu_util_pct',-1)):.0f}% "
+        f"gpu_mem={float(s.get('gpu_mem_used_mb',-1)):.0f}MB log_bytes={s['log_bytes']} "
+        f"log_tail={str(s.get('last_log_line',''))[-120:]!r}"
+    )
 
 
 def _sha(path: Path) -> str:
@@ -537,6 +736,8 @@ def _run_arm_batch(
         "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
         "BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1",
         "BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1",
+        "BDSE_V50_TIMING_TELEMETRY": "1",
+        "BDSE_PROFILE_CLOSED_LOOP": "1",
         "BDSE_REPLAN_INTERVAL_TICKS": "1",
         "BDSE_FORCE_REPLAN_EVERY_TICK": "1",
         # This is now useful: all planners in the batch reuse one read-only CUDA
@@ -547,19 +748,38 @@ def _run_arm_batch(
         "PYTHONUNBUFFERED": "1",
         "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1",
     })
-    started = time.time()
-    with log.open("w", encoding="utf-8") as f:
-        proc = subprocess.run(cmd, env=env, stdout=f, stderr=subprocess.STDOUT, check=False)
-    wall = time.time() - started
+    started = time.perf_counter()
+    telemetry = root / "timing_telemetry.jsonl"
+    heartbeat_s = max(float(args.heartbeat_seconds), 1.0)
+    with log.open("w", encoding="utf-8", buffering=1) as f:
+        proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
+        tracker = _BatchProgressTracker(role=role, diag=diag, log=log, telemetry=telemetry, started=started, gpu=str(gpu))
+        while True:
+            try:
+                returncode = proc.wait(timeout=heartbeat_s)
+                break
+            except subprocess.TimeoutExpired:
+                snap = tracker.snapshot(pid=proc.pid, final=False)
+                print(_heartbeat_line(snap), flush=True)
+        snap = tracker.snapshot(pid=proc.pid, final=True)
+        print(_heartbeat_line(snap), flush=True)
+    wall = time.perf_counter() - started
+    metric_started = time.perf_counter()
     text = log.read_text(encoding="utf-8", errors="replace")
     succ, fail = _parse_success(text)
-    if proc.returncode != 0 or succ != len(tokens) or fail != 0:
+    if returncode != 0 or succ != len(tokens) or fail != 0:
         tail = "\n".join(text.replace("\r", "\n").splitlines()[-40:])
         raise RuntimeError(
-            f"V50 {role} batch failed return={proc.returncode} successful={succ} failed={fail} "
+            f"V50 {role} batch failed return={returncode} successful={succ} failed={fail} "
             f"expected={len(tokens)} tokens={tokens[:4]}...\n{tail}"
         )
-    metrics_by_token, _ = _scenario_metric_rows(root, tokens)
+    metrics_by_token, metric_parquet = _scenario_metric_rows(root, tokens)
+    metric_join_s = float(time.perf_counter() - metric_started)
+    print(
+        f"[V50 arm finalize] role={role} batch_tokens={len(tokens)} simulation_wall={wall:.1f}s "
+        f"metric_join={metric_join_s:.3f}s metric_file={metric_parquet}",
+        flush=True,
+    )
     if not diag.is_file() or not diag.stat().st_size:
         raise RuntimeError(f"V50 {role} batch: strict probe diagnostic missing")
     tagged = {str(r.get("scenario_token", "")) for r in _probe_rows(diag) if str(r.get("scenario_token", ""))}
@@ -660,6 +880,7 @@ def main() -> None:
     ap.add_argument("--nuplan-db-root", type=Path, default=None)
     ap.add_argument("--nuplan-db-files", type=Path, nargs="*", default=None)
     ap.add_argument("--batch-size", type=int, default=16, help="Scenarios per nuPlan process/arm; scientific protocol is unchanged")
+    ap.add_argument("--heartbeat-seconds", type=float, default=30.0, help="Engineering-only progress/timing heartbeat interval")
     ap.add_argument("--resume", action="store_true")
     a = ap.parse_args()
     if not a.checkpoint.is_file(): raise FileNotFoundError(a.checkpoint)

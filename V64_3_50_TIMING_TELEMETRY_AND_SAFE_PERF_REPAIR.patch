@@ -1,0 +1,925 @@
+--- a/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++++ b/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+@@ -37,6 +37,7 @@
+ export NUPLAN_SPLITS_ROOT="${NUPLAN_SPLITS_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits}"
+ export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_reactive_agents}"
+ export V50_BATCH_SIZE="${V50_BATCH_SIZE:-16}"
++export V50_HEARTBEAT_SECONDS="${V50_HEARTBEAT_SECONDS:-30}"
+ export PYTHONUNBUFFERED=1
+ 
+ # Import provenance: a long-lived server environment may have an older editable
+@@ -118,7 +119,7 @@
+   [[ -e "$NUPLAN_DB_ROOT" ]] || { echo "STOP V50 missing NUPLAN_DB_ROOT: $NUPLAN_DB_ROOT" >&2; exit 2; }
+ fi
+ 
+-echo "[V50 performance] batched paired collector: V50_BATCH_SIZE=$V50_BATCH_SIZE (scientific protocol unchanged)"
++echo "[V50 performance] batched paired collector: V50_BATCH_SIZE=$V50_BATCH_SIZE heartbeat=${V50_HEARTBEAT_SECONDS}s compact_tick_timing=on (scientific protocol unchanged)"
+ echo '[V50 dataset layout] BDSE NPZ caches (offline only):'
+ echo "  train=$BDSE_TRAIN_CACHE (present=$([[ -d "$BDSE_TRAIN_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
+ echo "  val=$BDSE_VAL_CACHE (present=$([[ -d "$BDSE_VAL_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
+@@ -205,7 +206,7 @@
+   --control-config "$CONTROL_CFG" --treatment-config "$TREATMENT_CFG" --checkpoint "$EAF_CKPT" \
+   --scenario-token-file "$TRAIN_TOKENS" --frozen-proposal-audit "$V49_CAND" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
+   --challenge "$CL_CHALLENGE" --nuplan-data-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" \
+-  --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --resume \
++  --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --heartbeat-seconds "$V50_HEARTBEAT_SECONDS" --resume \
+   2>&1 | tee "$OUT_ROOT/logs/v64_3_50_paired_closed_loop_collection.out"
+ stage_end
+ 
+--- a/bdse/planner/nuplan_planner.py
++++ b/bdse/planner/nuplan_planner.py
+@@ -73,6 +73,35 @@
+ _CLOSED_LOOP_PROFILE_LOCK = threading.Lock()
+ _CLOSED_LOOP_PROFILE: dict[str, dict[str, float]] = {}
+ _CLOSED_LOOP_PROFILE_REGISTERED = False
++_DIAG_WRITER_LOCK = threading.Lock()
++_DIAG_WRITERS: dict[str, Any] = {}
++_DIAG_WRITERS_REGISTERED = False
++
++
++def _close_diag_writers() -> None:
++    with _DIAG_WRITER_LOCK:
++        for handle in list(_DIAG_WRITERS.values()):
++            try:
++                handle.flush(); handle.close()
++            except Exception:
++                pass
++        _DIAG_WRITERS.clear()
++
++
++def _append_diag_line(path: Path, text: str) -> None:
++    """Append a diagnostic line without reopening the file every planner tick."""
++    global _DIAG_WRITERS_REGISTERED
++    key = str(path.resolve())
++    with _DIAG_WRITER_LOCK:
++        handle = _DIAG_WRITERS.get(key)
++        if handle is None or getattr(handle, "closed", False):
++            path.parent.mkdir(parents=True, exist_ok=True)
++            handle = path.open("a", encoding="utf-8", buffering=1)
++            _DIAG_WRITERS[key] = handle
++        if not _DIAG_WRITERS_REGISTERED:
++            atexit.register(_close_diag_writers)
++            _DIAG_WRITERS_REGISTERED = True
++        handle.write(text + "\n")
+ 
+ 
+ def _env_true(name: str, default: bool = False) -> bool:
+@@ -121,15 +150,7 @@
+     }
+ 
+ 
+-def _v50_prefixed_candidate_identity(candidates: Any, action: int, prefix: str) -> dict[str, Any]:
+-    """Rename the live candidate certificate for arbitrary pre/post probe actions.
+-
+-    V50 needs same-state identity not only for the RSMR proposal but also for the
+-    actually deployed action on ticks where no proposal exists.  This lets the
+-    paired collector certify an entire no-treatment trajectory without relying
+-    on state-local integer slots alone.
+-    """
+-    base = _v50_live_candidate_identity(candidates, action)
++def _v50_prefixed_identity(base: dict[str, Any], prefix: str) -> dict[str, Any]:
+     mapping = {
+         "v50_live_proposal_fingerprint": f"{prefix}_fingerprint",
+         "v50_live_proposal_maneuver_id": f"{prefix}_maneuver_id",
+@@ -140,6 +161,10 @@
+     return {mapping[k]: v for k, v in base.items()}
+ 
+ 
++def _v50_prefixed_candidate_identity(candidates: Any, action: int, prefix: str) -> dict[str, Any]:
++    return _v50_prefixed_identity(_v50_live_candidate_identity(candidates, action), prefix)
++
++
+ def _device_inference_lock(device: Any) -> threading.RLock:
+     key = str(device)
+     with _SHARED_MODEL_CACHE_LOCK:
+@@ -1656,6 +1681,15 @@
+         pcfg = cfg_stage.get("selected_outcome_probe", {}) if isinstance(cfg_stage, dict) else {}
+         probe_enabled = bool((pcfg or {}).get("enabled", False))
+         pre_probe_action = int(action)
++        t_probe = time.perf_counter()
++        identity_cache: dict[int, dict[str, Any]] = {}
++
++        def v50_identity(action_index: int) -> dict[str, Any]:
++            ai = int(action_index)
++            if ai not in identity_cache:
++                identity_cache[ai] = _v50_live_candidate_identity(candidates, ai)
++            return identity_cache[ai]
++
+         if probe_enabled:
+             try:
+                 proposal_exists = bool(float(probe_input.get("decisive_frontier_icer_scir_proposal_exists", 0.0)) > 0.5)
+@@ -1663,22 +1697,21 @@
+             except Exception:
+                 proposal_exists = False
+                 proposal_action = -1
+-            # Certify the action generated by the frozen historical planner on
+-            # every tick.  This is required to distinguish a genuine no-live-
+-            # proposal stratum from CONTROL/TREATMENT runtime divergence.
+-            probe_input.update(_v50_prefixed_candidate_identity(candidates, pre_probe_action, "v50_pre_probe_action"))
++            probe_input.update(_v50_prefixed_identity(v50_identity(pre_probe_action), "v50_pre_probe_action"))
+             if proposal_exists:
+-                probe_input.update(_v50_live_candidate_identity(candidates, proposal_action))
++                probe_input.update(v50_identity(proposal_action))
+         action, selected_outcome_probe_diag = apply_selected_outcome_probe(
+             action, probe_input, cfg_stage, self._selected_outcome_probe_state
+         )
+         if probe_enabled:
+             selected_outcome_probe_diag.update(
+-                _v50_prefixed_candidate_identity(candidates, int(pre_probe_action), "v50_pre_probe_action")
++                _v50_prefixed_identity(v50_identity(pre_probe_action), "v50_pre_probe_action")
+             )
+             selected_outcome_probe_diag.update(
+-                _v50_prefixed_candidate_identity(candidates, int(action), "v50_post_probe_action")
++                _v50_prefixed_identity(v50_identity(int(action)), "v50_post_probe_action")
+             )
++        if profile_enabled:
++            timing_core["v50_probe_instrumentation_s"] = float(time.perf_counter() - t_probe)
+         recovery_diag: dict[str, Any] = {}
+         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
+             from bdse.planner.fallback import (
+@@ -1928,6 +1961,13 @@
+                 diag_payload = {
+                     "selected_outcome_probe": (diagnostics.get("selected_outcome_probe", {}) or {}),
+                 }
++                if _env_true("BDSE_V50_TIMING_TELEMETRY", default=False):
++                    diag_payload["v50_timing"] = {
++                        "timing": (diagnostics.get("timing", {}) or {}),
++                        "timing_core": (diagnostics.get("timing_core", {}) or {}),
++                        "model_timing": (diagnostics.get("model_timing", {}) or {}),
++                        "cached_plan": bool(diagnostics.get("cached_plan", False)),
++                    }
+             row = {
+                 "planner": self._name,
+                 "scenario_token": str(getattr(self, "_diagnostic_scenario_token", "") or ""),
+@@ -1939,9 +1979,7 @@
+             if _env_true("BDSE_REQUIRE_SCENARIO_FOR_DIAG", default=False) and not row["scenario_token"]:
+                 raise RuntimeError("V50 batched diagnostics require the native nuPlan scenario token")
+             path = Path(diag_path).expanduser()
+-            path.parent.mkdir(parents=True, exist_ok=True)
+-            with path.open("a", encoding="utf-8") as f:
+-                f.write(json.dumps(row, sort_keys=True) + "\n")
++            _append_diag_line(path, json.dumps(row, sort_keys=True))
+         except Exception as exc:
+             # Never silently lose the runtime diagnostics used to validate the
+             # safety/progress mechanism.  Hydra can change the worker cwd, so the
+--- a/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
++++ b/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
+@@ -42,10 +42,209 @@
+     "driving_direction_compliance",
+ ]
+ COLLECTION_PROTOCOL_VERSION = "v50-live-selected-event-cohort-v1"
+-COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-v1"
++COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-timing-v2"
+ NO_TREATMENT_SCORE_TOL = 1.0e-9
+ 
+ 
++class _BatchProgressTracker:
++    """Incrementally summarize child-process progress without touching science state."""
++
++    def __init__(self, *, role: str, diag: Path, log: Path, telemetry: Path, started: float, gpu: str = "") -> None:
++        self.role = str(role)
++        self.diag = Path(diag)
++        self.log = Path(log)
++        self.telemetry = Path(telemetry)
++        self.started = float(started)
++        self.gpu = str(gpu)
++        self.diag_offset = 0
++        self.diag_partial = b""
++        self.log_offset = 0
++        self.log_partial = b""
++        self.rows = 0
++        self.tokens_seen: list[str] = []
++        self._token_set: set[str] = set()
++        self.latest_token = ""
++        self.latest_iteration = -1
++        self.latest_time_s = 0.0
++        self.planner_ready_count = 0
++        self.success_count = -1
++        self.failure_count = -1
++        self.last_log_line = ""
++        self.timing_count = 0
++        self.timing_sums: dict[str, float] = {}
++        self.timing_max: dict[str, float] = {}
++        self.timing_last: dict[str, float] = {}
++
++    @staticmethod
++    def _flatten_numeric(prefix: str, obj: Any, out: dict[str, float]) -> None:
++        if not isinstance(obj, dict):
++            return
++        for key, value in obj.items():
++            if isinstance(value, (int, float)):
++                x = float(value)
++                if math.isfinite(x):
++                    out[f"{prefix}{key}"] = x
++
++    def _poll_diag(self) -> None:
++        if not self.diag.is_file():
++            return
++        with self.diag.open("rb") as f:
++            f.seek(self.diag_offset)
++            data = f.read()
++            self.diag_offset = f.tell()
++        if not data:
++            return
++        data = self.diag_partial + data
++        parts = data.split(b"\n")
++        self.diag_partial = parts.pop()
++        for raw in parts:
++            if not raw.strip():
++                continue
++            try:
++                row = json.loads(raw.decode("utf-8"))
++            except Exception:
++                continue
++            self.rows += 1
++            tok = str(row.get("scenario_token", "") or "")
++            if tok and tok not in self._token_set:
++                self._token_set.add(tok)
++                self.tokens_seen.append(tok)
++            if tok:
++                self.latest_token = tok
++            self.latest_iteration = int(row.get("iteration_index", -1))
++            self.latest_time_s = float(row.get("time_s", 0.0))
++            vt = ((row.get("diagnostics", {}) or {}).get("v50_timing", {}) or {})
++            flat: dict[str, float] = {}
++            self._flatten_numeric("timing.", vt.get("timing", {}), flat)
++            self._flatten_numeric("core.", vt.get("timing_core", {}), flat)
++            self._flatten_numeric("model.", vt.get("model_timing", {}), flat)
++            if flat:
++                self.timing_count += 1
++                self.timing_last = flat
++                for key, value in flat.items():
++                    self.timing_sums[key] = self.timing_sums.get(key, 0.0) + value
++                    self.timing_max[key] = max(self.timing_max.get(key, float("-inf")), value)
++
++    def _poll_log(self) -> None:
++        if not self.log.is_file():
++            return
++        with self.log.open("rb") as f:
++            f.seek(self.log_offset)
++            data = f.read()
++            self.log_offset = f.tell()
++        if not data:
++            return
++        data = self.log_partial + data
++        parts = data.split(b"\n")
++        self.log_partial = parts.pop()
++        for raw in parts:
++            line = raw.decode("utf-8", errors="replace").strip().replace("\r", "")
++            if not line:
++                continue
++            if "[planner-ready]" in line:
++                self.planner_ready_count += 1
++            m = re.search(r"Number of successful simulations:\s*(\d+)", line)
++            if m:
++                self.success_count = int(m.group(1))
++            m = re.search(r"Number of failed simulations:\s*(\d+)", line)
++            if m:
++                self.failure_count = int(m.group(1))
++            self.last_log_line = line[-280:]
++
++    @staticmethod
++    def _process_resources(pid: int) -> dict[str, float]:
++        out: dict[str, float] = {}
++        try:
++            status = Path(f"/proc/{int(pid)}/status").read_text(encoding="utf-8", errors="replace")
++            m = re.search(r"^VmRSS:\s+(\d+)\s+kB", status, flags=re.MULTILINE)
++            if m:
++                out["child_rss_mb"] = float(int(m.group(1))) / 1024.0
++        except Exception:
++            pass
++        try:
++            parts = Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8").split()
++            hz = float(os.sysconf(os.sysconf_names["SC_CLK_TCK"]))
++            out["child_cpu_time_s"] = (float(parts[13]) + float(parts[14])) / hz
++        except Exception:
++            pass
++        return out
++
++    def _gpu_resources(self) -> dict[str, float]:
++        if not self.gpu or shutil.which("nvidia-smi") is None:
++            return {}
++        try:
++            q = subprocess.run(
++                ["nvidia-smi", "-i", self.gpu,
++                 "--query-gpu=utilization.gpu,memory.used,memory.total",
++                 "--format=csv,noheader,nounits"],
++                check=False, capture_output=True, text=True, timeout=3.0,
++            )
++            if q.returncode != 0 or not q.stdout.strip():
++                return {}
++            vals = [float(x.strip()) for x in q.stdout.strip().splitlines()[0].split(",")]
++            if len(vals) >= 3:
++                return {"gpu_util_pct": vals[0], "gpu_mem_used_mb": vals[1], "gpu_mem_total_mb": vals[2]}
++        except Exception:
++            pass
++        return {}
++
++    def snapshot(self, *, pid: int, final: bool = False) -> dict[str, Any]:
++        self._poll_diag()
++        self._poll_log()
++        elapsed = float(time.perf_counter() - self.started)
++        mean = {k: v / max(self.timing_count, 1) for k, v in self.timing_sums.items()}
++        snap: dict[str, Any] = {
++            "timestamp_unix": time.time(),
++            "role": self.role,
++            "pid": int(pid),
++            "final": bool(final),
++            "elapsed_s": elapsed,
++            "diag_rows": int(self.rows),
++            "scenarios_seen": int(len(self.tokens_seen)),
++            "latest_token": self.latest_token,
++            "latest_iteration": int(self.latest_iteration),
++            "latest_sim_time_s": float(self.latest_time_s),
++            "planner_ready_count": int(self.planner_ready_count),
++            "successful_simulations_reported": int(self.success_count),
++            "failed_simulations_reported": int(self.failure_count),
++            "diag_bytes": int(self.diag.stat().st_size) if self.diag.is_file() else 0,
++            "log_bytes": int(self.log.stat().st_size) if self.log.is_file() else 0,
++            "last_log_line": self.last_log_line,
++            "timing_samples": int(self.timing_count),
++            "timing_last_s": self.timing_last,
++            "timing_mean_s": mean,
++            "timing_max_s": self.timing_max,
++        }
++        snap.update(self._process_resources(pid))
++        snap.update(self._gpu_resources())
++        self.telemetry.parent.mkdir(parents=True, exist_ok=True)
++        with self.telemetry.open("a", encoding="utf-8") as f:
++            f.write(json.dumps(snap, sort_keys=True) + "\n")
++        return snap
++
++
++def _heartbeat_line(s: dict[str, Any]) -> str:
++    mean = s.get("timing_mean_s", {}) or {}
++    last = s.get("timing_last_s", {}) or {}
++    def val(src: dict[str, Any], key: str) -> str:
++        x = src.get(key)
++        return "-" if x is None else f"{float(x):.3f}"
++    latest = f"{s.get('latest_token','')}@{s.get('latest_iteration',-1)}" if s.get("latest_token") else "pre-first-tick"
++    return (
++        f"[V50 heartbeat] role={s['role']} elapsed={s['elapsed_s']:.0f}s pid={s['pid']} "
++        f"scenes_seen={s['scenarios_seen']} ticks={s['diag_rows']} latest={latest} "
++        f"planner_total(last/mean)={val(last,'timing.compute_planner_trajectory_total_s')}/"
++        f"{val(mean,'timing.compute_planner_trajectory_total_s')}s "
++        f"core={val(mean,'timing.core_plan_s')}s cand={val(mean,'core.candidate_generation_s')}s "
++        f"evidence={val(mean,'core.evidence_enumeration_s')}s cert={val(mean,'core.certificate_stages_s')}s "
++        f"model_ctx={val(mean,'model.model_encode_context_s')}s model_pair={val(mean,'model.model_pair_scoring_s')}s "
++        f"planner_ready={s['planner_ready_count']} cpu={float(s.get('child_cpu_time_s',-1)):.1f}s "
++        f"rss={float(s.get('child_rss_mb',-1)):.0f}MB gpu={float(s.get('gpu_util_pct',-1)):.0f}% "
++        f"gpu_mem={float(s.get('gpu_mem_used_mb',-1)):.0f}MB log_bytes={s['log_bytes']} "
++        f"log_tail={str(s.get('last_log_line',''))[-120:]!r}"
++    )
++
++
+ def _sha(path: Path) -> str:
+     return hashlib.sha256(path.read_bytes()).hexdigest()
+ 
+@@ -537,6 +736,8 @@
+         "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
+         "BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1",
+         "BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1",
++        "BDSE_V50_TIMING_TELEMETRY": "1",
++        "BDSE_PROFILE_CLOSED_LOOP": "1",
+         "BDSE_REPLAN_INTERVAL_TICKS": "1",
+         "BDSE_FORCE_REPLAN_EVERY_TICK": "1",
+         # This is now useful: all planners in the batch reuse one read-only CUDA
+@@ -547,19 +748,38 @@
+         "PYTHONUNBUFFERED": "1",
+         "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1",
+     })
+-    started = time.time()
+-    with log.open("w", encoding="utf-8") as f:
+-        proc = subprocess.run(cmd, env=env, stdout=f, stderr=subprocess.STDOUT, check=False)
+-    wall = time.time() - started
++    started = time.perf_counter()
++    telemetry = root / "timing_telemetry.jsonl"
++    heartbeat_s = max(float(args.heartbeat_seconds), 1.0)
++    with log.open("w", encoding="utf-8", buffering=1) as f:
++        proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
++        tracker = _BatchProgressTracker(role=role, diag=diag, log=log, telemetry=telemetry, started=started, gpu=str(gpu))
++        while True:
++            try:
++                returncode = proc.wait(timeout=heartbeat_s)
++                break
++            except subprocess.TimeoutExpired:
++                snap = tracker.snapshot(pid=proc.pid, final=False)
++                print(_heartbeat_line(snap), flush=True)
++        snap = tracker.snapshot(pid=proc.pid, final=True)
++        print(_heartbeat_line(snap), flush=True)
++    wall = time.perf_counter() - started
++    metric_started = time.perf_counter()
+     text = log.read_text(encoding="utf-8", errors="replace")
+     succ, fail = _parse_success(text)
+-    if proc.returncode != 0 or succ != len(tokens) or fail != 0:
++    if returncode != 0 or succ != len(tokens) or fail != 0:
+         tail = "\n".join(text.replace("\r", "\n").splitlines()[-40:])
+         raise RuntimeError(
+-            f"V50 {role} batch failed return={proc.returncode} successful={succ} failed={fail} "
++            f"V50 {role} batch failed return={returncode} successful={succ} failed={fail} "
+             f"expected={len(tokens)} tokens={tokens[:4]}...\n{tail}"
+         )
+-    metrics_by_token, _ = _scenario_metric_rows(root, tokens)
++    metrics_by_token, metric_parquet = _scenario_metric_rows(root, tokens)
++    metric_join_s = float(time.perf_counter() - metric_started)
++    print(
++        f"[V50 arm finalize] role={role} batch_tokens={len(tokens)} simulation_wall={wall:.1f}s "
++        f"metric_join={metric_join_s:.3f}s metric_file={metric_parquet}",
++        flush=True,
++    )
+     if not diag.is_file() or not diag.stat().st_size:
+         raise RuntimeError(f"V50 {role} batch: strict probe diagnostic missing")
+     tagged = {str(r.get("scenario_token", "")) for r in _probe_rows(diag) if str(r.get("scenario_token", ""))}
+@@ -660,6 +880,7 @@
+     ap.add_argument("--nuplan-db-root", type=Path, default=None)
+     ap.add_argument("--nuplan-db-files", type=Path, nargs="*", default=None)
+     ap.add_argument("--batch-size", type=int, default=16, help="Scenarios per nuPlan process/arm; scientific protocol is unchanged")
++    ap.add_argument("--heartbeat-seconds", type=float, default=30.0, help="Engineering-only progress/timing heartbeat interval")
+     ap.add_argument("--resume", action="store_true")
+     a = ap.parse_args()
+     if not a.checkpoint.is_file(): raise FileNotFoundError(a.checkpoint)
+--- a/bdse/tests/test_v64_3_50_eaf_icer_sior.py
++++ b/bdse/tests/test_v64_3_50_eaf_icer_sior.py
+@@ -20,6 +20,7 @@
+     _hard_noninferiority,
+     _validate_native_nuplan_inputs,
+     _validate_pair,
++    _BatchProgressTracker,
+ )
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+@@ -360,7 +361,7 @@
+     assert '"$NUPLAN_SPLITS_ROOT/train_pittsburgh"' in text
+     assert '"$NUPLAN_SPLITS_ROOT/train_singapore"' in text
+     assert '"$NUPLAN_SPLITS_ROOT/train_vegas"' in text
+-    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --resume' in text
++    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --heartbeat-seconds "$V50_HEARTBEAT_SECONDS" --resume' in text
+     assert 'NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train' not in text
+ 
+ 
+@@ -431,12 +432,15 @@
+ 
+ def test_v50_batched_engine_is_execution_only_and_protocol_is_unchanged() -> None:
+     assert COLLECTION_PROTOCOL_VERSION == "v50-live-selected-event-cohort-v1"
+-    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-v1"
++    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-timing-v2"
+     text = (ROOT / "bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py").read_text(encoding="utf-8")
+     assert '"BDSE_FORCE_REPLAN_EVERY_TICK": "1"' in text
+     assert '"BDSE_SHARE_MODEL_PER_PROCESS": "1"' in text
+     assert '"BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1"' in text
+     assert '"BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1"' in text
++    assert '"BDSE_V50_TIMING_TELEMETRY": "1"' in text
++    assert '"BDSE_PROFILE_CLOSED_LOOP": "1"' in text
++    assert "heartbeat-seconds" in text
+     assert 'worker.max_workers=1' in text
+ 
+ 
+@@ -462,3 +466,52 @@
+     assert '"requested_batch_size": batch_size' in text
+     assert 'different requested batch size' in text
+     assert 'V50 paired output predates the frozen batched-engine provenance field requested_batch_size' in text
++
++
++def test_v50_progress_tracker_extracts_compact_tick_timing(tmp_path: Path) -> None:
++    diag = tmp_path / "diag.jsonl"
++    log = tmp_path / "run.log"
++    telemetry = tmp_path / "timing.jsonl"
++    row = {
++        "scenario_token": "tok_a",
++        "iteration_index": 7,
++        "time_s": 0.7,
++        "diagnostics": {
++            "selected_outcome_probe": {"enabled": True, "proposal_exists": False},
++            "v50_timing": {
++                "timing": {"compute_planner_trajectory_total_s": 0.5, "core_plan_s": 0.4},
++                "timing_core": {"candidate_generation_s": 0.1, "certificate_stages_s": 0.2},
++                "model_timing": {"model_encode_context_s": 0.05},
++            },
++        },
++    }
++    diag.write_text(json.dumps(row) + "\n", encoding="utf-8")
++    log.write_text("[planner-ready] reused=True\n", encoding="utf-8")
++    import time
++    tr = _BatchProgressTracker(role="control", diag=diag, log=log, telemetry=telemetry, started=time.perf_counter())
++    snap = tr.snapshot(pid=123)
++    assert snap["diag_rows"] == 1
++    assert snap["scenarios_seen"] == 1
++    assert snap["latest_token"] == "tok_a"
++    assert snap["latest_iteration"] == 7
++    assert snap["planner_ready_count"] == 1
++    assert snap["timing_mean_s"]["timing.compute_planner_trajectory_total_s"] == pytest.approx(0.5)
++    assert snap["timing_mean_s"]["core.candidate_generation_s"] == pytest.approx(0.1)
++    assert snap["timing_mean_s"]["model.model_encode_context_s"] == pytest.approx(0.05)
++    assert telemetry.is_file() and telemetry.stat().st_size > 0
++
++
++def test_v50_diag_only_profile_keeps_probe_and_compact_timing_only() -> None:
++    text = (ROOT / "bdse/planner/nuplan_planner.py").read_text(encoding="utf-8")
++    assert 'diag_payload["v50_timing"]' in text
++    assert '"selected_outcome_probe": (diagnostics.get("selected_outcome_probe", {}) or {})' in text
++    assert '_append_diag_line(path, json.dumps(row, sort_keys=True))' in text
++    assert 'timing_core["v50_probe_instrumentation_s"]' in text
++    assert 'identity_cache: dict[int, dict[str, Any]]' in text
++
++
++def test_v50_persistent_diag_writer_is_line_visible(tmp_path: Path) -> None:
++    from bdse.planner.nuplan_planner import _append_diag_line
++    p = tmp_path / "live.jsonl"
++    _append_diag_line(p, '{"x":1}')
++    assert p.read_text(encoding="utf-8") == '{"x":1}\n'
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -12343,3 +12343,24 @@
+ Explicitly **not** optimized because it would alter V50 science: per-tick replanning, native reactive simulation, both CONTROL/TREATMENT arms, official nuPlan metrics/hard metrics, full no-treatment equivalence checks, live eligibility semantics, selector/candidate/treatment policy, SIOR model/loss/calibration/gates. A future shared-prefix simulator-state fork is deferred because it would require a separately validated state-cloning contract.
+ 
+ This repair does not provide scientific evidence for SIOR by itself. It only reduces redundant execution overhead in the native paired evidence-acquisition stage. See `V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md`.
++
++## V64.3.50 performance observability + science-preserving micro-optimization repair (2026-08-30)
++
++**Scientific algorithm/protocol unchanged.** The first batched server run appeared to stall after `[V50 batch 1/32]` because the parent emitted no progress until both 16-scene child nuPlan processes exited. The old log could not distinguish startup, DB/scenario construction, model warm-up, normal per-tick planning, or metric aggregation.
++
++Repair:
++
++- retain `collection_protocol_version=v50-live-selected-event-cohort-v1`;
++- advance execution provenance only to `collection_engine_version=v50-batched-nuplan-timing-v2`;
++- add `V50_HEARTBEAT_SECONDS` (default 30 s);
++- emit live CONTROL/TREATMENT progress: child PID, elapsed time, planner-ready count, scenario count, planner tick count, latest token/iteration, compact phase timings, CPU/RSS, optional GPU utilization/memory, log size, and short log tail;
++- persist per-arm `timing_telemetry.jsonl`;
++- enable `BDSE_PROFILE_CLOSED_LOOP=1` only as observation and retain compact `v50_timing` beside the selected-outcome certificate; timing never enters planning or SIOR;
++- reuse one line-buffered diagnostic append handle per process rather than reopening the JSONL every tick;
++- memoize candidate identity by same-tick local action slot, removing redundant trajectory quantization/SHA work used only for V50 pair auditing;
++- expose `timing_core.v50_probe_instrumentation_s`;
++- report parent metric-parquet join time separately from child simulation wall time.
++
++No change to every-tick replanning, reactive simulation, paired arms, candidate/RSMR/Q/P/E semantics, live eligibility, treatment, official metrics, SIOR fit/gates, or no-fallback containment. More aggressive changes such as DB-locality cohort reordering, multi-scenario GPU concurrency, and shared-prefix simulator-state forking are deferred until measured timing evidence identifies the dominant phase.
++
++See `V64_3_50_TIMING_TELEMETRY_AND_SAFE_PERF_REPAIR.md`.
+--- a/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt
++++ b/NEXT_COMMANDS_V64_3_50_EAF_ICER_SIOR.txt
+@@ -234,3 +234,13 @@
+ nuPlan score/hard metrics, and validates every token independently.  See
+ V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md for the performance/science
+ boundary.
++
++# Timing-instrumented execution engine.
++# Scientific protocol is unchanged, but do not mix rows from the previous engine.
++export V50_BATCH_SIZE="${V50_BATCH_SIZE:-16}"
++export V50_HEARTBEAT_SECONDS="${V50_HEARTBEAT_SECONDS:-30}"
++rm -rf outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/paired_train
++bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++
++# For denser timing output only (no scientific change):
++# V50_HEARTBEAT_SECONDS=10 bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+--- a/V64_3_50_ENGINEERING_VALIDATION.txt
++++ b/V64_3_50_ENGINEERING_VALIDATION.txt
+@@ -1,153 +1,24 @@
+-V64.3.50 EAF-ICER-SIOR — live-selection eligibility / cohort-semantics repair validation
++V64.3.50 EAF-ICER-SIOR timing telemetry / science-preserving performance repair
++Date: 2026-08-30
+ 
+-Trigger
+--------
+-After the earlier event-state and state-local action-slot repairs, native paired
+-collection progressed through the first two V49 discovery-cohort scenes and then
+-stopped on token 04e294754b4d56a6 with:
++Scientific protocol unchanged: v50-live-selected-event-cohort-v1
++Execution engine: v50-batched-nuplan-timing-v2
+ 
+-  expected exactly one first proposal marker in both arms, got 0/0
+-
+-The strict selected-outcome diagnostic stream was present.  Therefore 0/0 did
+-not mean the marker logger failed: neither CONTROL nor TREATMENT emitted a live
+-RSMR direct proposal anywhere in that native closed-loop scenario.
+-
+-Root cause
+-----------
+-V50 still conflated two different populations:
+-
+-  1) V49 offline discovery cohort: 502 TRAIN scenes selected by offline V49
+-     instrumentation; and
+-  2) V50 live intervention cohort: native closed-loop states in which the frozen
+-     RSMR policy actually emits a direct proposal, so a one-shot selected-action
+-     treatment is defined.
+-
+-Offline membership does not guarantee live treatment eligibility.  Treating a
+-symmetric no-proposal replay as an engineering exception makes the experiment
+-impossible; treating it as a negative SIOR label would be scientifically wrong
+-because no treatment was available or executed.
+-
+-Repair
+-------
+-- Keep all 502 V49 scenes as the frozen offline discovery/transport cohort.
+-- Every token is still replayed in paired CONTROL/TREATMENT native nuPlan runs.
+-- If both arms reach the same first live RSMR proposal event, keep all prior
+-  same-state identity/QPE/one-shot invariants and label the paired selected
+-  outcome (`pair_status=eligible_intervened`).
+-- If neither arm ever emits a proposal, record
+-  `pair_status=no_live_proposal`, `live_intervention_eligible=0`; prove whole-run
+-  CONTROL/TREATMENT deployed action + trajectory-fingerprint equality, zero
+-  proposal/intervention counters, and official score/hard-metric equivalence.
+-  Do NOT create a safe_benefit/nonbenefit label and exclude the row from SIOR
+-  fit/calibration/test.
+-- Exactly-one-arm proposal, malformed marker state, pre-treatment divergence,
+-  proposal/fingerprint/QPE mismatch, or multiple treatment execution remains an
+-  ENGINEERING STOP.
+-- The paired CSV has a new locked protocol version
+-  `v50-live-selected-event-cohort-v1`; both collector resume and the fit tool
+-  reject older/missing versions so old V50 rows cannot be mixed silently.
+-- V49 OBS comparator is reconstructed on the full frozen 502 offline selected
+-  population for each fold, not the live-eligible subset, then evaluated on the
+-  same live Q/P/E test states and closed-loop labels as SIOR.  This prevents
+-  live-eligibility leakage into the baseline fitting distribution.
+-
+-Scientific population-support discipline
+-----------------------------------------
+-No live-eligibility-rate threshold was invented after observing this failure.
+-Instead, fitting is allowed only if the live selected-event population satisfies
+-the already-frozen V48/V49 estimator support requirements:
+-
+-  - every nested fit split: >=32 safe-benefit and >=32 nonbenefit events;
+-  - every calibration fold: >=16 safe-benefit events;
+-  - every held-out fold: both classes present;
+-  - final fit/calibration: the same inherited minima.
+-
+-If support fails, V50 writes the 502-scene cohort-transport audit and SCIENTIFIC
+-STOPs before risk fitting/fresh evaluation.  It must not relabel no-proposal
+-scenes, lower minima, change loss/threshold, or expand the risk head.
+-
+-Interpretation / protocol status
+---------------------------------
+-This is not merely a missing-marker engineering fix.  It corrects an experiment-
+-unit/estimand flaw: V50 SIOR is an outcome model conditional on a real live
+-selection event.  The 502-scene V49 population remains useful as a frozen
+-offline discovery cohort and separately measures offline->native selection
+-transport.  The core SIOR hypothesis (replace offline pseudo-intervention labels
+-with native paired selected-outcome evidence) is unchanged, but any paper claim
+-must distinguish offline discovery coverage from conditional live selected-event
+-outcome identification.
+-
+-The repair was designed from proposal-eligibility/diagnostic information only;
+-no paired score or hard-safety outcome from the failing 0/0 token was provided to
+-or inspected by this analysis.
+-
+-Validation
+-----------
+-Python compileall: PASS
+-launcher bash -n: PASS
+-V50 focused after final protocol-version guard: 21/21 PASS
+-V48 + V48.2 + V49 + V50 adjacent focused: 38/38 PASS
+-V13 -> V50 exact launcher targeted regression after final guard: 263/263 PASS
+-Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class
+-Earlier exhaustive 126-file sharded repository run before the final one-test
+-protocol guard: 599/599 PASS; the newly added protocol-version guard is included
+-in the final 21/21 and 263/263 suites.  A later concurrent full-repository rerun
+-was interrupted by the tool execution window and is not claimed as a second
+-complete full-suite PASS.
+-`python setup.py --name`: PASS (`bdse-planner`)
+-V50 current source manifest: 916 locked paths; regenerated after final source changes
+-
+-Rerun requirement
+------------------
+-Because the paired CSV semantics/schema changed, delete ONLY:
+-
+-  outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/paired_train
+-
+-before running this package.  Do not delete or rerun frozen V49 outputs.
+-
+-V64.3.50 performance-only batched paired-collection execution repair
+---------------------------------------------------------------------
+-Trigger: server collection progressed without semantic failure but single-scenario
+-throughput was impractically slow. Code audit found 502 sequential pair waves and
+-1004 fresh Python/Hydra/nuPlan process launches. The existing per-process model
+-cache therefore had almost no opportunity to amortize checkpoint/model loading,
+-and every child repeatedly received the four full TRAIN DB directories.
+-
+-Repair (scientific protocol unchanged):
+-- `collection_protocol_version` remains `v50-live-selected-event-cohort-v1`.
+-- New execution provenance only: `collection_engine_version=v50-batched-nuplan-v1`.
+-- Default `V50_BATCH_SIZE=16`: one CONTROL and one TREATMENT process per token
+-  batch, concurrent on GPU0/GPU1; `worker.max_workers=1` keeps scenarios serial
+-  within each arm process.
+-- Official nuPlan per-scenario metric rows are joined by exact native scenario
+-  token and every token still runs the same `_validate_pair()` independently.
+-- Process-global read-only model sharing is now amortized across batch scenarios.
+-- Build an outcome-blind 502-token -> exact native `.db` file index once; each
+-  batch passes only relevant DB files. Exact-index failure falls back to the old
+-  configured DB inputs and never changes the cohort.
+-- V50 collection writes only the selected-outcome diagnostic certificate rather
+-  than the unused full planner diagnostic tree on every tick.
+-- Resume rejects legacy engines and a different requested batch size; batch size
+-  is execution provenance and must remain frozen for one collection.
+-- Per-tick replanning, native reactive simulation, CONTROL/TREATMENT policies,
+-  one-shot intervention, official score/hard metrics, Q/P/E, labels, SIOR model,
+-  calibration and all scientific gates remain unchanged.
+-
+-Validation after final requested-batch-size provenance lock:
+-Python compileall: PASS
+-launcher bash -n: PASS
+-V50 focused: 26/26 PASS
+-V48 + V48.2 + V49 + V50 adjacent focused: 43/43 PASS
+-V13 -> V50 exact launcher targeted regression: 268/268 PASS
+-Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class
+-A later 4-way full-repository shard attempt was interrupted by the outer tool
+-window. One shard completed 154/154 PASS and the remaining shards showed no
+-failure before interruption; this incomplete rerun is not claimed as a full
+-repository PASS. Historical full-suite coverage before this performance-only
+-engine change is documented above; the changed paths are covered by the final
+-focused/adjacent/launcher-targeted suites.
+-
+-Expected process-launch count at B=16: 2*ceil(502/16)=64 rather than 1004.
+-No empirical server speedup is claimed before rerunning the batched engine.
+-See V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md.
+-Final batched-performance source manifest: 919/919 PASS after performance audit/patch/changed-files provenance was added.
++Validation:
++- python compileall: PASS
++- launcher bash -n: PASS
++- V50 focused: 29/29 PASS
++- V38->V50 adjacent/history mechanism suite: 99/99 PASS
++- no new warning class observed in these suites
++
++Changed execution/observation only:
++- heartbeat + per-arm timing telemetry
++- compact per-tick timing fields
++- parent CPU/RSS and optional GPU utilization observation
++- persistent line-buffered diagnostic writer
++- same-tick candidate identity memoization
++
++Explicitly unchanged:
++reactive closed-loop, both paired arms, every-tick replanning, candidate/RSMR/EAF/Q/P/E,
++live eligibility, treatment assignment, official metrics, SIOR fit/calibration/gates,
++and same-winner/incumbent no-fallback containment.
+--- /dev/null
++++ b/V64_3_50_TIMING_TELEMETRY_AND_SAFE_PERF_REPAIR.md
+@@ -0,0 +1,172 @@
++# V64.3.50 Timing Telemetry and Science-Preserving Performance Repair
++
++## Scope
++
++This is an execution/observability repair only. The V50 scientific protocol remains `v50-live-selected-event-cohort-v1`.
++
++Unchanged:
++
++- native `closed_loop_reactive_agents` simulation;
++- separate CONTROL and TREATMENT rollouts;
++- every-tick replanning and every-tick selector decision;
++- frozen RSMR/candidate/EAF/Q/P/E definitions;
++- live-selection eligibility and no-live-proposal stratum;
++- one-shot treatment semantics;
++- official nuPlan aggregate score and four hard metrics;
++- SIOR state, loss, calibration, and GO/STOP gates.
++
++Only execution provenance changes from `v50-batched-nuplan-v1` to `v50-batched-nuplan-timing-v2`.
++
++## Why the previous batch looked frozen
++
++The previous batched collector printed before starting a 16-scenario batch and then blocked until BOTH CONTROL and TREATMENT child processes completed all 16 scenarios. Therefore the terminal could remain silent for a long period even while native simulation was progressing normally.
++
++After:
++
++```text
++[V50 batch 1/32] ...
++[V50 batch DB restriction] exact_db_files=13
++```
++
++the silence could have meant any of:
++
++1. Python/Hydra/ScenarioBuilder startup;
++2. DB/scenario construction;
++3. CUDA checkpoint/model initialization;
++4. normal scenario 1..16 reactive simulation;
++5. expensive per-tick BDSE planning;
++6. post-simulation official metric aggregation.
++
++The old parent log could not distinguish these phases.
++
++## New heartbeat
++
++`V50_HEARTBEAT_SECONDS` defaults to 30 seconds. A heartbeat is emitted independently for CONTROL and TREATMENT, for example:
++
++```text
++[V50 heartbeat] role=control elapsed=90s pid=... scenarios_seen=1 ticks=37
++latest=03dac...@36 planner_total(last/mean)=0.842/0.791s
++core=0.744s cand=0.031s evidence=0.046s cert=0.612s
++model_ctx=0.084s model_pair=0.351s planner_ready=1
++cpu=72.1s rss=4350MB gpu=86% gpu_mem=5210MB ...
++```
++
++Each arm also writes:
++
++```text
++paired_train/batches/<batch>/control/timing_telemetry.jsonl
++paired_train/batches/<batch>/treatment/timing_telemetry.jsonl
++```
++
++The existing strict `probe_diag.jsonl` gains a compact `v50_timing` block per tick. Full selector/tournament diagnostics remain suppressed during this evidence collection.
++
++The heartbeat additionally samples child CPU time/RSS through `/proc` and, when available, GPU utilization/memory through `nvidia-smi`. These are parent-side observations only.
++
++## Timing fields
++
++Important fields include:
++
++- `timing.compute_planner_trajectory_total_s`
++- `timing.runtime_from_planner_input_s`
++- `timing.core_plan_s`
++- `timing.to_nuplan_trajectory_s`
++- `core.candidate_generation_s`
++- `core.candidate_aware_agent_resort_s`
++- `core.evidence_enumeration_s`
++- `core.certificate_stages_s`
++- `core.final_safety_flags_s`
++- `core.v50_probe_instrumentation_s`
++- `model.model_make_batch_s`
++- `model.model_encode_context_s`
++- `model.model_action_sparse_s`
++- `model.model_pair_scoring_s`
++
++The detailed model timings are host-wall timings around the existing operations, not a CUDA kernel profiler; they are intended to localize the dominant stage, not to claim exact GPU kernel time.
++
++## How to interpret the next run
++
++### A. Startup / DB / Hydra bottleneck
++
++If heartbeats show:
++
++- `planner_ready=0`
++- `ticks=0`
++- GPU utilization near zero
++
++for a long time, the bottleneck is before the first planner tick: Hydra import/config composition, ScenarioBuilder, DB construction/filtering, map initialization, or model construction.
++
++If this dominates, the next safe optimization candidate is DB-locality-aware batching or further process initialization reuse. It should be validated without changing the 502-token cohort or per-scene simulation semantics.
++
++### B. Scenario initialization bottleneck
++
++If `planner_ready>0` but `ticks=0` for a long time, planner/model construction completed, but nuPlan has not reached the first planning callback. Scenario initialization / observations / map / reactive simulation setup is the likely bottleneck.
++
++### C. Per-tick planner bottleneck
++
++If `ticks` and `latest_iteration` keep advancing, the process is alive. Compare timing components:
++
++- large `cand` -> candidate generation;
++- large `core.candidate_aware_agent_resort_s` -> candidate-aware agent reranking and possible second candidate generation;
++- large `evidence` -> evidence atom enumeration;
++- large `cert` -> selector/tournament/certificate stack;
++- large `model_ctx` / `model_pair` -> neural context / pair scoring;
++- `planner_total >> core` -> runtime feature extraction and/or nuPlan trajectory conversion.
++
++The V49 runtime configuration has candidate-aware agent selection enabled. In the frozen implementation, this can generate a candidate bank, resort agents using candidates, then regenerate the candidate bank. This is a plausible expensive path, but it is part of the frozen V49 semantics and is NOT removed in this repair. It should only be optimized later via an exact-equivalence implementation change if telemetry proves it dominant.
++
++### D. Simulator / metric bottleneck
++
++If per-tick planner time is modest but scene wall time is much larger, native simulation/observation/metric work dominates.
++
++If ticks stop after the final scenario while the child remains alive, metric computation/aggregation is likely dominant.
++
++At child completion the collector prints:
++
++```text
++[V50 arm finalize] role=... simulation_wall=... metric_join=... metric_file=...
++```
++
++`metric_join` is only the parent-side read/join of nuPlan's existing per-scenario aggregator parquet; official metric computation itself occurs inside `simulation_wall`.
++
++## Science-preserving micro-optimizations applied
++
++### Persistent line-buffered diagnostic writer
++
++Previously each planner tick reopened and closed `probe_diag.jsonl`. The current process reuses one line-buffered append handle. Completed lines remain immediately visible to the parent heartbeat. Diagnostic writing occurs after the planner action/trajectory is already computed and cannot affect decision semantics.
++
++### Same-tick candidate identity memoization
++
++V50 fingerprints pre-probe, proposal, and post-probe candidate trajectories for causal-pair consistency. These often refer to the same local candidate slot in one tick. The previous implementation re-quantized and re-hashed identical trajectories multiple times. The current implementation memoizes identity by local action slot within that tick only.
++
++The candidate fingerprint is instrumentation only and never enters RSMR, Q/P/E, treatment assignment, metrics, or SIOR.
++
++`core.v50_probe_instrumentation_s` explicitly measures this overhead.
++
++## Deferred optimizations
++
++The following are deliberately NOT applied before timing evidence because they have higher scientific risk:
++
++- replan interval > 1 / skipping selector ticks;
++- early termination of no-live-proposal scenes;
++- dropping CONTROL;
++- replacing CONTROL with offline output;
++- dropping or pruning official metrics;
++- reactive -> nonreactive closed-loop;
++- multi-scenario concurrent inference on one GPU;
++- reordering the frozen cohort by DB locality;
++- changing batch size based on observed outcomes;
++- shared-prefix CONTROL/TREATMENT simulator-state fork.
++
++The last item could potentially save substantial work because both arms are identical before the first live proposal, but an exact state fork must include ego/reactive-agent state, history buffer, traffic-light state, controller/planner state, and metric state. It is not safe to introduce without an independent equivalence experiment.
++
++## What to upload next
++
++If the run is still slow, upload at minimum:
++
++1. `outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/logs/v64_3_50_paired_closed_loop_collection.out`
++2. `paired_train/batches/batch_0000_*/control/timing_telemetry.jsonl`
++3. `paired_train/batches/batch_0000_*/treatment/timing_telemetry.jsonl`
++4. corresponding `control/run.log` and `treatment/run.log`
++5. optionally corresponding `probe_diag.jsonl`
++
++With those files, the next optimization can target the measured dominant phase without weakening the V49-to-V50 causal comparison.

@@ -12343,3 +12343,24 @@ The execution engine is changed, not the V50 estimand:
 Explicitly **not** optimized because it would alter V50 science: per-tick replanning, native reactive simulation, both CONTROL/TREATMENT arms, official nuPlan metrics/hard metrics, full no-treatment equivalence checks, live eligibility semantics, selector/candidate/treatment policy, SIOR model/loss/calibration/gates. A future shared-prefix simulator-state fork is deferred because it would require a separately validated state-cloning contract.
 
 This repair does not provide scientific evidence for SIOR by itself. It only reduces redundant execution overhead in the native paired evidence-acquisition stage. See `V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md`.
+
+## V64.3.50 performance observability + science-preserving micro-optimization repair (2026-08-30)
+
+**Scientific algorithm/protocol unchanged.** The first batched server run appeared to stall after `[V50 batch 1/32]` because the parent emitted no progress until both 16-scene child nuPlan processes exited. The old log could not distinguish startup, DB/scenario construction, model warm-up, normal per-tick planning, or metric aggregation.
+
+Repair:
+
+- retain `collection_protocol_version=v50-live-selected-event-cohort-v1`;
+- advance execution provenance only to `collection_engine_version=v50-batched-nuplan-timing-v2`;
+- add `V50_HEARTBEAT_SECONDS` (default 30 s);
+- emit live CONTROL/TREATMENT progress: child PID, elapsed time, planner-ready count, scenario count, planner tick count, latest token/iteration, compact phase timings, CPU/RSS, optional GPU utilization/memory, log size, and short log tail;
+- persist per-arm `timing_telemetry.jsonl`;
+- enable `BDSE_PROFILE_CLOSED_LOOP=1` only as observation and retain compact `v50_timing` beside the selected-outcome certificate; timing never enters planning or SIOR;
+- reuse one line-buffered diagnostic append handle per process rather than reopening the JSONL every tick;
+- memoize candidate identity by same-tick local action slot, removing redundant trajectory quantization/SHA work used only for V50 pair auditing;
+- expose `timing_core.v50_probe_instrumentation_s`;
+- report parent metric-parquet join time separately from child simulation wall time.
+
+No change to every-tick replanning, reactive simulation, paired arms, candidate/RSMR/Q/P/E semantics, live eligibility, treatment, official metrics, SIOR fit/gates, or no-fallback containment. More aggressive changes such as DB-locality cohort reordering, multi-scenario GPU concurrency, and shared-prefix simulator-state forking are deferred until measured timing evidence identifies the dominant phase.
+
+See `V64_3_50_TIMING_TELEMETRY_AND_SAFE_PERF_REPAIR.md`.

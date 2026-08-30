@@ -37,6 +37,7 @@ export NUPLAN_EXP_ROOT="${NUPLAN_EXP_ROOT:-$SCRIPT_DIR/$OUT_ROOT/nuplan_exp}"
 export NUPLAN_SPLITS_ROOT="${NUPLAN_SPLITS_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits}"
 export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_reactive_agents}"
 export V50_BATCH_SIZE="${V50_BATCH_SIZE:-16}"
+export V50_HEARTBEAT_SECONDS="${V50_HEARTBEAT_SECONDS:-30}"
 export PYTHONUNBUFFERED=1
 
 # Import provenance: a long-lived server environment may have an older editable
@@ -118,7 +119,7 @@ elif [[ -n "${NUPLAN_DB_ROOT:-}" ]]; then
   [[ -e "$NUPLAN_DB_ROOT" ]] || { echo "STOP V50 missing NUPLAN_DB_ROOT: $NUPLAN_DB_ROOT" >&2; exit 2; }
 fi
 
-echo "[V50 performance] batched paired collector: V50_BATCH_SIZE=$V50_BATCH_SIZE (scientific protocol unchanged)"
+echo "[V50 performance] batched paired collector: V50_BATCH_SIZE=$V50_BATCH_SIZE heartbeat=${V50_HEARTBEAT_SECONDS}s compact_tick_timing=on (scientific protocol unchanged)"
 echo '[V50 dataset layout] BDSE NPZ caches (offline only):'
 echo "  train=$BDSE_TRAIN_CACHE (present=$([[ -d "$BDSE_TRAIN_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
 echo "  val=$BDSE_VAL_CACHE (present=$([[ -d "$BDSE_VAL_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
@@ -205,7 +206,7 @@ python -m bdse.tools.run_v64_3_50_paired_selected_outcome_collection \
   --control-config "$CONTROL_CFG" --treatment-config "$TREATMENT_CFG" --checkpoint "$EAF_CKPT" \
   --scenario-token-file "$TRAIN_TOKENS" --frozen-proposal-audit "$V49_CAND" --output-root "$OUT_ROOT/paired_train" --gpus "$GPU0,$GPU1" \
   --challenge "$CL_CHALLENGE" --nuplan-data-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" \
-  --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --resume \
+  --nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --heartbeat-seconds "$V50_HEARTBEAT_SECONDS" --resume \
   2>&1 | tee "$OUT_ROOT/logs/v64_3_50_paired_closed_loop_collection.out"
 stage_end
 

@@ -20,6 +20,7 @@ from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
     _hard_noninferiority,
     _validate_native_nuplan_inputs,
     _validate_pair,
+    _BatchProgressTracker,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -360,7 +361,7 @@ def test_v50_launcher_separates_npz_cache_from_native_closed_loop_db_layout() ->
     assert '"$NUPLAN_SPLITS_ROOT/train_pittsburgh"' in text
     assert '"$NUPLAN_SPLITS_ROOT/train_singapore"' in text
     assert '"$NUPLAN_SPLITS_ROOT/train_vegas"' in text
-    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --resume' in text
+    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --heartbeat-seconds "$V50_HEARTBEAT_SECONDS" --resume' in text
     assert 'NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train' not in text
 
 
@@ -431,12 +432,15 @@ def test_v50_batched_probe_rows_are_token_scoped(tmp_path: Path) -> None:
 
 def test_v50_batched_engine_is_execution_only_and_protocol_is_unchanged() -> None:
     assert COLLECTION_PROTOCOL_VERSION == "v50-live-selected-event-cohort-v1"
-    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-v1"
+    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-timing-v2"
     text = (ROOT / "bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py").read_text(encoding="utf-8")
     assert '"BDSE_FORCE_REPLAN_EVERY_TICK": "1"' in text
     assert '"BDSE_SHARE_MODEL_PER_PROCESS": "1"' in text
     assert '"BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1"' in text
     assert '"BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1"' in text
+    assert '"BDSE_V50_TIMING_TELEMETRY": "1"' in text
+    assert '"BDSE_PROFILE_CLOSED_LOOP": "1"' in text
+    assert "heartbeat-seconds" in text
     assert 'worker.max_workers=1' in text
 
 
@@ -462,3 +466,52 @@ def test_v50_batched_resume_locks_requested_batch_size() -> None:
     assert '"requested_batch_size": batch_size' in text
     assert 'different requested batch size' in text
     assert 'V50 paired output predates the frozen batched-engine provenance field requested_batch_size' in text
+
+
+def test_v50_progress_tracker_extracts_compact_tick_timing(tmp_path: Path) -> None:
+    diag = tmp_path / "diag.jsonl"
+    log = tmp_path / "run.log"
+    telemetry = tmp_path / "timing.jsonl"
+    row = {
+        "scenario_token": "tok_a",
+        "iteration_index": 7,
+        "time_s": 0.7,
+        "diagnostics": {
+            "selected_outcome_probe": {"enabled": True, "proposal_exists": False},
+            "v50_timing": {
+                "timing": {"compute_planner_trajectory_total_s": 0.5, "core_plan_s": 0.4},
+                "timing_core": {"candidate_generation_s": 0.1, "certificate_stages_s": 0.2},
+                "model_timing": {"model_encode_context_s": 0.05},
+            },
+        },
+    }
+    diag.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    log.write_text("[planner-ready] reused=True\n", encoding="utf-8")
+    import time
+    tr = _BatchProgressTracker(role="control", diag=diag, log=log, telemetry=telemetry, started=time.perf_counter())
+    snap = tr.snapshot(pid=123)
+    assert snap["diag_rows"] == 1
+    assert snap["scenarios_seen"] == 1
+    assert snap["latest_token"] == "tok_a"
+    assert snap["latest_iteration"] == 7
+    assert snap["planner_ready_count"] == 1
+    assert snap["timing_mean_s"]["timing.compute_planner_trajectory_total_s"] == pytest.approx(0.5)
+    assert snap["timing_mean_s"]["core.candidate_generation_s"] == pytest.approx(0.1)
+    assert snap["timing_mean_s"]["model.model_encode_context_s"] == pytest.approx(0.05)
+    assert telemetry.is_file() and telemetry.stat().st_size > 0
+
+
+def test_v50_diag_only_profile_keeps_probe_and_compact_timing_only() -> None:
+    text = (ROOT / "bdse/planner/nuplan_planner.py").read_text(encoding="utf-8")
+    assert 'diag_payload["v50_timing"]' in text
+    assert '"selected_outcome_probe": (diagnostics.get("selected_outcome_probe", {}) or {})' in text
+    assert '_append_diag_line(path, json.dumps(row, sort_keys=True))' in text
+    assert 'timing_core["v50_probe_instrumentation_s"]' in text
+    assert 'identity_cache: dict[int, dict[str, Any]]' in text
+
+
+def test_v50_persistent_diag_writer_is_line_visible(tmp_path: Path) -> None:
+    from bdse.planner.nuplan_planner import _append_diag_line
+    p = tmp_path / "live.jsonl"
+    _append_diag_line(p, '{"x":1}')
+    assert p.read_text(encoding="utf-8") == '{"x":1}\n'

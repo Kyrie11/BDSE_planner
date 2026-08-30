@@ -1,153 +1,24 @@
-V64.3.50 EAF-ICER-SIOR — live-selection eligibility / cohort-semantics repair validation
+V64.3.50 EAF-ICER-SIOR timing telemetry / science-preserving performance repair
+Date: 2026-08-30
 
-Trigger
--------
-After the earlier event-state and state-local action-slot repairs, native paired
-collection progressed through the first two V49 discovery-cohort scenes and then
-stopped on token 04e294754b4d56a6 with:
+Scientific protocol unchanged: v50-live-selected-event-cohort-v1
+Execution engine: v50-batched-nuplan-timing-v2
 
-  expected exactly one first proposal marker in both arms, got 0/0
+Validation:
+- python compileall: PASS
+- launcher bash -n: PASS
+- V50 focused: 29/29 PASS
+- V38->V50 adjacent/history mechanism suite: 99/99 PASS
+- no new warning class observed in these suites
 
-The strict selected-outcome diagnostic stream was present.  Therefore 0/0 did
-not mean the marker logger failed: neither CONTROL nor TREATMENT emitted a live
-RSMR direct proposal anywhere in that native closed-loop scenario.
+Changed execution/observation only:
+- heartbeat + per-arm timing telemetry
+- compact per-tick timing fields
+- parent CPU/RSS and optional GPU utilization observation
+- persistent line-buffered diagnostic writer
+- same-tick candidate identity memoization
 
-Root cause
-----------
-V50 still conflated two different populations:
-
-  1) V49 offline discovery cohort: 502 TRAIN scenes selected by offline V49
-     instrumentation; and
-  2) V50 live intervention cohort: native closed-loop states in which the frozen
-     RSMR policy actually emits a direct proposal, so a one-shot selected-action
-     treatment is defined.
-
-Offline membership does not guarantee live treatment eligibility.  Treating a
-symmetric no-proposal replay as an engineering exception makes the experiment
-impossible; treating it as a negative SIOR label would be scientifically wrong
-because no treatment was available or executed.
-
-Repair
-------
-- Keep all 502 V49 scenes as the frozen offline discovery/transport cohort.
-- Every token is still replayed in paired CONTROL/TREATMENT native nuPlan runs.
-- If both arms reach the same first live RSMR proposal event, keep all prior
-  same-state identity/QPE/one-shot invariants and label the paired selected
-  outcome (`pair_status=eligible_intervened`).
-- If neither arm ever emits a proposal, record
-  `pair_status=no_live_proposal`, `live_intervention_eligible=0`; prove whole-run
-  CONTROL/TREATMENT deployed action + trajectory-fingerprint equality, zero
-  proposal/intervention counters, and official score/hard-metric equivalence.
-  Do NOT create a safe_benefit/nonbenefit label and exclude the row from SIOR
-  fit/calibration/test.
-- Exactly-one-arm proposal, malformed marker state, pre-treatment divergence,
-  proposal/fingerprint/QPE mismatch, or multiple treatment execution remains an
-  ENGINEERING STOP.
-- The paired CSV has a new locked protocol version
-  `v50-live-selected-event-cohort-v1`; both collector resume and the fit tool
-  reject older/missing versions so old V50 rows cannot be mixed silently.
-- V49 OBS comparator is reconstructed on the full frozen 502 offline selected
-  population for each fold, not the live-eligible subset, then evaluated on the
-  same live Q/P/E test states and closed-loop labels as SIOR.  This prevents
-  live-eligibility leakage into the baseline fitting distribution.
-
-Scientific population-support discipline
-----------------------------------------
-No live-eligibility-rate threshold was invented after observing this failure.
-Instead, fitting is allowed only if the live selected-event population satisfies
-the already-frozen V48/V49 estimator support requirements:
-
-  - every nested fit split: >=32 safe-benefit and >=32 nonbenefit events;
-  - every calibration fold: >=16 safe-benefit events;
-  - every held-out fold: both classes present;
-  - final fit/calibration: the same inherited minima.
-
-If support fails, V50 writes the 502-scene cohort-transport audit and SCIENTIFIC
-STOPs before risk fitting/fresh evaluation.  It must not relabel no-proposal
-scenes, lower minima, change loss/threshold, or expand the risk head.
-
-Interpretation / protocol status
---------------------------------
-This is not merely a missing-marker engineering fix.  It corrects an experiment-
-unit/estimand flaw: V50 SIOR is an outcome model conditional on a real live
-selection event.  The 502-scene V49 population remains useful as a frozen
-offline discovery cohort and separately measures offline->native selection
-transport.  The core SIOR hypothesis (replace offline pseudo-intervention labels
-with native paired selected-outcome evidence) is unchanged, but any paper claim
-must distinguish offline discovery coverage from conditional live selected-event
-outcome identification.
-
-The repair was designed from proposal-eligibility/diagnostic information only;
-no paired score or hard-safety outcome from the failing 0/0 token was provided to
-or inspected by this analysis.
-
-Validation
-----------
-Python compileall: PASS
-launcher bash -n: PASS
-V50 focused after final protocol-version guard: 21/21 PASS
-V48 + V48.2 + V49 + V50 adjacent focused: 38/38 PASS
-V13 -> V50 exact launcher targeted regression after final guard: 263/263 PASS
-Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class
-Earlier exhaustive 126-file sharded repository run before the final one-test
-protocol guard: 599/599 PASS; the newly added protocol-version guard is included
-in the final 21/21 and 263/263 suites.  A later concurrent full-repository rerun
-was interrupted by the tool execution window and is not claimed as a second
-complete full-suite PASS.
-`python setup.py --name`: PASS (`bdse-planner`)
-V50 current source manifest: 916 locked paths; regenerated after final source changes
-
-Rerun requirement
------------------
-Because the paired CSV semantics/schema changed, delete ONLY:
-
-  outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/paired_train
-
-before running this package.  Do not delete or rerun frozen V49 outputs.
-
-V64.3.50 performance-only batched paired-collection execution repair
---------------------------------------------------------------------
-Trigger: server collection progressed without semantic failure but single-scenario
-throughput was impractically slow. Code audit found 502 sequential pair waves and
-1004 fresh Python/Hydra/nuPlan process launches. The existing per-process model
-cache therefore had almost no opportunity to amortize checkpoint/model loading,
-and every child repeatedly received the four full TRAIN DB directories.
-
-Repair (scientific protocol unchanged):
-- `collection_protocol_version` remains `v50-live-selected-event-cohort-v1`.
-- New execution provenance only: `collection_engine_version=v50-batched-nuplan-v1`.
-- Default `V50_BATCH_SIZE=16`: one CONTROL and one TREATMENT process per token
-  batch, concurrent on GPU0/GPU1; `worker.max_workers=1` keeps scenarios serial
-  within each arm process.
-- Official nuPlan per-scenario metric rows are joined by exact native scenario
-  token and every token still runs the same `_validate_pair()` independently.
-- Process-global read-only model sharing is now amortized across batch scenarios.
-- Build an outcome-blind 502-token -> exact native `.db` file index once; each
-  batch passes only relevant DB files. Exact-index failure falls back to the old
-  configured DB inputs and never changes the cohort.
-- V50 collection writes only the selected-outcome diagnostic certificate rather
-  than the unused full planner diagnostic tree on every tick.
-- Resume rejects legacy engines and a different requested batch size; batch size
-  is execution provenance and must remain frozen for one collection.
-- Per-tick replanning, native reactive simulation, CONTROL/TREATMENT policies,
-  one-shot intervention, official score/hard metrics, Q/P/E, labels, SIOR model,
-  calibration and all scientific gates remain unchanged.
-
-Validation after final requested-batch-size provenance lock:
-Python compileall: PASS
-launcher bash -n: PASS
-V50 focused: 26/26 PASS
-V48 + V48.2 + V49 + V50 adjacent focused: 43/43 PASS
-V13 -> V50 exact launcher targeted regression: 268/268 PASS
-Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class
-A later 4-way full-repository shard attempt was interrupted by the outer tool
-window. One shard completed 154/154 PASS and the remaining shards showed no
-failure before interruption; this incomplete rerun is not claimed as a full
-repository PASS. Historical full-suite coverage before this performance-only
-engine change is documented above; the changed paths are covered by the final
-focused/adjacent/launcher-targeted suites.
-
-Expected process-launch count at B=16: 2*ceil(502/16)=64 rather than 1004.
-No empirical server speedup is claimed before rerunning the batched engine.
-See V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md.
-Final batched-performance source manifest: 919/919 PASS after performance audit/patch/changed-files provenance was added.
+Explicitly unchanged:
+reactive closed-loop, both paired arms, every-tick replanning, candidate/RSMR/EAF/Q/P/E,
+live eligibility, treatment assignment, official metrics, SIOR fit/calibration/gates,
+and same-winner/incumbent no-fallback containment.
