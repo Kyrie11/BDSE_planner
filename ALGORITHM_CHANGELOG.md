@@ -12324,3 +12324,22 @@ Packaging repair in the same engineering change restores `pyproject.toml` as the
 - reconstruct the V49 OBS comparator from the full offline fold population, then evaluate it on the same live Q/P/E states/labels as SIOR, avoiding eligibility leakage into the baseline.
 
 This is an **outcome-blind protocol/estimand correction**, not a new feature, threshold, risk head, or deployment action. The paper claim must distinguish offline discovery coverage from conditional on-policy selected-outcome identification.
+
+## V64.3.50 performance-only paired-collection execution repair (2026-08-30)
+
+**Scientific protocol and algorithm unchanged.** After the repaired collector progressed through several native paired scenes without semantic failures, server throughput exposed a separate engineering bottleneck: the original V50 evidence collector launched one fresh nuPlan/Hydra/Python process per scenario per arm. The 502-scene frozen discovery cohort therefore required 1004 process launches, repeatedly rebuilding ScenarioBuilder/DB state and reloading the same checkpoint/model; `BDSE_SHARE_MODEL_PER_PROCESS=1` could not amortize this work across scenarios.
+
+The execution engine is changed, not the V50 estimand:
+
+- keep `collection_protocol_version=v50-live-selected-event-cohort-v1` unchanged;
+- add execution provenance `collection_engine_version=v50-batched-nuplan-v1`;
+- default to deterministic `V50_BATCH_SIZE=16`: one CONTROL process and one TREATMENT process run the same token batch concurrently on two GPUs, while `worker.max_workers=1` executes scenarios sequentially inside each arm process;
+- parse nuPlan's official per-scenario aggregator rows by exact native scenario token and run the existing pair validator independently for every token;
+- enable the existing read-only process-global model cache, reducing nominal process/model initialization from 1004 to about 64 launches at batch size 16;
+- build one outcome-blind frozen token -> exact native `.db` index and pass only the relevant DB files to each batch; exact-index failure falls back to the original configured DB directories rather than changing the cohort;
+- serialize only the V50 selected-outcome diagnostic certificate during paired collection, while preserving all planner computation and decisions;
+- record requested batch size in every committed row and reject resume from a different engine/batch setting. Therefore an existing legacy single-scenario `paired_train` must be deleted before the first batched run; frozen V49 outputs are not touched.
+
+Explicitly **not** optimized because it would alter V50 science: per-tick replanning, native reactive simulation, both CONTROL/TREATMENT arms, official nuPlan metrics/hard metrics, full no-treatment equivalence checks, live eligibility semantics, selector/candidate/treatment policy, SIOR model/loss/calibration/gates. A future shared-prefix simulator-state fork is deferred because it would require a separately validated state-cloning contract.
+
+This repair does not provide scientific evidence for SIOR by itself. It only reduces redundant execution overhead in the native paired evidence-acquisition stage. See `V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md`.

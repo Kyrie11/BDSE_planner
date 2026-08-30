@@ -1788,7 +1788,11 @@ def _json_safe(obj: Any):
 
 
 class BDSEnuPlanPlanner(AbstractPlanner):
-    requires_scenario: bool = False
+    # V50 batched evidence collection needs the native nuPlan scenario token in
+    # runtime diagnostics so several scenarios can safely share one process.
+    # Keep the historical planner interface unchanged unless the dedicated
+    # instrumentation environment flag is present.
+    requires_scenario: bool = _env_true("BDSE_REQUIRE_SCENARIO_FOR_DIAG", default=False)
 
     def __init__(
         self,
@@ -1797,8 +1801,13 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         checkpoint: str | None = None,
         config_path: str | None = None,
         device: str = "auto",
+        scenario: Any | None = None,
     ):
         cfg = cfg or load_config(config_path)
+        # Instrumentation-only identity.  It never enters the planner features,
+        # candidate generation, selector, or treatment assignment.  nuPlan passes
+        # the scenario only when ``requires_scenario`` is enabled.
+        self._diagnostic_scenario_token = str(getattr(scenario, "token", "") or "")
         device = _maybe_shard_planner_device(device)
         self.device = resolve_torch_device(device, context="BDSEnuPlanPlanner")
         configure_torch_for_device(self.device)
@@ -1910,13 +1919,25 @@ class BDSEnuPlanPlanner(AbstractPlanner):
             return
         try:
             iteration = getattr(current_input, "iteration", None)
+            diag_payload = diagnostics
+            if _env_true("BDSE_SELECTED_OUTCOME_DIAG_ONLY", default=False):
+                # V50 consumes only the selected-outcome probe certificate.
+                # Serializing the complete selector/tournament/runtime-safety
+                # diagnostics every tick creates substantial JSON/I/O overhead
+                # and is scientifically redundant for this evidence collector.
+                diag_payload = {
+                    "selected_outcome_probe": (diagnostics.get("selected_outcome_probe", {}) or {}),
+                }
             row = {
                 "planner": self._name,
+                "scenario_token": str(getattr(self, "_diagnostic_scenario_token", "") or ""),
                 "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
                 "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
                 "action_index": int(action),
-                "diagnostics": _json_safe(diagnostics),
+                "diagnostics": _json_safe(diag_payload),
             }
+            if _env_true("BDSE_REQUIRE_SCENARIO_FOR_DIAG", default=False) and not row["scenario_token"]:
+                raise RuntimeError("V50 batched diagnostics require the native nuPlan scenario token")
             path = Path(diag_path).expanduser()
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as f:

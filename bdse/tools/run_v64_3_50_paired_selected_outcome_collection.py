@@ -7,13 +7,15 @@ Each scenario is run twice from the identical nuPlan scenario start:
   TREATMENT : the first live direct RSMR winner is executed exactly once, then all
               later direct proposals are vetoed to the incumbent.
 
-Running one scenario per nuPlan invocation is intentional: it makes the final
-nuPlan aggregate row a scenario-level paired outcome without relying on private
-metric-file schemas or heuristic scenario-name/token joins.  The V49 action
-integer stored for each token is only an offline cohort slot: candidate banks
-are regenerated and pruned at every live state, so cross-state slot equality is
-not a valid proposal-identity test.  The runner is
-resumable and schedules the two arms concurrently on two GPUs.
+For throughput, scenarios are collected in small deterministic batches.  nuPlan's
+weighted metric aggregator already writes one row per scenario and
+``NuPlanScenario.scenario_name`` is the scenario token, so batching preserves the
+exact per-scenario official score while amortizing Hydra/ScenarioBuilder/model
+startup.  CONTROL and TREATMENT still run in separate processes on separate GPUs,
+use identical token batches, replan every tick, and are validated scenario by
+scenario.  The V49 action integer stored for each token is only an offline cohort
+slot: candidate banks are regenerated and pruned at every live state, so
+cross-state slot equality is not a valid proposal-identity test.
 """
 
 import argparse
@@ -25,12 +27,13 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 from typing import Any
 
-from bdse.tools.run_fixed_budget_closed_loop_suite import final_metric_row
+import pandas as pd
 
 HARD_METRICS = [
     "no_ego_at_fault_collisions",
@@ -39,6 +42,7 @@ HARD_METRICS = [
     "driving_direction_compliance",
 ]
 COLLECTION_PROTOCOL_VERSION = "v50-live-selected-event-cohort-v1"
+COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-v1"
 NO_TREATMENT_SCORE_TOL = 1.0e-9
 
 
@@ -89,20 +93,83 @@ def _hard_noninferiority(control: dict[str, float], treatment: dict[str, float])
     return len(regressions) == 0, regressions
 
 
-def _probe_rows(path: Path) -> list[dict[str, Any]]:
+def _probe_rows(path: Path, scenario_token: str | None = None) -> list[dict[str, Any]]:
+    """Read selected-outcome diagnostics, optionally for one batched scenario."""
     out: list[dict[str, Any]] = []
+    saw_tagged = False
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         r = json.loads(line)
+        row_token = str(r.get("scenario_token", "") or "").strip()
+        if row_token:
+            saw_tagged = True
+        if scenario_token is not None and row_token and row_token != str(scenario_token):
+            continue
         d = ((r.get("diagnostics", {}) or {}).get("selected_outcome_probe", {}) or {})
         if d.get("enabled"):
             out.append({
+                "scenario_token": row_token,
                 "iteration_index": int(r.get("iteration_index", -1)),
                 "time_s": float(r.get("time_s", 0.0)),
                 **d,
             })
+    # Legacy single-scenario unit fixtures have no scenario_token field.  Batch
+    # outputs are required to be tagged; the caller checks this contract.
+    if scenario_token is not None and saw_tagged:
+        out = [r for r in out if str(r.get("scenario_token", "")) == str(scenario_token)]
     return out
+
+
+def _scenario_metric_rows(root: Path, tokens: list[str]) -> tuple[dict[str, dict[str, float]], Path]:
+    """Read official nuPlan per-scenario aggregate rows for a batched run.
+
+    WeightedAverageMetricAggregator stores the individual scenario rows in the
+    same parquet as scenario-type and final_score rows.  For NuPlanScenario the
+    ``scenario`` column is the initial lidar token, so it is an exact join key.
+    """
+    wanted = set(map(str, tokens))
+    found: dict[str, dict[str, float]] = {}
+    used: Path | None = None
+    files = sorted(root.glob("**/aggregator_metric/*.parquet"))
+    if not files:
+        raise RuntimeError(f"V50 no aggregator_metric parquet under {root}")
+    for path in files:
+        df = pd.read_parquet(path)
+        if "scenario" not in df.columns:
+            continue
+        scenario_col = df["scenario"].astype(str)
+        sub = df[scenario_col.isin(wanted)]
+        if sub.empty:
+            continue
+        used = path
+        for _, sr in sub.iterrows():
+            tok = str(sr["scenario"])
+            if tok in found:
+                raise RuntimeError(f"V50 duplicate per-scenario aggregate row for token {tok}")
+            row: dict[str, float] = {}
+            for key, value in sr.items():
+                if isinstance(value, (bool, int, float)):
+                    x = float(value)
+                    if math.isfinite(x):
+                        row[str(key)] = x
+                else:
+                    # numpy scalar numerics are common in parquet rows.
+                    try:
+                        x = float(value)
+                    except Exception:
+                        continue
+                    if math.isfinite(x):
+                        row[str(key)] = x
+            found[tok] = row
+    missing = sorted(wanted - set(found))
+    extra = sorted(set(found) - wanted)
+    if missing or extra or used is None:
+        raise RuntimeError(
+            f"V50 batched per-scenario metric join failed missing={missing[:10]} extra={extra[:10]} "
+            f"found={len(found)} expected={len(wanted)} root={root}"
+        )
+    return found, used
 
 
 def _load_frozen_proposals(path: Path) -> dict[str, int]:
@@ -201,7 +268,7 @@ def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, offline
     as an audited, label-free ``no_live_proposal`` transport stratum and excluded
     from SIOR outcome fitting.
     """
-    c = _probe_rows(control_diag); t = _probe_rows(treatment_diag)
+    c = _probe_rows(control_diag, token); t = _probe_rows(treatment_diag, token)
     if not c or not t:
         raise RuntimeError(f"V50 {token}: missing strict selected-outcome probe diagnostics")
     c0 = [r for r in c if bool(r.get("first_proposal_now", False))]
@@ -323,16 +390,124 @@ def _validate_pair(token: str, control_diag: Path, treatment_diag: Path, offline
     }
 
 
-def _run_arm(*, token: str, role: str, config: Path, checkpoint: Path, gpu: str, root: Path, args: argparse.Namespace) -> tuple[dict[str, float], Path, float]:
-    # A token is skipped entirely only after its paired row was committed.  For
-    # an incomplete/retried token, delete any partial nuPlan output first so a
-    # stale aggregator parquet can never be mistaken for the new run.
+def _native_db_files(args: argparse.Namespace) -> list[Path]:
+    """Flatten configured native nuPlan DB inputs to exact SQLite files."""
+    inputs: list[Path]
+    if args.nuplan_db_files:
+        inputs = [Path(x).expanduser() for x in args.nuplan_db_files]
+    elif args.nuplan_db_root is not None:
+        inputs = [Path(args.nuplan_db_root).expanduser()]
+    else:
+        return []
+    files: list[Path] = []
+    for p in inputs:
+        if p.is_file() and p.suffix == ".db":
+            files.append(p.resolve())
+        elif p.is_dir():
+            direct = sorted(p.glob("*.db"))
+            files.extend(x.resolve() for x in (direct if direct else p.rglob("*.db")))
+    return sorted(set(files), key=lambda x: str(x))
+
+
+def _build_token_db_index(tokens: list[str], db_files: list[Path], cache_path: Path) -> dict[str, str] | None:
+    """Build an outcome-blind token -> exact nuPlan DB index.
+
+    NuPlanScenario.token is the initial lidar_pc token.  Querying the primary-key
+    ``lidar_pc.token`` column is therefore sufficient and avoids repeatedly asking
+    ScenarioBuilder to discover every TRAIN DB for every batch.  Failure to build
+    the optimization index falls back to the original DB-directory inputs rather
+    than changing scientific behavior.
+    """
+    token_sha = hashlib.sha256("\n".join(tokens).encode("utf-8")).hexdigest()
+    db_sig = [
+        {"path": str(p), "size": int(p.stat().st_size), "mtime_ns": int(p.stat().st_mtime_ns)}
+        for p in db_files
+    ]
+    signature = hashlib.sha256(json.dumps({"token_sha": token_sha, "db": db_sig}, sort_keys=True).encode("utf-8")).hexdigest()
+    if cache_path.is_file():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            mapping = {str(k): str(v) for k, v in (cached.get("mapping", {}) or {}).items()}
+            if cached.get("signature") == signature and set(mapping) == set(tokens) and all(Path(v).is_file() for v in mapping.values()):
+                print(f"[V50 DB index] reused exact token->DB cache: {cache_path}", flush=True)
+                return mapping
+        except Exception:
+            pass
+
+    wanted: dict[bytes, str] = {}
+    try:
+        for tok in tokens:
+            raw = bytes.fromhex(tok)
+            wanted[raw] = tok
+    except Exception as exc:
+        print(f"[V50 DB index] disabled: scenario token is not canonical hex: {exc}", flush=True)
+        return None
+    mapping: dict[str, str] = {}
+    unresolved = set(tokens)
+    try:
+        for db in db_files:
+            if not unresolved:
+                break
+            raw_unresolved = [bytes.fromhex(t) for t in sorted(unresolved)]
+            uri = f"file:{db}?mode=ro"
+            con = sqlite3.connect(uri, uri=True, timeout=5.0)
+            try:
+                # Stay comfortably below common SQLite variable limits.
+                for off in range(0, len(raw_unresolved), 400):
+                    chunk = raw_unresolved[off:off + 400]
+                    marks = ",".join("?" for _ in chunk)
+                    rows = con.execute(f"SELECT token FROM lidar_pc WHERE token IN ({marks})", chunk).fetchall()
+                    for (raw_token,) in rows:
+                        raw_bytes = bytes(raw_token)
+                        tok = wanted.get(raw_bytes, raw_bytes.hex())
+                        if tok not in unresolved:
+                            continue
+                        if tok in mapping and mapping[tok] != str(db):
+                            raise RuntimeError(f"token {tok} appeared in multiple nuPlan DBs: {mapping[tok]} and {db}")
+                        mapping[tok] = str(db)
+                        unresolved.discard(tok)
+            finally:
+                con.close()
+    except Exception as exc:
+        print(f"[V50 DB index] disabled after SQLite lookup error: {type(exc).__name__}: {exc}", flush=True)
+        return None
+    if unresolved:
+        print(
+            f"[V50 DB index] disabled: could not map {len(unresolved)}/{len(tokens)} tokens; "
+            f"examples={sorted(unresolved)[:5]}. Falling back to configured DB directories.",
+            flush=True,
+        )
+        return None
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps({"signature": signature, "mapping": mapping}, indent=2, sort_keys=True), encoding="utf-8")
+    print(
+        f"[V50 DB index] mapped {len(mapping)}/{len(tokens)} tokens across "
+        f"{len(set(mapping.values()))} exact DB files; cache={cache_path}",
+        flush=True,
+    )
+    return mapping
+
+
+def _run_arm_batch(
+    *,
+    tokens: list[str],
+    role: str,
+    config: Path,
+    checkpoint: Path,
+    gpu: str,
+    root: Path,
+    args: argparse.Namespace,
+    db_files_override: list[Path] | None = None,
+) -> tuple[dict[str, dict[str, float]], Path, float]:
+    """Run one CONTROL/TREATMENT batch in a single nuPlan process."""
+    if not tokens:
+        raise ValueError("V50 empty batch")
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     diag = root / "probe_diag.jsonl"
     log = root / "run.log"
-    uid = f"v50_{role}_{token}_{args.challenge}"
+    uid = f"v50_{role}_batch_{tokens[0]}_{len(tokens)}_{args.challenge}"
     cmd = [
         sys.executable, "-m", "bdse.experiments.evaluate_closed_loop",
         "--config", str(config), "--checkpoint", str(checkpoint), "--device", "cuda",
@@ -343,21 +518,31 @@ def _run_arm(*, token: str, role: str, config: Path, checkpoint: Path, gpu: str,
         "--hydra-full-error", "--nuplan-data-root", str(args.nuplan_data_root),
         "--nuplan-map-root", str(args.nuplan_map_root), "--nuplan-exp-root", str(args.nuplan_exp_root),
     ]
-    if args.nuplan_db_files:
+    if db_files_override:
+        cmd += ["--nuplan-db-files", *[str(x) for x in db_files_override]]
+    elif args.nuplan_db_files:
         cmd += ["--nuplan-db-files", *[str(x) for x in args.nuplan_db_files]]
     else:
         cmd += ["--nuplan-db-root", str(args.nuplan_db_root)]
-    token_override = "scenario_filter.scenario_tokens=" + json.dumps([token], separators=(",", ":"))
-    cmd += ["--", token_override, "scenario_filter.limit_total_scenarios=1", "scenario_filter.shuffle=false",
-            "scenario_filter.log_names=null", "worker.max_workers=1", "run_metric=true", "~callback.simulation_log_callback"]
+    token_override = "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":"))
+    cmd += [
+        "--", token_override, f"scenario_filter.limit_total_scenarios={len(tokens)}",
+        "scenario_filter.shuffle=false", "scenario_filter.log_names=null",
+        "worker.max_workers=1", "run_metric=true", "~callback.simulation_log_callback",
+    ]
     env = os.environ.copy()
     env.update({
         "CUDA_VISIBLE_DEVICES": str(gpu),
         "BDSE_CLOSED_LOOP_DIAG": str(diag.resolve()),
         "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
+        "BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1",
+        "BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1",
         "BDSE_REPLAN_INTERVAL_TICKS": "1",
         "BDSE_FORCE_REPLAN_EVERY_TICK": "1",
+        # This is now useful: all planners in the batch reuse one read-only CUDA
+        # model inside the same process.
         "BDSE_SHARE_MODEL_PER_PROCESS": "1",
+        "BDSE_SERIALIZE_GPU_INFERENCE": "0",
         "BDSE_SHARD_PLANNERS_ACROSS_GPUS": "0",
         "PYTHONUNBUFFERED": "1",
         "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1",
@@ -368,13 +553,22 @@ def _run_arm(*, token: str, role: str, config: Path, checkpoint: Path, gpu: str,
     wall = time.time() - started
     text = log.read_text(encoding="utf-8", errors="replace")
     succ, fail = _parse_success(text)
-    if proc.returncode != 0 or succ != 1 or fail != 0:
-        tail = "\n".join(text.replace("\r", "\n").splitlines()[-30:])
-        raise RuntimeError(f"V50 {role} {token} failed return={proc.returncode} successful={succ} failed={fail}\n{tail}")
-    metrics, metric_file = final_metric_row(root)
+    if proc.returncode != 0 or succ != len(tokens) or fail != 0:
+        tail = "\n".join(text.replace("\r", "\n").splitlines()[-40:])
+        raise RuntimeError(
+            f"V50 {role} batch failed return={proc.returncode} successful={succ} failed={fail} "
+            f"expected={len(tokens)} tokens={tokens[:4]}...\n{tail}"
+        )
+    metrics_by_token, _ = _scenario_metric_rows(root, tokens)
     if not diag.is_file() or not diag.stat().st_size:
-        raise RuntimeError(f"V50 {role} {token}: strict probe diagnostic missing")
-    return metrics, diag, wall
+        raise RuntimeError(f"V50 {role} batch: strict probe diagnostic missing")
+    tagged = {str(r.get("scenario_token", "")) for r in _probe_rows(diag) if str(r.get("scenario_token", ""))}
+    missing_diag = sorted(set(tokens) - tagged)
+    if missing_diag:
+        raise RuntimeError(
+            f"V50 {role} batch diagnostics missing native scenario-token tags for {missing_diag[:10]}"
+        )
+    return metrics_by_token, diag, wall
 
 
 def _validate_native_nuplan_inputs(args: argparse.Namespace) -> dict[str, Any]:
@@ -465,6 +659,7 @@ def main() -> None:
     ap.add_argument("--nuplan-exp-root", type=Path, required=True)
     ap.add_argument("--nuplan-db-root", type=Path, default=None)
     ap.add_argument("--nuplan-db-files", type=Path, nargs="*", default=None)
+    ap.add_argument("--batch-size", type=int, default=16, help="Scenarios per nuPlan process/arm; scientific protocol is unchanged")
     ap.add_argument("--resume", action="store_true")
     a = ap.parse_args()
     if not a.checkpoint.is_file(): raise FileNotFoundError(a.checkpoint)
@@ -477,11 +672,15 @@ def main() -> None:
     gpus = [x.strip() for x in a.gpus.split(",") if x.strip()]
     if len(gpus) != 2:
         raise ValueError("V50 paired collection requires exactly two GPU ids so CONTROL/TREATMENT start concurrently")
+    if int(a.batch_size) < 1:
+        raise ValueError("V50 --batch-size must be >=1")
     tokens = _read_tokens(a.scenario_token_file)
     frozen_proposals = _load_frozen_proposals(a.frozen_proposal_audit)
     if set(tokens) != set(frozen_proposals):
         raise RuntimeError(f"V50 frozen token/proposal population mismatch tokens={len(tokens)} proposals={len(frozen_proposals)}")
     a.output_root.mkdir(parents=True, exist_ok=True)
+    all_db_files = _native_db_files(a)
+    token_db_index = _build_token_db_index(tokens, all_db_files, a.output_root / "token_db_index.json") if all_db_files else None
     rows_path = a.output_root / "paired_selected_outcomes.csv"
     existing: dict[str, dict[str, Any]] = {}
     if a.resume and rows_path.is_file():
@@ -493,64 +692,136 @@ def main() -> None:
                     f"({version or 'missing version'}). Remove only the V50 paired_train directory and rerun; "
                     "do not mix pre-amendment and live-eligibility rows."
                 )
+            engine = str(r.get("collection_engine_version", "")).strip()
+            if engine != COLLECTION_ENGINE_VERSION:
+                raise RuntimeError(
+                    "V50 paired output was created by a different execution engine "
+                    f"({engine or 'legacy single-scenario engine'}). Remove only the V50 paired_train directory and rerun; "
+                    "the scientific protocol is unchanged but engine outputs must not be mixed."
+                )
+            requested_batch = str(r.get("requested_batch_size", "")).strip()
+            if requested_batch and int(float(requested_batch)) != int(a.batch_size):
+                raise RuntimeError(
+                    "V50 paired output was created with a different requested batch size "
+                    f"({requested_batch} vs current {a.batch_size}). Remove only the V50 paired_train directory and rerun; "
+                    "do not mix execution-engine settings inside one frozen evidence collection."
+                )
+            if not requested_batch:
+                raise RuntimeError(
+                    "V50 paired output predates the frozen batched-engine provenance field requested_batch_size. "
+                    "Remove only the V50 paired_train directory and rerun."
+                )
             existing[str(r["scenario_token"])] = dict(r)
     rows: list[dict[str, Any]] = [existing[t] for t in tokens if t in existing]
 
-    for idx, token in enumerate(tokens):
-        if token in existing:
-            print(f"[V50 resume {idx+1}/{len(tokens)}] {token}", flush=True); continue
-        print(f"[V50 pair {idx+1}/{len(tokens)}] {token}", flush=True)
-        roots = {role: a.output_root / "scenarios" / token / role for role in ("control", "treatment")}
-        procs: dict[str, Any] = {}; results: dict[str, Any] = {}; errors: list[str] = []
+    pending = [t for t in tokens if t not in existing]
+    batch_size = int(a.batch_size)
+    batches = [pending[i:i + batch_size] for i in range(0, len(pending), batch_size)]
+    completed_before = len(existing)
+    for batch_idx, batch_tokens in enumerate(batches):
+        print(
+            f"[V50 batch {batch_idx+1}/{len(batches)}] tokens={len(batch_tokens)} "
+            f"progress={completed_before + batch_idx * batch_size}/{len(tokens)} first={batch_tokens[0]}",
+            flush=True,
+        )
+        batch_root = a.output_root / "batches" / f"batch_{batch_idx:04d}_{batch_tokens[0]}"
+        roots = {role: batch_root / role for role in ("control", "treatment")}
+        batch_db_files = (
+            sorted({Path(token_db_index[t]) for t in batch_tokens}, key=lambda x: str(x))
+            if token_db_index is not None else None
+        )
+        if batch_db_files is not None:
+            print(f"[V50 batch DB restriction] exact_db_files={len(batch_db_files)}", flush=True)
+        results: dict[str, Any] = {}
+        errors: list[str] = []
         import threading
+
         def target(role: str, config: Path, gpu: str) -> None:
-            try: results[role] = _run_arm(token=token, role=role, config=config, checkpoint=a.checkpoint, gpu=gpu, root=roots[role], args=a)
-            except Exception as exc: errors.append(f"{role}: {type(exc).__name__}: {exc}")
-        th = [threading.Thread(target=target, args=("control", a.control_config, gpus[0]), daemon=True),
-              threading.Thread(target=target, args=("treatment", a.treatment_config, gpus[1]), daemon=True)]
-        [x.start() for x in th]; [x.join() for x in th]
-        if errors: raise RuntimeError(" | ".join(errors))
-        cm, cd, cw = results["control"]; tm, td, tw = results["treatment"]
-        ident = _validate_pair(token, cd, td, frozen_proposals[token])
-        cs = _score(cm, a.challenge); ts = _score(tm, a.challenge); delta = ts - cs
-        row: dict[str, Any] = {
-            "scenario_token": token, **ident,
-            "challenge": a.challenge, "control_score": cs, "treatment_score": ts,
-            "control_wall_s": cw, "treatment_wall_s": tw,
-        }
-        if int(ident["live_intervention_eligible"]) == 1:
-            hard_ok, hard_reg = _hard_noninferiority(cm, tm)
-            row.update({
-                "paired_score_delta": delta, "hard_noninferior": int(hard_ok),
-                "safe_benefit": int(hard_ok and delta > 0.0),
-                "hard_regressions": ";".join(hard_reg),
-                "no_treatment_metric_equivalent": "",
-            })
-        else:
-            # With no proposal the probe never changes either arm.  Require the
-            # official score and hard metrics to be numerically identical as a
-            # determinism check, but do NOT create a causal outcome label.
-            hard_same, hard_diff = _hard_noninferiority(cm, tm)
-            reverse_same, reverse_diff = _hard_noninferiority(tm, cm)
-            metric_equiv = bool(
-                abs(delta) <= NO_TREATMENT_SCORE_TOL and hard_same and reverse_same
-            )
-            if not metric_equiv:
-                raise RuntimeError(
-                    f"V50 {token}: no-live-proposal arms should be identical but official metrics diverged: "
-                    f"score_delta={delta} hard_control_to_treatment={hard_diff} hard_treatment_to_control={reverse_diff}"
+            try:
+                results[role] = _run_arm_batch(
+                    tokens=batch_tokens, role=role, config=config, checkpoint=a.checkpoint,
+                    gpu=gpu, root=roots[role], args=a, db_files_override=batch_db_files,
                 )
-            row.update({
-                "paired_score_delta": "", "hard_noninferior": "", "safe_benefit": "",
-                "hard_regressions": "", "no_treatment_metric_equivalent": 1,
-            })
-        for m in HARD_METRICS:
-            if m in cm: row[f"control::{m}"] = float(cm[m])
-            if m in tm: row[f"treatment::{m}"] = float(tm[m])
-        rows.append(row); existing[token] = row
-        ordered = [existing[t] for t in tokens if t in existing]
-        _write_csv(rows_path, ordered)
-        (a.output_root / "progress.json").write_text(json.dumps({"completed": len(ordered), "expected": len(tokens), "challenge": a.challenge}, indent=2), encoding="utf-8")
+            except Exception as exc:
+                errors.append(f"{role}: {type(exc).__name__}: {exc}")
+
+        th = [
+            threading.Thread(target=target, args=("control", a.control_config, gpus[0]), daemon=True),
+            threading.Thread(target=target, args=("treatment", a.treatment_config, gpus[1]), daemon=True),
+        ]
+        [x.start() for x in th]
+        [x.join() for x in th]
+        if errors:
+            raise RuntimeError(" | ".join(errors))
+        cm_by, cd, cw = results["control"]
+        tm_by, td, tw = results["treatment"]
+        print(
+            f"[V50 batch done] size={len(batch_tokens)} wall_control={cw:.1f}s wall_treatment={tw:.1f}s "
+            f"amortized_pair_wall={max(cw, tw)/max(len(batch_tokens),1):.1f}s/scenario",
+            flush=True,
+        )
+        for local_idx, token in enumerate(batch_tokens):
+            print(
+                f"[V50 validate {completed_before + batch_idx * batch_size + local_idx + 1}/{len(tokens)}] {token}",
+                flush=True,
+            )
+            cm = cm_by[token]
+            tm = tm_by[token]
+            ident = _validate_pair(token, cd, td, frozen_proposals[token])
+            cs = _score(cm, a.challenge)
+            ts = _score(tm, a.challenge)
+            delta = ts - cs
+            row: dict[str, Any] = {
+                "scenario_token": token,
+                **ident,
+                "collection_engine_version": COLLECTION_ENGINE_VERSION,
+                "challenge": a.challenge,
+                "control_score": cs,
+                "treatment_score": ts,
+                "batch_size": len(batch_tokens),
+                "requested_batch_size": batch_size,
+                "batch_index": batch_idx,
+                "control_batch_wall_s": cw,
+                "treatment_batch_wall_s": tw,
+                "amortized_pair_wall_s": max(cw, tw) / max(len(batch_tokens), 1),
+            }
+            if int(ident["live_intervention_eligible"]) == 1:
+                hard_ok, hard_reg = _hard_noninferiority(cm, tm)
+                row.update({
+                    "paired_score_delta": delta, "hard_noninferior": int(hard_ok),
+                    "safe_benefit": int(hard_ok and delta > 0.0),
+                    "hard_regressions": ";".join(hard_reg),
+                    "no_treatment_metric_equivalent": "",
+                })
+            else:
+                hard_same, hard_diff = _hard_noninferiority(cm, tm)
+                reverse_same, reverse_diff = _hard_noninferiority(tm, cm)
+                metric_equiv = bool(abs(delta) <= NO_TREATMENT_SCORE_TOL and hard_same and reverse_same)
+                if not metric_equiv:
+                    raise RuntimeError(
+                        f"V50 {token}: no-live-proposal arms should be identical but official metrics diverged: "
+                        f"score_delta={delta} hard_control_to_treatment={hard_diff} "
+                        f"hard_treatment_to_control={reverse_diff}"
+                    )
+                row.update({
+                    "paired_score_delta": "", "hard_noninferior": "", "safe_benefit": "",
+                    "hard_regressions": "", "no_treatment_metric_equivalent": 1,
+                })
+            for m in HARD_METRICS:
+                if m in cm:
+                    row[f"control::{m}"] = float(cm[m])
+                if m in tm:
+                    row[f"treatment::{m}"] = float(tm[m])
+            existing[token] = row
+            ordered_now = [existing[t] for t in tokens if t in existing]
+            _write_csv(rows_path, ordered_now)
+            (a.output_root / "progress.json").write_text(
+                json.dumps({
+                    "completed": len(ordered_now), "expected": len(tokens), "challenge": a.challenge,
+                    "collection_engine_version": COLLECTION_ENGINE_VERSION, "batch_size": batch_size,
+                }, indent=2),
+                encoding="utf-8",
+            )
 
     ordered = [existing[t] for t in tokens]
     _write_csv(rows_path, ordered)
@@ -559,6 +830,10 @@ def main() -> None:
         "token_file_sha256": _sha(a.scenario_token_file),
         "frozen_proposal_audit_sha256": _sha(a.frozen_proposal_audit),
         "collection_protocol_version": COLLECTION_PROTOCOL_VERSION,
+        "collection_engine_version": COLLECTION_ENGINE_VERSION,
+        "batch_size": int(a.batch_size),
+        "nuplan_process_count_per_arm": int(math.ceil(len(tokens) / max(int(a.batch_size), 1))),
+        "exact_token_db_index_enabled": bool(token_db_index is not None),
         "offline_discovery_cohort_count": len(tokens),
         "live_intervention_eligible_count": sum(int(float(r.get("live_intervention_eligible", 0))) for r in ordered),
         "no_live_proposal_count": sum(1 for r in ordered if str(r.get("pair_status", "")) == "no_live_proposal"),

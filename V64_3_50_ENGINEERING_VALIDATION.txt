@@ -104,3 +104,50 @@ Because the paired CSV semantics/schema changed, delete ONLY:
   outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/paired_train
 
 before running this package.  Do not delete or rerun frozen V49 outputs.
+
+V64.3.50 performance-only batched paired-collection execution repair
+--------------------------------------------------------------------
+Trigger: server collection progressed without semantic failure but single-scenario
+throughput was impractically slow. Code audit found 502 sequential pair waves and
+1004 fresh Python/Hydra/nuPlan process launches. The existing per-process model
+cache therefore had almost no opportunity to amortize checkpoint/model loading,
+and every child repeatedly received the four full TRAIN DB directories.
+
+Repair (scientific protocol unchanged):
+- `collection_protocol_version` remains `v50-live-selected-event-cohort-v1`.
+- New execution provenance only: `collection_engine_version=v50-batched-nuplan-v1`.
+- Default `V50_BATCH_SIZE=16`: one CONTROL and one TREATMENT process per token
+  batch, concurrent on GPU0/GPU1; `worker.max_workers=1` keeps scenarios serial
+  within each arm process.
+- Official nuPlan per-scenario metric rows are joined by exact native scenario
+  token and every token still runs the same `_validate_pair()` independently.
+- Process-global read-only model sharing is now amortized across batch scenarios.
+- Build an outcome-blind 502-token -> exact native `.db` file index once; each
+  batch passes only relevant DB files. Exact-index failure falls back to the old
+  configured DB inputs and never changes the cohort.
+- V50 collection writes only the selected-outcome diagnostic certificate rather
+  than the unused full planner diagnostic tree on every tick.
+- Resume rejects legacy engines and a different requested batch size; batch size
+  is execution provenance and must remain frozen for one collection.
+- Per-tick replanning, native reactive simulation, CONTROL/TREATMENT policies,
+  one-shot intervention, official score/hard metrics, Q/P/E, labels, SIOR model,
+  calibration and all scientific gates remain unchanged.
+
+Validation after final requested-batch-size provenance lock:
+Python compileall: PASS
+launcher bash -n: PASS
+V50 focused: 26/26 PASS
+V48 + V48.2 + V49 + V50 adjacent focused: 43/43 PASS
+V13 -> V50 exact launcher targeted regression: 268/268 PASS
+Targeted warnings: 2 historical Transformer nested-tensor warnings; no new warning class
+A later 4-way full-repository shard attempt was interrupted by the outer tool
+window. One shard completed 154/154 PASS and the remaining shards showed no
+failure before interruption; this incomplete rerun is not claimed as a full
+repository PASS. Historical full-suite coverage before this performance-only
+engine change is documented above; the changed paths are covered by the final
+focused/adjacent/launcher-targeted suites.
+
+Expected process-launch count at B=16: 2*ceil(502/16)=64 rather than 1004.
+No empirical server speedup is claimed before rerunning the batched engine.
+See V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md.
+Final batched-performance source manifest: 919/919 PASS after performance audit/patch/changed-files provenance was added.

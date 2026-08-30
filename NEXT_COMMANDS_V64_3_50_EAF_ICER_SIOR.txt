@@ -201,3 +201,36 @@ support requirements (>=32 benefit/nonbenefit in every nested fit split, >=16
 benefits in every calibration fold, both classes in every test fold). If not,
 V50 writes the cohort-transport audit and SCIENTIFIC STOPs before SIOR fitting or
 fresh evaluation; do not relabel no-proposal scenes or lower these minima.
+
+V64.3.50 BATCHED PAIRED-COLLECTION PERFORMANCE ENGINE
+------------------------------------------------------
+The scientific protocol is unchanged, but the paired execution engine now
+batches native nuPlan scenarios to amortize process/Hydra/ScenarioBuilder/model
+startup. Default: V50_BATCH_SIZE=16.
+
+Because your current server run already committed rows with the older
+single-scenario engine, do NOT resume those rows with the batched engine. Remove
+ONLY V50 paired collection state once:
+
+  rm -rf outputs_v64_3_50_eaf_icer_sior_screen_2gpu_v1/paired_train
+
+Then rerun:
+
+  V50_BATCH_SIZE=16 bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+Do not delete or rerun frozen V49 outputs.  Keep batch size fixed for the whole
+V50 collection.  If server memory/resource limits make 16 unsuitable, choose 8
+BEFORE restarting the collection and keep 8 frozen; do not change batch size
+based on scientific outcomes.
+
+Expected logging changes:
+
+  [V50 batch 1/32] tokens=16 ...
+  [V50 batch done] ... amortized_pair_wall=...s/scenario
+  [V50 validate 1/502] ...
+
+The batched engine still uses native reactive closed-loop, replans every tick,
+runs CONTROL/TREATMENT on separate GPUs, computes the same official per-scenario
+nuPlan score/hard metrics, and validates every token independently.  See
+V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md for the performance/science
+boundary.

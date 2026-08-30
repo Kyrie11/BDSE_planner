@@ -12,7 +12,11 @@ from bdse.tools.fit_v64_3_50_eaf_icer_sior import ALPHA_RET, PAIR_COLLECTION_PRO
 from bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs import _make
 from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
     COLLECTION_PROTOCOL_VERSION,
+    COLLECTION_ENGINE_VERSION,
     HARD_METRICS,
+    _probe_rows,
+    _scenario_metric_rows,
+    _build_token_db_index,
     _hard_noninferiority,
     _validate_native_nuplan_inputs,
     _validate_pair,
@@ -356,7 +360,7 @@ def test_v50_launcher_separates_npz_cache_from_native_closed_loop_db_layout() ->
     assert '"$NUPLAN_SPLITS_ROOT/train_pittsburgh"' in text
     assert '"$NUPLAN_SPLITS_ROOT/train_singapore"' in text
     assert '"$NUPLAN_SPLITS_ROOT/train_vegas"' in text
-    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --resume' in text
+    assert '--nuplan-exp-root "$NUPLAN_EXP_ROOT" "${NUPLAN_DB_ARGS[@]}" --batch-size "$V50_BATCH_SIZE" --resume' in text
     assert 'NUPLAN_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/train' not in text
 
 
@@ -383,3 +387,78 @@ def test_v50_fit_locks_live_selection_pair_protocol_version() -> None:
     text = (ROOT / "bdse/tools/fit_v64_3_50_eaf_icer_sior.py").read_text(encoding="utf-8")
     assert "paired outcome protocol version mismatch" in text
     assert "never mix old and live-eligibility rows" in text
+
+
+
+def test_v50_batched_metric_rows_use_scenario_token_as_exact_join(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "run" / "closed_loop_reactive_agents" / "aggregator_metric"
+    root.mkdir(parents=True)
+    import pandas as pd
+    df = pd.DataFrame([
+        {"scenario": "tok_a", "score": 0.7, "no_ego_at_fault_collisions": 1.0},
+        {"scenario": "tok_b", "score": 0.4, "no_ego_at_fault_collisions": 0.5},
+        {"scenario": "some_type", "score": 0.55, "no_ego_at_fault_collisions": 0.75},
+        {"scenario": "final_score", "score": 0.55, "no_ego_at_fault_collisions": 0.75},
+    ])
+    parquet = root / "summary.parquet"
+    parquet.write_bytes(b"placeholder")
+    monkeypatch.setattr("bdse.tools.run_v64_3_50_paired_selected_outcome_collection.pd.read_parquet", lambda _p: df)
+    rows, path = _scenario_metric_rows(tmp_path / "run", ["tok_a", "tok_b"])
+    assert path.name == "summary.parquet"
+    assert rows["tok_a"]["score"] == pytest.approx(0.7)
+    assert rows["tok_b"]["score"] == pytest.approx(0.4)
+    assert "final_score" not in rows
+
+
+def test_v50_batched_probe_rows_are_token_scoped(tmp_path: Path) -> None:
+    p = tmp_path / "diag.jsonl"
+    rows = []
+    for tok in ("tok_a", "tok_b"):
+        for it in range(2):
+            rows.append({
+                "scenario_token": tok,
+                "iteration_index": it,
+                "time_s": 0.1 * it,
+                "diagnostics": {"selected_outcome_probe": {"enabled": True, "role": "control", "proposal_exists": False}},
+            })
+    p.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    a = _probe_rows(p, "tok_a")
+    b = _probe_rows(p, "tok_b")
+    assert len(a) == len(b) == 2
+    assert {r["scenario_token"] for r in a} == {"tok_a"}
+    assert {r["scenario_token"] for r in b} == {"tok_b"}
+
+
+def test_v50_batched_engine_is_execution_only_and_protocol_is_unchanged() -> None:
+    assert COLLECTION_PROTOCOL_VERSION == "v50-live-selected-event-cohort-v1"
+    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-v1"
+    text = (ROOT / "bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py").read_text(encoding="utf-8")
+    assert '"BDSE_FORCE_REPLAN_EVERY_TICK": "1"' in text
+    assert '"BDSE_SHARE_MODEL_PER_PROCESS": "1"' in text
+    assert '"BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1"' in text
+    assert '"BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1"' in text
+    assert 'worker.max_workers=1' in text
+
+
+
+def test_v50_token_db_index_maps_lidar_tokens_without_outcome_data(tmp_path: Path) -> None:
+    import sqlite3
+    toks = ["0011223344556677", "8899aabbccddeeff"]
+    db1 = tmp_path / "a.db"; db2 = tmp_path / "b.db"
+    for db, tok in ((db1, toks[0]), (db2, toks[1])):
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE lidar_pc (token BLOB PRIMARY KEY)")
+        con.execute("INSERT INTO lidar_pc(token) VALUES (?)", (bytes.fromhex(tok),))
+        con.commit(); con.close()
+    cache = tmp_path / "index.json"
+    got = _build_token_db_index(toks, [db1, db2], cache)
+    assert got == {toks[0]: str(db1), toks[1]: str(db2)}
+    got2 = _build_token_db_index(toks, [db1, db2], cache)
+    assert got2 == got
+
+
+def test_v50_batched_resume_locks_requested_batch_size() -> None:
+    text = (ROOT / "bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py").read_text(encoding="utf-8")
+    assert '"requested_batch_size": batch_size' in text
+    assert 'different requested batch size' in text
+    assert 'V50 paired output predates the frozen batched-engine provenance field requested_batch_size' in text
