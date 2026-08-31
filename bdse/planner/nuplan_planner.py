@@ -4,7 +4,6 @@ from contextlib import nullcontext
 from typing import Any
 
 import atexit
-import hashlib
 import itertools
 import json
 import os
@@ -73,35 +72,6 @@ _DEVICE_INFERENCE_LOCKS: dict[str, threading.RLock] = {}
 _CLOSED_LOOP_PROFILE_LOCK = threading.Lock()
 _CLOSED_LOOP_PROFILE: dict[str, dict[str, float]] = {}
 _CLOSED_LOOP_PROFILE_REGISTERED = False
-_DIAG_WRITER_LOCK = threading.Lock()
-_DIAG_WRITERS: dict[str, Any] = {}
-_DIAG_WRITERS_REGISTERED = False
-
-
-def _close_diag_writers() -> None:
-    with _DIAG_WRITER_LOCK:
-        for handle in list(_DIAG_WRITERS.values()):
-            try:
-                handle.flush(); handle.close()
-            except Exception:
-                pass
-        _DIAG_WRITERS.clear()
-
-
-def _append_diag_line(path: Path, text: str) -> None:
-    """Append a diagnostic line without reopening the file every planner tick."""
-    global _DIAG_WRITERS_REGISTERED
-    key = str(path.resolve())
-    with _DIAG_WRITER_LOCK:
-        handle = _DIAG_WRITERS.get(key)
-        if handle is None or getattr(handle, "closed", False):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            handle = path.open("a", encoding="utf-8", buffering=1)
-            _DIAG_WRITERS[key] = handle
-        if not _DIAG_WRITERS_REGISTERED:
-            atexit.register(_close_diag_writers)
-            _DIAG_WRITERS_REGISTERED = True
-        handle.write(text + "\n")
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -109,60 +79,6 @@ def _env_true(name: str, default: bool = False) -> bool:
     if raw is None:
         return bool(default)
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _v50_live_candidate_identity(candidates: Any, action: int) -> dict[str, Any]:
-    """Return an auditable *live-state* identity for one candidate slot.
-
-    Candidate ``action`` integers are local indices into a bank that is rebuilt
-    and state-dependently pruned on every planner tick.  They are therefore not
-    stable proposal identifiers across two different planner states.  V50 only
-    needs identity across CONTROL/TREATMENT at the *same* pre-intervention live
-    state.  A quantized trajectory fingerprint plus the candidate semantics is
-    a much stronger invariant for that paired comparison than comparing the
-    local slot to an offline V49 slot number.
-
-    The fingerprint is instrumentation only and never enters ranking, Q/P/E, or
-    the deployed action decision.
-    """
-    a = int(action)
-    if a < 0 or a >= int(getattr(candidates, "K", len(candidates.trajectories))):
-        raise ValueError(f"V50 live proposal action out of candidate-bank range: {a}")
-    traj = np.asarray(candidates.trajectories[a], dtype=np.float32)
-    if not np.isfinite(traj).all():
-        raise ValueError(f"V50 live proposal trajectory is non-finite for action {a}")
-    # 1e-4 quantization is far below planning-scale geometry but avoids making
-    # provenance depend on irrelevant last-bit differences between processes.
-    quantized = np.round(traj.astype(np.float64), 4).astype(np.float32)
-    h = hashlib.sha256()
-    h.update(str(tuple(int(x) for x in quantized.shape)).encode("utf-8"))
-    h.update(quantized.tobytes(order="C"))
-    maneuver_id = int(np.asarray(candidates.maneuver_ids)[a])
-    h.update(str(maneuver_id).encode("utf-8"))
-    meta = dict(candidates.metadata[a] or {})
-    theta = dict(candidates.theta[a] or {})
-    return {
-        "v50_live_proposal_fingerprint": h.hexdigest(),
-        "v50_live_proposal_maneuver_id": maneuver_id,
-        "v50_live_proposal_pool_original_index": int(meta.get("pool_original_index", -1)),
-        "v50_live_proposal_maneuver": str(meta.get("maneuver", "")),
-        "v50_live_proposal_theta": json.dumps(theta, sort_keys=True, default=str, separators=(",", ":")),
-    }
-
-
-def _v50_prefixed_identity(base: dict[str, Any], prefix: str) -> dict[str, Any]:
-    mapping = {
-        "v50_live_proposal_fingerprint": f"{prefix}_fingerprint",
-        "v50_live_proposal_maneuver_id": f"{prefix}_maneuver_id",
-        "v50_live_proposal_pool_original_index": f"{prefix}_pool_original_index",
-        "v50_live_proposal_maneuver": f"{prefix}_maneuver",
-        "v50_live_proposal_theta": f"{prefix}_theta",
-    }
-    return {mapping[k]: v for k, v in base.items()}
-
-
-def _v50_prefixed_candidate_identity(candidates: Any, action: int, prefix: str) -> dict[str, Any]:
-    return _v50_prefixed_identity(_v50_live_candidate_identity(candidates, action), prefix)
 
 
 def _device_inference_lock(device: Any) -> threading.RLock:
@@ -392,21 +308,11 @@ def runtime_query_diagnostics(
     }
 
 
-from bdse.planner.selected_outcome_probe import (
-    SelectedOutcomeProbeState,
-    apply_selected_outcome_probe,
-)
-
-
 class BDSEPlannerCore:
     def __init__(self, model: Any | None = None, cfg: dict[str, Any] | None = None, inference_lock: threading.RLock | None = None):
         self.cfg = cfg or load_config()
         self.model = model
         self.inference_lock = inference_lock
-        self._selected_outcome_probe_state = SelectedOutcomeProbeState()
-
-    def reset_selected_outcome_probe(self) -> None:
-        self._selected_outcome_probe_state.reset()
 
     def __getstate__(self) -> dict[str, Any]:
         # nuPlan's SimulationLogCallback pickles the planner at the end of every
@@ -1669,49 +1575,6 @@ class BDSEPlannerCore:
         safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
         if profile_enabled:
             timing_core["final_safety_flags_s"] = float(time.perf_counter() - t_post)
-
-        # V64.3.50 TRAIN/fresh evidence probe.  This changes no deployed V49
-        # science path because it is disabled unless an explicit probe config is
-        # supplied.  With fallback disabled it creates a single paired intervention
-        # on the first *live* full-set RSMR winner from the frozen selector:
-        # treatment executes that live winner exactly once; control preserves the
-        # incumbent.  Candidate action integers are state-local bank slots, so V50
-        # also records a trajectory/semantic fingerprint for same-state pair identity.
-        probe_input = dict(tournament.diagnostics)
-        pcfg = cfg_stage.get("selected_outcome_probe", {}) if isinstance(cfg_stage, dict) else {}
-        probe_enabled = bool((pcfg or {}).get("enabled", False))
-        pre_probe_action = int(action)
-        t_probe = time.perf_counter()
-        identity_cache: dict[int, dict[str, Any]] = {}
-
-        def v50_identity(action_index: int) -> dict[str, Any]:
-            ai = int(action_index)
-            if ai not in identity_cache:
-                identity_cache[ai] = _v50_live_candidate_identity(candidates, ai)
-            return identity_cache[ai]
-
-        if probe_enabled:
-            try:
-                proposal_exists = bool(float(probe_input.get("decisive_frontier_icer_scir_proposal_exists", 0.0)) > 0.5)
-                proposal_action = int(round(float(probe_input.get("decisive_frontier_icer_scir_proposal_action", -1))))
-            except Exception:
-                proposal_exists = False
-                proposal_action = -1
-            probe_input.update(_v50_prefixed_identity(v50_identity(pre_probe_action), "v50_pre_probe_action"))
-            if proposal_exists:
-                probe_input.update(v50_identity(proposal_action))
-        action, selected_outcome_probe_diag = apply_selected_outcome_probe(
-            action, probe_input, cfg_stage, self._selected_outcome_probe_state
-        )
-        if probe_enabled:
-            selected_outcome_probe_diag.update(
-                _v50_prefixed_identity(v50_identity(pre_probe_action), "v50_pre_probe_action")
-            )
-            selected_outcome_probe_diag.update(
-                _v50_prefixed_identity(v50_identity(int(action)), "v50_post_probe_action")
-            )
-        if profile_enabled:
-            timing_core["v50_probe_instrumentation_s"] = float(time.perf_counter() - t_probe)
         recovery_diag: dict[str, Any] = {}
         if triggered and bool(fcfg.get("rule_rerank_top_k", 5)):
             from bdse.planner.fallback import (
@@ -1797,7 +1660,6 @@ class BDSEPlannerCore:
             "fallback_reason": self._fallback_reason(tournament, cfg_stage),
             "fallback_stage_records": stage_records,
             "recovery": recovery_diag,
-            "selected_outcome_probe": selected_outcome_probe_diag,
             **({"timing_core": timing_core} if profile_enabled else {}),
         }
         return action, trajectory, diagnostics
@@ -1821,11 +1683,7 @@ def _json_safe(obj: Any):
 
 
 class BDSEnuPlanPlanner(AbstractPlanner):
-    # V50 batched evidence collection needs the native nuPlan scenario token in
-    # runtime diagnostics so several scenarios can safely share one process.
-    # Keep the historical planner interface unchanged unless the dedicated
-    # instrumentation environment flag is present.
-    requires_scenario: bool = _env_true("BDSE_REQUIRE_SCENARIO_FOR_DIAG", default=False)
+    requires_scenario: bool = False
 
     def __init__(
         self,
@@ -1834,13 +1692,8 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         checkpoint: str | None = None,
         config_path: str | None = None,
         device: str = "auto",
-        scenario: Any | None = None,
     ):
         cfg = cfg or load_config(config_path)
-        # Instrumentation-only identity.  It never enters the planner features,
-        # candidate generation, selector, or treatment assignment.  nuPlan passes
-        # the scenario only when ``requires_scenario`` is enabled.
-        self._diagnostic_scenario_token = str(getattr(scenario, "token", "") or "")
         device = _maybe_shard_planner_device(device)
         self.device = resolve_torch_device(device, context="BDSEnuPlanPlanner")
         configure_torch_for_device(self.device)
@@ -1930,14 +1783,6 @@ class BDSEnuPlanPlanner(AbstractPlanner):
 
     def initialize(self, initialization: Any) -> None:
         self.initialization = initialization
-        # A nuPlan planner instance can be reused across scenarios.  The V50
-        # one-shot intervention state is scenario-local and must never leak.
-        self.core.reset_selected_outcome_probe()
-        self._cached_local_trajectory = None
-        self._cached_action_index = 0
-        self._cached_replan_iteration_index = None
-        self._cached_replan_time_s = None
-        self._cached_replan_ego_pose = None
 
     def _current_iteration_index(self, current_input: Any) -> int:
         iteration = getattr(current_input, "iteration", None)
@@ -1952,34 +1797,17 @@ class BDSEnuPlanPlanner(AbstractPlanner):
             return
         try:
             iteration = getattr(current_input, "iteration", None)
-            diag_payload = diagnostics
-            if _env_true("BDSE_SELECTED_OUTCOME_DIAG_ONLY", default=False):
-                # V50 consumes only the selected-outcome probe certificate.
-                # Serializing the complete selector/tournament/runtime-safety
-                # diagnostics every tick creates substantial JSON/I/O overhead
-                # and is scientifically redundant for this evidence collector.
-                diag_payload = {
-                    "selected_outcome_probe": (diagnostics.get("selected_outcome_probe", {}) or {}),
-                }
-                if _env_true("BDSE_V50_TIMING_TELEMETRY", default=False):
-                    diag_payload["v50_timing"] = {
-                        "timing": (diagnostics.get("timing", {}) or {}),
-                        "timing_core": (diagnostics.get("timing_core", {}) or {}),
-                        "model_timing": (diagnostics.get("model_timing", {}) or {}),
-                        "cached_plan": bool(diagnostics.get("cached_plan", False)),
-                    }
             row = {
                 "planner": self._name,
-                "scenario_token": str(getattr(self, "_diagnostic_scenario_token", "") or ""),
                 "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
                 "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
                 "action_index": int(action),
-                "diagnostics": _json_safe(diag_payload),
+                "diagnostics": _json_safe(diagnostics),
             }
-            if _env_true("BDSE_REQUIRE_SCENARIO_FOR_DIAG", default=False) and not row["scenario_token"]:
-                raise RuntimeError("V50 batched diagnostics require the native nuPlan scenario token")
             path = Path(diag_path).expanduser()
-            _append_diag_line(path, json.dumps(row, sort_keys=True))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, sort_keys=True) + "\n")
         except Exception as exc:
             # Never silently lose the runtime diagnostics used to validate the
             # safety/progress mechanism.  Hydra can change the worker cwd, so the

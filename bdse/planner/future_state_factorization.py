@@ -291,45 +291,22 @@ def runtime_future_state_factorization_observable_costs(
     runtime: RuntimeFeatures,
     candidates: CandidateBank,
     cfg: dict[str, Any],
-    *,
-    requested_names: list[str] | tuple[str, ...] | None = None,
 ) -> tuple[np.ndarray, list[str]]:
-    """Return V47 current-only future-state costs.
-
-    ``requested_names`` is an execution-only projection used by V50 paired
-    collection.  The default remains the exact historical Kx3 V47 observable
-    matrix.  When a strict subset is requested, only those *already frozen*
-    observables are evaluated; their numerical definitions are unchanged.
-    This lets V50 avoid re-evaluating the scientifically closed AGENT-2D branch
-    when its OCRR/SIOR state consumes only PLAN-1D and EGO-REF.
-    """
-    names = list(FSFR_OBSERVABLE_NAMES) if requested_names is None else [str(x) for x in requested_names]
-    if len(names) != len(set(names)) or any(n not in FSFR_OBSERVABLE_NAMES for n in names):
-        raise ValueError(f"V47 FSFR requested observable schema invalid: {names}")
+    """Return Kx3 V47 current-only future-state costs."""
     K = int(candidates.K)
     if K <= 0:
-        return np.zeros((0, len(names)), dtype=np.float64), names
-    if not names:
-        return np.zeros((K, 0), dtype=np.float64), []
-
-    values: dict[str, np.ndarray] = {}
-    need_response = any(n in names for n in ("fsfr_plan_1d_occupancy_cost", "fsfr_plan_2d_occupancy_cost"))
-    if need_response:
-        local = response_field_local_agent_features(runtime, cfg)
-        plan, _ = response_field_plan_agent_features(runtime, candidates, cfg)
-        mean_model = _response_model_cfg(cfg)
-        local_a = _predict_local_accel(local, mean_model)
-        plan_a = _predict_plan_accel(local_a, plan, mean_model)
-        if "fsfr_plan_1d_occupancy_cost" in names:
-            values["fsfr_plan_1d_occupancy_cost"] = _occupancy_cost_for_accels(runtime, candidates, cfg, plan_a)
-        if "fsfr_plan_2d_occupancy_cost" in names:
-            _, lateral_plan = _predict_lateral(local, plan, cfg)
-            values["fsfr_plan_2d_occupancy_cost"] = _occupancy_cost_2d(runtime, candidates, cfg, plan_a, lateral_plan)
-    if "fsfr_predicted_demo_cost" in names:
-        ego_feat = ego_reference_candidate_features(runtime, candidates, cfg)
-        values["fsfr_predicted_demo_cost"] = _predict_demo(ego_feat, cfg)
-
-    out = np.stack([values[n] for n in names], axis=1).astype(np.float64)
-    if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
+        return np.zeros((0, len(FSFR_OBSERVABLE_NAMES)), dtype=np.float64), list(FSFR_OBSERVABLE_NAMES)
+    local = response_field_local_agent_features(runtime, cfg)
+    plan, _ = response_field_plan_agent_features(runtime, candidates, cfg)
+    mean_model = _response_model_cfg(cfg)
+    local_a = _predict_local_accel(local, mean_model)
+    plan_a = _predict_plan_accel(local_a, plan, mean_model)
+    plan_1d = _occupancy_cost_for_accels(runtime, candidates, cfg, plan_a)
+    _, lateral_plan = _predict_lateral(local, plan, cfg)
+    plan_2d = _occupancy_cost_2d(runtime, candidates, cfg, plan_a, lateral_plan)
+    ego_feat = ego_reference_candidate_features(runtime, candidates, cfg)
+    demo_hat = _predict_demo(ego_feat, cfg)
+    out = np.stack([plan_1d, plan_2d, demo_hat], axis=1).astype(np.float64)
+    if out.shape != (K, len(FSFR_OBSERVABLE_NAMES)) or not np.all(np.isfinite(out)):
         raise ValueError("V47 FSFR observable matrix malformed/non-finite")
-    return out, names
+    return out, list(FSFR_OBSERVABLE_NAMES)

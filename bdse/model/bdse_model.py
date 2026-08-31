@@ -1963,93 +1963,20 @@ class BDSEModel(nn.Module):
                 out["pair_atom_var"] = pair_out[1]
         return out
 
-    @staticmethod
-    def _runtime_arrays_to_torch_batch(
-        arrays: dict[str, np.ndarray],
-        device: torch.device,
-        *,
-        packed_transfer: bool,
-    ) -> dict[str, torch.Tensor]:
-        """Convert one runtime sample to model tensors without changing values.
-
-        The legacy runtime path issued one pageable CPU->CUDA transfer per input
-        tensor (currently 20+ transfers/tick).  V50 paired closed-loop executes
-        this path on every selector tick, so transfer-launch/synchronization
-        overhead becomes material even though the payload is only about 1 MB.
-
-        ``packed_transfer`` groups tensors by their *existing target dtype* and
-        performs at most one transfer for float32, int64 and bool respectively.
-        Returned tensors are non-overlapping views into those device buffers,
-        with exactly the same shape, dtype, values and contiguous layout as the
-        legacy tensors.  No model arithmetic, candidate/evidence content, or
-        selector state is changed.
-        """
-        if not packed_transfer:
-            batch: dict[str, torch.Tensor] = {}
-            for k, v in arrays.items():
-                arr = np.asarray(v)
-                if arr.dtype == np.bool_:
-                    t = torch.from_numpy(arr[None].astype(bool))
-                elif np.issubdtype(arr.dtype, np.integer):
-                    t = torch.from_numpy(arr[None].astype(np.int64))
-                else:
-                    t = torch.from_numpy(arr[None].astype(np.float32))
-                batch[k] = t.to(device)
-            return batch
-
-        # Keep the historical normalization contract byte-for-byte: booleans
-        # stay bool, all integer arrays become int64, and all other numeric
-        # arrays become float32.  np.ascontiguousarray is value-preserving and
-        # ensures each packed slice can be viewed with the legacy tensor shape.
-        groups: dict[str, list[tuple[str, tuple[int, ...], np.ndarray]]] = {
-            "bool": [], "int64": [], "float32": [],
-        }
-        key_order: list[str] = []
-        views: dict[str, torch.Tensor] = {}
-        for k, v in arrays.items():
-            arr = np.asarray(v)
-            original_shape = tuple(arr.shape)
-            if arr.dtype == np.bool_:
-                group = "bool"; target = bool; norm = np.ascontiguousarray(arr, dtype=np.bool_)
-            elif np.issubdtype(arr.dtype, np.integer):
-                group = "int64"; target = np.int64; norm = np.ascontiguousarray(arr, dtype=np.int64)
-            else:
-                group = "float32"; target = np.float32; norm = np.ascontiguousarray(arr, dtype=np.float32)
-            key = str(k)
-            key_order.append(key)
-            if arr.size == 0:
-                # NumPy gives zero-sized arrays special zero strides; preserve
-                # the legacy tensor metadata exactly. There is no payload to
-                # amortize, so keeping this individual transfer has no material
-                # runtime cost.
-                views[key] = torch.from_numpy(arr[None].astype(target)).to(device)
-                continue
-            groups[group].append((key, original_shape, norm.reshape(-1)))
-
-        for group in ("float32", "int64", "bool"):
-            entries = groups[group]
-            if not entries:
-                continue
-            # np.concatenate also owns writable storage, avoiding lifetime or
-            # read-only issues from arbitrary RuntimeFeatures-backed arrays.
-            packed = np.concatenate([flat for _, _, flat in entries], axis=0)
-            dev = torch.from_numpy(packed).to(device)
-            offset = 0
-            for key, shape, flat in entries:
-                n = int(flat.size)
-                sl = dev.narrow(0, offset, n)
-                legacy_shape = (1, *shape) if shape else (1,)
-                views[key] = sl.view(*legacy_shape)
-                offset += n
-            if offset != int(dev.numel()):
-                raise RuntimeError("packed runtime-batch transfer accounting mismatch")
-        return {k: views[k] for k in key_order}
-
     def _make_batch(self, runtime, candidates, evidence_bank, include_dense_query: bool = False) -> dict[str, torch.Tensor]:
         arrays = runtime_to_model_numpy(runtime, candidates, evidence_bank, self.cfg, include_dense_query=include_dense_query)
+        batch = {}
+        for k, v in arrays.items():
+            arr = np.asarray(v)
+            if arr.dtype == np.bool_:
+                t = torch.from_numpy(arr[None].astype(bool))
+            elif np.issubdtype(arr.dtype, np.integer):
+                t = torch.from_numpy(arr[None].astype(np.int64))
+            else:
+                t = torch.from_numpy(arr[None].astype(np.float32))
+            batch[k] = t
         device = next(self.parameters()).device
-        packed = os.environ.get("BDSE_PACKED_RUNTIME_BATCH_TRANSFER", "0").lower() in {"1", "true", "yes", "on"}
-        return self._runtime_arrays_to_torch_batch(arrays, device, packed_transfer=packed)
+        return {k: v.to(device) for k, v in batch.items()}
 
     def _score_pair_indices_numpy(
         self,
