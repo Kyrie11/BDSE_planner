@@ -1,57 +1,41 @@
-V64.3.50 EAF-ICER-PIOR ENGINEERING VALIDATION
+V64.3.50 EAF-ICER-PIOR — engineering validation after speed/resume optimization
 
-Scientific status
------------------
-NOT RUN / NOT CLAIMED in this local environment.  V50 requires the server-side nuPlan TRAIN cache, raw TRAIN DBs, historical roots, and checkpoint to collect the preregistered paired closed-loop selected-outcome evidence.  The launcher is fail-closed: if data/probe identity, paired-outcome identification, or the paired retention gate fails, it stops before any untouched validation.
-
-V49 prerequisite audit
-----------------------
-PASS  Uploaded V49 code ZIP SHA256 matches the preregistered V49 package: 4bc0044ffb311eaf3db77d221bad58ca8d5de21f6987c337ea098874811d112b.
-PASS  V49 current source manifest independently checked: 907/907 files, zero mismatch.
-PASS  Server targeted regression: 242/242.
-PASS  Independent local V49 targeted replay: 242/242.
-PASS  V49 stopped at nested TRAIN identification/deployment gate before selecting or consuming new fresh A/B.
-PASS  V49 preregistered branch therefore closes the current offline selected-risk family and requires an outcome-source change.
-
-V50 implementation contract
----------------------------
-PASS  Full-set RSMR remains the sole proposal selector; tournament.py is unchanged.
-PASS  Frozen tournament.py SHA256: 291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044.
-PASS  PIOR probe is TRAIN-only and can fire at most once per scenario.
-PASS  Treatment executes exactly the already-frozen full-set RSMR proposal at the first proposal event; control executes incumbent.
-PASS  After the paired intervention event, both arms return to incumbent-only execution for the remainder of the scenario.
-PASS  Probe refuses fallback-enabled configs; no rerank, second-best, or fallback path is introduced.
-PASS  PIOR deployment state remains [Q, P-Q, E-P]; no K/logK or new offline future observable is added.
-PASS  PIOR reuses the same low-capacity zero-bias pairwise sign-risk family and fixed lambda=1.
-PASS  Paired outcome label requires strictly better treatment closed-loop score and no degradation in collision/TTC/drivable-area hard-safety metrics.
-PASS  train_vegas_2 cache is explicitly mapped to raw train_vegas DB split.
-PASS  Manifest builder requires all four TRAIN cache cities and direct raw DB files and refuses partial 502-token alignment.
-
-Syntax / compile
-----------------
-PASS  Python compile / compileall for the V50 implementation.
-PASS  bash -n RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh.
-
-Tests
+Scope
 -----
-PASS  V50 focused: 7/7.
-PASS  V13->V50 targeted regression: 249/249 (2 historical Torch nested-tensor warnings only).
-PASS  Full repository split into four mutually exclusive and exhaustive test-file shards:
-      shard0 158/158
-      shard1 152/152
-      shard2 135/135
-      shard3 141/141
-      total 586/586 across 126/126 test files.
+Engineering-only optimization of paired TRAIN closed-loop collection. Scientific PIOR semantics are unchanged: exact 502 frozen V49 full-set RSMR proposals, same treatment/control one-shot intervention, same Q/P/E state, same ranker/lambda, same closed_loop_nonreactive_agents challenge, same hard-safety metrics and same nested TRAIN gate.
 
-Manifest
---------
-V64_3_50_SOURCE_MANIFEST.sha256 entries: 913
-V64_3_50_SOURCE_MANIFEST.sha256 SHA256: e35380b07ca8c13be71edc8137948f5a414471ef96971dffe934f16455dbcc7e
-sha256sum -c V64_3_50_SOURCE_MANIFEST.sha256: 913/913 PASS
+Validation
+----------
+Python compile / compileall: PASS
+Launcher bash -n: PASS
+V50 focused tests: 10/10 PASS
+V13 -> V50 targeted regression (including V48.2 provenance lock): 252/252 PASS
+Full repository: 126/126 test files, 589/589 PASS
+  shard 0: 158/158 PASS
+  shard 1: 152/152 PASS
+  shard 2: 138/138 PASS
+  shard 3: 141/141 PASS
+V64.3.50 source manifest: 913/913 PASS
+Source manifest SHA256: 2357d493f002a39cdf91f54769349f79478628ce6ec232d29c9138e223730339
 
-Preregistered V50 scientific stop
-----------------------------------
-If paired TRAIN collection cannot establish exact 502/502 token identity, exactly one probe event per arm per scene, or unambiguous official score/hard-safety metrics: ENGINEERING/DATA STOP; fix collection only.
-If PIOR does not outperform both frozen OFFLINE-OBS and -EGO-REF outcome-risk baselines in aggregate and >=4/5 folds versus each: SCIENTIFIC STOP; the Q/P/E state is insufficient even with aligned interventional outcomes.
-If PIOR identifies outcome risk but the causal retention gate fails: SCIENTIFIC STOP; the low-capacity sign-risk functional is insufficient for the actual selected-outcome law.
-Only a TRAIN PASS may freeze PIOR and permit a new untouched paired closed-loop validation.  Do not tune from untouched outcomes and do not pool failed blocks.
+New engineering contracts tested
+--------------------------------
+1. PIOR probe-only diagnostic mode writes no row on ordinary ticks and exactly one minimal event payload when the one-shot probe fires; the full diagnostics tree is not serialized in this mode.
+2. Historical/default closed-loop diagnostic semantics remain unchanged unless BDSE_CLOSED_LOOP_DIAG_MODE is explicitly set by the PIOR runner.
+3. Resume certificates require exact token/config/checkpoint/challenge identities, the exact per-batch raw-DB path-list SHA256, successful/failed counts, exact probe count, normalized metric SHA256 and probe-event SHA256. Mutating a metric file or changing the DB subset invalidates resume.
+4. Optimized launcher exposes deterministic batch resume, heartbeat telemetry and a conservative switch to restore serialized GPU inference.
+5. Exact raw DB restriction is all-or-nothing; every frozen token must map to a direct raw *.db file before collection.
+
+Performance changes (no scientific-semantic changes)
+-----------------------------------------------------
+- exact DB subset rather than four complete TRAIN split directories;
+- BDSE_SERIALIZE_GPU_INFERENCE defaults to 0 for shared read-only per-arm CUDA inference (can be restored with PIOR_SERIALIZE_GPU_INFERENCE=1);
+- PIOR event-only diagnostics rather than full diagnostics every planner tick;
+- 30 s parent heartbeat with phase/probe/GPU telemetry;
+- per-batch closed-loop timing profile;
+- deterministic batch completion certificates and resume;
+- fully complete legacy 502-scene arm may be reused only after strict validation; partial legacy arm is never reused.
+
+Not changed for speed
+---------------------
+No replan interval change; no horizon shortening; no scenario subsampling; no candidate/top-K/RSMR change; no approximate selector; no treatment/control action change; no metric removal; no probe-time change.

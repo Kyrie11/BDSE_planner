@@ -1,28 +1,10 @@
-V64.3.50 EAF-ICER-PIOR changed / added files
-
-Scientific implementation / paired outcome source
-- bdse/planner/nuplan_planner.py (TRAIN-only one-shot selected-outcome probe; frozen RSMR/tournament remains external and unchanged)
-- bdse/tools/build_v64_3_50_pior_train_manifest.py
-- bdse/tools/make_v64_3_50_pior_probe_configs.py
-- bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
-- bdse/tools/fit_v64_3_50_eaf_icer_pior.py
-- bdse/tests/test_v64_3_50_eaf_icer_pior.py
-- RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
-
-Analysis / protocol / handoff
-- V64_3_49_RESULT_POSTMORTEM_AND_V64_3_50_PIOR_DESIGN.md
-- V64_3_49_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_50.json
-- V64_3_49_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_50.csv
-- V64_3_50_ENGINEERING_VALIDATION.txt
-- V64_3_50_SOURCE_MANIFEST.sha256
-- NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
-- ALGORITHM_CHANGELOG.md (appended V49 postmortem, V50 PIOR preregistration, no-repeat closures, engineering validation)
-
-Explicitly unchanged / frozen scientific core
-- bdse/planner/tournament.py (SHA256 291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044)
-- RSMR selector semantics and full candidate bank
-- V44 ungated prospective occupancy support
-- V45 agent-local longitudinal response path
-- V47 EGO-REF consequence coordinate
-- veto-only same-winner-or-incumbent / no rerank / no second-best / no fallback contract
-- Q/P/E deployment risk state, zero-bias pairwise ranker family, fixed lambda=1
+ALGORITHM_CHANGELOG.md
+NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
+RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+V64_3_50_ENGINEERING_VALIDATION.txt
+V64_3_50_PIOR_SPEED_RESUME_OPTIMIZATION.md
+V64_3_50_SOURCE_MANIFEST.sha256
+bdse/planner/nuplan_planner.py
+bdse/tests/test_v64_3_50_eaf_icer_pior.py
+bdse/tools/build_v64_3_50_pior_train_manifest.py
+bdse/tools/run_v64_3_50_pior_paired_closed_loop.py

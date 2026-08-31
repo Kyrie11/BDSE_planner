@@ -24,6 +24,14 @@ NUPLAN_DB_SPLIT_ROOT="${NUPLAN_DB_SPLIT_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits}"
 EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-../outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
 EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/train_log.jsonl}"
 WORKERS_PER_ARM="${WORKERS_PER_ARM:-4}"
+# Engineering-only speed/resume knobs. They do not change the 502-scene
+# population, full-set RSMR proposal, one-shot treatment/control action, metric
+# definition, or PIOR fitting gate.
+PIOR_BATCH_SIZE="${PIOR_BATCH_SIZE:-64}"
+PIOR_HEARTBEAT_SECONDS="${PIOR_HEARTBEAT_SECONDS:-30}"
+PIOR_RESUME="${PIOR_RESUME:-1}"
+PIOR_SERIALIZE_GPU_INFERENCE="${PIOR_SERIALIZE_GPU_INFERENCE:-0}"
+PIOR_PROFILE_CLOSED_LOOP="${PIOR_PROFILE_CLOSED_LOOP:-1}"
 
 V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
 V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
@@ -125,10 +133,17 @@ stage_end
 stage_start paired_one_shot_closed_loop_outcome_collection
 PAIRED="$OUT_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
 PAIR_REPORT="$OUT_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
+PIOR_RESUME_ARGS=()
+if [[ "$PIOR_RESUME" == "1" ]]; then
+  PIOR_RESUME_ARGS+=(--resume --allow-legacy-full-arm-resume)
+fi
 python -m bdse.tools.run_v64_3_50_pior_paired_closed_loop \
   --manifest "$TRAIN_MANIFEST" --treatment-config "$TREAT_CFG" --control-config "$CTRL_CFG" \
   --checkpoint "$EAF_CKPT" --nuplan-root "$NUPLAN_ROOT" --challenge closed_loop_nonreactive_agents \
   --output-root "$OUT_ROOT/closed_loop_train" --gpus "$GPU0,$GPU1" --workers-per-arm "$WORKERS_PER_ARM" \
+  --batch-size "$PIOR_BATCH_SIZE" --heartbeat-seconds "$PIOR_HEARTBEAT_SECONDS" \
+  --serialize-gpu-inference "$PIOR_SERIALIZE_GPU_INFERENCE" --profile-closed-loop "$PIOR_PROFILE_CLOSED_LOOP" \
+  "${PIOR_RESUME_ARGS[@]}" \
   --output-paired-outcomes "$PAIRED" --output-report "$PAIR_REPORT" \
   | tee "$OUT_ROOT/logs/v64_3_50_paired_closed_loop.out"
 stage_end

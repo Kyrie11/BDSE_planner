@@ -8,7 +8,7 @@ import pytest
 
 from bdse.planner.nuplan_planner import BDSEPlannerCore
 from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW
-from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS
+from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS, _batch_certificate_valid
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -104,3 +104,97 @@ def test_v50_launcher_changes_evidence_source_and_stops_before_untouched_validat
     assert "closed_loop_nonreactive_agents" in text
     assert "STOP before untouched closed-loop validation" in text or "do not consume untouched closed-loop validation" in text
     assert "A/B pooling" not in text  # no offline fresh-rescue stage exists in V50 launcher
+
+
+def test_v50_probe_only_diag_is_minimal_and_event_only(tmp_path, monkeypatch) -> None:
+    from bdse.planner.nuplan_planner import BDSEnuPlanPlanner
+
+    diag_path = tmp_path / "probe.jsonl"
+    monkeypatch.setenv("BDSE_CLOSED_LOOP_DIAG", str(diag_path))
+    monkeypatch.setenv("BDSE_CLOSED_LOOP_DIAG_MODE", "pior_probe_events")
+    fake_planner = SimpleNamespace(_name="BDSEPlanner")
+    current = SimpleNamespace(iteration=SimpleNamespace(index=7, time_s=0.7))
+    disabled = {"tournament": {"pior_probe_fired": False}}
+    BDSEnuPlanPlanner._write_closed_loop_diag(fake_planner, current, 1, disabled)
+    assert not diag_path.exists()
+    fired = {
+        "tournament": {
+            "pior_probe_fired": True,
+            "pior_probe_arm": "treatment",
+            "pior_probe_event_count": 1,
+            "pior_probe_baseline_action": 1,
+            "pior_probe_proposal_action": 3,
+            "pior_probe_final_action": 3,
+            "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
+            "pior_probe_contract_no_rerank_second_best_fallback": True,
+            "large_unused_payload": list(range(1000)),
+        }
+    }
+    BDSEnuPlanPlanner._write_closed_loop_diag(fake_planner, current, 3, fired)
+    rows = [__import__("json").loads(x) for x in diag_path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["pior_probe_fired"] is True
+    assert rows[0]["pior_probe_proposal_action"] == 3
+    assert "diagnostics" not in rows[0]
+    assert "large_unused_payload" not in rows[0]
+
+
+def test_v50_optimized_launcher_has_exact_db_resume_and_ticks() -> None:
+    text = (ROOT / "RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh").read_text()
+    assert "PIOR_BATCH_SIZE" in text
+    assert "PIOR_HEARTBEAT_SECONDS" in text
+    assert "PIOR_RESUME" in text
+    assert "PIOR_SERIALIZE_GPU_INFERENCE" in text
+    assert "--resume" in text and "--allow-legacy-full-arm-resume" in text
+    runner = (ROOT / "bdse/tools/run_v64_3_50_pior_paired_closed_loop.py").read_text()
+    assert "[PIOR-TICK]" in runner
+    assert "BDSE_CLOSED_LOOP_DIAG_MODE" in runner
+    assert '"pior_probe_events"' in runner
+    assert '"BDSE_SERIALIZE_GPU_INFERENCE": "1" if serialize_gpu_inference else "0"' in runner
+    manifest = (ROOT / "bdse/tools/build_v64_3_50_pior_train_manifest.py").read_text()
+    assert 'row["raw_db_file"]' in manifest
+    assert '"raw_db_files": raw_files' in manifest
+
+
+def test_v50_resume_certificate_requires_exact_hashes(tmp_path) -> None:
+    import hashlib, json
+    root = tmp_path / "batch_0000"
+    root.mkdir()
+    tokens = ["a", "b"]
+    metrics = root / "scenario_metrics.jsonl"
+    metrics.write_text(
+        "\n".join(json.dumps({"scenario_token": t, "identity": {}, "metrics": {"score": 1.0}}, sort_keys=True) for t in tokens) + "\n"
+    )
+    diag = root / "pior_probe_events.jsonl"
+    diag.write_text(
+        "\n".join(json.dumps({"pior_probe_fired": True, "pior_probe_arm": "control"}, sort_keys=True) for _ in tokens) + "\n"
+    )
+    sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    token_sha = hashlib.sha256(("\n".join(tokens) + "\n").encode()).hexdigest()
+    cert = {
+        "complete": True, "scenario_count": 2, "scenario_token_sha256": token_sha,
+        "config_sha256": "cfg", "checkpoint_sha256": "ckpt",
+        "challenge": "closed_loop_nonreactive_agents", "successful": 2, "failed": 0,
+        "raw_db_file_list_sha256": "dbhash",
+        "probe_fired_count": 2, "scenario_metrics_sha256": sha(metrics),
+        "probe_events_sha256": sha(diag),
+    }
+    (root / ".pior_batch_complete.json").write_text(json.dumps(cert))
+    got, _ = _batch_certificate_valid(
+        root=root, tokens=tokens, cfg_sha="cfg", ckpt_sha="ckpt", challenge="closed_loop_nonreactive_agents",
+        raw_db_file_list_sha256="dbhash",
+    )
+    assert got is not None and set(got) == set(tokens)
+    # A different raw-DB subset invalidates reuse even if every result file is unchanged.
+    got_db, cert_db = _batch_certificate_valid(
+        root=root, tokens=tokens, cfg_sha="cfg", ckpt_sha="ckpt", challenge="closed_loop_nonreactive_agents",
+        raw_db_file_list_sha256="different-dbhash",
+    )
+    assert got_db is None and cert_db is None
+    # Any metric mutation invalidates the batch rather than silently reusing it.
+    metrics.write_text(metrics.read_text() + " ")
+    got2, cert2 = _batch_certificate_valid(
+        root=root, tokens=tokens, cfg_sha="cfg", ckpt_sha="ckpt", challenge="closed_loop_nonreactive_agents",
+        raw_db_file_list_sha256="dbhash",
+    )
+    assert got2 is None and cert2 is None

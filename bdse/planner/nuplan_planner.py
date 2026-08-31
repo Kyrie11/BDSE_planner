@@ -72,6 +72,7 @@ _DEVICE_INFERENCE_LOCKS: dict[str, threading.RLock] = {}
 _CLOSED_LOOP_PROFILE_LOCK = threading.Lock()
 _CLOSED_LOOP_PROFILE: dict[str, dict[str, float]] = {}
 _CLOSED_LOOP_PROFILE_REGISTERED = False
+_CLOSED_LOOP_DIAG_WRITE_LOCK = threading.Lock()
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -1884,17 +1885,49 @@ class BDSEnuPlanPlanner(AbstractPlanner):
             return
         try:
             iteration = getattr(current_input, "iteration", None)
-            row = {
-                "planner": self._name,
-                "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
-                "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
-                "action_index": int(action),
-                "diagnostics": _json_safe(diagnostics),
-            }
+            mode = os.environ.get("BDSE_CLOSED_LOOP_DIAG_MODE", "full").strip().lower()
+            if mode in {"pior_probe_events", "pior-events", "probe_only"}:
+                # V64.3.50 engineering fast path: the paired-outcome runner needs
+                # only a durable certificate that the unique PIOR intervention
+                # fired once in every scenario. Serializing the complete selector /
+                # tournament diagnostics at every nuPlan tick can write gigabytes
+                # and is not part of the scientific outcome. Historical runs keep
+                # the exact old full-diagnostic behavior unless this env mode is
+                # explicitly enabled by the PIOR collection runner.
+                td = ((diagnostics.get("tournament", {}) or {}) if isinstance(diagnostics, dict) else {})
+                if not bool(td.get("pior_probe_fired", False)):
+                    return
+                row = {
+                    "planner": self._name,
+                    "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
+                    "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
+                    "action_index": int(action),
+                    "pior_probe_fired": True,
+                    "pior_probe_arm": str(td.get("pior_probe_arm", "")),
+                    "pior_probe_event_count": int(td.get("pior_probe_event_count", 0)),
+                    "pior_probe_baseline_action": int(td.get("pior_probe_baseline_action", -1)),
+                    "pior_probe_proposal_action": int(td.get("pior_probe_proposal_action", -1)),
+                    "pior_probe_final_action": int(td.get("pior_probe_final_action", action)),
+                    "pior_probe_contract_same_frozen_proposal_or_incumbent": bool(td.get("pior_probe_contract_same_frozen_proposal_or_incumbent", False)),
+                    "pior_probe_contract_no_rerank_second_best_fallback": bool(td.get("pior_probe_contract_no_rerank_second_best_fallback", False)),
+                }
+            else:
+                row = {
+                    "planner": self._name,
+                    "iteration_index": int(getattr(iteration, "index", -1)) if iteration is not None else -1,
+                    "time_s": float(getattr(iteration, "time_s", 0.0)) if iteration is not None else 0.0,
+                    "action_index": int(action),
+                    "diagnostics": _json_safe(diagnostics),
+                }
             path = Path(diag_path).expanduser()
             path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(row, sort_keys=True) + "\n")
+            payload = json.dumps(row, sort_keys=True) + "\n"
+            # nuPlan runs multiple scenarios in a thread pool. Protect the single
+            # JSONL append so an interruption never leaves interleaved probe
+            # certificates that would make resume attribution ambiguous.
+            with _CLOSED_LOOP_DIAG_WRITE_LOCK:
+                with path.open("a", encoding="utf-8") as f:
+                    f.write(payload)
         except Exception as exc:
             # Never silently lose the runtime diagnostics used to validate the
             # safety/progress mechanism.  Hydra can change the worker cwd, so the

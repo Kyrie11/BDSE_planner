@@ -12232,3 +12232,33 @@ The V50 implementation is engineering-valid but **scientifically not yet run/cla
 - frozen `bdse/planner/tournament.py` SHA256 remains `291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044`.
 
 The next scientific action is therefore the preregistered paired TRAIN closed-loop intervention run. No untouched validation is permitted unless that TRAIN identification + causal-retention gate passes.
+
+---
+
+# V64.3.50 engineering-only PIOR speed/resume patch (scientific mechanism unchanged)
+
+The first server PIOR collection was observed to remain silent for multiple hours after probe-config generation. Code audit identified engineering bottlenecks rather than a scientific mechanism issue: the parent blocked while child nuPlan logs were redirected to files; all four TRAIN DB directories were exposed to scenario construction; `BDSE_SERIALIZE_GPU_INFERENCE=1` serialized a shared read-only model despite per-arm thread workers; and the complete diagnostics tree was JSON-serialized on every simulation tick although PIOR only needs one probe-fire certificate per scenario.
+
+This patch does **not** alter V64.3.50 preregistration, the exact 502 V49 full-set RSMR proposal tokens, treatment/control action, Q/P/E state, ranker/lambda, closed-loop challenge, safety metrics, outcome label, or nested PIOR gate.
+
+Engineering changes only:
+
+- exact all-or-nothing `scenario token -> raw *.db` mapping in the TRAIN manifest; each run batch passes only DB files needed by its tokens;
+- PIOR-only lightweight diagnostic mode writes one minimal fired-probe event per scenario instead of full per-tick diagnostics; default/historical diagnostic behavior is unchanged;
+- shared read-only CUDA inference is no longer serialized by default for PIOR collection (`PIOR_SERIALIZE_GPU_INFERENCE=0`), matching the repository's existing optimized fixed-budget closed-loop execution pattern; a conservative env switch restores serialization;
+- non-blocking subprocess monitoring prints 30-second PIOR heartbeats with phase, probe progress, GPU utilization/memory and child-log tail;
+- final planner timing profiles are recorded per batch;
+- deterministic batch collection with cryptographically validated completion certificates supports resume. Only fully completed batches with exact token/config/checkpoint/challenge/probe/metric hashes are reused; incomplete batches rerun from scratch;
+- fully complete pre-patch 502-scene arms may be salvaged only after exact `502 success / 0 fail / 502 probe fires / 502 token metrics` validation. Partially complete pre-patch arms are never reconstructed or reused.
+
+Scientific rationale for resume: nuPlan scenarios are the independent units already used to form the 502 token-keyed paired outcome table and subsequent fixed outer folds. Batch boundaries do not enter the model, selector, label, or fold assignment. Resume therefore changes only execution scheduling, while the completion certificate prevents partial or identity-ambiguous outputs from entering the scientific fit.
+
+Forbidden speed shortcuts: no replan-interval change, shortened horizon, scenario subsampling, candidate/top-K change, approximate selector, treatment/control change, metric removal, or probe-time alteration.
+
+Final engineering validation of the optimized byte version:
+
+- V50 focused speed/resume contract: **10/10 PASS**;
+- V13→V50 targeted regression: **252/252 PASS** (two historical Transformer warnings only);
+- full repository: **126/126 test files, 589/589 PASS** in four mutually exclusive and exhaustive shards (`158 + 152 + 138 + 141`);
+- resume completion certificate additionally binds the exact per-batch raw-DB path-list SHA256, so changing the DB subset invalidates reuse;
+- Python compile/compileall and launcher `bash -n`: PASS.
