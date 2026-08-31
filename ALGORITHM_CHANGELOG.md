@@ -12034,3 +12034,201 @@ If nested TRAIN fails, V49 stops **before consuming fresh** and closes the curre
 - V48 science-locked `tournament.py` hash remains `291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044`.
 
 V49 scientific efficacy is **not** claimed by these engineering tests; it remains preregistered until the server nested TRAIN and, only if eligible, untouched double-fresh run complete.
+
+---
+
+# V64.3.49 uploaded TRAIN result -> V64.3.50 EAF-ICER-PIOR — Paired Interventional Outcome Retention
+
+## Reliability decision: PASS; scientific attribution is allowed
+
+The uploaded V64.3.49 code ZIP is byte-identical to the preregistered V49 delivery (`SHA256 4bc0044ffb311eaf3db77d221bad58ca8d5de21f6987c337ea098874811d112b`). The uploaded result contains the V49 907-file source manifest and every listed file matches the uploaded source tree. Server targeted regression is `242/242 PASS`; an independent replay of the exact uploaded package also gives `242/242 PASS` with only the same two historical torch warnings. V48 science-lock replay passes. The launcher terminates inside the nested TRAIN SIIR stage, before `double_fresh_selection`; no new V49 A500/B500 token list or fresh evaluation artifact exists. Therefore the result is an engineering-valid preregistered **scientific TRAIN STOP**, not a runtime/provenance failure.
+
+## Strict preregistered V49 decision: SIIR fails; close the current offline selected-risk family
+
+V49 keeps the frozen RSMR winner and the same `[Q, P-Q, E-P]` runtime state. Its only scientific change from `OBS-SIGN` is that the zero-bias pairwise sign-risk model is fit on label-free random-prefix selection-interventional TRAIN winners.
+
+Aggregate TRAIN results:
+
+| Arm | selected | positive | capture | sum teacher improvement | catastrophe | no-op false | NegRMS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| RSMR | 502 | 221 | 38.5017% | +43.2941 | 28 | 107 | 0.35569 |
+| EGO-REF | 251 | 136 | 23.6934% | +59.5327 | 9 | 45 | 0.22331 |
+| OBS-SIGN | 411 | 187 | 32.5784% | +53.4956 | 18 | 78 | 0.27065 |
+| SIIR | 464 | 208 | 36.2369% | +53.4681 | 21 | 93 | 0.27927 |
+
+SIIR reaches the historical capture floor but fails `existence_and_capture` because no-positive-opportunity false interventions remain `93`, above the frozen reduction contract. More importantly, the independent identification gate fails:
+
+- EGO-REF nonpositive-risk AUC: `0.6298288272`;
+- exact OBS-SIGN replay AUC: `0.6139192606`;
+- SIIR AUC: **`0.6081222525`**;
+- SIIR > OBS in only `3/5` folds;
+- SIIR > EGO-REF in only `1/5` folds;
+- on an independently hashed held-out intervention measure, OBS AUC is `0.6171768707` while SIIR is only `0.6070578231`.
+
+Thus V49 does not merely fail transport back to the deployment full-set winners: the random-prefix-trained risk law does **not even dominate OBS-SIGN on a second intervention-selected population**. The preregistered failure branch is therefore activated exactly as written:
+
+> **close the current offline selected-risk family; consume no fresh; do not tune the intervention seed/prefix law, loss, lambda, calibration, Q/P/E, or add operator observables.**
+
+## Selected-set causal diagnosis
+
+OBS-SIGN and SIIR share 405 retained proposals (`+53.4961`, 185 positive, 18 catastrophes). OBS-only contains only 6 near-zero scenes (`-0.00056`, 0 catastrophes). SIIR adds **59** proposals that OBS rejected:
+
+- 23 positive, including 4 material positives (`Delta_T > 0.2`);
+- 36 nonpositive;
+- **3 catastrophes**;
+- positive sum `+4.2150` versus nonpositive sum `-4.2431`;
+- net `-0.0281`.
+
+This is not blanket abstention and not a one-sided threshold bias. The newly admitted region contains both genuine material opportunities and catastrophic failures in almost exact value cancellation. The learned ordering is therefore unable to distinguish the relevant positive and negative tails.
+
+A postmortem-only oracle sweep over a common SIIR risk-threshold offset finds **no threshold** satisfying the unchanged capture/no-op/tail/population gate. Among thresholds that preserve the `35.5017%` capture floor, the smallest no-op count is still `91` (required <=85), with 21 catastrophes. Among thresholds with no-op <=85, maximal capture is only `33.798%`. This is diagnostic only and must not be used for tuning; it confirms that V49 is an ordering/identification failure rather than a scalar calibration failure.
+
+## Why the random-prefix intervention failed as an identification mechanism
+
+The V49 intervention changes the selected event less often than its conceptual description may suggest. Across TRAIN:
+
+- full-set RSMR proposal exists in 502 scenes;
+- random-prefix intervention proposal exists in only 356;
+- among those 356, **277 (77.81%) select exactly the same action as the full-set RSMR winner**;
+- only about 79 events actually expose a different selected action;
+- mean prefix fraction is `0.664`, mean prefix size `7.93` for mean candidate count `12.33`.
+
+The intervention-selected population is therefore a mixture dominated by unchanged full-set winners plus a minority of deliberately sub-extremal winners. It changes the selection measure, but it does not directly observe the counterfactual deployment outcome of the actual full-set winner versus the incumbent. Prefix/seed tuning is nevertheless forbidden: V49 was explicitly a one-shot falsification of this offline identification strategy, not a family to optimize.
+
+## Dominant bottleneck after V49
+
+The dominant bottleneck is no longer best described as “selection-regime transportability that can be repaired from the same offline labels.” V49 closes that branch. The remaining issue is:
+
+**selected-outcome evidence alignment / interventional outcome-law identification for the actual frozen deployment proposal.**
+
+The evidence chain is now:
+
+1. better prediction is not necessarily better deployment decision (V46);
+2. identifiable future-state representation is not necessarily decision-sufficient (V47);
+3. observational selected-risk identification is not fresh-transport sufficient (V48);
+4. changing only the offline selected-event measure through a label-free random-prefix intervention is not sufficient either (V49).
+
+The next experiment must therefore change the **evidence source** rather than the offline estimator.
+
+## V64.3.50 mechanism: PIOR
+
+V64.3.50 is **EAF-ICER-PIOR — Paired Interventional Outcome Retention**.
+
+PIOR keeps the deployment mechanism intentionally almost identical to V49:
+
+- B16/M24 bounded evidence interface: frozen;
+- EAF frontier/exact attribution: frozen;
+- support/admissibility: frozen;
+- full-set RSMR ordinal winner: frozen;
+- V44 ungated prospective occupancy: preserved through the existing PLAN coordinate;
+- V45 agent-local longitudinal response: preserved;
+- V47 EGO-REF: preserved;
+- runtime risk state: still `[Q, P-Q, E-P]`;
+- zero-bias pairwise sign-risk: unchanged;
+- `lambda=1`: unchanged;
+- no multiplicity/operator feature;
+- runtime output: exact frozen winner or incumbent only;
+- no rerank, no second-best, no fallback;
+- no logged/teacher future at deployment.
+
+The only first-order change is the **TRAIN supervision source**.
+
+### Paired one-shot selected-outcome intervention
+
+For the exact 502 TRAIN scenes where frozen full-set RSMR has a proposal, run two deterministic `closed_loop_nonreactive_agents` simulations with identical initial scene, candidate generator, evidence interface and planner:
+
+- **control:** at the first frozen RSMR proposal event, execute the same incumbent/baseline;
+- **treatment:** at that same event, execute the exact already-frozen full-set RSMR proposal once;
+- after the event, **both arms use the incumbent path only for the remainder of the scenario**.
+
+The probe is TRAIN-only instrumentation. It does not search, rerank, choose a second proposal, or use an outcome label to determine which action is intervened upon. Each nuPlan planner instance may fire the intervention at most once; the runner requires exactly one fired event for every member of the 502-scene paired population or stops.
+
+This creates a selected-outcome pair tied directly to the deployed operator rather than a surrogate selection regime.
+
+### Interventional outcome label
+
+For every paired scenario, PIOR records the official per-scenario closed-loop score difference. A proposal is a positive outcome only when:
+
+1. treatment official score is strictly higher than control; and
+2. treatment does not degrade any of the three hard-safety aggregator coordinates: `no_ego_at_fault_collisions`, `time_to_collision_within_bound`, `drivable_area_compliance`.
+
+The ranker consumes **sign only** (`+1/-1`); there is no manually weighted catastrophe loss or magnitude coefficient. The physical score delta and hard-safety deltas remain separately audited.
+
+### Scientific causal ablation
+
+The decisive comparison is no longer SIIR-prefix versus OBS. On the same full-set RSMR events, evaluate risk for the paired closed-loop outcome using:
+
+- `-EGO-REF`: the strongest frozen single-coordinate baseline;
+- `OFFLINE-OBS`: V49 exact observational selected-risk OOF score trained from offline teacher outcomes;
+- `PIOR`: the same low-capacity Q/P/E sign-risk family trained from paired closed-loop outcomes.
+
+PIOR identification requires aggregate AUC greater than both frozen baselines and at least `4/5` folds greater than each.
+
+The independent outcome-retention gate requires:
+
+- beneficial-proposal recall at least `1-alpha_ret`, with the same frozen `alpha_ret=0.0779185520` false-veto budget derived before V48;
+- hard-harm count non-increasing and strictly reduced when baseline hard harm exists;
+- negative closed-loop score RMS non-worse;
+- strictly fewer retained nonbeneficial interventions;
+- closed-loop score-delta sum non-worse;
+- hard-harm and score-delta non-harm in every outer fold;
+- minimum retained/beneficial population support.
+
+Only identification **and** this paired-outcome deployment gate may pass TRAIN.
+
+### Dataset / raw DB contract
+
+V50 hard-codes no scientific assumption about path discovery, but the launcher explicitly validates the provided data layout:
+
+- NPZ TRAIN cache: `bdse_train_v2/train_boston`, `train_pittsburgh`, `train_singapore`, `train_vegas_2`, then log folder, then `.npz`;
+- raw nuPlan DB: `splits/train_boston`, `train_pittsburgh`, `train_singapore`, `train_vegas`, each with direct `.db` files;
+- `train_vegas_2` NPZ cache maps to raw DB folder `train_vegas`.
+
+The manifest builder scans all four NPZ city trees, verifies all exact 502 frozen V49 proposal tokens are present, and refuses partial/misaligned training data.
+
+## V50 preregistered STOP branches
+
+- If paired TRAIN collection cannot establish exact 502/502 token identity, one intervention per scene, or required official safety/score metrics: **ENGINEERING/DATA STOP**. Fix collection only; do not alter the algorithm.
+- If PIOR paired-outcome AUC fails the identification gate: the Q/P/E selected-risk state is insufficient even under an aligned outcome source. Do not return to offline features/loss/threshold tuning.
+- If AUC identifies the outcome but the retention gate fails: the low-capacity sign-risk deployment functional is insufficient for the interventional outcome law. The next algorithmic branch should model a structured closed-loop outcome functional/state under on-policy data, while preserving RSMR and monotone containment.
+- If TRAIN passes: freeze PIOR completely and only then run an untouched paired closed-loop validation. Do not use TRAIN outcomes to retune features, loss, threshold, hard-safety definition, or simulator challenge.
+
+## No-repeat directions after V49
+
+All previous prohibitions remain, and V49 adds a hard closure of the following family:
+
+- no more random-prefix/seed/intervention-distribution sweep on offline teacher outcomes;
+- no `K/logK/K-bin/K-interaction` resurrection;
+- no pairwise-loss/lambda/class/focal/catastrophe weighting change;
+- no retention threshold/calibration sweep;
+- no larger selected-risk MLP;
+- no new offline future observable or feature block;
+- no V46 variance/handcrafted temporal profile;
+- no V47 constant-drift AGENT-2D;
+- no CVaR/selected translation/binary catastrophe veto;
+- no RSMR/B/M/top-K/candidate-count change;
+- no reranking, second-best, or fallback;
+- no A/B pooling or fresh-label rescue.
+
+The new research axis is **how to obtain and identify deployment-aligned selected outcomes**, not how to squeeze more signal from the same offline surrogate.
+
+## CCF-A paper line after V49
+
+A stronger current headline is:
+
+> **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface**
+
+with a possible causal/interventional subtitle after PIOR validation. The algorithmic thesis is not “closed-loop labels improve a classifier.” It is that extremal planning separates three operators with distinct sufficient-statistic/evidence requirements: ordinal proposal selection, prospective absolute valuation, and post-selection execution retention. V46–V49 provide successive falsification evidence showing that prediction accuracy, representation identifiability, in-domain post-selection risk, and selection-measure intervention are each insufficient substitutes for the **actual selected-outcome law**. PIOR is the first experiment to identify that law through a paired intervention on the exact deployed proposal while retaining monotone no-fallback containment.
+
+## V64.3.50 engineering validation before server science run
+
+The V50 implementation is engineering-valid but **scientifically not yet run/claimed** in this environment because the required raw nuPlan TRAIN DB/cache/checkpoint are server-side. Validation completed before packaging:
+
+- V50 focused tests: **7/7 PASS**;
+- V13→V50 targeted regression: **249/249 PASS** with only two historical Torch nested-tensor warnings;
+- full repository: **586/586 PASS** across **126/126** test files, executed as four mutually exclusive and exhaustive shards (`158 + 152 + 135 + 141`);
+- Python compile/compileall: PASS;
+- V50 launcher `bash -n`: PASS;
+- frozen `bdse/planner/tournament.py` SHA256 remains `291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044`.
+
+The next scientific action is therefore the preregistered paired TRAIN closed-loop intervention run. No untouched validation is permitted unless that TRAIN identification + causal-retention gate passes.

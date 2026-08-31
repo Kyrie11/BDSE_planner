@@ -313,6 +313,86 @@ class BDSEPlannerCore:
         self.cfg = cfg or load_config()
         self.model = model
         self.inference_lock = inference_lock
+        # V64.3.50 PIOR: TRAIN-only paired selected-outcome intervention state.
+        # Disabled by default and therefore a semantic no-op for every historical
+        # planner/config.  nuPlan calls initialize once per scenario; the wrapper
+        # resets this state there so a treatment arm contains at most one frozen
+        # RSMR proposal intervention.
+        self._pior_probe_used = False
+        self._pior_probe_event_count = 0
+
+    def reset_selected_outcome_probe(self) -> None:
+        self._pior_probe_used = False
+        self._pior_probe_event_count = 0
+
+    def _apply_selected_outcome_probe(self, tournament: Any, action: int, candidates: Any) -> tuple[int, dict[str, Any]]:
+        """Apply the V64.3.50 TRAIN-only one-shot proposal intervention.
+
+        The intervention never searches for an alternative.  It consumes the
+        *already frozen* full-set RSMR proposal exposed by ICER diagnostics and
+        either executes exactly that proposal once (treatment) or the incumbent
+        (control).  Every subsequent planning step returns to the same incumbent
+        path.  This changes the supervision/evidence source, not the deployed
+        selector or representation.
+        """
+        pcfg = (self.cfg.get("selected_outcome_probe", {}) or {}) if isinstance(self.cfg, dict) else {}
+        enabled = bool(pcfg.get("enabled", False))
+        if not enabled:
+            return int(action), {
+                "pior_probe_enabled": False,
+                "pior_probe_fired": False,
+                "pior_probe_used": False,
+            }
+        fcfg = self.cfg.get("fallback", {}) or {}
+        if bool(fcfg.get("enabled", True)):
+            raise RuntimeError("V64.3.50 PIOR probe requires fallback.enabled=false; paired outcome identification must not rerank or fall through")
+        arm = str(pcfg.get("arm", "")).strip().lower()
+        if arm not in {"treatment", "control"}:
+            raise ValueError(f"V64.3.50 PIOR selected_outcome_probe.arm must be treatment/control, got {arm!r}")
+        diag = dict(getattr(tournament, "diagnostics", {}) or {})
+        proposal_exists = bool(float(diag.get("decisive_frontier_icer_scir_proposal_exists", 0.0)) > 0.5)
+        proposal = int(round(float(diag.get("decisive_frontier_icer_scir_proposal_action", -1))))
+        baseline = int(round(float(diag.get("decisive_frontier_icer_baseline_action", -1))))
+        k = int(getattr(candidates, "K", 0))
+        valid = np.asarray(getattr(candidates, "valid_mask", np.zeros((k,), dtype=bool)), dtype=bool).reshape(-1)
+        def _valid_action(a: int) -> bool:
+            return bool(0 <= int(a) < valid.shape[0] and valid[int(a)])
+        if not _valid_action(baseline):
+            raise RuntimeError(f"V64.3.50 PIOR probe requires a valid incumbent/baseline action, got {baseline}")
+
+        fired = False
+        original_action = int(action)
+        if self._pior_probe_used:
+            chosen = int(baseline)
+            phase = "post_intervention_incumbent"
+        elif proposal_exists and proposal != baseline:
+            if not _valid_action(proposal):
+                raise RuntimeError(f"V64.3.50 PIOR frozen proposal is invalid: {proposal}")
+            chosen = int(proposal if arm == "treatment" else baseline)
+            self._pior_probe_used = True
+            self._pior_probe_event_count += 1
+            fired = True
+            phase = "paired_intervention"
+        else:
+            # Before the unique proposal event, both arms stay on the incumbent
+            # rather than consuming a different learned post-selection decision.
+            chosen = int(baseline)
+            phase = "awaiting_frozen_proposal"
+        return chosen, {
+            "pior_probe_enabled": True,
+            "pior_probe_arm": arm,
+            "pior_probe_phase": phase,
+            "pior_probe_fired": bool(fired),
+            "pior_probe_used": bool(self._pior_probe_used),
+            "pior_probe_event_count": int(self._pior_probe_event_count),
+            "pior_probe_original_post_selection_action": int(original_action),
+            "pior_probe_baseline_action": int(baseline),
+            "pior_probe_proposal_action": int(proposal),
+            "pior_probe_proposal_exists": bool(proposal_exists),
+            "pior_probe_final_action": int(chosen),
+            "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
+            "pior_probe_contract_no_rerank_second_best_fallback": True,
+        }
 
     def __getstate__(self) -> dict[str, Any]:
         # nuPlan's SimulationLogCallback pickles the planner at the end of every
@@ -1570,6 +1650,11 @@ class BDSEPlannerCore:
         assert best is not None
         stage_name, cfg_stage, pred, selection, tournament, atom_active = best
         action = int(tournament.action_index)
+        # V64.3.50 PIOR is an explicit TRAIN-only evidence-collection mode.
+        # It intervenes on the already frozen RSMR proposal identity and then
+        # returns to the incumbent for the rest of the scenario. Historical and
+        # deployment configs do not enable this block.
+        action, pior_probe_diag = self._apply_selected_outcome_probe(tournament, action, candidates)
         t_post = time.perf_counter()
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg_stage)
         safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
@@ -1643,6 +1728,7 @@ class BDSEPlannerCore:
         if "selected_action_safety_flag" in tournament_diag:
             tournament_diag["pre_recovery_selected_action_safety_flag"] = bool(tournament_diag.get("selected_action_safety_flag", False))
         tournament_diag.update(final_runtime_safety)
+        tournament_diag.update(pior_probe_diag)
         tournament_diag["selected_action_safety_flag"] = bool(final_runtime_safety.get("final_action_safety_flag", False))
         diagnostics = {
             "action_index": action,
@@ -1783,6 +1869,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
 
     def initialize(self, initialization: Any) -> None:
         self.initialization = initialization
+        self.core.reset_selected_outcome_probe()
 
     def _current_iteration_index(self, current_input: Any) -> int:
         iteration = getattr(current_input, "iteration", None)

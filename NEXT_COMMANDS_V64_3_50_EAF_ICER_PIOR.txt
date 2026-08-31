@@ -1,0 +1,28 @@
+V64.3.50 EAF-ICER-PIOR — next server command
+
+Default paths already match the dataset layout you supplied:
+
+  cd bdse_v64_3_50_eaf_icer_pior
+  bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+
+Explicit form:
+
+  cd bdse_v64_3_50_eaf_icer_pior
+  V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+  BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2 \
+  NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
+  NUPLAN_DB_SPLIT_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits \
+  EAF_V64_3_13_ROOT=/path/to/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+  GPU0=0 GPU1=1 \
+  bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+
+If checkpoint auto-resolution is unavailable, add:
+
+  export EAF_CKPT=/path/to/bdse_v64_saqa_bcc.epoch_XXXX.pt
+
+Scientific discipline:
+- V50 uses the exact 502 V49 full-set RSMR TRAIN proposal scenes.
+- It runs paired one-shot closed_loop_nonreactive_agents control/treatment outcomes.
+- If collection identity/metrics/probe coverage fail: fix engineering/data only.
+- If nested PIOR TRAIN gate fails: scientific STOP. Do not tune offline feature/loss/lambda/threshold/K/prefix or consume untouched closed-loop validation.
+- If nested PIOR TRAIN gate passes: freeze the emitted v64_3_50_pior.yaml. The next run must be a newly preregistered untouched paired closed-loop validation; do not reuse TRAIN outcomes for tuning.
