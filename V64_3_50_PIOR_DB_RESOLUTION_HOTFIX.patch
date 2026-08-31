@@ -1,0 +1,584 @@
+--- a/bdse/tools/build_v64_3_50_pior_train_manifest.py
++++ b/bdse/tools/build_v64_3_50_pior_train_manifest.py
+@@ -2,6 +2,8 @@
+ 
+ import argparse
+ import json
++import re
++import sqlite3
+ from pathlib import Path
+ from typing import Any
+ 
+@@ -51,32 +53,156 @@
+     return sorted(out), meta
+ 
+ 
+-def _db_index(raw_split_root: Path) -> dict[str, dict[str, Path]]:
+-    """Index the user's flat TRAIN DB folders by filename stem.
++def _stable_log_name(text: Any) -> str:
++    """Recover the nuPlan log identity from a DB/crop name.
+ 
+-    V50 originally handed nuPlan all four TRAIN directories. That is scientifically
+-    correct but can make scenario construction discover/open many irrelevant logs.
+-    The PIOR manifest already knows the exact log_name for every frozen proposal,
+-    so resolve the all-or-nothing direct DB subset here and fail closed if any log
+-    cannot be mapped. This changes only I/O scope, never the scenario population.
++    nuPlan split DB files may append a temporal crop suffix such as
++    ``_00718_00912`` while cached samples keep the stable log identity
++    ``2021...._veh-28``.  This is the same normalization already used by the
++    repository's feature/dataset code.
+     """
+-    out: dict[str, dict[str, Path]] = {}
++    name = Path(str(text or "")).name
++    if name.endswith(".db"):
++        name = name[:-3]
++    return re.sub(r"_\d{5,6}_\d{5,6}$", "", name)
++
++
++def _db_index(raw_split_root: Path) -> dict[str, dict[str, Any]]:
++    """Index direct TRAIN DB files by exact and stable nuPlan log identity."""
++    out: dict[str, dict[str, Any]] = {}
+     for raw in sorted(set(CITY_TO_RAW.values())):
+         d = raw_split_root / raw
+         if not d.is_dir():
+             raise FileNotFoundError(f"missing raw nuPlan DB split directory: {d}")
+-        dbs = sorted(d.glob("*.db"), key=lambda p: str(p))
++        dbs = sorted((p.resolve() for p in d.glob("*.db")), key=lambda p: str(p))
+         if not dbs:
+             raise RuntimeError(f"raw split directory contains no direct .db files as required: {d}")
+         by_stem: dict[str, Path] = {}
++        by_stable: dict[str, list[Path]] = {}
+         for p in dbs:
+             if p.stem in by_stem:
+                 raise RuntimeError(f"duplicate raw DB stem in {d}: {p.stem}")
+-            by_stem[p.stem] = p.resolve()
+-        out[raw] = by_stem
++            by_stem[p.stem] = p
++            by_stable.setdefault(_stable_log_name(p.stem), []).append(p)
++        out[raw] = {"all": dbs, "by_stem": by_stem, "by_stable": by_stable}
+     return out
+ 
+ 
++def _db_contains_token(db: Path, token: str) -> bool | None:
++    """Best-effort read-only exact token membership check.
++
++    nuPlan versions store the scenario identity as a lidar-pc token, usually a
++    BLOB primary key.  Return True/False when a known schema can be queried and
++    None when the local DB schema cannot be proven.  None is deliberately not a
++    failure: callers keep the whole stable-log DB family and let nuPlan's exact
++    ``scenario_filter.scenario_tokens`` perform the final selection.
++    """
++    token = str(token).strip()
++    values: list[Any] = [token]
++    try:
++        if len(token) % 2 == 0 and re.fullmatch(r"[0-9A-Fa-f]+", token):
++            values.insert(0, bytes.fromhex(token))
++    except Exception:
++        pass
++    try:
++        conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)
++    except Exception:
++        return None
++    try:
++        known = False
++        for table, column in (("lidar_pc", "token"), ("scenario_tag", "lidar_pc_token")):
++            try:
++                cols = {str(r[1]) for r in conn.execute(f'PRAGMA table_info("{table}")')}
++            except Exception:
++                continue
++            if column not in cols:
++                continue
++            known = True
++            for value in values:
++                try:
++                    row = conn.execute(
++                        f'SELECT 1 FROM "{table}" WHERE "{column}" = ? LIMIT 1',
++                        (value,),
++                    ).fetchone()
++                except Exception:
++                    continue
++                if row is not None:
++                    return True
++        return False if known else None
++    finally:
++        conn.close()
++
++
++def _resolve_raw_db_files(*, row: dict[str, Any], token: str, db_index: dict[str, dict[str, Any]]) -> tuple[list[Path], str]:
++    """Resolve a safe raw DB set without ever changing the scientific token set.
++
++    Resolution order:
++      1) exact DB stem;
++      2) stable log family after stripping nuPlan crop suffix;
++      3) when a family has multiple DB chunks, exact SQLite token membership;
++      4) if naming/schema cannot prove a narrower set, all direct DBs in the
++         token's city split.
++
++    Steps 2/4 can return multiple DB files.  This is scientifically safe because
++    runtime still filters by the exact frozen ``scenario_token`` list; the DB set
++    only controls I/O discovery scope.
++    """
++    raw = str(row["raw_db_split"])
++    idx = db_index[raw]
++    hints = []
++    for value in (row.get("log_name", ""), Path(str(row.get("npz_path", ""))).parent.name):
++        # nuPlan log names contain many dots (e.g. 2021.08.23...._veh-28).
++        # pathlib.Path.stem would incorrectly truncate such an identity at the
++        # final dot. Strip only a literal DB suffix and preserve every other dot.
++        h = str(value or "").strip()
++        if h.endswith(".db"):
++            h = h[:-3]
++        if h and h not in hints:
++            hints.append(h)
++
++    # Exact filename stem remains the cheapest path when available.
++    for hint in hints:
++        db = idx["by_stem"].get(hint)
++        if db is not None:
++            return [db], "exact_stem"
++
++    # nuPlan commonly appends _<start>_<end> crop ranges to DB filenames.
++    family: list[Path] = []
++    seen: set[Path] = set()
++    for hint in hints:
++        stable = _stable_log_name(hint)
++        for db in idx["by_stable"].get(stable, []):
++            if db not in seen:
++                seen.add(db); family.append(db)
++    if family:
++        if len(family) == 1:
++            return family, "stable_log_single"
++        exact_hits: list[Path] = []
++        schema_unknown = False
++        for db in family:
++            contains = _db_contains_token(db, token)
++            if contains is True:
++                exact_hits.append(db)
++            elif contains is None:
++                schema_unknown = True
++        if len(exact_hits) == 1:
++            return exact_hits, "stable_log_sqlite_token_exact"
++        if len(exact_hits) > 1:
++            raise RuntimeError(
++                f"V64.3.50 PIOR STOP: scenario token={token} appears in multiple raw DB chunks "
++                f"for stable log={_stable_log_name(hints[0] if hints else '')}: {[str(x) for x in exact_hits]}"
++            )
++        # No exact hit can mean a devkit/schema variation rather than missing data.
++        # Keep all DB chunks belonging to the proven stable log family and let the
++        # exact scenario-token filter validate the population at simulation time.
++        return family, "stable_log_family_schema_fallback" if schema_unknown else "stable_log_family_token_not_indexed"
++
++    # Last-resort correctness fallback.  Passing all DBs in the *known city* does
++    # not alter the requested 502 tokens because nuPlan receives the exact token
++    # filter.  It only gives up part of the startup optimization for this row.
++    return list(idx["all"]), "city_split_fallback"
++
++
+ def main() -> None:
+     ap = argparse.ArgumentParser(description="Build exact V49 full-set RSMR TRAIN proposal manifest for V64.3.50 paired closed-loop outcome collection.")
+     ap.add_argument("--v49-candidate-audit", type=Path, required=True)
+@@ -129,28 +255,21 @@
+     raw_dirs = [str((args.raw_split_root / raw).resolve()) for raw in sorted(db_index)]
+     raw_files: list[str] = []
+     raw_seen: set[str] = set()
++    resolution_counts: dict[str, int] = {}
+     for tok in tokens:
+         row = found[tok]
+-        raw = str(row["raw_db_split"])
+-        # nuPlan log_name is normally the DB filename stem. Be permissive about
+-        # an accidental '.db' suffix while still requiring an exact stem match.
+-        hint = Path(str(row.get("log_name", ""))).stem
+-        db = db_index[raw].get(hint)
+-        if db is None:
+-            # The user's cache contract also makes the NPZ parent the acquisition
+-            # log folder. Use it only as a second exact-stem hint, never substring
+-            # matching or row-order inference.
+-            parent_hint = Path(str(row["npz_path"])).parent.name
+-            db = db_index[raw].get(parent_hint)
+-        if db is None:
+-            raise RuntimeError(
+-                f"V64.3.50 PIOR STOP: cannot map token={tok} log_name={row.get('log_name','')} "
+-                f"to direct raw DB under {args.raw_split_root / raw}; exact DB restriction cannot be proven"
+-            )
+-        row["raw_db_file"] = str(db)
+-        if str(db) not in raw_seen:
+-            raw_seen.add(str(db))
+-            raw_files.append(str(db))
++        dbs, mode = _resolve_raw_db_files(row=row, token=tok, db_index=db_index)
++        if not dbs:
++            raise RuntimeError(f"V64.3.50 PIOR STOP: no raw DB candidates for token={tok}")
++        row["raw_db_files"] = [str(x) for x in dbs]
++        # Backward-compatible convenience field only when the mapping is unique.
++        row["raw_db_file"] = str(dbs[0]) if len(dbs) == 1 else ""
++        row["raw_db_resolution_mode"] = mode
++        resolution_counts[mode] = resolution_counts.get(mode, 0) + 1
++        for db in dbs:
++            if str(db) not in raw_seen:
++                raw_seen.add(str(db))
++                raw_files.append(str(db))
+ 
+     rows = [found[t] for t in tokens]
+     counts: dict[str, int] = {}
+@@ -167,7 +286,11 @@
+         "raw_db_directories": raw_dirs,
+         "raw_db_files": raw_files,
+         "raw_db_file_count": len(raw_files),
+-        "raw_db_restriction": "exact all-or-nothing log_name/NPZ-parent stem mapping for the 502 frozen tokens",
++        "raw_db_resolution_counts": resolution_counts,
++        "raw_db_restriction": (
++            "safe per-token DB-set restriction: exact stem -> stable nuPlan log family -> optional read-only SQLite token disambiguation; "
++            "unresolved naming/schema falls back to the token city split while exact scenario_filter.scenario_tokens preserves the frozen population"
++        ),
+         "dataset_contract": {
+             "train_cache_layout": "bdse_train_v2/train_{boston,pittsburgh,singapore,vegas_2}/<log>/*.npz",
+             "raw_db_layout": "splits/train_{boston,pittsburgh,singapore,vegas}/*.db",
+@@ -184,6 +307,7 @@
+         "scenario_count": len(rows),
+         "city_counts": counts,
+         "raw_db_file_count": len(raw_files),
++        "raw_db_resolution_counts": resolution_counts,
+         "npz_files_scanned_until_complete": int(scanned_npz),
+         "output": str(args.output_manifest),
+     }, sort_keys=True))
+--- a/bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
++++ b/bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
+@@ -57,17 +57,33 @@
+         raise RuntimeError(f"V64.3.50 PIOR manifest must be exact 502 unique frozen RSMR proposals, got {len(tokens)}/{len(set(tokens))}")
+     meta = {str(x["scenario_token"]): dict(x) for x in rows}
+     raw_files = [str(x) for x in r.get("raw_db_files", [])]
+-    # Optimized V50 manifests prove an exact raw DB mapping for every frozen
+-    # scenario. Do not silently fall back to all TRAIN DBs because that is the
+-    # dominant nuPlan initialization bottleneck this engineering patch removes.
+-    if not raw_files or any(not str(meta[t].get("raw_db_file", "")) for t in tokens):
+-        raise RuntimeError(
+-            "V64.3.50 optimized PIOR manifest is missing exact raw_db_file mappings. "
+-            "Regenerate the manifest with the optimized build_v64_3_50_pior_train_manifest tool."
+-        )
+-    for p in raw_files:
+-        if not Path(p).is_file():
+-            raise FileNotFoundError(f"V64.3.50 PIOR raw DB file disappeared: {p}")
++    # A row may map to one exact DB or to a small safe DB set (e.g. multiple
++    # nuPlan crop DBs sharing the same stable log name). The *scenario token*
++    # remains the scientific identity and is still passed as an exact nuPlan
++    # scenario_filter. Never require a guessed filename == log_name equality.
++    for t in tokens:
++        row_files = [str(x) for x in meta[t].get("raw_db_files", []) if str(x)]
++        if not row_files:
++            one = str(meta[t].get("raw_db_file", ""))
++            row_files = [one] if one else []
++        if not row_files:
++            raise RuntimeError(
++                f"V64.3.50 PIOR manifest has no safe raw DB candidate set for token={t}; "
++                "regenerate the manifest with build_v64_3_50_pior_train_manifest."
++            )
++        meta[t]["raw_db_files"] = row_files
++        for db in row_files:
++            if not Path(db).is_file():
++                raise FileNotFoundError(f"V64.3.50 PIOR raw DB file disappeared for token={t}: {db}")
++    if not raw_files:
++        seen: set[str] = set()
++        for t in tokens:
++            for db in meta[t]["raw_db_files"]:
++                if db not in seen:
++                    seen.add(db); raw_files.append(db)
++    for db in raw_files:
++        if not Path(db).is_file():
++            raise FileNotFoundError(f"V64.3.50 PIOR raw DB file disappeared: {db}")
+     return tokens, meta, raw_files
+ 
+ 
+@@ -250,15 +266,22 @@
+ 
+ 
+ def _batch_raw_files(tokens: list[str], meta: dict[str, dict[str, Any]]) -> list[str]:
++    """Union the safe per-token DB candidate sets for one deterministic batch."""
+     out: list[str] = []
+     seen: set[str] = set()
+     for tok in tokens:
+-        p = str(meta[tok].get("raw_db_file", ""))
+-        if not p or not Path(p).is_file():
+-            raise RuntimeError(f"PIOR batch cannot resolve exact raw DB for token={tok}: {p}")
+-        if p not in seen:
+-            seen.add(p)
+-            out.append(p)
++        row_files = [str(x) for x in meta[tok].get("raw_db_files", []) if str(x)]
++        if not row_files:
++            one = str(meta[tok].get("raw_db_file", ""))
++            row_files = [one] if one else []
++        if not row_files:
++            raise RuntimeError(f"PIOR batch has no raw DB candidates for token={tok}")
++        for p in row_files:
++            if not Path(p).is_file():
++                raise RuntimeError(f"PIOR batch raw DB candidate disappeared for token={tok}: {p}")
++            if p not in seen:
++                seen.add(p)
++                out.append(p)
+     return out
+ 
+ 
+--- a/bdse/tests/test_v64_3_50_eaf_icer_pior.py
++++ b/bdse/tests/test_v64_3_50_eaf_icer_pior.py
+@@ -7,8 +7,8 @@
+ import pytest
+ 
+ from bdse.planner.nuplan_planner import BDSEPlannerCore
+-from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW
+-from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS, _batch_certificate_valid
++from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW, _stable_log_name, _resolve_raw_db_files
++from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ 
+@@ -152,8 +152,10 @@
+     assert '"pior_probe_events"' in runner
+     assert '"BDSE_SERIALIZE_GPU_INFERENCE": "1" if serialize_gpu_inference else "0"' in runner
+     manifest = (ROOT / "bdse/tools/build_v64_3_50_pior_train_manifest.py").read_text()
+-    assert 'row["raw_db_file"]' in manifest
++    assert '_stable_log_name' in manifest
++    assert 'row["raw_db_files"]' in manifest
+     assert '"raw_db_files": raw_files' in manifest
++    assert 'city_split_fallback' in manifest
+ 
+ 
+ def test_v50_resume_certificate_requires_exact_hashes(tmp_path) -> None:
+@@ -198,3 +200,54 @@
+         raw_db_file_list_sha256="dbhash",
+     )
+     assert got2 is None and cert2 is None
++
++
++def test_v50_raw_db_resolution_understands_nuplan_crop_suffix_and_exact_token(tmp_path: Path) -> None:
++    import sqlite3
++
++    token = "00f4aedf9b3c5f65"
++    log = "2021.08.23.18.41.38_veh-28"
++    a = tmp_path / f"{log}_00001_00099.db"
++    b = tmp_path / f"{log}_00100_00199.db"
++    for db in (a, b):
++        conn = sqlite3.connect(db)
++        conn.execute("CREATE TABLE lidar_pc (token BLOB PRIMARY KEY)")
++        conn.commit(); conn.close()
++    conn = sqlite3.connect(b)
++    conn.execute("INSERT INTO lidar_pc(token) VALUES (?)", (bytes.fromhex(token),))
++    conn.commit(); conn.close()
++
++    assert _stable_log_name(a.name) == log
++    idx = {
++        "train_boston": {
++            "all": [a, b],
++            "by_stem": {a.stem: a, b.stem: b},
++            "by_stable": {log: [a, b]},
++        }
++    }
++    row = {"raw_db_split": "train_boston", "log_name": log, "npz_path": str(tmp_path / log / "x.npz")}
++    got, mode = _resolve_raw_db_files(row=row, token=token, db_index=idx)
++    assert got == [b]
++    assert mode == "stable_log_sqlite_token_exact"
++
++
++def test_v50_raw_db_resolution_falls_back_without_changing_token_population(tmp_path: Path) -> None:
++    a = tmp_path / "unrelated_a.db"; a.write_bytes(b"")
++    b = tmp_path / "unrelated_b.db"; b.write_bytes(b"")
++    idx = {
++        "train_boston": {
++            "all": [a, b],
++            "by_stem": {a.stem: a, b.stem: b},
++            "by_stable": {a.stem: [a], b.stem: [b]},
++        }
++    }
++    row = {"raw_db_split": "train_boston", "log_name": "2021.08.23.18.41.38_veh-28", "npz_path": str(tmp_path / "log" / "x.npz")}
++    got, mode = _resolve_raw_db_files(row=row, token="00f4aedf9b3c5f65", db_index=idx)
++    assert got == [a, b]
++    assert mode == "city_split_fallback"
++
++    meta = {
++        "tok": {"raw_db_files": [str(a), str(b)]},
++        "tok2": {"raw_db_files": [str(b)]},
++    }
++    assert _batch_raw_files(["tok", "tok2"], meta) == [str(a), str(b)]
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -12262,3 +12262,29 @@
+ - full repository: **126/126 test files, 589/589 PASS** in four mutually exclusive and exhaustive shards (`158 + 152 + 138 + 141`);
+ - resume completion certificate additionally binds the exact per-batch raw-DB path-list SHA256, so changing the DB subset invalidates reuse;
+ - Python compile/compileall and launcher `bash -n`: PASS.
++
++
++---
++
++# V64.3.50 engineering hotfix — nuPlan dotted-log / crop-DB resolution
++
++The first speed/resume package introduced an over-strong raw-DB restriction and could STOP before PIOR simulation with messages such as `cannot map token=... log_name=2021.08.23.18.41.38_veh-28`. This was an **engineering mapping bug only**, not a V50 scientific failure.
++
++Root causes:
++
++1. the speed patch called `Path(log_name).stem` on nuPlan log identities containing dots; for `2021.08.23.18.41.38_veh-28`, Python truncates the identity to `2021.08.23.18.41`;
++2. raw nuPlan DB files may append temporal crop suffixes such as `_<start>_<end>.db`, while cached NPZ `log_name` keeps the stable log identity. The repository's existing `_stable_log_name` contract already strips this well-known numeric crop suffix, but the speed patch did not reuse that contract;
++3. requiring one guessed unique DB filename was unnecessarily stronger than the scientific requirement. The frozen scientific identity is the exact 502 `scenario_token` list; the DB list is only the I/O discovery scope.
++
++Hotfix:
++
++- never apply `Path.stem` to a dotted nuPlan log identity; strip only a literal `.db` suffix;
++- normalize raw DB stems with the same `_<5-6 digits>_<5-6 digits>` crop rule already used by the dataset/feature code;
++- allow a token to carry a **safe DB candidate set** instead of forcing one file;
++- for a multi-chunk stable-log family, perform a read-only SQLite lookup against `lidar_pc.token` / `scenario_tag.lidar_pc_token` when the local schema permits exact disambiguation;
++- if schema/naming cannot prove a unique file, keep the whole stable-log DB family; if even stable-log matching is unavailable, fall back only to the known city split. In every case, nuPlan still receives the exact frozen `scenario_filter.scenario_tokens`, so the scientific population cannot silently change;
++- batch resume certificates continue to hash the **actual DB candidate-file union** used by that batch, so changing the I/O search set invalidates reuse.
++
++Scientific mechanism unchanged: exact 502 V49 full-set RSMR proposal tokens, treatment/control one-shot action, candidate bank, RSMR, Q/P/E state, simulator challenge, official metrics, PIOR outcome label and nested gate are all unchanged. This hotfix changes only raw DB discovery/provenance.
++
++Validation of the hotfix byte version: V50 focused **12/12 PASS**; V13→V50 targeted **254/254 PASS**; full repository **126/126 test files, 591/591 PASS** (`158 + 152 + 140 + 141`); compileall and launcher `bash -n` PASS.
+--- a/V64_3_50_PIOR_SPEED_RESUME_OPTIMIZATION.md
++++ b/V64_3_50_PIOR_SPEED_RESUME_OPTIMIZATION.md
+@@ -16,9 +16,11 @@
+ 
+ ## Optimizations
+ 
+-### Exact raw DB restriction
++### Safe raw DB restriction
+ 
+-The manifest now resolves every frozen token to one exact direct `*.db` file using `(raw split, log_name)` with the NPZ parent folder as a second exact-stem hint. The mapping is all-or-nothing: any unmapped token causes a STOP rather than silently changing the population. Each batch passes nuPlan only the DB files needed by that batch.
++The scientific identity is the exact frozen `scenario_token`, not a guessed filename. The manifest therefore resolves each token to the narrowest **safe DB candidate set** it can prove: exact DB stem first; then the repository-consistent stable nuPlan log identity after stripping a numeric crop suffix such as `_00718_00912`; then an optional read-only SQLite token lookup for multi-chunk log families. If a local DB schema cannot prove one file, the whole stable-log family is retained; if naming cannot establish even that family, only that token's known city split is used. nuPlan still receives the exact frozen `scenario_filter.scenario_tokens`, so widening the DB search set cannot silently add a scientific sample. Each batch passes only the union of its tokens' safe candidate sets.
++
++Important bug fix: nuPlan log identities contain dots. The previous speed package used `Path(log_name).stem`, which incorrectly converted `2021.08.23.18.41.38_veh-28` to `2021.08.23.18.41`. The hotfix never uses generic path-stem parsing on a log identity and strips only a literal `.db` suffix.
+ 
+ ### Probe-only diagnostics
+ 
+--- a/V64_3_50_ENGINEERING_VALIDATION.txt
++++ b/V64_3_50_ENGINEERING_VALIDATION.txt
+@@ -1,41 +1,36 @@
+-V64.3.50 EAF-ICER-PIOR — engineering validation after speed/resume optimization
++V64.3.50 EAF-ICER-PIOR — engineering validation after speed/resume + DB-resolution hotfix
+ 
+ Scope
+ -----
+-Engineering-only optimization of paired TRAIN closed-loop collection. Scientific PIOR semantics are unchanged: exact 502 frozen V49 full-set RSMR proposals, same treatment/control one-shot intervention, same Q/P/E state, same ranker/lambda, same closed_loop_nonreactive_agents challenge, same hard-safety metrics and same nested TRAIN gate.
++Engineering-only repair of paired TRAIN closed-loop collection. Scientific PIOR semantics are unchanged: exact 502 frozen V49 full-set RSMR proposals, same treatment/control one-shot intervention, same Q/P/E state, same ranker/lambda, same closed_loop_nonreactive_agents challenge, same hard-safety metrics and same nested TRAIN gate.
++
++Bug fixed
++---------
++The first speed package incorrectly applied pathlib.Path.stem to dotted nuPlan log identities and also assumed cached log_name must equal one raw DB filename stem. Example: Path('2021.08.23.18.41.38_veh-28').stem becomes '2021.08.23.18.41'. Raw nuPlan DB filenames may additionally carry numeric crop suffixes. The hotfix preserves dotted log identities, normalizes the known crop suffix, optionally disambiguates multi-chunk log families via read-only SQLite token lookup, and otherwise widens only the raw DB search set while retaining the exact frozen scenario-token filter.
+ 
+ Validation
+ ----------
+ Python compile / compileall: PASS
+ Launcher bash -n: PASS
+-V50 focused tests: 10/10 PASS
+-V13 -> V50 targeted regression (including V48.2 provenance lock): 252/252 PASS
+-Full repository: 126/126 test files, 589/589 PASS
++V50 focused tests: 12/12 PASS
++V13 -> V50 targeted regression (including V48.2 provenance lock): 254/254 PASS
++Full repository: 126/126 test files, 591/591 PASS
+   shard 0: 158/158 PASS
+   shard 1: 152/152 PASS
+-  shard 2: 138/138 PASS
++  shard 2: 140/140 PASS
+   shard 3: 141/141 PASS
+ V64.3.50 source manifest: 913/913 PASS
+-Source manifest SHA256: 2357d493f002a39cdf91f54769349f79478628ce6ec232d29c9138e223730339
+-
+-New engineering contracts tested
+---------------------------------
+-1. PIOR probe-only diagnostic mode writes no row on ordinary ticks and exactly one minimal event payload when the one-shot probe fires; the full diagnostics tree is not serialized in this mode.
+-2. Historical/default closed-loop diagnostic semantics remain unchanged unless BDSE_CLOSED_LOOP_DIAG_MODE is explicitly set by the PIOR runner.
+-3. Resume certificates require exact token/config/checkpoint/challenge identities, the exact per-batch raw-DB path-list SHA256, successful/failed counts, exact probe count, normalized metric SHA256 and probe-event SHA256. Mutating a metric file or changing the DB subset invalidates resume.
+-4. Optimized launcher exposes deterministic batch resume, heartbeat telemetry and a conservative switch to restore serialized GPU inference.
+-5. Exact raw DB restriction is all-or-nothing; every frozen token must map to a direct raw *.db file before collection.
++Source manifest SHA256: ea591a9ee383fd336a787d84dd34a4dcbd8c9536518556cc425f15eae2ea43ed
+ 
+-Performance changes (no scientific-semantic changes)
+------------------------------------------------------
+-- exact DB subset rather than four complete TRAIN split directories;
+-- BDSE_SERIALIZE_GPU_INFERENCE defaults to 0 for shared read-only per-arm CUDA inference (can be restored with PIOR_SERIALIZE_GPU_INFERENCE=1);
+-- PIOR event-only diagnostics rather than full diagnostics every planner tick;
+-- 30 s parent heartbeat with phase/probe/GPU telemetry;
+-- per-batch closed-loop timing profile;
+-- deterministic batch completion certificates and resume;
+-- fully complete legacy 502-scene arm may be reused only after strict validation; partial legacy arm is never reused.
++New DB/provenance contracts tested
++---------------------------------
++1. Dotted nuPlan log identities are preserved exactly; only a literal .db suffix is stripped.
++2. DB crop stems such as <log>_00001_00099.db normalize to the stable cached log identity.
++3. Multi-chunk stable-log families can be resolved by exact read-only SQLite lidar-pc/scenario-tag token membership when supported.
++4. If a unique raw DB cannot be proven, the runner retains a safe DB candidate set rather than dropping/stopping a frozen token; exact scenario_filter.scenario_tokens remains the final scientific population filter.
++5. Batch completion certificates bind the actual per-batch raw-DB candidate-list SHA256, so a changed DB search set invalidates resume.
++6. Probe-only diagnostics, heartbeat, unlocked shared-model inference and deterministic batch resume remain unchanged from the speed patch.
+ 
+-Not changed for speed
+----------------------
+-No replan interval change; no horizon shortening; no scenario subsampling; no candidate/top-K/RSMR change; no approximate selector; no treatment/control action change; no metric removal; no probe-time change.
++Not changed
++-----------
++No RSMR/candidate/top-K change; no treatment/control action change; no replan interval or horizon change; no scenario subsampling; no metric/label change; no fold/gate change; no fallback/rerank/second-best; no deployment future leakage.
+--- a/V64_3_50_SOURCE_MANIFEST.sha256
++++ b/V64_3_50_SOURCE_MANIFEST.sha256
+@@ -906,8 +906,8 @@
+ 8766476a9a8d5c93ad8ab02f32444be9f4dfb01a000b7f5e6ce6e1aa43ee40ac  bdse/tools/check_v64_3_49_eaf_icer_siir_screen.py
+ 01dbedbc3fc85bbed406dcd6930f5d7f099ffdf8b55b683d0be5ce299800c37a  bdse/tools/check_v64_3_49_eaf_icer_siir_split.py
+ 54b9dddb6d402bd8be1ef269b30727ba3bdfc2914b14d687fae00f42a57bee5d  bdse/tools/fit_v64_3_49_eaf_icer_siir.py
+-e22b2ecd4fd69c601a61c88b9f45769768926dd53ef47ce5de64c23274b5da05  bdse/tests/test_v64_3_50_eaf_icer_pior.py
+-0f0c2137610e67a59380bc4f05a96f3d33e2009380c374c0dcf9db6ddb0fd27f  bdse/tools/build_v64_3_50_pior_train_manifest.py
++dcd077eecbebe5045cbc352a5c09d9cabc894d071105ff03491edc4a3a16f2f4  bdse/tests/test_v64_3_50_eaf_icer_pior.py
++19aead4305e5aefa78e7a83f490c80d88195aa55990d279fb2384250f7daa364  bdse/tools/build_v64_3_50_pior_train_manifest.py
+ 315dc33bd12f0f8468be71e7627dfbe3b778eaa53ccd48ac5cc46f0badc4a821  bdse/tools/fit_v64_3_50_eaf_icer_pior.py
+ 3c35aae9b75a3a7727c239c0eb8484a0e48f4eeff22b6f664cba92c0ec44577d  bdse/tools/make_v64_3_50_pior_probe_configs.py
+-9da8b987027a7634617c1728fcb848bb58bb58ddc12442ab11d829a5bd6aa4b9  bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
++9b358bfbcfb7f9b05bd1f8833e8afad9ffdd48b73c67a0e356eabb485ad2f52b  bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
+--- a/NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
++++ b/NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
+@@ -70,3 +70,8 @@
+ - collection identity/metrics/probe failure => engineering/data STOP only;
+ - nested PIOR TRAIN failure => scientific STOP, no untouched validation;
+ - nested PIOR TRAIN pass => freeze PIOR, then preregister untouched paired closed-loop validation.
++
++
++DB-resolution hotfix note
++-------------------------
++The repaired package accepts dotted nuPlan log identities and crop-suffixed raw DB filenames. The normal launcher rebuilds the TRAIN manifest automatically; no manual token/DB rewrite is needed. After manifest construction, inspect `provenance/v64_3_50_pior_train_manifest.json` -> `raw_db_resolution_counts` if desired. `city_split_fallback` is correctness-safe because the exact frozen scenario-token filter remains active; it only reduces the startup speedup.
+--- /dev/null
++++ b/V64_3_50_PIOR_DB_RESOLUTION_HOTFIX.md
+@@ -0,0 +1,44 @@
++# V64.3.50 PIOR raw-DB resolution hotfix
++
++## Failure signature
++
++The first speed/resume package may stop in `build_v64_3_50_pior_train_manifest.py` with:
++
++```text
++V64.3.50 PIOR STOP: cannot map token=... log_name=2021.08.23.18.41.38_veh-28 ... exact DB restriction cannot be proven
++```
++
++This is an engineering bug in the speed patch, **not** a scientific V50 failure.
++
++## Root cause
++
++Two independent assumptions were too strong:
++
++1. `Path(log_name).stem` was used on a nuPlan log identity containing dots. Python interprets the final dot-delimited part as a suffix, so `2021.08.23.18.41.38_veh-28` becomes `2021.08.23.18.41`.
++2. Raw nuPlan DB filenames may append a temporal crop range such as `_00718_00912.db`, while cached NPZ `log_name` stores the stable log identity without that suffix. The repository's existing feature/dataset code already normalizes this suffix.
++
++## Correctness-preserving fix
++
++The frozen scientific identity remains the exact 502 V49 full-set RSMR `scenario_token`s. Raw DB paths are only the I/O search space.
++
++For each token the manifest now uses:
++
++1. exact raw DB stem if available;
++2. stable nuPlan log-family match after removing only a literal `.db` suffix and the known numeric crop suffix;
++3. for multi-chunk log families, optional read-only SQLite membership lookup against `lidar_pc.token` / `scenario_tag.lidar_pc_token`;
++4. if a unique file cannot be proven, the whole stable-log family; if naming cannot prove a family, only the token's known city split.
++
++The paired runner still passes the exact `scenario_filter.scenario_tokens`, so widening the raw DB candidate set cannot introduce a different scientific sample. It can only cost additional scenario-builder I/O. Any batch resume certificate hashes the actual DB candidate-file union, so a changed DB search set invalidates reuse.
++
++## Server command
++
++Use the original V50 command with this hotfixed package:
++
++```bash
++cd bdse_v64_3_50_eaf_icer_pior
++bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++```
++
++The manifest stage now prints `raw_db_resolution_counts`. Typical fast paths are `exact_stem`, `stable_log_single`, and `stable_log_sqlite_token_exact`. A small number of `stable_log_family_*` fallbacks is safe. `city_split_fallback` is also scientifically safe but may make affected batches slower; if many tokens use it, inspect the raw filenames before doing further speed optimization rather than changing the experiment.
++
++Do not modify the 502 token file, scenario challenge, RSMR, candidate bank, treatment/control action, PIOR label, or nested gate to work around DB naming.

@@ -57,17 +57,33 @@ def _manifest(path: Path) -> tuple[list[str], dict[str, dict[str, Any]], list[st
         raise RuntimeError(f"V64.3.50 PIOR manifest must be exact 502 unique frozen RSMR proposals, got {len(tokens)}/{len(set(tokens))}")
     meta = {str(x["scenario_token"]): dict(x) for x in rows}
     raw_files = [str(x) for x in r.get("raw_db_files", [])]
-    # Optimized V50 manifests prove an exact raw DB mapping for every frozen
-    # scenario. Do not silently fall back to all TRAIN DBs because that is the
-    # dominant nuPlan initialization bottleneck this engineering patch removes.
-    if not raw_files or any(not str(meta[t].get("raw_db_file", "")) for t in tokens):
-        raise RuntimeError(
-            "V64.3.50 optimized PIOR manifest is missing exact raw_db_file mappings. "
-            "Regenerate the manifest with the optimized build_v64_3_50_pior_train_manifest tool."
-        )
-    for p in raw_files:
-        if not Path(p).is_file():
-            raise FileNotFoundError(f"V64.3.50 PIOR raw DB file disappeared: {p}")
+    # A row may map to one exact DB or to a small safe DB set (e.g. multiple
+    # nuPlan crop DBs sharing the same stable log name). The *scenario token*
+    # remains the scientific identity and is still passed as an exact nuPlan
+    # scenario_filter. Never require a guessed filename == log_name equality.
+    for t in tokens:
+        row_files = [str(x) for x in meta[t].get("raw_db_files", []) if str(x)]
+        if not row_files:
+            one = str(meta[t].get("raw_db_file", ""))
+            row_files = [one] if one else []
+        if not row_files:
+            raise RuntimeError(
+                f"V64.3.50 PIOR manifest has no safe raw DB candidate set for token={t}; "
+                "regenerate the manifest with build_v64_3_50_pior_train_manifest."
+            )
+        meta[t]["raw_db_files"] = row_files
+        for db in row_files:
+            if not Path(db).is_file():
+                raise FileNotFoundError(f"V64.3.50 PIOR raw DB file disappeared for token={t}: {db}")
+    if not raw_files:
+        seen: set[str] = set()
+        for t in tokens:
+            for db in meta[t]["raw_db_files"]:
+                if db not in seen:
+                    seen.add(db); raw_files.append(db)
+    for db in raw_files:
+        if not Path(db).is_file():
+            raise FileNotFoundError(f"V64.3.50 PIOR raw DB file disappeared: {db}")
     return tokens, meta, raw_files
 
 
@@ -250,15 +266,22 @@ def _gpu_stats(gpu: str) -> tuple[str, str]:
 
 
 def _batch_raw_files(tokens: list[str], meta: dict[str, dict[str, Any]]) -> list[str]:
+    """Union the safe per-token DB candidate sets for one deterministic batch."""
     out: list[str] = []
     seen: set[str] = set()
     for tok in tokens:
-        p = str(meta[tok].get("raw_db_file", ""))
-        if not p or not Path(p).is_file():
-            raise RuntimeError(f"PIOR batch cannot resolve exact raw DB for token={tok}: {p}")
-        if p not in seen:
-            seen.add(p)
-            out.append(p)
+        row_files = [str(x) for x in meta[tok].get("raw_db_files", []) if str(x)]
+        if not row_files:
+            one = str(meta[tok].get("raw_db_file", ""))
+            row_files = [one] if one else []
+        if not row_files:
+            raise RuntimeError(f"PIOR batch has no raw DB candidates for token={tok}")
+        for p in row_files:
+            if not Path(p).is_file():
+                raise RuntimeError(f"PIOR batch raw DB candidate disappeared for token={tok}: {p}")
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
     return out
 
 

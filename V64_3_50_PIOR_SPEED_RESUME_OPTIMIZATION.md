@@ -16,9 +16,11 @@ The next stage launches two 502-scenario nuPlan subprocesses and redirects each 
 
 ## Optimizations
 
-### Exact raw DB restriction
+### Safe raw DB restriction
 
-The manifest now resolves every frozen token to one exact direct `*.db` file using `(raw split, log_name)` with the NPZ parent folder as a second exact-stem hint. The mapping is all-or-nothing: any unmapped token causes a STOP rather than silently changing the population. Each batch passes nuPlan only the DB files needed by that batch.
+The scientific identity is the exact frozen `scenario_token`, not a guessed filename. The manifest therefore resolves each token to the narrowest **safe DB candidate set** it can prove: exact DB stem first; then the repository-consistent stable nuPlan log identity after stripping a numeric crop suffix such as `_00718_00912`; then an optional read-only SQLite token lookup for multi-chunk log families. If a local DB schema cannot prove one file, the whole stable-log family is retained; if naming cannot establish even that family, only that token's known city split is used. nuPlan still receives the exact frozen `scenario_filter.scenario_tokens`, so widening the DB search set cannot silently add a scientific sample. Each batch passes only the union of its tokens' safe candidate sets.
+
+Important bug fix: nuPlan log identities contain dots. The previous speed package used `Path(log_name).stem`, which incorrectly converted `2021.08.23.18.41.38_veh-28` to `2021.08.23.18.41`. The hotfix never uses generic path-stem parsing on a log identity and strips only a literal `.db` suffix.
 
 ### Probe-only diagnostics
 

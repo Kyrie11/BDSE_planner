@@ -12262,3 +12262,29 @@ Final engineering validation of the optimized byte version:
 - full repository: **126/126 test files, 589/589 PASS** in four mutually exclusive and exhaustive shards (`158 + 152 + 138 + 141`);
 - resume completion certificate additionally binds the exact per-batch raw-DB path-list SHA256, so changing the DB subset invalidates reuse;
 - Python compile/compileall and launcher `bash -n`: PASS.
+
+
+---
+
+# V64.3.50 engineering hotfix — nuPlan dotted-log / crop-DB resolution
+
+The first speed/resume package introduced an over-strong raw-DB restriction and could STOP before PIOR simulation with messages such as `cannot map token=... log_name=2021.08.23.18.41.38_veh-28`. This was an **engineering mapping bug only**, not a V50 scientific failure.
+
+Root causes:
+
+1. the speed patch called `Path(log_name).stem` on nuPlan log identities containing dots; for `2021.08.23.18.41.38_veh-28`, Python truncates the identity to `2021.08.23.18.41`;
+2. raw nuPlan DB files may append temporal crop suffixes such as `_<start>_<end>.db`, while cached NPZ `log_name` keeps the stable log identity. The repository's existing `_stable_log_name` contract already strips this well-known numeric crop suffix, but the speed patch did not reuse that contract;
+3. requiring one guessed unique DB filename was unnecessarily stronger than the scientific requirement. The frozen scientific identity is the exact 502 `scenario_token` list; the DB list is only the I/O discovery scope.
+
+Hotfix:
+
+- never apply `Path.stem` to a dotted nuPlan log identity; strip only a literal `.db` suffix;
+- normalize raw DB stems with the same `_<5-6 digits>_<5-6 digits>` crop rule already used by the dataset/feature code;
+- allow a token to carry a **safe DB candidate set** instead of forcing one file;
+- for a multi-chunk stable-log family, perform a read-only SQLite lookup against `lidar_pc.token` / `scenario_tag.lidar_pc_token` when the local schema permits exact disambiguation;
+- if schema/naming cannot prove a unique file, keep the whole stable-log DB family; if even stable-log matching is unavailable, fall back only to the known city split. In every case, nuPlan still receives the exact frozen `scenario_filter.scenario_tokens`, so the scientific population cannot silently change;
+- batch resume certificates continue to hash the **actual DB candidate-file union** used by that batch, so changing the I/O search set invalidates reuse.
+
+Scientific mechanism unchanged: exact 502 V49 full-set RSMR proposal tokens, treatment/control one-shot action, candidate bank, RSMR, Q/P/E state, simulator challenge, official metrics, PIOR outcome label and nested gate are all unchanged. This hotfix changes only raw DB discovery/provenance.
+
+Validation of the hotfix byte version: V50 focused **12/12 PASS**; V13→V50 targeted **254/254 PASS**; full repository **126/126 test files, 591/591 PASS** (`158 + 152 + 140 + 141`); compileall and launcher `bash -n` PASS.

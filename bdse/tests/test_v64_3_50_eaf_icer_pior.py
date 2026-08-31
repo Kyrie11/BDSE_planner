@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 from bdse.planner.nuplan_planner import BDSEPlannerCore
-from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW
-from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS, _batch_certificate_valid
+from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW, _stable_log_name, _resolve_raw_db_files
+from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -152,8 +152,10 @@ def test_v50_optimized_launcher_has_exact_db_resume_and_ticks() -> None:
     assert '"pior_probe_events"' in runner
     assert '"BDSE_SERIALIZE_GPU_INFERENCE": "1" if serialize_gpu_inference else "0"' in runner
     manifest = (ROOT / "bdse/tools/build_v64_3_50_pior_train_manifest.py").read_text()
-    assert 'row["raw_db_file"]' in manifest
+    assert '_stable_log_name' in manifest
+    assert 'row["raw_db_files"]' in manifest
     assert '"raw_db_files": raw_files' in manifest
+    assert 'city_split_fallback' in manifest
 
 
 def test_v50_resume_certificate_requires_exact_hashes(tmp_path) -> None:
@@ -198,3 +200,54 @@ def test_v50_resume_certificate_requires_exact_hashes(tmp_path) -> None:
         raw_db_file_list_sha256="dbhash",
     )
     assert got2 is None and cert2 is None
+
+
+def test_v50_raw_db_resolution_understands_nuplan_crop_suffix_and_exact_token(tmp_path: Path) -> None:
+    import sqlite3
+
+    token = "00f4aedf9b3c5f65"
+    log = "2021.08.23.18.41.38_veh-28"
+    a = tmp_path / f"{log}_00001_00099.db"
+    b = tmp_path / f"{log}_00100_00199.db"
+    for db in (a, b):
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE lidar_pc (token BLOB PRIMARY KEY)")
+        conn.commit(); conn.close()
+    conn = sqlite3.connect(b)
+    conn.execute("INSERT INTO lidar_pc(token) VALUES (?)", (bytes.fromhex(token),))
+    conn.commit(); conn.close()
+
+    assert _stable_log_name(a.name) == log
+    idx = {
+        "train_boston": {
+            "all": [a, b],
+            "by_stem": {a.stem: a, b.stem: b},
+            "by_stable": {log: [a, b]},
+        }
+    }
+    row = {"raw_db_split": "train_boston", "log_name": log, "npz_path": str(tmp_path / log / "x.npz")}
+    got, mode = _resolve_raw_db_files(row=row, token=token, db_index=idx)
+    assert got == [b]
+    assert mode == "stable_log_sqlite_token_exact"
+
+
+def test_v50_raw_db_resolution_falls_back_without_changing_token_population(tmp_path: Path) -> None:
+    a = tmp_path / "unrelated_a.db"; a.write_bytes(b"")
+    b = tmp_path / "unrelated_b.db"; b.write_bytes(b"")
+    idx = {
+        "train_boston": {
+            "all": [a, b],
+            "by_stem": {a.stem: a, b.stem: b},
+            "by_stable": {a.stem: [a], b.stem: [b]},
+        }
+    }
+    row = {"raw_db_split": "train_boston", "log_name": "2021.08.23.18.41.38_veh-28", "npz_path": str(tmp_path / "log" / "x.npz")}
+    got, mode = _resolve_raw_db_files(row=row, token="00f4aedf9b3c5f65", db_index=idx)
+    assert got == [a, b]
+    assert mode == "city_split_fallback"
+
+    meta = {
+        "tok": {"raw_db_files": [str(a), str(b)]},
+        "tok2": {"raw_db_files": [str(b)]},
+    }
+    assert _batch_raw_files(["tok", "tok2"], meta) == [str(a), str(b)]

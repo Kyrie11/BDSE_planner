@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -51,30 +53,154 @@ def _eligible_tokens(candidate_audit: Path) -> tuple[list[str], dict[str, dict[s
     return sorted(out), meta
 
 
-def _db_index(raw_split_root: Path) -> dict[str, dict[str, Path]]:
-    """Index the user's flat TRAIN DB folders by filename stem.
+def _stable_log_name(text: Any) -> str:
+    """Recover the nuPlan log identity from a DB/crop name.
 
-    V50 originally handed nuPlan all four TRAIN directories. That is scientifically
-    correct but can make scenario construction discover/open many irrelevant logs.
-    The PIOR manifest already knows the exact log_name for every frozen proposal,
-    so resolve the all-or-nothing direct DB subset here and fail closed if any log
-    cannot be mapped. This changes only I/O scope, never the scenario population.
+    nuPlan split DB files may append a temporal crop suffix such as
+    ``_00718_00912`` while cached samples keep the stable log identity
+    ``2021...._veh-28``.  This is the same normalization already used by the
+    repository's feature/dataset code.
     """
-    out: dict[str, dict[str, Path]] = {}
+    name = Path(str(text or "")).name
+    if name.endswith(".db"):
+        name = name[:-3]
+    return re.sub(r"_\d{5,6}_\d{5,6}$", "", name)
+
+
+def _db_index(raw_split_root: Path) -> dict[str, dict[str, Any]]:
+    """Index direct TRAIN DB files by exact and stable nuPlan log identity."""
+    out: dict[str, dict[str, Any]] = {}
     for raw in sorted(set(CITY_TO_RAW.values())):
         d = raw_split_root / raw
         if not d.is_dir():
             raise FileNotFoundError(f"missing raw nuPlan DB split directory: {d}")
-        dbs = sorted(d.glob("*.db"), key=lambda p: str(p))
+        dbs = sorted((p.resolve() for p in d.glob("*.db")), key=lambda p: str(p))
         if not dbs:
             raise RuntimeError(f"raw split directory contains no direct .db files as required: {d}")
         by_stem: dict[str, Path] = {}
+        by_stable: dict[str, list[Path]] = {}
         for p in dbs:
             if p.stem in by_stem:
                 raise RuntimeError(f"duplicate raw DB stem in {d}: {p.stem}")
-            by_stem[p.stem] = p.resolve()
-        out[raw] = by_stem
+            by_stem[p.stem] = p
+            by_stable.setdefault(_stable_log_name(p.stem), []).append(p)
+        out[raw] = {"all": dbs, "by_stem": by_stem, "by_stable": by_stable}
     return out
+
+
+def _db_contains_token(db: Path, token: str) -> bool | None:
+    """Best-effort read-only exact token membership check.
+
+    nuPlan versions store the scenario identity as a lidar-pc token, usually a
+    BLOB primary key.  Return True/False when a known schema can be queried and
+    None when the local DB schema cannot be proven.  None is deliberately not a
+    failure: callers keep the whole stable-log DB family and let nuPlan's exact
+    ``scenario_filter.scenario_tokens`` perform the final selection.
+    """
+    token = str(token).strip()
+    values: list[Any] = [token]
+    try:
+        if len(token) % 2 == 0 and re.fullmatch(r"[0-9A-Fa-f]+", token):
+            values.insert(0, bytes.fromhex(token))
+    except Exception:
+        pass
+    try:
+        conn = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=5.0)
+    except Exception:
+        return None
+    try:
+        known = False
+        for table, column in (("lidar_pc", "token"), ("scenario_tag", "lidar_pc_token")):
+            try:
+                cols = {str(r[1]) for r in conn.execute(f'PRAGMA table_info("{table}")')}
+            except Exception:
+                continue
+            if column not in cols:
+                continue
+            known = True
+            for value in values:
+                try:
+                    row = conn.execute(
+                        f'SELECT 1 FROM "{table}" WHERE "{column}" = ? LIMIT 1',
+                        (value,),
+                    ).fetchone()
+                except Exception:
+                    continue
+                if row is not None:
+                    return True
+        return False if known else None
+    finally:
+        conn.close()
+
+
+def _resolve_raw_db_files(*, row: dict[str, Any], token: str, db_index: dict[str, dict[str, Any]]) -> tuple[list[Path], str]:
+    """Resolve a safe raw DB set without ever changing the scientific token set.
+
+    Resolution order:
+      1) exact DB stem;
+      2) stable log family after stripping nuPlan crop suffix;
+      3) when a family has multiple DB chunks, exact SQLite token membership;
+      4) if naming/schema cannot prove a narrower set, all direct DBs in the
+         token's city split.
+
+    Steps 2/4 can return multiple DB files.  This is scientifically safe because
+    runtime still filters by the exact frozen ``scenario_token`` list; the DB set
+    only controls I/O discovery scope.
+    """
+    raw = str(row["raw_db_split"])
+    idx = db_index[raw]
+    hints = []
+    for value in (row.get("log_name", ""), Path(str(row.get("npz_path", ""))).parent.name):
+        # nuPlan log names contain many dots (e.g. 2021.08.23...._veh-28).
+        # pathlib.Path.stem would incorrectly truncate such an identity at the
+        # final dot. Strip only a literal DB suffix and preserve every other dot.
+        h = str(value or "").strip()
+        if h.endswith(".db"):
+            h = h[:-3]
+        if h and h not in hints:
+            hints.append(h)
+
+    # Exact filename stem remains the cheapest path when available.
+    for hint in hints:
+        db = idx["by_stem"].get(hint)
+        if db is not None:
+            return [db], "exact_stem"
+
+    # nuPlan commonly appends _<start>_<end> crop ranges to DB filenames.
+    family: list[Path] = []
+    seen: set[Path] = set()
+    for hint in hints:
+        stable = _stable_log_name(hint)
+        for db in idx["by_stable"].get(stable, []):
+            if db not in seen:
+                seen.add(db); family.append(db)
+    if family:
+        if len(family) == 1:
+            return family, "stable_log_single"
+        exact_hits: list[Path] = []
+        schema_unknown = False
+        for db in family:
+            contains = _db_contains_token(db, token)
+            if contains is True:
+                exact_hits.append(db)
+            elif contains is None:
+                schema_unknown = True
+        if len(exact_hits) == 1:
+            return exact_hits, "stable_log_sqlite_token_exact"
+        if len(exact_hits) > 1:
+            raise RuntimeError(
+                f"V64.3.50 PIOR STOP: scenario token={token} appears in multiple raw DB chunks "
+                f"for stable log={_stable_log_name(hints[0] if hints else '')}: {[str(x) for x in exact_hits]}"
+            )
+        # No exact hit can mean a devkit/schema variation rather than missing data.
+        # Keep all DB chunks belonging to the proven stable log family and let the
+        # exact scenario-token filter validate the population at simulation time.
+        return family, "stable_log_family_schema_fallback" if schema_unknown else "stable_log_family_token_not_indexed"
+
+    # Last-resort correctness fallback.  Passing all DBs in the *known city* does
+    # not alter the requested 502 tokens because nuPlan receives the exact token
+    # filter.  It only gives up part of the startup optimization for this row.
+    return list(idx["all"]), "city_split_fallback"
 
 
 def main() -> None:
@@ -129,28 +255,21 @@ def main() -> None:
     raw_dirs = [str((args.raw_split_root / raw).resolve()) for raw in sorted(db_index)]
     raw_files: list[str] = []
     raw_seen: set[str] = set()
+    resolution_counts: dict[str, int] = {}
     for tok in tokens:
         row = found[tok]
-        raw = str(row["raw_db_split"])
-        # nuPlan log_name is normally the DB filename stem. Be permissive about
-        # an accidental '.db' suffix while still requiring an exact stem match.
-        hint = Path(str(row.get("log_name", ""))).stem
-        db = db_index[raw].get(hint)
-        if db is None:
-            # The user's cache contract also makes the NPZ parent the acquisition
-            # log folder. Use it only as a second exact-stem hint, never substring
-            # matching or row-order inference.
-            parent_hint = Path(str(row["npz_path"])).parent.name
-            db = db_index[raw].get(parent_hint)
-        if db is None:
-            raise RuntimeError(
-                f"V64.3.50 PIOR STOP: cannot map token={tok} log_name={row.get('log_name','')} "
-                f"to direct raw DB under {args.raw_split_root / raw}; exact DB restriction cannot be proven"
-            )
-        row["raw_db_file"] = str(db)
-        if str(db) not in raw_seen:
-            raw_seen.add(str(db))
-            raw_files.append(str(db))
+        dbs, mode = _resolve_raw_db_files(row=row, token=tok, db_index=db_index)
+        if not dbs:
+            raise RuntimeError(f"V64.3.50 PIOR STOP: no raw DB candidates for token={tok}")
+        row["raw_db_files"] = [str(x) for x in dbs]
+        # Backward-compatible convenience field only when the mapping is unique.
+        row["raw_db_file"] = str(dbs[0]) if len(dbs) == 1 else ""
+        row["raw_db_resolution_mode"] = mode
+        resolution_counts[mode] = resolution_counts.get(mode, 0) + 1
+        for db in dbs:
+            if str(db) not in raw_seen:
+                raw_seen.add(str(db))
+                raw_files.append(str(db))
 
     rows = [found[t] for t in tokens]
     counts: dict[str, int] = {}
@@ -167,7 +286,11 @@ def main() -> None:
         "raw_db_directories": raw_dirs,
         "raw_db_files": raw_files,
         "raw_db_file_count": len(raw_files),
-        "raw_db_restriction": "exact all-or-nothing log_name/NPZ-parent stem mapping for the 502 frozen tokens",
+        "raw_db_resolution_counts": resolution_counts,
+        "raw_db_restriction": (
+            "safe per-token DB-set restriction: exact stem -> stable nuPlan log family -> optional read-only SQLite token disambiguation; "
+            "unresolved naming/schema falls back to the token city split while exact scenario_filter.scenario_tokens preserves the frozen population"
+        ),
         "dataset_contract": {
             "train_cache_layout": "bdse_train_v2/train_{boston,pittsburgh,singapore,vegas_2}/<log>/*.npz",
             "raw_db_layout": "splits/train_{boston,pittsburgh,singapore,vegas}/*.db",
@@ -184,6 +307,7 @@ def main() -> None:
         "scenario_count": len(rows),
         "city_counts": counts,
         "raw_db_file_count": len(raw_files),
+        "raw_db_resolution_counts": resolution_counts,
         "npz_files_scanned_until_complete": int(scanned_npz),
         "output": str(args.output_manifest),
     }, sort_keys=True))

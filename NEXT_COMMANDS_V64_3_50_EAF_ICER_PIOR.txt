@@ -70,3 +70,8 @@ Scientific discipline remains unchanged:
 - collection identity/metrics/probe failure => engineering/data STOP only;
 - nested PIOR TRAIN failure => scientific STOP, no untouched validation;
 - nested PIOR TRAIN pass => freeze PIOR, then preregister untouched paired closed-loop validation.
+
+
+DB-resolution hotfix note
+-------------------------
+The repaired package accepts dotted nuPlan log identities and crop-suffixed raw DB filenames. The normal launcher rebuilds the TRAIN manifest automatically; no manual token/DB rewrite is needed. After manifest construction, inspect `provenance/v64_3_50_pior_train_manifest.json` -> `raw_db_resolution_counts` if desired. `city_split_fallback` is correctness-safe because the exact frozen scenario-token filter remains active; it only reduces the startup speedup.
