@@ -12364,3 +12364,35 @@ Repair:
 No change to every-tick replanning, reactive simulation, paired arms, candidate/RSMR/Q/P/E semantics, live eligibility, treatment, official metrics, SIOR fit/gates, or no-fallback containment. More aggressive changes such as DB-locality cohort reordering, multi-scenario GPU concurrency, and shared-prefix simulator-state forking are deferred until measured timing evidence identifies the dominant phase.
 
 See `V64_3_50_TIMING_TELEMETRY_AND_SAFE_PERF_REPAIR.md`.
+
+## V64.3.50 engineering-only lossless runtime optimization (2026-08-30)
+
+**Scientific algorithm/protocol unchanged.** This patch is restricted to execution cost in the V50 native paired selected-outcome collector. It preserves `collection_protocol_version=v50-live-selected-event-cohort-v1`, native reactive CONTROL/TREATMENT rollouts, forced every-tick replanning, the full-set RSMR selector, the first-live-winner one-shot treatment, live Q/P/E evidence, official nuPlan metrics/hard metrics, same-winner/incumbent containment, and all SIOR fitting/calibration/GO/STOP rules.
+
+Timing telemetry from the first batched run showed that V50 probe instrumentation itself is negligible (~0.13 ms/tick), while planner time is ~2.9--3.0 s/tick, with the certificate/value path and model batch construction dominating. Therefore heartbeat suppression alone is not treated as the optimization.
+
+Execution-only changes:
+
+- `V50_TIMING_TELEMETRY` now defaults to `0`. The strict per-tick `selected_outcome_probe` row remains mandatory; only timing payload, parent heartbeat polling and GPU telemetry sampling are disabled. Set `V50_TIMING_TELEMETRY=1` to restore the old timing view.
+- `BDSE_PACKED_RUNTIME_BATCH_TRANSFER=1` packs the 23 runtime tensors by their already-frozen target dtype (`float32`, `int64`, `bool`) before device transfer, reducing the normal CUDA host-to-device call count from one per tensor to at most one per dtype. Tensor values, shapes, dtypes, strides and key order are regression-locked against the historical conversion path; empty arrays fall back to the legacy transfer path.
+- `BDSE_V50_ELIDE_UNUSED_FSFR_2D=1` avoids evaluating `fsfr_plan_2d_occupancy_cost` in the V50 OCRR/SIOR runtime. That V47 AGENT-2D coordinate was scientifically closed before V50 and is not indexed by the frozen V48/V49/V50 Q/P/E operator state (`Q`, PLAN-1D, EGO-REF). The complete historical 12-column observable schema is still passed to the byte-locked V48 tournament; all consumed columns are exactly unchanged. The non-consumed PLAN-2D slot is not persisted by V50's selected-outcome-only diagnostic writer. The optimization fails closed if a config ever makes PLAN-2D a consumed Q/P/E coordinate.
+- The V48 science-locked `bdse/planner/tournament.py` is byte-identical to its frozen SHA256 `291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044`.
+- Execution provenance advances to `collection_engine_version=v50-batched-nuplan-lossless-opt-v4`; the scientific protocol version does not change. Resume intentionally refuses to mix rows produced under different execution engines/flags.
+
+Validation:
+
+- Final V50 + V48.2 science-lock focused suite: `36/36 PASS`.
+- V13->V50 targeted regression: `275/275 PASS`, two historical Transformer warnings.
+- Full repository: `612/612 PASS` across 126 test files when run in four exhaustive shards; warnings are historical PyTorch Transformer warnings only.
+- `python -m compileall -q bdse`: PASS.
+- `bash -n RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh`: PASS.
+- V48 OCRR science lock: `5/5 PASS`.
+- Representative local CPU benchmark (`K=64, N=32, T=81`) for the value-observable block: median `0.2826 s -> 0.1392 s` (`2.03x`) when only the closed PLAN-2D computation is elided; every consumed V50 Q/P/E column is `np.array_equal`. This is a block-level synthetic benchmark, not a claimed end-to-end server speedup.
+
+The unchanged launch command remains:
+
+```bash
+bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+```
+
+To profile again, use `V50_TIMING_TELEMETRY=1`. To replay the legacy execution implementation under the same scientific config, set `V50_PACKED_RUNTIME_BATCH_TRANSFER=0 V50_ELIDE_UNUSED_FSFR_2D=0`.

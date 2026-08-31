@@ -38,6 +38,13 @@ export NUPLAN_SPLITS_ROOT="${NUPLAN_SPLITS_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits
 export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_reactive_agents}"
 export V50_BATCH_SIZE="${V50_BATCH_SIZE:-16}"
 export V50_HEARTBEAT_SECONDS="${V50_HEARTBEAT_SECONDS:-30}"
+# Execution-only V50 optimizations. Scientific protocol, every-tick replanning,
+# paired CONTROL/TREATMENT rollouts and selected-outcome evidence are unchanged.
+# Timing telemetry defaults OFF; set V50_TIMING_TELEMETRY=1 to restore the
+# detailed heartbeat/timing_telemetry.jsonl instrumentation when profiling.
+export V50_TIMING_TELEMETRY="${V50_TIMING_TELEMETRY:-0}"
+export V50_PACKED_RUNTIME_BATCH_TRANSFER="${V50_PACKED_RUNTIME_BATCH_TRANSFER:-1}"
+export V50_ELIDE_UNUSED_FSFR_2D="${V50_ELIDE_UNUSED_FSFR_2D:-1}"
 export PYTHONUNBUFFERED=1
 
 # Import provenance: a long-lived server environment may have an older editable
@@ -119,7 +126,7 @@ elif [[ -n "${NUPLAN_DB_ROOT:-}" ]]; then
   [[ -e "$NUPLAN_DB_ROOT" ]] || { echo "STOP V50 missing NUPLAN_DB_ROOT: $NUPLAN_DB_ROOT" >&2; exit 2; }
 fi
 
-echo "[V50 performance] batched paired collector: V50_BATCH_SIZE=$V50_BATCH_SIZE heartbeat=${V50_HEARTBEAT_SECONDS}s compact_tick_timing=on (scientific protocol unchanged)"
+echo "[V50 performance] batch=$V50_BATCH_SIZE timing=$V50_TIMING_TELEMETRY packed_h2d=$V50_PACKED_RUNTIME_BATCH_TRANSFER elide_fsfr2d=$V50_ELIDE_UNUSED_FSFR_2D (every-tick paired scientific protocol unchanged)"
 echo '[V50 dataset layout] BDSE NPZ caches (offline only):'
 echo "  train=$BDSE_TRAIN_CACHE (present=$([[ -d "$BDSE_TRAIN_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
 echo "  val=$BDSE_VAL_CACHE (present=$([[ -d "$BDSE_VAL_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"

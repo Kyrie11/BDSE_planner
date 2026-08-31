@@ -1,0 +1,681 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/ALGORITHM_CHANGELOG.md /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/ALGORITHM_CHANGELOG.md
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/ALGORITHM_CHANGELOG.md	2026-08-30 05:15:42.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/ALGORITHM_CHANGELOG.md	2026-08-31 00:16:43.793075390 +0000
+@@ -12364,3 +12364,35 @@
+ No change to every-tick replanning, reactive simulation, paired arms, candidate/RSMR/Q/P/E semantics, live eligibility, treatment, official metrics, SIOR fit/gates, or no-fallback containment. More aggressive changes such as DB-locality cohort reordering, multi-scenario GPU concurrency, and shared-prefix simulator-state forking are deferred until measured timing evidence identifies the dominant phase.
+ 
+ See `V64_3_50_TIMING_TELEMETRY_AND_SAFE_PERF_REPAIR.md`.
++
++## V64.3.50 engineering-only lossless runtime optimization (2026-08-30)
++
++**Scientific algorithm/protocol unchanged.** This patch is restricted to execution cost in the V50 native paired selected-outcome collector. It preserves `collection_protocol_version=v50-live-selected-event-cohort-v1`, native reactive CONTROL/TREATMENT rollouts, forced every-tick replanning, the full-set RSMR selector, the first-live-winner one-shot treatment, live Q/P/E evidence, official nuPlan metrics/hard metrics, same-winner/incumbent containment, and all SIOR fitting/calibration/GO/STOP rules.
++
++Timing telemetry from the first batched run showed that V50 probe instrumentation itself is negligible (~0.13 ms/tick), while planner time is ~2.9--3.0 s/tick, with the certificate/value path and model batch construction dominating. Therefore heartbeat suppression alone is not treated as the optimization.
++
++Execution-only changes:
++
++- `V50_TIMING_TELEMETRY` now defaults to `0`. The strict per-tick `selected_outcome_probe` row remains mandatory; only timing payload, parent heartbeat polling and GPU telemetry sampling are disabled. Set `V50_TIMING_TELEMETRY=1` to restore the old timing view.
++- `BDSE_PACKED_RUNTIME_BATCH_TRANSFER=1` packs the 23 runtime tensors by their already-frozen target dtype (`float32`, `int64`, `bool`) before device transfer, reducing the normal CUDA host-to-device call count from one per tensor to at most one per dtype. Tensor values, shapes, dtypes, strides and key order are regression-locked against the historical conversion path; empty arrays fall back to the legacy transfer path.
++- `BDSE_V50_ELIDE_UNUSED_FSFR_2D=1` avoids evaluating `fsfr_plan_2d_occupancy_cost` in the V50 OCRR/SIOR runtime. That V47 AGENT-2D coordinate was scientifically closed before V50 and is not indexed by the frozen V48/V49/V50 Q/P/E operator state (`Q`, PLAN-1D, EGO-REF). The complete historical 12-column observable schema is still passed to the byte-locked V48 tournament; all consumed columns are exactly unchanged. The non-consumed PLAN-2D slot is not persisted by V50's selected-outcome-only diagnostic writer. The optimization fails closed if a config ever makes PLAN-2D a consumed Q/P/E coordinate.
++- The V48 science-locked `bdse/planner/tournament.py` is byte-identical to its frozen SHA256 `291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044`.
++- Execution provenance advances to `collection_engine_version=v50-batched-nuplan-lossless-opt-v4`; the scientific protocol version does not change. Resume intentionally refuses to mix rows produced under different execution engines/flags.
++
++Validation:
++
++- Final V50 + V48.2 science-lock focused suite: `36/36 PASS`.
++- V13->V50 targeted regression: `275/275 PASS`, two historical Transformer warnings.
++- Full repository: `612/612 PASS` across 126 test files when run in four exhaustive shards; warnings are historical PyTorch Transformer warnings only.
++- `python -m compileall -q bdse`: PASS.
++- `bash -n RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh`: PASS.
++- V48 OCRR science lock: `5/5 PASS`.
++- Representative local CPU benchmark (`K=64, N=32, T=81`) for the value-observable block: median `0.2826 s -> 0.1392 s` (`2.03x`) when only the closed PLAN-2D computation is elided; every consumed V50 Q/P/E column is `np.array_equal`. This is a block-level synthetic benchmark, not a claimed end-to-end server speedup.
++
++The unchanged launch command remains:
++
++```bash
++bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++```
++
++To profile again, use `V50_TIMING_TELEMETRY=1`. To replay the legacy execution implementation under the same scientific config, set `V50_PACKED_RUNTIME_BATCH_TRANSFER=0 V50_ELIDE_UNUSED_FSFR_2D=0`.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-30 05:14:13.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh	2026-08-31 00:08:18.366466384 +0000
+@@ -38,6 +38,13 @@
+ export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_reactive_agents}"
+ export V50_BATCH_SIZE="${V50_BATCH_SIZE:-16}"
+ export V50_HEARTBEAT_SECONDS="${V50_HEARTBEAT_SECONDS:-30}"
++# Execution-only V50 optimizations. Scientific protocol, every-tick replanning,
++# paired CONTROL/TREATMENT rollouts and selected-outcome evidence are unchanged.
++# Timing telemetry defaults OFF; set V50_TIMING_TELEMETRY=1 to restore the
++# detailed heartbeat/timing_telemetry.jsonl instrumentation when profiling.
++export V50_TIMING_TELEMETRY="${V50_TIMING_TELEMETRY:-0}"
++export V50_PACKED_RUNTIME_BATCH_TRANSFER="${V50_PACKED_RUNTIME_BATCH_TRANSFER:-1}"
++export V50_ELIDE_UNUSED_FSFR_2D="${V50_ELIDE_UNUSED_FSFR_2D:-1}"
+ export PYTHONUNBUFFERED=1
+ 
+ # Import provenance: a long-lived server environment may have an older editable
+@@ -119,7 +126,7 @@
+   [[ -e "$NUPLAN_DB_ROOT" ]] || { echo "STOP V50 missing NUPLAN_DB_ROOT: $NUPLAN_DB_ROOT" >&2; exit 2; }
+ fi
+ 
+-echo "[V50 performance] batched paired collector: V50_BATCH_SIZE=$V50_BATCH_SIZE heartbeat=${V50_HEARTBEAT_SECONDS}s compact_tick_timing=on (scientific protocol unchanged)"
++echo "[V50 performance] batch=$V50_BATCH_SIZE timing=$V50_TIMING_TELEMETRY packed_h2d=$V50_PACKED_RUNTIME_BATCH_TRANSFER elide_fsfr2d=$V50_ELIDE_UNUSED_FSFR_2D (every-tick paired scientific protocol unchanged)"
+ echo '[V50 dataset layout] BDSE NPZ caches (offline only):'
+ echo "  train=$BDSE_TRAIN_CACHE (present=$([[ -d "$BDSE_TRAIN_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
+ echo "  val=$BDSE_VAL_CACHE (present=$([[ -d "$BDSE_VAL_CACHE" ]] && echo yes || echo no); not consumed by V50 closed-loop)"
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/V64_3_50_SOURCE_MANIFEST.sha256 /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/V64_3_50_SOURCE_MANIFEST.sha256
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/V64_3_50_SOURCE_MANIFEST.sha256	2026-08-30 05:16:07.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/V64_3_50_SOURCE_MANIFEST.sha256	2026-08-31 00:14:51.052618465 +0000
+@@ -492,7 +492,7 @@
+ 24020f02630a5a1d3a0c6a472e17465fc9bef6b5542d9b22e1e555563fa3cd72  bdse/metrics/nuplan_metrics.py
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  bdse/model/__init__.py
+ 63141cac012567db417b32e1cbf36b2415e3c1fe67e0957644be45be02f1ef8b  bdse/model/action_encoder.py
+-439b65f48fe66a20b47d958fde931ffd19dbc08b77ee36d2a5e772971940957a  bdse/model/bdse_model.py
++979e4934974479c9652516c16d4ecd4cc837d1c66194d4c4c3c8ed2406e1ab36  bdse/model/bdse_model.py
+ 00f9127355d939d1b513164ae5ddad851ae81b292598d12dde381f82ead66f29  bdse/model/bdse_model.py.v10.bak
+ 8def5ccfefac38a623a33efd4c05ad8d09d7efbcc8654341122d4cb0028d5183  bdse/model/checkpoint_contract.py
+ f83179fe327601ef92620a99c4d8ef3193a61cdee3bca6d0ace795fa79f24a89  bdse/model/decisive_margin_utility.py
+@@ -513,7 +513,7 @@
+ 1e0958388ed0c6493f250372837ee66b82b1b46e4cc532a6b79b3a7119a953ca  bdse/planner/fallback.py
+ 3efd859d741c71517cabaefa5ddff9b7034d674b86288bf1da77f8f4bf2e5426  bdse/planner/frontier_contrast_rebinding.py
+ 43c9c19942c126f2733cb73c05df72397ce669432d3cea1a391874ea704b5be8  bdse/planner/full_bank_capacity_probe.py
+-ce56d28d3a76e7e81dd9dc38a667f3ef9e79c6df207f48998a4e90b4619189f0  bdse/planner/future_state_factorization.py
++6b16ff05955c0c63f43d155db1efb015af42f91105fad2299d39090f92886c61  bdse/planner/future_state_factorization.py
+ c9269321f45ae7982a37d51b5a6b5d567e38d6d615435ab1641dbcf409fa0bb5  bdse/planner/hab.py
+ a5a38ae85b9bcf9c09759f8760b3ea41ee9ee99e1653b870bfe0645f6ad0da7b  bdse/planner/interaction_response_field.py
+ 12639ded035d2ffa2ad9ffc2c46d0ba7e779bb18dfcc830aae844506abe218e1  bdse/planner/nuplan_planner.py
+@@ -527,7 +527,7 @@
+ cff3c361401f5f4b1ab4de28aba6aafdb8ec401e8de802c07d126553079c65cd  bdse/planner/teacher_cost.py
+ 291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044  bdse/planner/tournament.py
+ d4b5e02b46894d1e64727ae33b62ca9445bd40f7de4b4a4a366f2b0891c05139  bdse/planner/tournament.py.v10.bak
+-9e2f1bfb910fccde4899379c0515314714204c8ed10d4cc2532cfb9e3b68b9c8  bdse/planner/value_observables.py
++8c7a4f09366a574a17be7e2142f621c490dc604c465a13edc01dee8d6ffd0339  bdse/planner/value_observables.py
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  bdse/tests/__init__.py
+ 82c15cc2505f32ef7d0fda63e3ccc7a043935faa5f45727941f4f871ec5ff354  bdse/tests/conftest.py
+ d64a81639f37f05e0df08c79c319dfd2b373a452fb69bff98b43d2dbd32dde7b  bdse/tests/test_amp_masking.py
+@@ -905,13 +905,13 @@
+ 8766476a9a8d5c93ad8ab02f32444be9f4dfb01a000b7f5e6ce6e1aa43ee40ac  bdse/tools/check_v64_3_49_eaf_icer_siir_screen.py
+ 01dbedbc3fc85bbed406dcd6930f5d7f099ffdf8b55b683d0be5ce299800c37a  bdse/tools/check_v64_3_49_eaf_icer_siir_split.py
+ 54b9dddb6d402bd8be1ef269b30727ba3bdfc2914b14d687fae00f42a57bee5d  bdse/tools/fit_v64_3_49_eaf_icer_siir.py
+-ccd0151d7a1a4d6687c0e1848bcf136ac87fb8306a08bda53d05a51d05222158  RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
++61c9f9e15efaef4311718aaa77fddb16d811f898031b3d16a1ba21788070e402  RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+ a58b0bde289af5277cda5b38514aa8cb27e3d3974d0847ca593697e9c6204fff  bdse/planner/selected_outcome_probe.py
+ ec722e7c63538655f34cb05580185af1bbc72923cc85c205b7d4f738477a8c26  bdse/tools/prepare_v64_3_50_eaf_icer_sior_probe_configs.py
+ 69b9633c7251548f9ea6cfb4e220d9a42d4463860b1ad51eb4fa75ba29101a7c  bdse/tools/select_v64_3_50_sior_train_tokens.py
+-f0b714e66ab99b36d9b139b3e36bb84133c01cac805c93a1fa6bcaffb949918c  bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
++39b74b2f26a863ed6cef0f6eb7942338dc1bde313192584b5e73cbf2cd132c51  bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
+ a784b10bc06e4bec480cc7b22a4921c3ee3a633c2870e90d4199ce02e56bbec3  bdse/tools/fit_v64_3_50_eaf_icer_sior.py
+-309e640750a2df3e77121f074e7d3bc34af6c0c4ee674b89fa4aa1b83d8d2498  bdse/tests/test_v64_3_50_eaf_icer_sior.py
++a2b05535a9415cc4d09e0a2663a48247245e6f39e1a80b98e13d77fb714ac696  bdse/tests/test_v64_3_50_eaf_icer_sior.py
+ f0eba05ae6bf9b634c8ef7739eb0801010205965c4bfb6d20b8b6368ee546e89  setup.py
+ 11f5fc22b6f8bcc05a5a0ff070fabc3877d2e00bcb57664efbace55e02f7ebff  pyproject.toml
+ baf40ded10b5482c4c4ca322a0db5032138152f2b9fe33bf9fd6b00743e03f16  V64_3_50_PAIRED_COLLECTION_PERFORMANCE_AUDIT.md
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/model/bdse_model.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/model/bdse_model.py
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/model/bdse_model.py	2026-08-29 19:33:00.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/model/bdse_model.py	2026-08-31 00:01:25.915932783 +0000
+@@ -1963,20 +1963,93 @@
+                 out["pair_atom_var"] = pair_out[1]
+         return out
+ 
+-    def _make_batch(self, runtime, candidates, evidence_bank, include_dense_query: bool = False) -> dict[str, torch.Tensor]:
+-        arrays = runtime_to_model_numpy(runtime, candidates, evidence_bank, self.cfg, include_dense_query=include_dense_query)
+-        batch = {}
++    @staticmethod
++    def _runtime_arrays_to_torch_batch(
++        arrays: dict[str, np.ndarray],
++        device: torch.device,
++        *,
++        packed_transfer: bool,
++    ) -> dict[str, torch.Tensor]:
++        """Convert one runtime sample to model tensors without changing values.
++
++        The legacy runtime path issued one pageable CPU->CUDA transfer per input
++        tensor (currently 20+ transfers/tick).  V50 paired closed-loop executes
++        this path on every selector tick, so transfer-launch/synchronization
++        overhead becomes material even though the payload is only about 1 MB.
++
++        ``packed_transfer`` groups tensors by their *existing target dtype* and
++        performs at most one transfer for float32, int64 and bool respectively.
++        Returned tensors are non-overlapping views into those device buffers,
++        with exactly the same shape, dtype, values and contiguous layout as the
++        legacy tensors.  No model arithmetic, candidate/evidence content, or
++        selector state is changed.
++        """
++        if not packed_transfer:
++            batch: dict[str, torch.Tensor] = {}
++            for k, v in arrays.items():
++                arr = np.asarray(v)
++                if arr.dtype == np.bool_:
++                    t = torch.from_numpy(arr[None].astype(bool))
++                elif np.issubdtype(arr.dtype, np.integer):
++                    t = torch.from_numpy(arr[None].astype(np.int64))
++                else:
++                    t = torch.from_numpy(arr[None].astype(np.float32))
++                batch[k] = t.to(device)
++            return batch
++
++        # Keep the historical normalization contract byte-for-byte: booleans
++        # stay bool, all integer arrays become int64, and all other numeric
++        # arrays become float32.  np.ascontiguousarray is value-preserving and
++        # ensures each packed slice can be viewed with the legacy tensor shape.
++        groups: dict[str, list[tuple[str, tuple[int, ...], np.ndarray]]] = {
++            "bool": [], "int64": [], "float32": [],
++        }
++        key_order: list[str] = []
++        views: dict[str, torch.Tensor] = {}
+         for k, v in arrays.items():
+             arr = np.asarray(v)
++            original_shape = tuple(arr.shape)
+             if arr.dtype == np.bool_:
+-                t = torch.from_numpy(arr[None].astype(bool))
++                group = "bool"; target = bool; norm = np.ascontiguousarray(arr, dtype=np.bool_)
+             elif np.issubdtype(arr.dtype, np.integer):
+-                t = torch.from_numpy(arr[None].astype(np.int64))
++                group = "int64"; target = np.int64; norm = np.ascontiguousarray(arr, dtype=np.int64)
+             else:
+-                t = torch.from_numpy(arr[None].astype(np.float32))
+-            batch[k] = t
++                group = "float32"; target = np.float32; norm = np.ascontiguousarray(arr, dtype=np.float32)
++            key = str(k)
++            key_order.append(key)
++            if arr.size == 0:
++                # NumPy gives zero-sized arrays special zero strides; preserve
++                # the legacy tensor metadata exactly. There is no payload to
++                # amortize, so keeping this individual transfer has no material
++                # runtime cost.
++                views[key] = torch.from_numpy(arr[None].astype(target)).to(device)
++                continue
++            groups[group].append((key, original_shape, norm.reshape(-1)))
++
++        for group in ("float32", "int64", "bool"):
++            entries = groups[group]
++            if not entries:
++                continue
++            # np.concatenate also owns writable storage, avoiding lifetime or
++            # read-only issues from arbitrary RuntimeFeatures-backed arrays.
++            packed = np.concatenate([flat for _, _, flat in entries], axis=0)
++            dev = torch.from_numpy(packed).to(device)
++            offset = 0
++            for key, shape, flat in entries:
++                n = int(flat.size)
++                sl = dev.narrow(0, offset, n)
++                legacy_shape = (1, *shape) if shape else (1,)
++                views[key] = sl.view(*legacy_shape)
++                offset += n
++            if offset != int(dev.numel()):
++                raise RuntimeError("packed runtime-batch transfer accounting mismatch")
++        return {k: views[k] for k in key_order}
++
++    def _make_batch(self, runtime, candidates, evidence_bank, include_dense_query: bool = False) -> dict[str, torch.Tensor]:
++        arrays = runtime_to_model_numpy(runtime, candidates, evidence_bank, self.cfg, include_dense_query=include_dense_query)
+         device = next(self.parameters()).device
+-        return {k: v.to(device) for k, v in batch.items()}
++        packed = os.environ.get("BDSE_PACKED_RUNTIME_BATCH_TRANSFER", "0").lower() in {"1", "true", "yes", "on"}
++        return self._runtime_arrays_to_torch_batch(arrays, device, packed_transfer=packed)
+ 
+     def _score_pair_indices_numpy(
+         self,
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/planner/future_state_factorization.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/planner/future_state_factorization.py
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/planner/future_state_factorization.py	2026-08-29 19:33:02.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/planner/future_state_factorization.py	2026-08-30 23:58:56.448345218 +0000
+@@ -291,22 +291,45 @@
+     runtime: RuntimeFeatures,
+     candidates: CandidateBank,
+     cfg: dict[str, Any],
++    *,
++    requested_names: list[str] | tuple[str, ...] | None = None,
+ ) -> tuple[np.ndarray, list[str]]:
+-    """Return Kx3 V47 current-only future-state costs."""
++    """Return V47 current-only future-state costs.
++
++    ``requested_names`` is an execution-only projection used by V50 paired
++    collection.  The default remains the exact historical Kx3 V47 observable
++    matrix.  When a strict subset is requested, only those *already frozen*
++    observables are evaluated; their numerical definitions are unchanged.
++    This lets V50 avoid re-evaluating the scientifically closed AGENT-2D branch
++    when its OCRR/SIOR state consumes only PLAN-1D and EGO-REF.
++    """
++    names = list(FSFR_OBSERVABLE_NAMES) if requested_names is None else [str(x) for x in requested_names]
++    if len(names) != len(set(names)) or any(n not in FSFR_OBSERVABLE_NAMES for n in names):
++        raise ValueError(f"V47 FSFR requested observable schema invalid: {names}")
+     K = int(candidates.K)
+     if K <= 0:
+-        return np.zeros((0, len(FSFR_OBSERVABLE_NAMES)), dtype=np.float64), list(FSFR_OBSERVABLE_NAMES)
+-    local = response_field_local_agent_features(runtime, cfg)
+-    plan, _ = response_field_plan_agent_features(runtime, candidates, cfg)
+-    mean_model = _response_model_cfg(cfg)
+-    local_a = _predict_local_accel(local, mean_model)
+-    plan_a = _predict_plan_accel(local_a, plan, mean_model)
+-    plan_1d = _occupancy_cost_for_accels(runtime, candidates, cfg, plan_a)
+-    _, lateral_plan = _predict_lateral(local, plan, cfg)
+-    plan_2d = _occupancy_cost_2d(runtime, candidates, cfg, plan_a, lateral_plan)
+-    ego_feat = ego_reference_candidate_features(runtime, candidates, cfg)
+-    demo_hat = _predict_demo(ego_feat, cfg)
+-    out = np.stack([plan_1d, plan_2d, demo_hat], axis=1).astype(np.float64)
+-    if out.shape != (K, len(FSFR_OBSERVABLE_NAMES)) or not np.all(np.isfinite(out)):
++        return np.zeros((0, len(names)), dtype=np.float64), names
++    if not names:
++        return np.zeros((K, 0), dtype=np.float64), []
++
++    values: dict[str, np.ndarray] = {}
++    need_response = any(n in names for n in ("fsfr_plan_1d_occupancy_cost", "fsfr_plan_2d_occupancy_cost"))
++    if need_response:
++        local = response_field_local_agent_features(runtime, cfg)
++        plan, _ = response_field_plan_agent_features(runtime, candidates, cfg)
++        mean_model = _response_model_cfg(cfg)
++        local_a = _predict_local_accel(local, mean_model)
++        plan_a = _predict_plan_accel(local_a, plan, mean_model)
++        if "fsfr_plan_1d_occupancy_cost" in names:
++            values["fsfr_plan_1d_occupancy_cost"] = _occupancy_cost_for_accels(runtime, candidates, cfg, plan_a)
++        if "fsfr_plan_2d_occupancy_cost" in names:
++            _, lateral_plan = _predict_lateral(local, plan, cfg)
++            values["fsfr_plan_2d_occupancy_cost"] = _occupancy_cost_2d(runtime, candidates, cfg, plan_a, lateral_plan)
++    if "fsfr_predicted_demo_cost" in names:
++        ego_feat = ego_reference_candidate_features(runtime, candidates, cfg)
++        values["fsfr_predicted_demo_cost"] = _predict_demo(ego_feat, cfg)
++
++    out = np.stack([values[n] for n in names], axis=1).astype(np.float64)
++    if out.shape != (K, len(names)) or not np.all(np.isfinite(out)):
+         raise ValueError("V47 FSFR observable matrix malformed/non-finite")
+-    return out, list(FSFR_OBSERVABLE_NAMES)
++    return out, names
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/planner/value_observables.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/planner/value_observables.py
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/planner/value_observables.py	2026-08-29 19:33:02.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/planner/value_observables.py	2026-08-31 00:08:18.366268055 +0000
+@@ -16,6 +16,7 @@
+ 
+ from typing import Any
+ 
++import os
+ import numpy as np
+ 
+ from bdse.data.cache_schema import CandidateBank, RuntimeFeatures
+@@ -41,6 +42,49 @@
+ QUALITY_DIM = len(QUALITY_NAMES)
+ 
+ 
++def _env_true(name: str, default: bool = False) -> bool:
++    raw = os.environ.get(name)
++    if raw is None:
++        return bool(default)
++    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
++
++
++def _v50_elide_unused_fsfr_2d(cfg: dict[str, Any]) -> bool:
++    """Whether V50 may skip the closed V47 AGENT-2D observable.
++
++    The V48/V49/V50 OCRR/SIIR/SIOR operator consumes only QUALITY, the frozen
++    V45 PLAN-1D occupancy coordinate, and the V47 EGO-REF coordinate.  The
++    V47 ``fsfr_plan_2d_occupancy_cost`` column remains in the historical
++    observable schema for provenance, but it is not indexed by the frozen
++    post-selection functional.  Under the dedicated V50 execution flag we
++    therefore keep the *full historical schema* while not evaluating that
++    scientifically closed AGENT-2D branch.  Its in-memory, non-persisted slot
++    is filled with zero; the frozen tournament byte-lock is untouched.
++
++    The check is deliberately fail-closed: if a later config ever consumes
++    PLAN-2D, this optimization refuses to activate rather than silently change
++    a decision coordinate.
++    """
++    if not _env_true("BDSE_V50_ELIDE_UNUSED_FSFR_2D", default=False):
++        return False
++    ic = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {})
++    sc = ic.get("selection_conditioned_intervention_recovery", {}) or {}
++    if str(sc.get("post_selection_value_mode", "")) != "endpoint_potential_quality_operator_conditioned_risk_retention":
++        return False
++    stored = [str(x) for x in sc.get("post_selection_observable_names", [])]
++    qnames = [str(x) for x in sc.get("post_selection_quality_observable_names", [])]
++    pnames = [str(x) for x in sc.get("selected_policy_risk_plan_response_names", [])]
++    enames = [str(x) for x in sc.get("selected_policy_risk_ego_reference_names", [])]
++    required = set(qnames + pnames + enames)
++    target = "fsfr_plan_2d_occupancy_cost"
++    if target not in stored:
++        raise ValueError("V50 FSFR-2D elision requested but historical PLAN-2D observable is absent")
++    if target in required:
++        raise ValueError("V50 FSFR-2D elision refused because frozen Q/P/E consumes PLAN-2D")
++    if not required or any(n not in stored for n in required):
++        raise ValueError("V50 FSFR-2D elision found an incomplete frozen Q/P/E schema")
++    return True
++
+ def _finite_clip(x: np.ndarray, limit: float = 1.0e6) -> np.ndarray:
+     a = np.asarray(x, dtype=np.float64)
+     return np.clip(np.nan_to_num(a, nan=limit, posinf=limit, neginf=-limit), -limit, limit)
+@@ -62,7 +106,14 @@
+ 
+     K = int(candidates.K)
+     if K <= 0:
+-        return np.zeros((0, len(VALUE_OBSERVABLE_NAMES)), dtype=np.float64), list(VALUE_OBSERVABLE_NAMES)
++        # Preserve the historical schema even when the V50 dead-observable
++        # elision is enabled.  Tournament science-lock checks are schema-strict.
++        names0 = list(VALUE_OBSERVABLE_NAMES)
++        ic0 = (((cfg.get("runtime", {}) or {}).get("decisive_frontier_value", {}) or {}).get("incumbent_contrastive_extremal_recovery", {}) or {}) if isinstance(cfg, dict) else {}
++        if bool(ic0.get("instrument_future_state_factorization_observables", False)):
++            from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES
++            names0.extend(FSFR_OBSERVABLE_NAMES)
++        return np.zeros((0, len(names0)), dtype=np.float64), names0
+ 
+     tcfg = cfg.get("teacher", {}) if isinstance(cfg, dict) else {}
+     route = np.asarray(
+@@ -154,7 +205,25 @@
+         names.extend(dn)
+     if bool(ic.get("instrument_future_state_factorization_observables", False)):
+         from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES, runtime_future_state_factorization_observable_costs
+-        fs, fn = runtime_future_state_factorization_observable_costs(runtime, candidates, cfg)
++        if _v50_elide_unused_fsfr_2d(cfg):
++            requested = ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"]
++            fs_req, fn_req = runtime_future_state_factorization_observable_costs(
++                runtime, candidates, cfg, requested_names=requested
++            )
++            if fn_req != requested or fs_req.shape != (K, len(requested)):
++                raise ValueError("V50 FSFR-2D elision required-observable schema mismatch")
++            # Keep the exact V47 observable *schema* so the byte-locked V48
++            # tournament sees the same interface.  PLAN-2D is scientifically
++            # closed and is not indexed by the V48/V49/V50 Q/P/E functional.
++            # V50 persists only selected_outcome_probe diagnostics, which contain
++            # live Q/P/E and proposal identity, never this dead column.
++            fs = np.zeros((K, len(FSFR_OBSERVABLE_NAMES)), dtype=np.float64)
++            pos = {n: i for i, n in enumerate(FSFR_OBSERVABLE_NAMES)}
++            for j, n in enumerate(fn_req):
++                fs[:, pos[n]] = fs_req[:, j]
++            fn = list(FSFR_OBSERVABLE_NAMES)
++        else:
++            fs, fn = runtime_future_state_factorization_observable_costs(runtime, candidates, cfg)
+         if fn != FSFR_OBSERVABLE_NAMES or fs.shape != (K, len(FSFR_OBSERVABLE_NAMES)):
+             raise ValueError("V47 future-state-factorization observable schema mismatch")
+         out = np.concatenate([out, fs], axis=1)
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/tests/test_v64_3_50_eaf_icer_sior.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/tests/test_v64_3_50_eaf_icer_sior.py
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-30 05:14:30.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/tests/test_v64_3_50_eaf_icer_sior.py	2026-08-31 00:08:37.982505672 +0000
+@@ -6,8 +6,16 @@
+ 
+ import pytest
+ import yaml
++import numpy as np
++import torch
+ 
+ from bdse.planner.selected_outcome_probe import SelectedOutcomeProbeState, apply_selected_outcome_probe
++from bdse.model.bdse_model import BDSEModel
++from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES, runtime_future_state_factorization_observable_costs
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
++from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES, runtime_value_observable_costs
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
++from bdse.tests.test_v64_3_47_eaf_icer_fsfr import _runtime as _v47_runtime, _bank as _v47_bank, _cfg as _v47_cfg
+ from bdse.tools.fit_v64_3_50_eaf_icer_sior import ALPHA_RET, PAIR_COLLECTION_PROTOCOL_VERSION, V49_FAILURE, _check_v49, _statistical_admissibility
+ from bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs import _make
+ from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
+@@ -432,7 +440,7 @@
+ 
+ def test_v50_batched_engine_is_execution_only_and_protocol_is_unchanged() -> None:
+     assert COLLECTION_PROTOCOL_VERSION == "v50-live-selected-event-cohort-v1"
+-    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-timing-v2"
++    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-lossless-opt-v4"
+     text = (ROOT / "bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py").read_text(encoding="utf-8")
+     assert '"BDSE_FORCE_REPLAN_EVERY_TICK": "1"' in text
+     assert '"BDSE_SHARE_MODEL_PER_PROCESS": "1"' in text
+@@ -515,3 +523,135 @@
+     p = tmp_path / "live.jsonl"
+     _append_diag_line(p, '{"x":1}')
+     assert p.read_text(encoding="utf-8") == '{"x":1}\n'
++
++
++def test_v50_packed_runtime_batch_transfer_is_bit_exact_on_all_dtype_shapes() -> None:
++    arrays = {
++        "f": np.arange(24, dtype=np.float64).reshape(2, 3, 4) / 7.0,
++        "f32": np.arange(5, dtype=np.float32),
++        "i16": np.asarray([[1, -2], [3, 4]], dtype=np.int16),
++        "i64": np.asarray([5, 6, 7], dtype=np.int64),
++        "b": np.asarray([[True, False], [False, True]], dtype=bool),
++        "scalar": np.asarray(True),
++        "empty": np.zeros((0, 3), dtype=np.float32),
++    }
++    legacy = BDSEModel._runtime_arrays_to_torch_batch(arrays, torch.device("cpu"), packed_transfer=False)
++    packed = BDSEModel._runtime_arrays_to_torch_batch(arrays, torch.device("cpu"), packed_transfer=True)
++    assert list(legacy) == list(packed) == list(arrays)
++    for key in arrays:
++        assert legacy[key].dtype == packed[key].dtype
++        assert legacy[key].shape == packed[key].shape
++        assert legacy[key].stride() == packed[key].stride()
++        assert legacy[key].is_contiguous() and packed[key].is_contiguous()
++        assert torch.equal(legacy[key], packed[key])
++
++
++def _v50_ocrr_sc_for_projection() -> dict:
++    raw_names = list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    feature_names = [f"delta::{n}" for n in raw_names] + ["delta::support_logit"]
++    obs_names = VALUE_OBSERVABLE_NAMES + FSFR_OBSERVABLE_NAMES
++    return {
++        "feature_names": feature_names,
++        "feature_mean": [0.0] * 19,
++        "feature_std": [1.0] * 19,
++        "weights": [0.0] * 19,
++        "bias": 0.0,
++        "base_feature_names": raw_names,
++        "post_selection_value_enabled": True,
++        "post_selection_value_mode": "endpoint_potential_quality_operator_conditioned_risk_retention",
++        "post_selection_endpoint_feature_names": EPV_NAMES,
++        "post_selection_endpoint_feature_scale": [1.0] * 38,
++        "post_selection_endpoint_weights": [0.0] * 38,
++        "post_selection_endpoint_bias": 0.0,
++        "post_selection_observable_names": obs_names,
++        "post_selection_quality_observable_names": ["route_deviation_cost", "progress_deficit_cost", "global_comfort_cost"],
++        "post_selection_quality_observable_scale": [1.0] * 3,
++        "post_selection_quality_observable_weights": [0.3, -0.2, 0.1],
++        "selected_policy_risk_plan_response_names": ["fsfr_plan_1d_occupancy_cost"],
++        "selected_policy_risk_plan_response_scales": [1.0],
++        "selected_policy_risk_plan_response_weights": [0.4],
++        "selected_policy_risk_ego_reference_names": ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"],
++        "selected_policy_risk_ego_reference_scales": [1.0, 1.0],
++        "selected_policy_risk_ego_reference_weights": [0.4, 0.2],
++        "operator_conditioned_risk_retention": {
++            "feature_names": ["quality_value", "prospective_response_increment", "ego_reference_increment", "log_extremal_multiplicity"],
++            "aggregation": "sign_only",
++            "use_extremal_multiplicity": False,
++            "components": {
++                "sign_risk": {
++                    "model": "zero_bias_pairwise_selected_sign_risk",
++                    "feature_names": ["quality_value", "prospective_response_increment", "ego_reference_increment", "log_extremal_multiplicity"],
++                    "feature_mean": [0.0] * 4,
++                    "feature_std": [1.0] * 4,
++                    "weights": [-0.2, -0.3, -0.4, 0.0],
++                    "bias": 0.0,
++                    "lambda": 1.0,
++                    "fit_positive_score_mean": 0.0,
++                    "fit_positive_score_std": 1.0,
++                }
++            },
++            "retention_threshold": 0.7,
++        },
++    }
++
++
++def test_v50_fsfr_projection_exactly_reuses_full_plan1d_and_egoref_columns() -> None:
++    rt, bank, cfg = _v47_runtime(), _v47_bank(), _v47_cfg()
++    full, names = runtime_future_state_factorization_observable_costs(rt, bank, cfg)
++    requested = ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"]
++    projected, pnames = runtime_future_state_factorization_observable_costs(rt, bank, cfg, requested_names=requested)
++    assert pnames == requested
++    assert np.array_equal(projected[:, 0], full[:, names.index(requested[0])])
++    assert np.array_equal(projected[:, 1], full[:, names.index(requested[1])])
++
++
++def test_v50_eliding_closed_plan2d_keeps_frozen_ocrr_certificate_bit_exact() -> None:
++    sc = _v50_ocrr_sc_for_projection()
++    full_names = list(sc["post_selection_observable_names"])
++    full = np.arange(2 * len(full_names), dtype=np.float64).reshape(2, len(full_names)) / 17.0
++    elided = full.copy()
++    elided[:, full_names.index("fsfr_plan_2d_occupancy_cost")] = 0.0
++    raw_names = list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    feature_names = list(sc["feature_names"])
++    raw = np.zeros((2, len(raw_names)), dtype=np.float64)
++    sup = np.zeros(2, dtype=np.float64)
++    X = np.zeros((2, 19), dtype=np.float64)
++    mu = np.zeros(2, dtype=np.float64)
++    vf, ff, nf = _icer_post_selection_value(
++        1, mu, X, feature_names, sc, raw_feat=raw, raw_feature_names=raw_names, support_logits=sup,
++        legacy_action=0, value_observable_matrix=full, value_observable_names=full_names, selection_multiplicity=9,
++    )
++    ve, fe, ne = _icer_post_selection_value(
++        1, mu, X, feature_names, sc, raw_feat=raw, raw_feature_names=raw_names, support_logits=sup,
++        legacy_action=0, value_observable_matrix=elided, value_observable_names=full_names, selection_multiplicity=9,
++    )
++    assert ve == pytest.approx(vf, abs=0.0, rel=0.0)
++    assert np.array_equal(fe, ff)
++    assert ne == nf
++
++
++def test_v50_runtime_elide_fsfr2d_matches_full_observables_on_all_consumed_columns(monkeypatch: pytest.MonkeyPatch) -> None:
++    rt, bank, cfg = _v47_runtime(), _v47_bank(), _v47_cfg()
++    ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    sc = ic["selection_conditioned_intervention_recovery"]
++    sc.update({
++        "post_selection_value_mode": "endpoint_potential_quality_operator_conditioned_risk_retention",
++        "post_selection_observable_names": list(VALUE_OBSERVABLE_NAMES) + list(FSFR_OBSERVABLE_NAMES),
++        "post_selection_quality_observable_names": ["route_deviation_cost", "progress_deficit_cost", "global_comfort_cost"],
++        "selected_policy_risk_plan_response_names": ["fsfr_plan_1d_occupancy_cost"],
++        "selected_policy_risk_ego_reference_names": ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"],
++    })
++    monkeypatch.delenv("BDSE_V50_ELIDE_UNUSED_FSFR_2D", raising=False)
++    full, full_names = runtime_value_observable_costs(rt, bank, cfg)
++    monkeypatch.setenv("BDSE_V50_ELIDE_UNUSED_FSFR_2D", "1")
++    elided, names = runtime_value_observable_costs(rt, bank, cfg)
++    assert names == full_names
++    assert elided.shape == full.shape
++    dead = "fsfr_plan_2d_occupancy_cost"
++    dead_i = full_names.index(dead)
++    for i, name in enumerate(names):
++        if name == dead:
++            assert np.array_equal(elided[:, i], np.zeros((len(elided),), dtype=np.float64))
++        else:
++            assert np.array_equal(elided[:, i], full[:, i]), name
++    assert np.any(full[:, dead_i] != 0.0)
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' '--exclude=V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md' '--exclude=V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_50_LOSSLESS_OPT_CHANGED_FILES.txt' '--exclude=V64_3_50_LOSSLESS_OPT.patch' '--exclude=V64_3_50_LOSSLESS_OPT_SHA256SUMS.txt' /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
+--- /mnt/data/bdse_work/bdse_v64_3_50_eaf_icer_sior_timing_telemetry_fix/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py	2026-08-30 05:13:37.000000000 +0000
++++ /mnt/data/bdse_v64_3_50_eaf_icer_sior_lossless_opt/bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py	2026-08-31 00:08:18.366677322 +0000
+@@ -42,7 +42,23 @@
+     "driving_direction_compliance",
+ ]
+ COLLECTION_PROTOCOL_VERSION = "v50-live-selected-event-cohort-v1"
+-COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-timing-v2"
++COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-lossless-opt-v4"
++
++
++def _env_flag(name: str, default: bool) -> bool:
++    raw = os.environ.get(name)
++    if raw is None:
++        return bool(default)
++    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
++
++
++def _execution_flags() -> dict[str, bool]:
++    """Execution-only switches; none changes the V50 scientific protocol."""
++    return {
++        "timing_telemetry": _env_flag("V50_TIMING_TELEMETRY", False),
++        "packed_runtime_batch_transfer": _env_flag("V50_PACKED_RUNTIME_BATCH_TRANSFER", True),
++        "elide_unused_fsfr_2d": _env_flag("V50_ELIDE_UNUSED_FSFR_2D", True),
++    }
+ NO_TREATMENT_SCORE_TOL = 1.0e-9
+ 
+ 
+@@ -729,6 +745,8 @@
+         "scenario_filter.shuffle=false", "scenario_filter.log_names=null",
+         "worker.max_workers=1", "run_metric=true", "~callback.simulation_log_callback",
+     ]
++    flags = _execution_flags()
++    timing_enabled = bool(flags["timing_telemetry"])
+     env = os.environ.copy()
+     env.update({
+         "CUDA_VISIBLE_DEVICES": str(gpu),
+@@ -736,8 +754,14 @@
+         "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
+         "BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1",
+         "BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1",
+-        "BDSE_V50_TIMING_TELEMETRY": "1",
+-        "BDSE_PROFILE_CLOSED_LOOP": "1",
++        # V50 proof evidence is always written; expensive per-tick timing is
++        # execution-only and defaults OFF in the optimized engine.
++        "BDSE_V50_TIMING_TELEMETRY": "1" if timing_enabled else "0",
++        "BDSE_PROFILE_CLOSED_LOOP": "1" if timing_enabled else "0",
++        # Exact-value execution optimizations.  Both can be disabled to replay
++        # the legacy implementation without changing the scientific config.
++        "BDSE_PACKED_RUNTIME_BATCH_TRANSFER": "1" if flags["packed_runtime_batch_transfer"] else "0",
++        "BDSE_V50_ELIDE_UNUSED_FSFR_2D": "1" if flags["elide_unused_fsfr_2d"] else "0",
+         "BDSE_REPLAN_INTERVAL_TICKS": "1",
+         "BDSE_FORCE_REPLAN_EVERY_TICK": "1",
+         # This is now useful: all planners in the batch reuse one read-only CUDA
+@@ -753,16 +777,21 @@
+     heartbeat_s = max(float(args.heartbeat_seconds), 1.0)
+     with log.open("w", encoding="utf-8", buffering=1) as f:
+         proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
+-        tracker = _BatchProgressTracker(role=role, diag=diag, log=log, telemetry=telemetry, started=started, gpu=str(gpu))
+-        while True:
+-            try:
+-                returncode = proc.wait(timeout=heartbeat_s)
+-                break
+-            except subprocess.TimeoutExpired:
+-                snap = tracker.snapshot(pid=proc.pid, final=False)
+-                print(_heartbeat_line(snap), flush=True)
+-        snap = tracker.snapshot(pid=proc.pid, final=True)
+-        print(_heartbeat_line(snap), flush=True)
++        if timing_enabled:
++            tracker = _BatchProgressTracker(role=role, diag=diag, log=log, telemetry=telemetry, started=started, gpu=str(gpu))
++            while True:
++                try:
++                    returncode = proc.wait(timeout=heartbeat_s)
++                    break
++                except subprocess.TimeoutExpired:
++                    snap = tracker.snapshot(pid=proc.pid, final=False)
++                    print(_heartbeat_line(snap), flush=True)
++            snap = tracker.snapshot(pid=proc.pid, final=True)
++            print(_heartbeat_line(snap), flush=True)
++        else:
++            # No parent polling, nvidia-smi sampling or per-tick timing payload.
++            # Strict selected-outcome probe rows are still emitted every tick.
++            returncode = proc.wait()
+     wall = time.perf_counter() - started
+     metric_started = time.perf_counter()
+     text = log.read_text(encoding="utf-8", errors="replace")
+@@ -932,6 +961,18 @@
+                     "V50 paired output predates the frozen batched-engine provenance field requested_batch_size. "
+                     "Remove only the V50 paired_train directory and rerun."
+                 )
++            flags_now = _execution_flags()
++            for field, key in [
++                ("execution_packed_runtime_batch_transfer", "packed_runtime_batch_transfer"),
++                ("execution_elide_unused_fsfr_2d", "elide_unused_fsfr_2d"),
++                ("execution_timing_telemetry", "timing_telemetry"),
++            ]:
++                prior = str(r.get(field, "")).strip()
++                if not prior or bool(int(float(prior))) != bool(flags_now[key]):
++                    raise RuntimeError(
++                        f"V50 paired output execution setting mismatch for {field}: prior={prior or 'missing'} current={int(flags_now[key])}. "
++                        "Remove only the V50 paired_train directory and rerun; do not mix execution engines/settings."
++                    )
+             existing[str(r["scenario_token"])] = dict(r)
+     rows: list[dict[str, Any]] = [existing[t] for t in tokens if t in existing]
+ 
+@@ -996,6 +1037,9 @@
+                 "scenario_token": token,
+                 **ident,
+                 "collection_engine_version": COLLECTION_ENGINE_VERSION,
++                "execution_packed_runtime_batch_transfer": int(_execution_flags()["packed_runtime_batch_transfer"]),
++                "execution_elide_unused_fsfr_2d": int(_execution_flags()["elide_unused_fsfr_2d"]),
++                "execution_timing_telemetry": int(_execution_flags()["timing_telemetry"]),
+                 "challenge": a.challenge,
+                 "control_score": cs,
+                 "treatment_score": ts,
+@@ -1040,6 +1084,7 @@
+                 json.dumps({
+                     "completed": len(ordered_now), "expected": len(tokens), "challenge": a.challenge,
+                     "collection_engine_version": COLLECTION_ENGINE_VERSION, "batch_size": batch_size,
++                    "execution_flags": _execution_flags(),
+                 }, indent=2),
+                 encoding="utf-8",
+             )
+@@ -1052,6 +1097,7 @@
+         "frozen_proposal_audit_sha256": _sha(a.frozen_proposal_audit),
+         "collection_protocol_version": COLLECTION_PROTOCOL_VERSION,
+         "collection_engine_version": COLLECTION_ENGINE_VERSION,
++        "execution_flags": _execution_flags(),
+         "batch_size": int(a.batch_size),
+         "nuplan_process_count_per_arm": int(math.ceil(len(tokens) / max(int(a.batch_size), 1))),
+         "exact_token_db_index_enabled": bool(token_db_index is not None),

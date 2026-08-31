@@ -6,8 +6,16 @@ from pathlib import Path
 
 import pytest
 import yaml
+import numpy as np
+import torch
 
 from bdse.planner.selected_outcome_probe import SelectedOutcomeProbeState, apply_selected_outcome_probe
+from bdse.model.bdse_model import BDSEModel
+from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES, runtime_future_state_factorization_observable_costs
+from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
+from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES, runtime_value_observable_costs
+from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
+from bdse.tests.test_v64_3_47_eaf_icer_fsfr import _runtime as _v47_runtime, _bank as _v47_bank, _cfg as _v47_cfg
 from bdse.tools.fit_v64_3_50_eaf_icer_sior import ALPHA_RET, PAIR_COLLECTION_PROTOCOL_VERSION, V49_FAILURE, _check_v49, _statistical_admissibility
 from bdse.tools.prepare_v64_3_50_eaf_icer_sior_probe_configs import _make
 from bdse.tools.run_v64_3_50_paired_selected_outcome_collection import (
@@ -432,7 +440,7 @@ def test_v50_batched_probe_rows_are_token_scoped(tmp_path: Path) -> None:
 
 def test_v50_batched_engine_is_execution_only_and_protocol_is_unchanged() -> None:
     assert COLLECTION_PROTOCOL_VERSION == "v50-live-selected-event-cohort-v1"
-    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-timing-v2"
+    assert COLLECTION_ENGINE_VERSION == "v50-batched-nuplan-lossless-opt-v4"
     text = (ROOT / "bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py").read_text(encoding="utf-8")
     assert '"BDSE_FORCE_REPLAN_EVERY_TICK": "1"' in text
     assert '"BDSE_SHARE_MODEL_PER_PROCESS": "1"' in text
@@ -515,3 +523,135 @@ def test_v50_persistent_diag_writer_is_line_visible(tmp_path: Path) -> None:
     p = tmp_path / "live.jsonl"
     _append_diag_line(p, '{"x":1}')
     assert p.read_text(encoding="utf-8") == '{"x":1}\n'
+
+
+def test_v50_packed_runtime_batch_transfer_is_bit_exact_on_all_dtype_shapes() -> None:
+    arrays = {
+        "f": np.arange(24, dtype=np.float64).reshape(2, 3, 4) / 7.0,
+        "f32": np.arange(5, dtype=np.float32),
+        "i16": np.asarray([[1, -2], [3, 4]], dtype=np.int16),
+        "i64": np.asarray([5, 6, 7], dtype=np.int64),
+        "b": np.asarray([[True, False], [False, True]], dtype=bool),
+        "scalar": np.asarray(True),
+        "empty": np.zeros((0, 3), dtype=np.float32),
+    }
+    legacy = BDSEModel._runtime_arrays_to_torch_batch(arrays, torch.device("cpu"), packed_transfer=False)
+    packed = BDSEModel._runtime_arrays_to_torch_batch(arrays, torch.device("cpu"), packed_transfer=True)
+    assert list(legacy) == list(packed) == list(arrays)
+    for key in arrays:
+        assert legacy[key].dtype == packed[key].dtype
+        assert legacy[key].shape == packed[key].shape
+        assert legacy[key].stride() == packed[key].stride()
+        assert legacy[key].is_contiguous() and packed[key].is_contiguous()
+        assert torch.equal(legacy[key], packed[key])
+
+
+def _v50_ocrr_sc_for_projection() -> dict:
+    raw_names = list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
+    feature_names = [f"delta::{n}" for n in raw_names] + ["delta::support_logit"]
+    obs_names = VALUE_OBSERVABLE_NAMES + FSFR_OBSERVABLE_NAMES
+    return {
+        "feature_names": feature_names,
+        "feature_mean": [0.0] * 19,
+        "feature_std": [1.0] * 19,
+        "weights": [0.0] * 19,
+        "bias": 0.0,
+        "base_feature_names": raw_names,
+        "post_selection_value_enabled": True,
+        "post_selection_value_mode": "endpoint_potential_quality_operator_conditioned_risk_retention",
+        "post_selection_endpoint_feature_names": EPV_NAMES,
+        "post_selection_endpoint_feature_scale": [1.0] * 38,
+        "post_selection_endpoint_weights": [0.0] * 38,
+        "post_selection_endpoint_bias": 0.0,
+        "post_selection_observable_names": obs_names,
+        "post_selection_quality_observable_names": ["route_deviation_cost", "progress_deficit_cost", "global_comfort_cost"],
+        "post_selection_quality_observable_scale": [1.0] * 3,
+        "post_selection_quality_observable_weights": [0.3, -0.2, 0.1],
+        "selected_policy_risk_plan_response_names": ["fsfr_plan_1d_occupancy_cost"],
+        "selected_policy_risk_plan_response_scales": [1.0],
+        "selected_policy_risk_plan_response_weights": [0.4],
+        "selected_policy_risk_ego_reference_names": ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"],
+        "selected_policy_risk_ego_reference_scales": [1.0, 1.0],
+        "selected_policy_risk_ego_reference_weights": [0.4, 0.2],
+        "operator_conditioned_risk_retention": {
+            "feature_names": ["quality_value", "prospective_response_increment", "ego_reference_increment", "log_extremal_multiplicity"],
+            "aggregation": "sign_only",
+            "use_extremal_multiplicity": False,
+            "components": {
+                "sign_risk": {
+                    "model": "zero_bias_pairwise_selected_sign_risk",
+                    "feature_names": ["quality_value", "prospective_response_increment", "ego_reference_increment", "log_extremal_multiplicity"],
+                    "feature_mean": [0.0] * 4,
+                    "feature_std": [1.0] * 4,
+                    "weights": [-0.2, -0.3, -0.4, 0.0],
+                    "bias": 0.0,
+                    "lambda": 1.0,
+                    "fit_positive_score_mean": 0.0,
+                    "fit_positive_score_std": 1.0,
+                }
+            },
+            "retention_threshold": 0.7,
+        },
+    }
+
+
+def test_v50_fsfr_projection_exactly_reuses_full_plan1d_and_egoref_columns() -> None:
+    rt, bank, cfg = _v47_runtime(), _v47_bank(), _v47_cfg()
+    full, names = runtime_future_state_factorization_observable_costs(rt, bank, cfg)
+    requested = ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"]
+    projected, pnames = runtime_future_state_factorization_observable_costs(rt, bank, cfg, requested_names=requested)
+    assert pnames == requested
+    assert np.array_equal(projected[:, 0], full[:, names.index(requested[0])])
+    assert np.array_equal(projected[:, 1], full[:, names.index(requested[1])])
+
+
+def test_v50_eliding_closed_plan2d_keeps_frozen_ocrr_certificate_bit_exact() -> None:
+    sc = _v50_ocrr_sc_for_projection()
+    full_names = list(sc["post_selection_observable_names"])
+    full = np.arange(2 * len(full_names), dtype=np.float64).reshape(2, len(full_names)) / 17.0
+    elided = full.copy()
+    elided[:, full_names.index("fsfr_plan_2d_occupancy_cost")] = 0.0
+    raw_names = list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
+    feature_names = list(sc["feature_names"])
+    raw = np.zeros((2, len(raw_names)), dtype=np.float64)
+    sup = np.zeros(2, dtype=np.float64)
+    X = np.zeros((2, 19), dtype=np.float64)
+    mu = np.zeros(2, dtype=np.float64)
+    vf, ff, nf = _icer_post_selection_value(
+        1, mu, X, feature_names, sc, raw_feat=raw, raw_feature_names=raw_names, support_logits=sup,
+        legacy_action=0, value_observable_matrix=full, value_observable_names=full_names, selection_multiplicity=9,
+    )
+    ve, fe, ne = _icer_post_selection_value(
+        1, mu, X, feature_names, sc, raw_feat=raw, raw_feature_names=raw_names, support_logits=sup,
+        legacy_action=0, value_observable_matrix=elided, value_observable_names=full_names, selection_multiplicity=9,
+    )
+    assert ve == pytest.approx(vf, abs=0.0, rel=0.0)
+    assert np.array_equal(fe, ff)
+    assert ne == nf
+
+
+def test_v50_runtime_elide_fsfr2d_matches_full_observables_on_all_consumed_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    rt, bank, cfg = _v47_runtime(), _v47_bank(), _v47_cfg()
+    ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
+    sc = ic["selection_conditioned_intervention_recovery"]
+    sc.update({
+        "post_selection_value_mode": "endpoint_potential_quality_operator_conditioned_risk_retention",
+        "post_selection_observable_names": list(VALUE_OBSERVABLE_NAMES) + list(FSFR_OBSERVABLE_NAMES),
+        "post_selection_quality_observable_names": ["route_deviation_cost", "progress_deficit_cost", "global_comfort_cost"],
+        "selected_policy_risk_plan_response_names": ["fsfr_plan_1d_occupancy_cost"],
+        "selected_policy_risk_ego_reference_names": ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"],
+    })
+    monkeypatch.delenv("BDSE_V50_ELIDE_UNUSED_FSFR_2D", raising=False)
+    full, full_names = runtime_value_observable_costs(rt, bank, cfg)
+    monkeypatch.setenv("BDSE_V50_ELIDE_UNUSED_FSFR_2D", "1")
+    elided, names = runtime_value_observable_costs(rt, bank, cfg)
+    assert names == full_names
+    assert elided.shape == full.shape
+    dead = "fsfr_plan_2d_occupancy_cost"
+    dead_i = full_names.index(dead)
+    for i, name in enumerate(names):
+        if name == dead:
+            assert np.array_equal(elided[:, i], np.zeros((len(elided),), dtype=np.float64))
+        else:
+            assert np.array_equal(elided[:, i], full[:, i]), name
+    assert np.any(full[:, dead_i] != 0.0)

@@ -42,7 +42,23 @@ HARD_METRICS = [
     "driving_direction_compliance",
 ]
 COLLECTION_PROTOCOL_VERSION = "v50-live-selected-event-cohort-v1"
-COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-timing-v2"
+COLLECTION_ENGINE_VERSION = "v50-batched-nuplan-lossless-opt-v4"
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _execution_flags() -> dict[str, bool]:
+    """Execution-only switches; none changes the V50 scientific protocol."""
+    return {
+        "timing_telemetry": _env_flag("V50_TIMING_TELEMETRY", False),
+        "packed_runtime_batch_transfer": _env_flag("V50_PACKED_RUNTIME_BATCH_TRANSFER", True),
+        "elide_unused_fsfr_2d": _env_flag("V50_ELIDE_UNUSED_FSFR_2D", True),
+    }
 NO_TREATMENT_SCORE_TOL = 1.0e-9
 
 
@@ -729,6 +745,8 @@ def _run_arm_batch(
         "scenario_filter.shuffle=false", "scenario_filter.log_names=null",
         "worker.max_workers=1", "run_metric=true", "~callback.simulation_log_callback",
     ]
+    flags = _execution_flags()
+    timing_enabled = bool(flags["timing_telemetry"])
     env = os.environ.copy()
     env.update({
         "CUDA_VISIBLE_DEVICES": str(gpu),
@@ -736,8 +754,14 @@ def _run_arm_batch(
         "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
         "BDSE_REQUIRE_SCENARIO_FOR_DIAG": "1",
         "BDSE_SELECTED_OUTCOME_DIAG_ONLY": "1",
-        "BDSE_V50_TIMING_TELEMETRY": "1",
-        "BDSE_PROFILE_CLOSED_LOOP": "1",
+        # V50 proof evidence is always written; expensive per-tick timing is
+        # execution-only and defaults OFF in the optimized engine.
+        "BDSE_V50_TIMING_TELEMETRY": "1" if timing_enabled else "0",
+        "BDSE_PROFILE_CLOSED_LOOP": "1" if timing_enabled else "0",
+        # Exact-value execution optimizations.  Both can be disabled to replay
+        # the legacy implementation without changing the scientific config.
+        "BDSE_PACKED_RUNTIME_BATCH_TRANSFER": "1" if flags["packed_runtime_batch_transfer"] else "0",
+        "BDSE_V50_ELIDE_UNUSED_FSFR_2D": "1" if flags["elide_unused_fsfr_2d"] else "0",
         "BDSE_REPLAN_INTERVAL_TICKS": "1",
         "BDSE_FORCE_REPLAN_EVERY_TICK": "1",
         # This is now useful: all planners in the batch reuse one read-only CUDA
@@ -753,16 +777,21 @@ def _run_arm_batch(
     heartbeat_s = max(float(args.heartbeat_seconds), 1.0)
     with log.open("w", encoding="utf-8", buffering=1) as f:
         proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
-        tracker = _BatchProgressTracker(role=role, diag=diag, log=log, telemetry=telemetry, started=started, gpu=str(gpu))
-        while True:
-            try:
-                returncode = proc.wait(timeout=heartbeat_s)
-                break
-            except subprocess.TimeoutExpired:
-                snap = tracker.snapshot(pid=proc.pid, final=False)
-                print(_heartbeat_line(snap), flush=True)
-        snap = tracker.snapshot(pid=proc.pid, final=True)
-        print(_heartbeat_line(snap), flush=True)
+        if timing_enabled:
+            tracker = _BatchProgressTracker(role=role, diag=diag, log=log, telemetry=telemetry, started=started, gpu=str(gpu))
+            while True:
+                try:
+                    returncode = proc.wait(timeout=heartbeat_s)
+                    break
+                except subprocess.TimeoutExpired:
+                    snap = tracker.snapshot(pid=proc.pid, final=False)
+                    print(_heartbeat_line(snap), flush=True)
+            snap = tracker.snapshot(pid=proc.pid, final=True)
+            print(_heartbeat_line(snap), flush=True)
+        else:
+            # No parent polling, nvidia-smi sampling or per-tick timing payload.
+            # Strict selected-outcome probe rows are still emitted every tick.
+            returncode = proc.wait()
     wall = time.perf_counter() - started
     metric_started = time.perf_counter()
     text = log.read_text(encoding="utf-8", errors="replace")
@@ -932,6 +961,18 @@ def main() -> None:
                     "V50 paired output predates the frozen batched-engine provenance field requested_batch_size. "
                     "Remove only the V50 paired_train directory and rerun."
                 )
+            flags_now = _execution_flags()
+            for field, key in [
+                ("execution_packed_runtime_batch_transfer", "packed_runtime_batch_transfer"),
+                ("execution_elide_unused_fsfr_2d", "elide_unused_fsfr_2d"),
+                ("execution_timing_telemetry", "timing_telemetry"),
+            ]:
+                prior = str(r.get(field, "")).strip()
+                if not prior or bool(int(float(prior))) != bool(flags_now[key]):
+                    raise RuntimeError(
+                        f"V50 paired output execution setting mismatch for {field}: prior={prior or 'missing'} current={int(flags_now[key])}. "
+                        "Remove only the V50 paired_train directory and rerun; do not mix execution engines/settings."
+                    )
             existing[str(r["scenario_token"])] = dict(r)
     rows: list[dict[str, Any]] = [existing[t] for t in tokens if t in existing]
 
@@ -996,6 +1037,9 @@ def main() -> None:
                 "scenario_token": token,
                 **ident,
                 "collection_engine_version": COLLECTION_ENGINE_VERSION,
+                "execution_packed_runtime_batch_transfer": int(_execution_flags()["packed_runtime_batch_transfer"]),
+                "execution_elide_unused_fsfr_2d": int(_execution_flags()["elide_unused_fsfr_2d"]),
+                "execution_timing_telemetry": int(_execution_flags()["timing_telemetry"]),
                 "challenge": a.challenge,
                 "control_score": cs,
                 "treatment_score": ts,
@@ -1040,6 +1084,7 @@ def main() -> None:
                 json.dumps({
                     "completed": len(ordered_now), "expected": len(tokens), "challenge": a.challenge,
                     "collection_engine_version": COLLECTION_ENGINE_VERSION, "batch_size": batch_size,
+                    "execution_flags": _execution_flags(),
                 }, indent=2),
                 encoding="utf-8",
             )
@@ -1052,6 +1097,7 @@ def main() -> None:
         "frozen_proposal_audit_sha256": _sha(a.frozen_proposal_audit),
         "collection_protocol_version": COLLECTION_PROTOCOL_VERSION,
         "collection_engine_version": COLLECTION_ENGINE_VERSION,
+        "execution_flags": _execution_flags(),
         "batch_size": int(a.batch_size),
         "nuplan_process_count_per_arm": int(math.ceil(len(tokens) / max(int(a.batch_size), 1))),
         "exact_token_db_index_enabled": bool(token_db_index is not None),

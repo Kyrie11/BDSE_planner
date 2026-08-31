@@ -1,0 +1,91 @@
+V64.3.50 EAF-ICER-SIOR LOSSLESS RUNTIME OPTIMIZATION
+Date: 2026-08-30
+
+Scientific status
+-----------------
+NO NEW SCIENTIFIC CLAIM. V50 mechanism, paired estimand, Q/P/E state, selector,
+treatment assignment, official metrics and preregistered GO/STOP gates are unchanged.
+
+Execution provenance
+--------------------
+Scientific protocol: v50-live-selected-event-cohort-v1 (unchanged)
+Execution engine:    v50-batched-nuplan-lossless-opt-v4
+Timing telemetry:    OFF by default; selected_outcome_probe remains per-tick mandatory
+Packed H2D:          ON by default
+Unused V47 PLAN-2D:  elided in V50 OCRR/SIOR runtime by default
+
+Science locks
+-------------
+PASS V48 OCRR science lock: 5/5
+PASS bdse/planner/tournament.py frozen SHA256:
+     291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044
+
+Syntax / compile
+----------------
+PASS python -m compileall -q bdse
+PASS bash -n RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+Tests
+-----
+PASS V50 + V48.2 science-lock focused: 36/36
+PASS V13->V50 targeted regression: 275/275 (2 historical Transformer warnings)
+PASS full repository, 126 test files in four exhaustive shards:
+     shard0 158/158
+     shard1 152/152
+     shard2 161/161
+     shard3 141/141
+     total  612/612
+No new warning class observed; warnings are historical PyTorch Transformer nested-tensor warnings.
+
+Lossless-equivalence gates
+--------------------------
+PASS packed runtime transfer vs legacy: exact key order, dtype, shape, stride, contiguity and torch.equal values for mixed float/int/bool/scalar/empty arrays.
+PASS V47 requested PLAN-1D and EGO-REF FSFR columns are np.array_equal to historical full Kx3 calculation.
+PASS replacing only the non-consumed fsfr_plan_2d_occupancy_cost slot leaves frozen OCRR certificate/value feature/name outputs bit-exact.
+PASS real runtime_value_observable_costs test: complete historical schema preserved; all columns except intentionally dead PLAN-2D are np.array_equal to historical output; all Q/P/E-consumed columns exact.
+
+Representative local block benchmark
+------------------------------------
+Synthetic K=64, N=32, T=81 CPU case:
+full value-observable median   0.2826 s
+V50 PLAN-2D-elided median      0.1392 s
+block speedup                  2.03x
+This is not an end-to-end server speedup claim.
+
+Measured server timing target from uploaded telemetry
+-----------------------------------------------------
+CONTROL final mean planner total       2.9616 s/tick
+TREATMENT final mean planner total     2.9193 s/tick
+CONTROL certificate stages             1.9576 s/tick
+TREATMENT certificate stages           1.9365 s/tick
+CONTROL model_make_batch                0.4606 s/tick
+TREATMENT model_make_batch              0.4625 s/tick
+V50 probe instrumentation               ~0.00013 s/tick
+Therefore heartbeat removal alone is not treated as the performance solution.
+
+Explicitly unchanged
+--------------------
+- native reactive CONTROL and TREATMENT simulations
+- both paired arms
+- every-tick replanning and selector execution
+- full-set live RSMR winner
+- first-live-winner one-shot treatment
+- live proposal fingerprint/semantic pair checks
+- live Q/P/E values
+- no-live-proposal full-trajectory equivalence
+- official nuPlan score + four hard metrics
+- no rerank / no second-best / no fallback
+- SIOR loss/lambda/calibration/gates
+- V48 tournament science-locked bytes
+
+Run
+---
+bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+Re-enable timing
+----------------
+V50_TIMING_TELEMETRY=1 bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+
+Legacy execution replay (same science)
+--------------------------------------
+V50_PACKED_RUNTIME_BATCH_TRANSFER=0 V50_ELIDE_UNUSED_FSFR_2D=0 V50_TIMING_TELEMETRY=0 bash RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh

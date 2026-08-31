@@ -1,0 +1,12 @@
+V64.3.50 lossless runtime optimization — changed files
+
+M	ALGORITHM_CHANGELOG.md
+M	RUN_V64_3_50_EAF_ICER_SIOR_SCREEN_2GPU.sh
+A	V64_3_50_LOSSLESS_OPT_ENGINEERING_VALIDATION.txt
+A	V64_3_50_LOSSLESS_RUNTIME_OPTIMIZATION.md
+M	V64_3_50_SOURCE_MANIFEST.sha256
+M	bdse/model/bdse_model.py
+M	bdse/planner/future_state_factorization.py
+M	bdse/planner/value_observables.py
+M	bdse/tests/test_v64_3_50_eaf_icer_sior.py
+M	bdse/tools/run_v64_3_50_paired_selected_outcome_collection.py
