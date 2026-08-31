@@ -1,0 +1,354 @@
+{
+  "TRAIN": {
+    "ego_ref": {
+      "catastrophic_count": 9,
+      "no_positive_opportunity_false_intervention_count": 45,
+      "no_positive_opportunity_false_intervention_rate": 0.21634615384615385,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 136,
+      "positive_capture_rate": 0.23693379790940766,
+      "positive_opportunity_proposal_rate": 0.3588850174216028,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 206,
+      "positive_opportunity_selected_precision": 0.6601941747572816,
+      "selected_count": 251,
+      "selected_positive_count": 136,
+      "selected_precision": 0.5418326693227091,
+      "teacher_improvement_sum": 59.53269591505746,
+      "teacher_improvement_worst": -1.233023564266786,
+      "teacher_negative_rms": 0.2233142468559618
+    },
+    "plan_control": {
+      "catastrophic_count": 9,
+      "no_positive_opportunity_false_intervention_count": 38,
+      "no_positive_opportunity_false_intervention_rate": 0.18269230769230768,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 121,
+      "positive_capture_rate": 0.21080139372822299,
+      "positive_opportunity_proposal_rate": 0.3118466898954704,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 179,
+      "positive_opportunity_selected_precision": 0.6759776536312849,
+      "selected_count": 217,
+      "selected_positive_count": 121,
+      "selected_precision": 0.5576036866359447,
+      "teacher_improvement_sum": 56.55117310290402,
+      "teacher_improvement_worst": -1.233023564266786,
+      "teacher_negative_rms": 0.24017259256907322
+    },
+    "rsmr": {
+      "catastrophic_count": 28,
+      "no_positive_opportunity_false_intervention_count": 107,
+      "no_positive_opportunity_false_intervention_rate": 0.5144230769230769,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 221,
+      "positive_capture_rate": 0.38501742160278746,
+      "positive_opportunity_proposal_rate": 0.6881533101045296,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 395,
+      "positive_opportunity_selected_precision": 0.5594936708860759,
+      "selected_count": 502,
+      "selected_positive_count": 221,
+      "selected_precision": 0.4402390438247012,
+      "teacher_improvement_sum": 43.29405361274824,
+      "teacher_improvement_worst": -3.806486467696913,
+      "teacher_negative_rms": 0.3556880321206127
+    },
+    "sign_mult": {
+      "catastrophic_count": 14,
+      "no_positive_opportunity_false_intervention_count": 74,
+      "no_positive_opportunity_false_intervention_rate": 0.3557692307692308,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 204,
+      "positive_capture_rate": 0.3554006968641115,
+      "positive_opportunity_proposal_rate": 0.6358885017421603,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 365,
+      "positive_opportunity_selected_precision": 0.5589041095890411,
+      "selected_count": 439,
+      "selected_positive_count": 204,
+      "selected_precision": 0.4646924829157175,
+      "teacher_improvement_sum": 62.63414076193869,
+      "teacher_improvement_worst": -2.020414070067741,
+      "teacher_negative_rms": 0.2298850424724233
+    },
+    "sign_nomult": {
+      "catastrophic_count": 18,
+      "no_positive_opportunity_false_intervention_count": 78,
+      "no_positive_opportunity_false_intervention_rate": 0.375,
+      "no_positive_opportunity_scene_count": 208,
+      "path_nonharmful": false,
+      "positive_capture_count": 187,
+      "positive_capture_rate": 0.32578397212543553,
+      "positive_opportunity_proposal_rate": 0.5801393728222997,
+      "positive_opportunity_scenes": 574,
+      "positive_opportunity_selected_count": 333,
+      "positive_opportunity_selected_precision": 0.5615615615615616,
+      "selected_count": 411,
+      "selected_positive_count": 187,
+      "selected_precision": 0.45498783454987834,
+      "teacher_improvement_sum": 53.49557781828986,
+      "teacher_improvement_worst": -2.0207331793509424,
+      "teacher_negative_rms": 0.2706549580441637
+    }
+  },
+  "audit": "v64_3_48_2_uploaded_result_causal_audit_for_v64_3_49",
+  "diagnostics": {
+    "fresh_A": {
+      "K_bad_mean": 22.527027027027028,
+      "K_good_mean": 22.5,
+      "ego_auc": 0.5421303656597775,
+      "logK_auc": 0.49761526232114467,
+      "mult_auc": 0.537758346581876,
+      "mult_only": {
+        "catastrophe": 1,
+        "material_positive": 0,
+        "n": 4,
+        "positive": 1,
+        "sum": -1.258411346924135
+      },
+      "nomult_auc": 0.5914149443561209,
+      "nomult_only": {
+        "catastrophe": 0,
+        "material_positive": 2,
+        "n": 13,
+        "positive": 4,
+        "sum": 2.282756790768097
+      }
+    },
+    "fresh_B": {
+      "K_bad_mean": 21.984615384615385,
+      "K_good_mean": 20.84090909090909,
+      "ego_auc": 0.637062937062937,
+      "logK_auc": 0.5552447552447553,
+      "mult_auc": 0.6181818181818182,
+      "mult_only": {
+        "catastrophe": 0,
+        "material_positive": 0,
+        "n": 2,
+        "positive": 2,
+        "sum": 0.00010472770447201869
+      },
+      "nomult_auc": 0.6132867132867132,
+      "nomult_only": {
+        "catastrophe": 0,
+        "material_positive": 0,
+        "n": 14,
+        "positive": 4,
+        "sum": 0.0029586436047435924
+      }
+    },
+    "oracle_threshold": {
+      "A": {
+        "feasible_threshold_count": 0,
+        "required_positive": 32,
+        "sign_mult_zero_cat_capture": 0.03333333333333333,
+        "sign_mult_zero_cat_positive": 3,
+        "sign_mult_zero_cat_selected": 4
+      },
+      "B": {
+        "feasible_threshold_count": 0,
+        "required_positive": 42,
+        "sign_mult_zero_cat_capture": 0.011627906976744186,
+        "sign_mult_zero_cat_positive": 1,
+        "sign_mult_zero_cat_selected": 1
+      }
+    },
+    "train_K": {
+      "bad_mean": 12.08,
+      "good_mean": 13.84,
+      "interpretation": "TRAIN learned smaller-K-is-riskier association"
+    }
+  },
+  "fresh_A": {
+    "ego_ref": {
+      "catastrophic_count": 2,
+      "no_positive_opportunity_false_intervention_count": 8,
+      "positive_capture_rate": 0.1322314049586777,
+      "selected_count": 48,
+      "selected_positive_count": 16,
+      "teacher_improvement_sum": 2.0231005841905545,
+      "teacher_negative_rms": 0.22728966996520955
+    },
+    "plan_control": {
+      "catastrophic_count": 1,
+      "no_positive_opportunity_false_intervention_count": 7,
+      "positive_capture_rate": 0.11570247933884298,
+      "selected_count": 39,
+      "selected_positive_count": 14,
+      "teacher_improvement_sum": 3.2579987776285195,
+      "teacher_negative_rms": 0.15689275637547306
+    },
+    "quality": {
+      "catastrophic_count": 1,
+      "no_positive_opportunity_false_intervention_count": 3,
+      "positive_capture_rate": 0.12396694214876033,
+      "selected_count": 28,
+      "selected_positive_count": 15,
+      "teacher_improvement_sum": 2.457599692859356,
+      "teacher_negative_rms": 0.17514355967035566
+    },
+    "rsmr": {
+      "catastrophic_count": 6,
+      "no_positive_opportunity_false_intervention_count": 18,
+      "positive_capture_rate": 0.2809917355371901,
+      "selected_count": 108,
+      "selected_positive_count": 34,
+      "teacher_improvement_sum": 1.0145382656794268,
+      "teacher_negative_rms": 0.2519173053929979
+    },
+    "sign_mult": {
+      "catastrophic_count": 5,
+      "no_positive_opportunity_false_intervention_count": 10,
+      "positive_capture_rate": 0.2231404958677686,
+      "selected_count": 86,
+      "selected_positive_count": 27,
+      "teacher_improvement_sum": -1.4678025987180439,
+      "teacher_negative_rms": 0.25895747931520147
+    },
+    "sign_nomult": {
+      "catastrophic_count": 4,
+      "no_positive_opportunity_false_intervention_count": 15,
+      "positive_capture_rate": 0.24793388429752067,
+      "selected_count": 95,
+      "selected_positive_count": 30,
+      "teacher_improvement_sum": 2.0733655389741874,
+      "teacher_negative_rms": 0.21028312911267272
+    }
+  },
+  "fresh_B": {
+    "ego_ref": {
+      "catastrophic_count": 4,
+      "no_positive_opportunity_false_intervention_count": 8,
+      "positive_capture_rate": 0.2283464566929134,
+      "selected_count": 57,
+      "selected_positive_count": 29,
+      "teacher_improvement_sum": 5.512739046600751,
+      "teacher_negative_rms": 0.24542274019920793
+    },
+    "plan_control": {
+      "catastrophic_count": 4,
+      "no_positive_opportunity_false_intervention_count": 6,
+      "positive_capture_rate": 0.2047244094488189,
+      "selected_count": 50,
+      "selected_positive_count": 26,
+      "teacher_improvement_sum": 5.497838671496879,
+      "teacher_negative_rms": 0.2620467504612542
+    },
+    "quality": {
+      "catastrophic_count": 3,
+      "no_positive_opportunity_false_intervention_count": 3,
+      "positive_capture_rate": 0.16535433070866143,
+      "selected_count": 37,
+      "selected_positive_count": 21,
+      "teacher_improvement_sum": 4.561343180997373,
+      "teacher_negative_rms": 0.29445941445121604
+    },
+    "rsmr": {
+      "catastrophic_count": 8,
+      "no_positive_opportunity_false_intervention_count": 23,
+      "positive_capture_rate": 0.3464566929133858,
+      "selected_count": 109,
+      "selected_positive_count": 44,
+      "teacher_improvement_sum": 0.076468819466609,
+      "teacher_negative_rms": 0.3247007040960567
+    },
+    "sign_mult": {
+      "catastrophic_count": 6,
+      "no_positive_opportunity_false_intervention_count": 12,
+      "positive_capture_rate": 0.30708661417322836,
+      "selected_count": 87,
+      "selected_positive_count": 39,
+      "teacher_improvement_sum": 3.3763381517164324,
+      "teacher_negative_rms": 0.2578289293588408
+    },
+    "sign_nomult": {
+      "catastrophic_count": 6,
+      "no_positive_opportunity_false_intervention_count": 18,
+      "positive_capture_rate": 0.3228346456692913,
+      "selected_count": 99,
+      "selected_positive_count": 41,
+      "teacher_improvement_sum": 3.3791920676167058,
+      "teacher_negative_rms": 0.24169834364800394
+    }
+  },
+  "mechanism_judgment": {
+    "V48_sign_mult_OCRR": "FALSIFIED_on_double_untouched_fresh",
+    "dominant_bottleneck": "selection_regime_transportability_and_post_selection_outcome_law_identification",
+    "multiplicity_logK": "CLOSE_as_core_operator_conditioning_variable",
+    "sign_nomult_observational_selected_risk": "not_deployment_sufficient",
+    "valid_conceptual_shift": "post_selection decision functional remains the correct problem class"
+  },
+  "preregistered_verdict": {
+    "A_direct_capture_preserve": 0.3254437869822485,
+    "A_direct_capture_sign_mult": 0.14792899408284024,
+    "A_endpoint_noninferior": false,
+    "A_engineering_valid": true,
+    "A_sign_mult_gate": {
+      "existence_and_capture": false,
+      "hard_tail": false,
+      "pass": false
+    },
+    "B_direct_capture_preserve": 0.3493975903614458,
+    "B_direct_capture_sign_mult": 0.21686746987951808,
+    "B_endpoint_noninferior": false,
+    "B_engineering_valid": true,
+    "B_sign_mult_gate": {
+      "existence_and_capture": false,
+      "hard_tail": false,
+      "pass": false
+    },
+    "double_fresh": {
+      "audit": "v64_3_48_eaf_icer_ocrr_double_fresh",
+      "next_action": "STOP_no_promotion_do_not_pool_A_B_or_tune",
+      "pass": false,
+      "preferred_arm": "sign_mult",
+      "same_preregistered_arm_on_both_splits": true,
+      "split_A_pass": false,
+      "split_B_pass": false
+    }
+  },
+  "reliability": {
+    "A_B_overlap": 0,
+    "A_B_size": [
+      500,
+      500
+    ],
+    "decision": "PASS_for_scientific_attribution",
+    "double_fresh_screen_sha256": "f22d6f75f67df35188e370c2a8073c922857dc37b86817669a480a1e078b3df4",
+    "fit_report_sha256": "000ddef7523f6e79004c49f7d21c9f8e83b243162e72d4fd7fec4db5e8330317",
+    "fresh1000_ledger_sha256": "d9822a47a2442c3c0591834b7e00cea70a8f30f393379487bc1761728f6fb9dc",
+    "fresh_selection_count": 1000,
+    "fresh_selection_label_free": true,
+    "fresh_selection_old_consumed_overlap": 0,
+    "ocrr_science_lock_check": "5/5 PASS",
+    "ocrr_science_lock_entries": 5,
+    "official_closed_loop_consumed": false,
+    "source_manifest_entries": 900,
+    "source_manifest_local_check": "900/900 PASS",
+    "targeted_regression_independent_local": "232/232 PASS",
+    "targeted_regression_server": "232/232 PASS",
+    "v48_2_source_manifest_file_sha256": "2ce9884305a6a2b551fcdb0ec2a70da69b1ff4b58be2079785abfbeaa1a71bbb",
+    "v48_ocrr_science_lock_file_sha256": "01b876b7951b90a5c18983ce54c12fd66a9cbda6baa934652ea8a5a654751cb0"
+  },
+  "v49_preregistered_branch": {
+    "calibration": "unchanged capture-derived V48 split conformal threshold on full-set selected positives",
+    "causal_arms": [
+      "OBS-SIGN exact V48 SIGN-NOMULT replay",
+      "SIIR same runtime/loss/state with interventional TRAIN selection measure"
+    ],
+    "failure_stop": "if nested TRAIN fails, close current offline selected-risk family before fresh; if either fresh split fails, no tuning/no pooling and close family",
+    "fresh_gate": "unchanged strict V48 fresh mechanism + direct capture + endpoint + containment gates on independent A500 and B500",
+    "identification_gate": "SIIR AUC > OBS-SIGN and > -EGOREF aggregate and in >=4/5 folds versus both",
+    "loss": "unchanged V48 zero-bias pairwise sign-risk, lambda=1",
+    "name": "V64.3.49 EAF-ICER-SIIR \u2014 Selection-Interventional Invariant Retention",
+    "only_scientific_change": "TRAIN selected-risk identification population generated by fixed label-free hash-prefix selection intervention",
+    "runtime_action": "same winner or incumbent only",
+    "runtime_selector": "unchanged full-set frozen RSMR winner",
+    "runtime_state": "[Q, P-Q, E-P]; no K/multiplicity"
+  }
+}

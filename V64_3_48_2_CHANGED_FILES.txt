@@ -1,0 +1,18 @@
+Engineering/provenance repair relative to the uploaded current V64.3.48 source package:
+- RUN_V64_3_48_2_EAF_ICER_OCRR_SCREEN_2GPU.sh (new repaired launcher)
+- V64_3_48_2_SOURCE_MANIFEST.sha256 (new current-release execution-stack lock)
+- V64_3_48_OCRR_SCIENCE_LOCK.sha256 (new lock to original preregistered OCRR core)
+- bdse/configs/v64_3_48_consumed_fresh1000_tokens.txt (old A/B permanent consumption ledger)
+- bdse/tests/test_v64_3_48_2_eaf_icer_ocrr_provenance_repair.py (new provenance tests)
+- V64_SAQA_BCC_NEXT_COMMANDS.sh (restored fail-closed historical compatibility entrypoint)
+- ALGORITHM_CHANGELOG.md (engineering STOP + repair entry appended)
+- V64_3_48_PROVENANCE_FAILURE_AND_V64_3_48_2_REPAIR.md (audit/report)
+- NEXT_COMMANDS_V64_3_48_2_EAF_ICER_OCRR.txt (rerun command)
+- V64_3_48_2_ENGINEERING_VALIDATION.txt (validation record)
+- V64_3_48_2_CHANGED_FILES.txt (this file)
+
+Historical safety changes:
+- original V64.3.48 launcher renamed to HISTORICAL_RUN_V64_3_48_EAF_ICER_OCRR_SCREEN_2GPU.sh.disabled and made non-executable;
+- original preregistered manifest preserved as V64_3_48_ORIGINAL_PREREGISTERED_SOURCE_MANIFEST.sha256.
+
+OCRR scientific-core files are not modified.

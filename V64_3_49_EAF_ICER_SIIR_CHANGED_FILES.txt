@@ -1,0 +1,31 @@
+V64.3.49 EAF-ICER-SIIR changed / added files
+
+Scientific implementation
+- bdse/planner/selection_interventional_risk_retention.py
+- bdse/tools/fit_v64_3_49_eaf_icer_siir.py
+- bdse/tools/check_v64_3_49_eaf_icer_siir_split.py
+- bdse/tools/check_v64_3_49_eaf_icer_siir_screen.py
+- bdse/tests/test_v64_3_49_eaf_icer_siir.py
+- RUN_V64_3_49_EAF_ICER_SIIR_SCREEN_2GPU.sh
+
+Fresh/provenance protection
+- bdse/configs/v64_3_48_2_consumed_fresh1000_tokens.txt
+- V64_3_49_SOURCE_MANIFEST.sha256
+
+Analysis / protocol / handoff
+- V64_3_48_2_RESULT_POSTMORTEM_AND_V64_3_49_SIIR_DESIGN.md
+- V64_3_48_2_UPLOADED_RESULT_CAUSAL_AUDIT_FOR_V64_3_49.json
+- V64_3_48_2_FRESH_CAUSAL_DIAGNOSTICS_FOR_V64_3_49.txt
+- V64_3_48_2_FRESH_SCENE_LEVEL_CAUSAL_AUDIT_FOR_V64_3_49.csv
+- V64_3_48_2_TRAIN_RISK_GROUP_DIAGNOSTICS_FOR_V64_3_49.txt
+- V64_3_48_2_ORACLE_THRESHOLD_DIAGNOSTICS_FOR_V64_3_49.txt
+- V64_3_49_ENGINEERING_VALIDATION.txt
+- NEXT_COMMANDS_V64_3_49_EAF_ICER_SIIR.txt
+- ALGORITHM_CHANGELOG.md (appended V48.2 postmortem + V49 preregistration)
+
+Explicitly unchanged scientific runtime core
+- bdse/planner/tournament.py (V48 science-lock hash unchanged)
+- bdse/planner/operator_conditioned_risk_retention.py
+- bdse/tools/fit_v64_3_48_eaf_icer_ocrr.py
+- bdse/tools/check_v64_3_48_eaf_icer_ocrr_split.py
+- bdse/tools/check_v64_3_48_eaf_icer_ocrr_screen.py

@@ -1,0 +1,48 @@
+V64.3.49 EAF-ICER-SIIR ENGINEERING VALIDATION
+
+Scientific status
+-----------------
+NOT RUN / NOT CLAIMED.  The uploaded conversation does not contain the complete server V44/V47 historical output roots, caches, and checkpoint required to execute the V49 nested TRAIN scientific fit.  The launcher is fail-closed and will stop before new fresh selection unless nested TRAIN passes.
+
+Implementation contract
+-----------------------
+PASS  V48.2 reliability prerequisite encoded as exact fit/screen/fresh-ledger hashes.
+PASS  V48 OCRR 5-file science lock is rechecked by the V49 launcher.
+PASS  V49 current execution-stack manifest: 907/907 files.
+PASS  V48 science-locked tournament.py unchanged: 291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044.
+PASS  Runtime deployment reuses V48 NOMULT path; multiplicity coordinate is forcibly zeroed and test verifies output invariance for K=2 vs K=999.
+PASS  TRAIN selection intervention API accepts no teacher outcome/value label.
+PASS  One fixed hash-prefix intervention per scene; no intervention sweep.
+PASS  Full-set RSMR winner remains the only deployable challenger; same-winner-or-incumbent only.
+PASS  Original V48 consumed fresh1000 and V48.2 consumed fresh1000 both excluded from V49 fresh selection.
+PASS  V49 nested TRAIN failure exits before fresh token selection.
+
+Syntax / compile
+----------------
+PASS  python -m py_compile on all four V49 modules.
+PASS  python -m compileall -q bdse.
+PASS  bash -n RUN_V64_3_49_EAF_ICER_SIIR_SCREEN_2GPU.sh.
+
+Tests
+-----
+PASS  V48 + V48.2 provenance + V49 focused: 17/17.
+PASS  V13->V49 targeted regression: 242/242 (2 historical warnings).
+PASS  Full repository split into four exhaustive test-file shards:
+      shard0 162/162
+      shard1 147/147
+      shard2 128/128
+      shard3 142/142
+      total 579/579 across 125 test files.
+      Warnings are historical Transformer nested-tensor warnings; no new warning class observed.
+
+Manifest
+--------
+V64_3_49_SOURCE_MANIFEST.sha256 entries: 907
+V64_3_49_SOURCE_MANIFEST.sha256 SHA256: 0baf1f02cdd774ae2754d8bf74f4a64583376c1f04e29dada9e84503ff01f48c
+sha256sum -c V64_3_49_SOURCE_MANIFEST.sha256: 907/907 PASS
+sha256sum -c V64_3_48_OCRR_SCIENCE_LOCK.sha256: 5/5 PASS
+
+Preregistered scientific stop
+-----------------------------
+If SIIR does not beat both OBS-SIGN and -EGO-REF risk AUC in aggregate and >=4/5 folds versus each, or if the unchanged TRAIN deployment gate fails, STOP before fresh selection and close the current offline selected-risk family.
+If TRAIN passes but either untouched A500 or B500 fails, STOP; never pool A/B and never tune intervention seed/prefix law, K transform, loss, lambda, class/catastrophe weighting, calibration/threshold, or Q/P/E features from fresh.
