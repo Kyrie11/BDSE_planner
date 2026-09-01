@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
+BDSE_ROOT="$(cd "$BDSE_ROOT" && pwd)"
+if [[ "$BDSE_ROOT" != "$SCRIPT_DIR" ]]; then
+  echo "BDSE_ROOT must be the repository root containing this launcher: script=$SCRIPT_DIR BDSE_ROOT=$BDSE_ROOT" >&2
+  exit 2
+fi
+cd "$BDSE_ROOT"
+export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
 
 export NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}"
 export NUPLAN_MAP_ROOT="${NUPLAN_MAP_ROOT:-$NUPLAN_ROOT/maps}"
@@ -8,8 +17,8 @@ export NUPLAN_EXP_ROOT="${NUPLAN_EXP_ROOT:-$NUPLAN_ROOT/exp}"
 # User-provided raw nuPlan v1.1 TEST split: .db files are directly in this folder.
 export NUPLAN_TEST_DB_ROOT="${NUPLAN_TEST_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/test}"
 export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2}"
-export EXTERNAL_OUT_ROOT="${EXTERNAL_OUT_ROOT:-outputs/external_fixed_budget}"
-export EXTERNAL_CL_OUT_ROOT="${EXTERNAL_CL_OUT_ROOT:-outputs/closed_loop/external_fixed_budget_test}"
+export EXTERNAL_OUT_ROOT="${EXTERNAL_OUT_ROOT:-$OUTPUTS_ROOT/external_fixed_budget}"
+export EXTERNAL_CL_OUT_ROOT="${EXTERNAL_CL_OUT_ROOT:-$OUTPUTS_ROOT/closed_loop/external_fixed_budget_test}"
 export GPUS="${GPUS:-0,1}"
 export BUDGETS="${BUDGETS:-8 16 24}"
 export PROPOSAL_TOP_M="${PROPOSAL_TOP_M:-24}"

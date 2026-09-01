@@ -10,18 +10,25 @@ set -euo pipefail
 #   closed-loop outcomes for the *actual frozen full-set RSMR proposal* versus
 #   the same incumbent, then fit the unchanged low-capacity Q/P/E risk law.
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT_DIR"
-export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
+BDSE_ROOT="$(cd "$BDSE_ROOT" && pwd)"
+if [[ "$BDSE_ROOT" != "$SCRIPT_DIR" ]]; then
+  echo "STOP V50: BDSE_ROOT must be the directory containing this launcher: script=$SCRIPT_DIR BDSE_ROOT=$BDSE_ROOT" >&2
+  exit 2
+fi
+cd "$BDSE_ROOT"
+export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
 
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
-OUT_ROOT="${OUT_ROOT:-outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1}"
-V49_ROOT="${V49_ROOT:-outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
+OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1}"
+V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
 BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
 NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
 NUPLAN_DB_SPLIT_ROOT="${NUPLAN_DB_SPLIT_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits}"
-EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
+EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
 EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/train_log.jsonl}"
 WORKERS_PER_ARM="${WORKERS_PER_ARM:-4}"
 # Engineering-only speed/resume knobs. They do not change the 502-scene

@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; cd "$SCRIPT_DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
+BDSE_ROOT="$(cd "$BDSE_ROOT" && pwd)"
+if [[ "$BDSE_ROOT" != "$SCRIPT_DIR" ]]; then
+  echo "BDSE_ROOT must be the repository root containing this launcher: script=$SCRIPT_DIR BDSE_ROOT=$BDSE_ROOT" >&2
+  exit 2
+fi
+cd "$BDSE_ROOT"
+export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
 
 # Two-A30 optimized training: GPU0/GPU1 each own one model for all budgets,
 # then the next model pair starts.  This avoids model/GPU migration and keeps
 # disk/cache access predictable.
 export BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
 export BDSE_VAL_CACHE="${BDSE_VAL_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}"
-export EXTERNAL_OUT_ROOT="${EXTERNAL_OUT_ROOT:-outputs/external_fixed_budget}"
+export EXTERNAL_OUT_ROOT="${EXTERNAL_OUT_ROOT:-$OUTPUTS_ROOT/external_fixed_budget}"
 export GPUS="${GPUS:-0,1}"
 export BUDGETS="${BUDGETS:-8 16 24}"
 export PROPOSAL_TOP_M="${PROPOSAL_TOP_M:-24}"

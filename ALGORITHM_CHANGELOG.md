@@ -12382,3 +12382,20 @@ This scheduling change does not alter tokens, folds, actions, labels or metrics.
 - only if that TRAIN gate passes may an untouched closed-loop validation be designed/run.
 
 No previously prohibited algorithm direction is reopened by this engineering repair.
+
+---
+
+## V64.3.50.1 repository-layout / clean-package engineering revision
+
+This revision changes **no scientific mechanism**. It only makes repository/output placement explicit and removes obsolete delivery artifacts.
+
+- canonical code root: `BDSE_ROOT` (default = launcher directory);
+- canonical experiment-output root: `$BDSE_ROOT/outputs`;
+- V50.1 default output: `$BDSE_ROOT/outputs/outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1`;
+- V49/V13 historical prerequisites are resolved under the same `$BDSE_ROOT/outputs` root;
+- external-baseline training uses `$BDSE_ROOT/outputs/external_fixed_budget`;
+- external-baseline closed-loop uses `$BDSE_ROOT/outputs/closed_loop/external_fixed_budget_test`;
+- historical reports, duplicate patches, stale next-command files, unused root launchers, review artifacts and redundant engineering notes were removed from the delivery package;
+- a minimal set of historical launcher/science-lock fixtures remains because the current V13→V50 regression suite explicitly reads them.
+
+Changing a checksummed launcher necessarily invalidates the old V50 source manifest. The clean package therefore regenerates `V64_3_50_SOURCE_MANIFEST.sha256` after all path/cleanup edits; the checksum is not bypassed or weakened.
