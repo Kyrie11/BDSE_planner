@@ -1,0 +1,1459 @@
+--- a/RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++++ b/RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+@@ -16,7 +16,7 @@
+ 
+ GPU0="${GPU0:-0}"
+ GPU1="${GPU1:-1}"
+-OUT_ROOT="${OUT_ROOT:-../outputs_v64_3_50_eaf_icer_pior_train_2gpu_v1}"
++OUT_ROOT="${OUT_ROOT:-../outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1}"
+ V49_ROOT="${V49_ROOT:-../outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
+ BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
+ NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
+@@ -28,6 +28,7 @@
+ # population, full-set RSMR proposal, one-shot treatment/control action, metric
+ # definition, or PIOR fitting gate.
+ PIOR_BATCH_SIZE="${PIOR_BATCH_SIZE:-64}"
++PIOR_FIRST_BATCH_SIZE="${PIOR_FIRST_BATCH_SIZE:-4}"
+ PIOR_HEARTBEAT_SECONDS="${PIOR_HEARTBEAT_SECONDS:-30}"
+ PIOR_RESUME="${PIOR_RESUME:-1}"
+ PIOR_SERIALIZE_GPU_INFERENCE="${PIOR_SERIALIZE_GPU_INFERENCE:-0}"
+@@ -141,7 +142,7 @@
+   --manifest "$TRAIN_MANIFEST" --treatment-config "$TREAT_CFG" --control-config "$CTRL_CFG" \
+   --checkpoint "$EAF_CKPT" --nuplan-root "$NUPLAN_ROOT" --challenge closed_loop_nonreactive_agents \
+   --output-root "$OUT_ROOT/closed_loop_train" --gpus "$GPU0,$GPU1" --workers-per-arm "$WORKERS_PER_ARM" \
+-  --batch-size "$PIOR_BATCH_SIZE" --heartbeat-seconds "$PIOR_HEARTBEAT_SECONDS" \
++  --batch-size "$PIOR_BATCH_SIZE" --first-batch-size "$PIOR_FIRST_BATCH_SIZE" --heartbeat-seconds "$PIOR_HEARTBEAT_SECONDS" \
+   --serialize-gpu-inference "$PIOR_SERIALIZE_GPU_INFERENCE" --profile-closed-loop "$PIOR_PROFILE_CLOSED_LOOP" \
+   "${PIOR_RESUME_ARGS[@]}" \
+   --output-paired-outcomes "$PAIRED" --output-report "$PAIR_REPORT" \
+--- a/bdse/planner/nuplan_planner.py
++++ b/bdse/planner/nuplan_planner.py
+@@ -73,6 +73,83 @@
+ _CLOSED_LOOP_PROFILE: dict[str, dict[str, float]] = {}
+ _CLOSED_LOOP_PROFILE_REGISTERED = False
+ _CLOSED_LOOP_DIAG_WRITE_LOCK = threading.Lock()
++_PIOR_TARGET_CACHE_LOCK = threading.Lock()
++_PIOR_TARGET_CACHE: dict[str, dict[int, dict[str, Any]]] = {}
++
++
++def _load_pior_target_map() -> dict[int, dict[str, Any]]:
++    """Load the batch-local V50.1 frozen-proposal identity map.
++
++    The map is TRAIN-only instrumentation supplied by the paired-outcome runner.
++    Runtime identity is keyed by the preregistered cache/scenario start timestamp
++    (all V49 proposal samples are ``it000000``).  This avoids re-selecting a new
++    online proposal and binds treatment/control to the exact V49 frozen action.
++    """
++    raw = os.environ.get("BDSE_PIOR_TARGETS_FILE", "").strip()
++    if not raw:
++        raise RuntimeError(
++            "V64.3.50.1 PIOR target map missing: BDSE_PIOR_TARGETS_FILE is required for manifest-bound paired collection"
++        )
++    path = str(Path(raw).expanduser().resolve())
++    with _PIOR_TARGET_CACHE_LOCK:
++        cached = _PIOR_TARGET_CACHE.get(path)
++        if cached is not None:
++            return cached
++        payload = json.loads(Path(path).read_text(encoding="utf-8"))
++        rows = list(payload.get("targets", [])) if isinstance(payload, dict) else []
++        out: dict[int, dict[str, Any]] = {}
++        tokens: set[str] = set()
++        for row in rows:
++            ts = int(row.get("timestamp_us", 0) or 0)
++            tok = str(row.get("scenario_token", ""))
++            act = int(row.get("full_selected_action", -1))
++            if ts <= 0 or not tok or act < 0:
++                raise RuntimeError(f"V64.3.50.1 PIOR malformed target row: {row}")
++            if ts in out or tok in tokens:
++                raise RuntimeError(f"V64.3.50.1 PIOR duplicate target identity timestamp={ts} token={tok}")
++            out[ts] = {"scenario_token": tok, "timestamp_us": ts, "full_selected_action": act}
++            tokens.add(tok)
++        if not out:
++            raise RuntimeError(f"V64.3.50.1 PIOR empty target map: {path}")
++        _PIOR_TARGET_CACHE[path] = out
++        return out
++
++
++def _pior_iteration_time_us(current_input: Any) -> int:
++    iteration = getattr(current_input, "iteration", None)
++    if iteration is None:
++        return 0
++    for attr in ("time_us", "timestamp_us"):
++        value = getattr(iteration, attr, None)
++        if value is not None:
++            try:
++                return int(value)
++            except Exception:
++                pass
++    try:
++        return int(round(float(getattr(iteration, "time_s")) * 1.0e6))
++    except Exception:
++        return 0
++
++
++def _lookup_pior_target(current_input: Any) -> tuple[dict[str, Any], int]:
++    targets = _load_pior_target_map()
++    now_us = _pior_iteration_time_us(current_input)
++    if now_us <= 0:
++        raise RuntimeError("V64.3.50.1 PIOR cannot resolve current simulation timestamp")
++    exact = targets.get(now_us)
++    if exact is not None:
++        return exact, 0
++    # Float seconds at epoch scale can lose a fraction of a microsecond.  Permit
++    # only a tiny deterministic tolerance and fail on ambiguity.
++    nearby = [(abs(int(ts) - now_us), row) for ts, row in targets.items() if abs(int(ts) - now_us) <= 4]
++    nearby.sort(key=lambda x: x[0])
++    if len(nearby) == 1:
++        return nearby[0][1], int(nearby[0][0])
++    raise RuntimeError(
++        f"V64.3.50.1 PIOR cannot bind scenario-start time_us={now_us} to a unique frozen target; "
++        f"matches_within_4us={len(nearby)}"
++    )
+ 
+ 
+ def _env_true(name: str, default: bool = False) -> bool:
+@@ -321,20 +398,22 @@
+         # RSMR proposal intervention.
+         self._pior_probe_used = False
+         self._pior_probe_event_count = 0
++        self._pior_probe_first_call_seen = False
+ 
+     def reset_selected_outcome_probe(self) -> None:
+         self._pior_probe_used = False
+         self._pior_probe_event_count = 0
+-
+-    def _apply_selected_outcome_probe(self, tournament: Any, action: int, candidates: Any) -> tuple[int, dict[str, Any]]:
+-        """Apply the V64.3.50 TRAIN-only one-shot proposal intervention.
+-
+-        The intervention never searches for an alternative.  It consumes the
+-        *already frozen* full-set RSMR proposal exposed by ICER diagnostics and
+-        either executes exactly that proposal once (treatment) or the incumbent
+-        (control).  Every subsequent planning step returns to the same incumbent
+-        path.  This changes the supervision/evidence source, not the deployed
+-        selector or representation.
++        self._pior_probe_first_call_seen = False
++
++    def _apply_selected_outcome_probe(self, tournament: Any, action: int, candidates: Any, current_input: Any | None = None) -> tuple[int, dict[str, Any]]:
++        """Apply the V64.3.50.1 TRAIN-only one-shot frozen-proposal intervention.
++
++        V50 preregistered the *exact V49 full-set RSMR proposal* as the treatment
++        action.  The original implementation accidentally waited for a newly
++        recomputed online proposal and therefore fired in only 50/64 scenarios.
++        The engineering repair binds each scenario at iteration 0 to the frozen
++        manifest entry by its cache/start ``timestamp_us`` and executes exactly
++        that action once (treatment) or the current incumbent (control).
+         """
+         pcfg = (self.cfg.get("selected_outcome_probe", {}) or {}) if isinstance(self.cfg, dict) else {}
+         enabled = bool(pcfg.get("enabled", False))
+@@ -351,34 +430,76 @@
+         if arm not in {"treatment", "control"}:
+             raise ValueError(f"V64.3.50 PIOR selected_outcome_probe.arm must be treatment/control, got {arm!r}")
+         diag = dict(getattr(tournament, "diagnostics", {}) or {})
+-        proposal_exists = bool(float(diag.get("decisive_frontier_icer_scir_proposal_exists", 0.0)) > 0.5)
+-        proposal = int(round(float(diag.get("decisive_frontier_icer_scir_proposal_action", -1))))
++        online_proposal_exists = bool(float(diag.get("decisive_frontier_icer_scir_proposal_exists", 0.0)) > 0.5)
++        online_proposal = int(round(float(diag.get("decisive_frontier_icer_scir_proposal_action", -1))))
+         baseline = int(round(float(diag.get("decisive_frontier_icer_baseline_action", -1))))
+         k = int(getattr(candidates, "K", 0))
+         valid = np.asarray(getattr(candidates, "valid_mask", np.zeros((k,), dtype=bool)), dtype=bool).reshape(-1)
++
+         def _valid_action(a: int) -> bool:
+             return bool(0 <= int(a) < valid.shape[0] and valid[int(a)])
++
+         if not _valid_action(baseline):
+             raise RuntimeError(f"V64.3.50 PIOR probe requires a valid incumbent/baseline action, got {baseline}")
+ 
++        source = str(pcfg.get("proposal_source", "")).strip()
++        manifest_bound = source == "preregistered_V49_manifest_iteration0_proposal"
++        original_action = int(action)
+         fired = False
+-        original_action = int(action)
++        target: dict[str, Any] | None = None
++        timestamp_error_us = 0
++        iteration = getattr(current_input, "iteration", None) if current_input is not None else None
++        iteration_index = int(getattr(iteration, "index", -1)) if iteration is not None else -1
++
+         if self._pior_probe_used:
+             chosen = int(baseline)
+             phase = "post_intervention_incumbent"
+-        elif proposal_exists and proposal != baseline:
++            proposal = int(online_proposal)
++        elif manifest_bound:
++            if current_input is None:
++                raise RuntimeError("V64.3.50.1 PIOR manifest-bound probe requires current planner input")
++            if self._pior_probe_first_call_seen:
++                raise RuntimeError("V64.3.50.1 PIOR reached a second planner call before the required one-shot event")
++            self._pior_probe_first_call_seen = True
++            if iteration_index != 0:
++                raise RuntimeError(
++                    f"V64.3.50.1 PIOR frozen proposal must fire at scenario iteration 0, got iteration={iteration_index}"
++                )
++            target, timestamp_error_us = _lookup_pior_target(current_input)
++            proposal = int(target["full_selected_action"])
+             if not _valid_action(proposal):
+-                raise RuntimeError(f"V64.3.50 PIOR frozen proposal is invalid: {proposal}")
++                raise RuntimeError(
++                    f"V64.3.50.1 PIOR frozen manifest proposal is invalid at scenario start: "
++                    f"token={target['scenario_token']} action={proposal} K={valid.shape[0]}"
++                )
++            if proposal == baseline:
++                raise RuntimeError(
++                    f"V64.3.50.1 PIOR frozen proposal equals incumbent at scenario start: "
++                    f"token={target['scenario_token']} action={proposal}"
++                )
+             chosen = int(proposal if arm == "treatment" else baseline)
+             self._pior_probe_used = True
+             self._pior_probe_event_count += 1
+             fired = True
+-            phase = "paired_intervention"
++            phase = "paired_manifest_iteration0_intervention"
+         else:
+-            # Before the unique proposal event, both arms stay on the incumbent
+-            # rather than consuming a different learned post-selection decision.
+-            chosen = int(baseline)
+-            phase = "awaiting_frozen_proposal"
++            # Compatibility for historical/synthetic configs only. Production
++            # V50.1 configs always use the manifest-bound source above.
++            proposal = int(online_proposal)
++            if online_proposal_exists and proposal != baseline:
++                if not _valid_action(proposal):
++                    raise RuntimeError(f"V64.3.50 PIOR frozen proposal is invalid: {proposal}")
++                chosen = int(proposal if arm == "treatment" else baseline)
++                self._pior_probe_used = True
++                self._pior_probe_event_count += 1
++                fired = True
++                phase = "legacy_online_proposal_intervention"
++            else:
++                chosen = int(baseline)
++                phase = "awaiting_online_proposal"
++
++        target_token = str(target.get("scenario_token", "")) if target is not None else ""
++        target_timestamp_us = int(target.get("timestamp_us", 0)) if target is not None else 0
+         return chosen, {
+             "pior_probe_enabled": True,
+             "pior_probe_arm": arm,
+@@ -389,7 +510,17 @@
+             "pior_probe_original_post_selection_action": int(original_action),
+             "pior_probe_baseline_action": int(baseline),
+             "pior_probe_proposal_action": int(proposal),
+-            "pior_probe_proposal_exists": bool(proposal_exists),
++            "pior_probe_proposal_exists": bool(manifest_bound or online_proposal_exists),
++            "pior_probe_target_source": source,
++            "pior_probe_scenario_token": target_token,
++            "pior_probe_target_timestamp_us": target_timestamp_us,
++            "pior_probe_current_timestamp_us": int(_pior_iteration_time_us(current_input)) if current_input is not None else 0,
++            "pior_probe_timestamp_error_us": int(timestamp_error_us),
++            "pior_probe_online_proposal_exists": bool(online_proposal_exists),
++            "pior_probe_online_proposal_action": int(online_proposal),
++            "pior_probe_online_proposal_matches_target": bool(
++                target is not None and online_proposal_exists and int(online_proposal) == int(proposal)
++            ),
+             "pior_probe_final_action": int(chosen),
+             "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
+             "pior_probe_contract_no_rerank_second_best_fallback": True,
+@@ -1555,11 +1686,11 @@
+     def _needs_fallback(self, tournament, candidates, cfg: dict[str, Any]) -> bool:
+         return self._fallback_reason(tournament, cfg) not in {"disabled", "accepted", "accepted_low_delta"}
+ 
+-    def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
++    def plan_from_runtime(self, runtime: RuntimeFeatures, current_input: Any | None = None) -> tuple[int, np.ndarray, dict[str, Any]]:
+         prediction_scope = getattr(self.model, "runtime_prediction_cache_scope", None)
+         model_scope = prediction_scope() if callable(prediction_scope) else nullcontext(None)
+         with runtime_safety_cache_scope() as safety_memo, model_scope as prediction_memo:
+-            action, trajectory, diagnostics = self._plan_from_runtime_impl(runtime)
++            action, trajectory, diagnostics = self._plan_from_runtime_impl(runtime, current_input=current_input)
+             if os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}:
+                 timing = diagnostics.setdefault("timing_core", {})
+                 timing["runtime_safety_cache_hits"] = int(safety_memo.hits)
+@@ -1571,7 +1702,7 @@
+                     timing["runtime_prediction_cache_entries"] = int(len(prediction_memo.cache))
+             return action, trajectory, diagnostics
+ 
+-    def _plan_from_runtime_impl(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
++    def _plan_from_runtime_impl(self, runtime: RuntimeFeatures, current_input: Any | None = None) -> tuple[int, np.ndarray, dict[str, Any]]:
+         profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
+         timing_core: dict[str, float] = {}
+         t = time.perf_counter()
+@@ -1655,7 +1786,7 @@
+         # It intervenes on the already frozen RSMR proposal identity and then
+         # returns to the incumbent for the rest of the scenario. Historical and
+         # deployment configs do not enable this block.
+-        action, pior_probe_diag = self._apply_selected_outcome_probe(tournament, action, candidates)
++        action, pior_probe_diag = self._apply_selected_outcome_probe(tournament, action, candidates, current_input)
+         t_post = time.perf_counter()
+         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg_stage)
+         safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
+@@ -1905,8 +2036,16 @@
+                     "pior_probe_fired": True,
+                     "pior_probe_arm": str(td.get("pior_probe_arm", "")),
+                     "pior_probe_event_count": int(td.get("pior_probe_event_count", 0)),
++                    "scenario_token": str(td.get("pior_probe_scenario_token", "")),
++                    "target_timestamp_us": int(td.get("pior_probe_target_timestamp_us", 0)),
++                    "current_timestamp_us": int(td.get("pior_probe_current_timestamp_us", 0)),
++                    "timestamp_error_us": int(td.get("pior_probe_timestamp_error_us", 0)),
++                    "pior_probe_target_source": str(td.get("pior_probe_target_source", "")),
+                     "pior_probe_baseline_action": int(td.get("pior_probe_baseline_action", -1)),
+                     "pior_probe_proposal_action": int(td.get("pior_probe_proposal_action", -1)),
++                    "pior_probe_online_proposal_exists": bool(td.get("pior_probe_online_proposal_exists", False)),
++                    "pior_probe_online_proposal_action": int(td.get("pior_probe_online_proposal_action", -1)),
++                    "pior_probe_online_proposal_matches_target": bool(td.get("pior_probe_online_proposal_matches_target", False)),
+                     "pior_probe_final_action": int(td.get("pior_probe_final_action", action)),
+                     "pior_probe_contract_same_frozen_proposal_or_incumbent": bool(td.get("pior_probe_contract_same_frozen_proposal_or_incumbent", False)),
+                     "pior_probe_contract_no_rerank_second_best_fallback": bool(td.get("pior_probe_contract_no_rerank_second_best_fallback", False)),
+@@ -2066,7 +2205,7 @@
+         t_runtime = time.perf_counter()
+         runtime = self._runtime_from_planner_input(current_input)
+         t1 = time.perf_counter()
+-        action, trajectory, diagnostics = self.core.plan_from_runtime(runtime)
++        action, trajectory, diagnostics = self.core.plan_from_runtime(runtime, current_input=current_input)
+         t2 = time.perf_counter()
+         out_traj = self._to_nuplan_trajectory(trajectory, current_input)
+         t3 = time.perf_counter()
+--- a/bdse/tests/test_v64_3_50_eaf_icer_pior.py
++++ b/bdse/tests/test_v64_3_50_eaf_icer_pior.py
+@@ -8,7 +8,9 @@
+ 
+ from bdse.planner.nuplan_planner import BDSEPlannerCore
+ from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW, _stable_log_name, _resolve_raw_db_files
+-from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files
++from bdse.tools.run_v64_3_50_pior_paired_closed_loop import (
++    _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files, _validate_probe_events, _collision_safe_batches
++)
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ 
+@@ -63,6 +65,48 @@
+     assert d["pior_probe_fired"] is True
+     assert d["pior_probe_proposal_action"] == 3
+     assert d["pior_probe_baseline_action"] == 1
++
++
++
++def test_v50_manifest_bound_probe_fires_exact_v49_action_at_iteration0_even_when_online_proposal_absent(tmp_path, monkeypatch) -> None:
++    import json
++    ts = 1_629_745_157_950_134
++    target = tmp_path / "targets.json"
++    target.write_text(json.dumps({"targets": [{
++        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
++    }]}))
++    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
++    cfg = _cfg("treatment")
++    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"
++    core = BDSEPlannerCore(cfg=cfg)
++    current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
++    action, d = core._apply_selected_outcome_probe(
++        _tournament(proposal=-1, baseline=1, exists=False, action=1), 1, _candidates(), current
++    )
++    assert action == 3
++    assert d["pior_probe_fired"] is True
++    assert d["pior_probe_scenario_token"] == "tok"
++    assert d["pior_probe_proposal_action"] == 3
++    assert d["pior_probe_online_proposal_exists"] is False
++    assert d["pior_probe_online_proposal_matches_target"] is False
++    assert d["pior_probe_target_timestamp_us"] == ts
++    assert abs(d["pior_probe_current_timestamp_us"] - ts) <= 4
++
++
++def test_v50_manifest_bound_probe_refuses_nonzero_first_iteration(tmp_path, monkeypatch) -> None:
++    import json
++    ts = 1_629_745_157_950_134
++    target = tmp_path / "targets.json"
++    target.write_text(json.dumps({"targets": [{
++        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
++    }]}))
++    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
++    cfg = _cfg("control")
++    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"
++    core = BDSEPlannerCore(cfg=cfg)
++    current = SimpleNamespace(iteration=SimpleNamespace(index=5, time_s=ts / 1e6))
++    with pytest.raises(RuntimeError, match="iteration 0"):
++        core._apply_selected_outcome_probe(_tournament(baseline=1), 1, _candidates(), current)
+ 
+ 
+ def test_v50_probe_refuses_fallback_or_second_path() -> None:
+@@ -122,6 +166,14 @@
+             "pior_probe_fired": True,
+             "pior_probe_arm": "treatment",
+             "pior_probe_event_count": 1,
++            "pior_probe_scenario_token": "tok",
++            "pior_probe_target_timestamp_us": 700000,
++            "pior_probe_current_timestamp_us": 700000,
++            "pior_probe_timestamp_error_us": 0,
++            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
++            "pior_probe_online_proposal_exists": False,
++            "pior_probe_online_proposal_action": -1,
++            "pior_probe_online_proposal_matches_target": False,
+             "pior_probe_baseline_action": 1,
+             "pior_probe_proposal_action": 3,
+             "pior_probe_final_action": 3,
+@@ -135,6 +187,8 @@
+     assert len(rows) == 1
+     assert rows[0]["pior_probe_fired"] is True
+     assert rows[0]["pior_probe_proposal_action"] == 3
++    assert rows[0]["scenario_token"] == "tok"
++    assert rows[0]["target_timestamp_us"] == 700000
+     assert "diagnostics" not in rows[0]
+     assert "large_unused_payload" not in rows[0]
+ 
+@@ -171,6 +225,7 @@
+     diag.write_text(
+         "\n".join(json.dumps({"pior_probe_fired": True, "pior_probe_arm": "control"}, sort_keys=True) for _ in tokens) + "\n"
+     )
++    (root / "pior_probe_targets.json").write_text(json.dumps({"targets": []}) + "\n")
+     sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+     token_sha = hashlib.sha256(("\n".join(tokens) + "\n").encode()).hexdigest()
+     cert = {
+@@ -251,3 +306,60 @@
+         "tok2": {"raw_db_files": [str(b)]},
+     }
+     assert _batch_raw_files(["tok", "tok2"], meta) == [str(a), str(b)]
++
++
++def test_v50_probe_event_validation_is_token_bound(tmp_path: Path) -> None:
++    import json
++    tokens = ["a", "b"]
++    meta = {
++        "a": {"timestamp_us": 1000000, "cache_iteration": 0, "full_selected_action": 3},
++        "b": {"timestamp_us": 2000000, "cache_iteration": 0, "full_selected_action": 4},
++    }
++    path = tmp_path / "events.jsonl"
++    rows = []
++    for tok, base in [("a", 1), ("b", 2)]:
++        m = meta[tok]
++        rows.append({
++            "scenario_token": tok, "iteration_index": 0,
++            "pior_probe_fired": True, "pior_probe_event_count": 1, "pior_probe_arm": "treatment",
++            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
++            "target_timestamp_us": m["timestamp_us"], "current_timestamp_us": m["timestamp_us"],
++            "pior_probe_proposal_action": m["full_selected_action"], "pior_probe_baseline_action": base,
++            "pior_probe_final_action": m["full_selected_action"],
++            "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
++            "pior_probe_contract_no_rerank_second_best_fallback": True,
++            "pior_probe_online_proposal_exists": False, "pior_probe_online_proposal_matches_target": False,
++        })
++    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
++    got, audit = _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
++    assert set(got) == set(tokens)
++    assert audit["online_proposal_matches_frozen_target_count"] == 0
++    rows[1]["scenario_token"] = "a"
++    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
++    with pytest.raises(RuntimeError, match="duplicate probe event"):
++        _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
++
++
++def test_v50_collision_safe_batches_separate_equal_start_timestamps() -> None:
++    tokens = ["a", "b", "c", "d"]
++    meta = {
++        "a": {"timestamp_us": 1},
++        "b": {"timestamp_us": 2},
++        "c": {"timestamp_us": 1},
++        "d": {"timestamp_us": 3},
++    }
++    batches = _collision_safe_batches(tokens, meta, 4)
++    assert batches == [["a", "b"], ["c", "d"]]
++    for batch in batches:
++        assert len({meta[t]["timestamp_us"] for t in batch}) == len(batch)
++
++
++def test_v50_first_batch_is_small_paired_preflight_without_changing_population() -> None:
++    tokens = [f"t{i}" for i in range(10)]
++    meta = {t: {"timestamp_us": i + 1} for i, t in enumerate(tokens)}
++    batches = _collision_safe_batches(tokens, meta, batch_size=6, first_batch_size=3)
++    assert batches == [tokens[:3], tokens[3:9], tokens[9:]]
++    assert [t for batch in batches for t in batch] == tokens
++    text = (ROOT / "RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh").read_text()
++    assert 'PIOR_FIRST_BATCH_SIZE="${PIOR_FIRST_BATCH_SIZE:-4}"' in text
++    assert '--first-batch-size "$PIOR_FIRST_BATCH_SIZE"' in text
+--- a/bdse/tools/build_v64_3_50_pior_train_manifest.py
++++ b/bdse/tools/build_v64_3_50_pior_train_manifest.py
+@@ -27,6 +27,22 @@
+         return str(v)
+     except Exception:
+         return ""
++
++
++def _scalar_int(z: Any, key: str) -> int:
++    if key not in z:
++        return 0
++    try:
++        a = np.asarray(z[key])
++        v = a.item() if a.shape == () else a.reshape(-1)[0]
++        return int(v)
++    except Exception:
++        return 0
++
++
++def _cache_iteration(path: Path) -> int:
++    m = re.search(r"_it(\d+)\.npz$", path.name)
++    return int(m.group(1)) if m else -1
+ 
+ 
+ def _eligible_tokens(candidate_audit: Path) -> tuple[list[str], dict[str, dict[str, Any]]]:
+@@ -231,12 +247,26 @@
+                     if tok not in wanted or tok in found:
+                         continue
+                     log_name = _scalar(z, "log_name") or p.parent.name
++                    timestamp_us = _scalar_int(z, "timestamp_us")
++                    cache_iteration = _cache_iteration(p)
++                    if timestamp_us <= 0:
++                        raise RuntimeError(
++                            f"V64.3.50 PIOR STOP: frozen token={tok} has no valid cache timestamp_us in {p}; "
++                            "paired iteration-0 intervention identity cannot be proven"
++                        )
++                    if cache_iteration != 0:
++                        raise RuntimeError(
++                            f"V64.3.50 PIOR STOP: frozen token={tok} comes from cache iteration={cache_iteration}, expected it000000; "
++                            "V50.1 repair is defined only for the preregistered scenario-start proposal event"
++                        )
+                     found[tok] = {
+                         **meta[tok],
+                         "scenario_token": tok,
+                         "cache_city": city,
+                         "raw_db_split": CITY_TO_RAW[city],
+                         "npz_path": str(p.resolve()),
++                        "cache_iteration": int(cache_iteration),
++                        "timestamp_us": int(timestamp_us),
+                         "log_name": log_name,
+                         "scenario_name": _scalar(z, "scenario_name"),
+                         "scenario_type": _scalar(z, "scenario_type"),
+@@ -250,6 +280,17 @@
+     missing = sorted(wanted - set(found))
+     if missing:
+         raise RuntimeError(f"V64.3.50 PIOR STOP: {len(missing)} frozen RSMR TRAIN tokens missing from stated bdse_train_v2 layout; first={missing[:10]}")
++
++    # Every preregistered V49 proposal comes from *_it000000.npz.  Store the
++    # exact scenario-start timestamp so the paired runner can bind each planner
++    # instance to the frozen action.  Timestamp collisions across the full 502
++    # population are allowed: the runner deterministically separates colliding
++    # timestamps into different subprocess batches, where scenario_filter tokens
++    # provide the remaining identity constraint.
++    ts_counts: dict[int, int] = {}
++    for tok in tokens:
++        ts = int(found[tok]["timestamp_us"])
++        ts_counts[ts] = ts_counts.get(ts, 0) + 1
+ 
+     db_index = _db_index(args.raw_split_root)
+     raw_dirs = [str((args.raw_split_root / raw).resolve()) for raw in sorted(db_index)]
+@@ -281,6 +322,8 @@
+         "scientific_population": "exact_V49_full_set_RSMR_TRAIN_proposals_only",
+         "scenario_count": len(rows),
+         "unique_scenario_count": len({r["scenario_token"] for r in rows}),
++        "scenario_start_timestamp_unique_count": len(ts_counts),
++        "scenario_start_timestamp_collision_count": int(sum(max(v - 1, 0) for v in ts_counts.values())),
+         "city_counts": counts,
+         "npz_files_scanned_until_complete": int(scanned_npz),
+         "raw_db_directories": raw_dirs,
+--- a/bdse/tools/make_v64_3_50_pior_probe_configs.py
++++ b/bdse/tools/make_v64_3_50_pior_probe_configs.py
+@@ -17,8 +17,10 @@
+         "enabled": True,
+         "arm": arm,
+         "one_shot": True,
+-        "proposal_source": "already_frozen_full_set_RSMR_proposal",
++        "proposal_source": "preregistered_V49_manifest_iteration0_proposal",
+         "control_action": "same_ICER_incumbent_baseline",
++        "event_iteration": 0,
++        "identity_binding": "exact_cache_timestamp_us_plus_scenario_token_certificate",
+         "after_intervention": "incumbent_only",
+         "teacher_or_future_label_input": False,
+         "runtime_deployment_feature": False,
+--- a/bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
++++ b/bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
+@@ -285,13 +285,123 @@
+     return out
+ 
+ 
++
++def _probe_target_payload(tokens: list[str], meta: dict[str, dict[str, Any]]) -> dict[str, Any]:
++    rows: list[dict[str, Any]] = []
++    seen_ts: set[int] = set()
++    for tok in tokens:
++        row = meta[tok]
++        ts = int(row.get("timestamp_us", 0) or 0)
++        cache_it = int(row.get("cache_iteration", -1))
++        act = int(row.get("full_selected_action", -1))
++        if ts <= 0 or cache_it != 0 or act < 0:
++            raise RuntimeError(
++                f"V64.3.50.1 PIOR invalid frozen target token={tok}: timestamp_us={ts} cache_iteration={cache_it} action={act}"
++            )
++        if ts in seen_ts:
++            raise RuntimeError(f"V64.3.50.1 PIOR duplicate start timestamp_us={ts} inside batch")
++        seen_ts.add(ts)
++        rows.append({"scenario_token": str(tok), "timestamp_us": ts, "full_selected_action": act})
++    return {
++        "algorithm_version": "V64.3.50.1-EAF-ICER-PIOR-ENGINEERING-REPAIR",
++        "identity": "exact_V49_manifest_it000000_timestamp_and_frozen_action",
++        "targets": rows,
++    }
++
++
++def _payload_sha256(payload: dict[str, Any]) -> str:
++    raw = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
++    return hashlib.sha256(raw).hexdigest()
++
++
++def _write_probe_target_file(path: Path, payload: dict[str, Any]) -> str:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
++    path.write_text(text, encoding="utf-8")
++    return _sha256(path)
++
++
++def _validate_probe_events(
++    path: Path,
++    *,
++    tokens: list[str],
++    meta: dict[str, dict[str, Any]],
++    arm: str,
++) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
++    if not path.is_file():
++        raise RuntimeError(f"V64.3.50.1 PIOR missing probe event file: {path}")
++    by_token: dict[str, dict[str, Any]] = {}
++    with path.open(encoding="utf-8") as f:
++        for line_no, line in enumerate(f, 1):
++            if not line.strip():
++                continue
++            row = json.loads(line)
++            tok = str(row.get("scenario_token", ""))
++            if not tok or tok not in meta:
++                raise RuntimeError(f"V64.3.50.1 PIOR invalid probe token at {path}:{line_no}: {tok!r}")
++            if tok in by_token:
++                raise RuntimeError(f"V64.3.50.1 PIOR duplicate probe event for token={tok}")
++            if not bool(row.get("pior_probe_fired", False)) or int(row.get("pior_probe_event_count", 0)) != 1:
++                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} does not have exactly one fired event")
++            if str(row.get("pior_probe_arm", "")) != arm:
++                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} arm mismatch {row.get('pior_probe_arm')} vs {arm}")
++            if int(row.get("iteration_index", -1)) != 0:
++                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} fired outside iteration 0")
++            if str(row.get("pior_probe_target_source", "")) != "preregistered_V49_manifest_iteration0_proposal":
++                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} target source mismatch")
++            expected_ts = int(meta[tok].get("timestamp_us", 0) or 0)
++            target_ts = int(row.get("target_timestamp_us", 0) or 0)
++            current_ts = int(row.get("current_timestamp_us", 0) or 0)
++            if target_ts != expected_ts or abs(current_ts - expected_ts) > 4:
++                raise RuntimeError(
++                    f"V64.3.50.1 PIOR token={tok} timestamp mismatch target/current/expected="
++                    f"{target_ts}/{current_ts}/{expected_ts}"
++                )
++            expected_action = int(meta[tok].get("full_selected_action", -1))
++            proposal = int(row.get("pior_probe_proposal_action", -1))
++            baseline = int(row.get("pior_probe_baseline_action", -1))
++            final = int(row.get("pior_probe_final_action", -1))
++            if proposal != expected_action or proposal < 0 or proposal == baseline:
++                raise RuntimeError(
++                    f"V64.3.50.1 PIOR token={tok} frozen action mismatch proposal={proposal} expected={expected_action} baseline={baseline}"
++                )
++            if arm == "treatment" and final != proposal:
++                raise RuntimeError(f"V64.3.50.1 PIOR treatment token={tok} did not execute frozen proposal")
++            if arm == "control" and final != baseline:
++                raise RuntimeError(f"V64.3.50.1 PIOR control token={tok} did not preserve incumbent")
++            if not bool(row.get("pior_probe_contract_same_frozen_proposal_or_incumbent", False)):
++                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} same-winner containment certificate failed")
++            if not bool(row.get("pior_probe_contract_no_rerank_second_best_fallback", False)):
++                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} no-fallback certificate failed")
++            by_token[tok] = row
++    if set(by_token) != set(tokens):
++        missing = sorted(set(tokens) - set(by_token))[:20]
++        extra = sorted(set(by_token) - set(tokens))[:20]
++        raise RuntimeError(
++            f"V64.3.50.1 PIOR probe-event token mismatch {len(by_token)}/{len(tokens)} missing={missing} extra={extra}"
++        )
++    online_exists = sum(bool(r.get("pior_probe_online_proposal_exists", False)) for r in by_token.values())
++    online_match = sum(bool(r.get("pior_probe_online_proposal_matches_target", False)) for r in by_token.values())
++    audit = {
++        "scenario_count": len(tokens),
++        "token_sha256": _token_sha(tokens),
++        "online_proposal_exists_count": int(online_exists),
++        "online_proposal_matches_frozen_target_count": int(online_match),
++        "online_replay_fraction": float(online_match / max(len(tokens), 1)),
++        "scientific_intervention_identity": "manifest_frozen_V49_action_not_online_reselection",
++    }
++    return by_token, audit
++
++
+ def _batch_certificate_valid(
+     *, root: Path, tokens: list[str], cfg_sha: str, ckpt_sha: str, challenge: str, raw_db_file_list_sha256: str = "",
++    meta: dict[str, dict[str, Any]] | None = None, arm: str = "", probe_target_spec_sha256: str = "",
+ ) -> tuple[dict[str, dict[str, Any]] | None, dict[str, Any] | None]:
+     cert_path = root / ".pior_batch_complete.json"
+     metrics_path = root / "scenario_metrics.jsonl"
+     diag = root / "pior_probe_events.jsonl"
+-    if not cert_path.is_file() or not metrics_path.is_file() or not diag.is_file():
++    target_path = root / "pior_probe_targets.json"
++    if not cert_path.is_file() or not metrics_path.is_file() or not diag.is_file() or not target_path.is_file():
+         return None, None
+     try:
+         cert = json.loads(cert_path.read_text(encoding="utf-8"))
+@@ -303,6 +413,8 @@
+             or str(cert.get("checkpoint_sha256", "")) != ckpt_sha
+             or str(cert.get("challenge", "")) != challenge
+             or (raw_db_file_list_sha256 and str(cert.get("raw_db_file_list_sha256", "")) != raw_db_file_list_sha256)
++            or (probe_target_spec_sha256 and str(cert.get("probe_target_spec_sha256", "")) != probe_target_spec_sha256)
++            or (probe_target_spec_sha256 and _sha256(target_path) != probe_target_spec_sha256)
+             or int(cert.get("successful", -1)) != len(tokens)
+             or int(cert.get("failed", -1)) != 0
+             or int(cert.get("probe_fired_count", -1)) != len(tokens)
+@@ -311,6 +423,8 @@
+         ):
+             return None, None
+         metrics = _read_normalized_metrics(metrics_path, tokens)
++        if meta is not None and arm:
++            _validate_probe_events(diag, tokens=tokens, meta=meta, arm=arm)
+         return metrics, cert
+     except Exception:
+         return None, None
+@@ -366,10 +480,13 @@
+     root = arm_root / "batches" / f"batch_{batch_index:04d}"
+     raw_files = _batch_raw_files(tokens, meta)
+     raw_db_file_list_sha256 = hashlib.sha256(("\n".join(raw_files) + "\n").encode("utf-8")).hexdigest()
++    target_payload = _probe_target_payload(tokens, meta)
++    probe_target_spec_sha256 = _payload_sha256(target_payload)
+     if resume:
+         metrics, cert = _batch_certificate_valid(
+             root=root, tokens=tokens, cfg_sha=cfg_sha, ckpt_sha=ckpt_sha, challenge=challenge,
+-            raw_db_file_list_sha256=raw_db_file_list_sha256,
++            raw_db_file_list_sha256=raw_db_file_list_sha256, meta=meta, arm=arm,
++            probe_target_spec_sha256=probe_target_spec_sha256,
+         )
+         if metrics is not None and cert is not None:
+             print(
+@@ -383,6 +500,10 @@
+         shutil.rmtree(root)
+     root.mkdir(parents=True, exist_ok=True)
+     (root / "scenario_tokens.json").write_text(json.dumps(tokens, indent=2), encoding="utf-8")
++    target_file = root / "pior_probe_targets.json"
++    written_target_sha = _write_probe_target_file(target_file, target_payload)
++    if written_target_sha != probe_target_spec_sha256:
++        raise RuntimeError("V64.3.50.1 PIOR target-spec serialization hash mismatch")
+     token_override = "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":"))
+     diag = root / "pior_probe_events.jsonl"
+     profile = root / "bdse_closed_loop_profile.json"
+@@ -414,6 +535,7 @@
+         # per-tick diagnostics are pure I/O overhead for this experiment.
+         "BDSE_CLOSED_LOOP_DIAG": str(diag.resolve()),
+         "BDSE_CLOSED_LOOP_DIAG_MODE": "pior_probe_events",
++        "BDSE_PIOR_TARGETS_FILE": str(target_file.resolve()),
+         "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
+         "BDSE_PROFILE_CLOSED_LOOP": "1" if profile_closed_loop else "0",
+         "BDSE_CLOSED_LOOP_PROFILE_JSON": str(profile.resolve()),
+@@ -456,6 +578,7 @@
+             f"PIOR {arm} batch={batch_index} invalid return={returncode} success={succ} failed={fail} "
+             f"probe_fired={fired} expected={len(tokens)}; see {log}\n--- tail ---\n{tail}"
+         )
++    _, probe_audit = _validate_probe_events(diag, tokens=tokens, meta=meta, arm=arm)
+     metrics, metric_file = _extract_scenario_metrics(root, tokens, meta)
+     normalized = root / "scenario_metrics.jsonl"
+     _write_normalized_metrics(normalized, metrics, tokens)
+@@ -475,6 +598,10 @@
+         "raw_db_file_count": len(raw_files),
+         "raw_db_files": raw_files,
+         "raw_db_file_list_sha256": raw_db_file_list_sha256,
++        "probe_target_spec_file": str(target_file),
++        "probe_target_spec_sha256": probe_target_spec_sha256,
++        "probe_event_token_sha256": _token_sha(tokens),
++        "probe_identity_audit": probe_audit,
+         "workers": int(workers),
+         "serialize_gpu_inference": bool(serialize_gpu_inference),
+         "wall_time_s": float(wall),
+@@ -495,11 +622,44 @@
+     return metrics, cert
+ 
+ 
++
++def _collision_safe_batches(
++    tokens: list[str], meta: dict[str, dict[str, Any]], batch_size: int, first_batch_size: int | None = None
++) -> list[list[str]]:
++    """Deterministically batch tokens while keeping start timestamps unique per subprocess.
++
++    ``first_batch_size`` is an engineering-only paired preflight.  It changes no
++    token, intervention, metric, label, or fold; it merely makes the first
++    completion certificate small enough to fail fast on a server-side identity
++    mismatch before the remaining expensive TRAIN collection is allowed to run.
++    """
++    normal_limit = max(1, int(batch_size))
++    first_limit = normal_limit if first_batch_size is None else max(1, min(int(first_batch_size), normal_limit))
++    out: list[list[str]] = []
++    cur: list[str] = []
++    seen_ts: set[int] = set()
++    limit = first_limit
++    for tok in tokens:
++        ts = int(meta[tok].get("timestamp_us", 0) or 0)
++        if ts <= 0:
++            raise RuntimeError(f"V64.3.50.1 PIOR token={tok} missing timestamp_us for batching")
++        if cur and (len(cur) >= limit or ts in seen_ts):
++            out.append(cur)
++            cur = []
++            seen_ts = set()
++            limit = normal_limit
++        cur.append(tok)
++        seen_ts.add(ts)
++    if cur:
++        out.append(cur)
++    return out
++
++
+ def _run_arm(
+     *, arm: str, gpu: str, cfg: Path, checkpoint: Path, tokens: list[str], meta: dict[str, dict[str, Any]],
+     nuplan_root: Path, challenge: str, output_root: Path, workers: int, batch_size: int, resume: bool,
+     heartbeat_seconds: float, serialize_gpu_inference: bool, profile_closed_loop: bool,
+-    allow_legacy_full_arm_resume: bool,
++    allow_legacy_full_arm_resume: bool, first_batch_size: int, preflight_barrier: threading.Barrier | None,
+ ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+     root = output_root / arm
+     root.mkdir(parents=True, exist_ok=True)
+@@ -518,28 +678,50 @@
+             return metrics, {"arm": arm, "resume_mode": "legacy_full_arm", "batches": [cert]}
+ 
+     batch_size = max(1, int(batch_size))
+-    batches = [tokens[i:i + batch_size] for i in range(0, len(tokens), batch_size)]
++    batches = _collision_safe_batches(tokens, meta, batch_size, first_batch_size=first_batch_size)
+     combined: dict[str, dict[str, Any]] = {}
+     certs: list[dict[str, Any]] = []
+     for bi, batch_tokens in enumerate(batches):
+-        metrics, cert = _run_batch(
+-            arm=arm, gpu=gpu, cfg=cfg, checkpoint=checkpoint, tokens=batch_tokens, meta=meta,
+-            nuplan_root=nuplan_root, challenge=challenge, arm_root=root, workers=workers,
+-            batch_index=bi, batch_count=len(batches), resume=resume, heartbeat_seconds=heartbeat_seconds,
+-            serialize_gpu_inference=serialize_gpu_inference, profile_closed_loop=profile_closed_loop,
+-            cfg_sha=cfg_sha, ckpt_sha=ckpt_sha,
+-        )
++        try:
++            metrics, cert = _run_batch(
++                arm=arm, gpu=gpu, cfg=cfg, checkpoint=checkpoint, tokens=batch_tokens, meta=meta,
++                nuplan_root=nuplan_root, challenge=challenge, arm_root=root, workers=workers,
++                batch_index=bi, batch_count=len(batches), resume=resume, heartbeat_seconds=heartbeat_seconds,
++                serialize_gpu_inference=serialize_gpu_inference, profile_closed_loop=profile_closed_loop,
++                cfg_sha=cfg_sha, ckpt_sha=ckpt_sha,
++            )
++        except Exception:
++            if bi == 0 and preflight_barrier is not None:
++                try:
++                    preflight_barrier.abort()
++                except Exception:
++                    pass
++            raise
+         overlap = set(combined) & set(metrics)
+         if overlap:
+             raise RuntimeError(f"PIOR duplicate tokens across completed batches: {sorted(overlap)[:10]}")
+         combined.update(metrics)
+         certs.append(cert)
++        if bi == 0 and preflight_barrier is not None:
++            print(
++                f"[PIOR-PREFLIGHT-PASS] arm={arm} scenarios={len(batch_tokens)}; "
++                "waiting for paired arm before full TRAIN collection",
++                flush=True,
++            )
++            try:
++                preflight_barrier.wait(timeout=300.0)
++            except threading.BrokenBarrierError as exc:
++                raise RuntimeError(
++                    f"V64.3.50.1 PIOR paired preflight peer failed; arm={arm} will not continue expensive collection"
++                ) from exc
++            print(f"[PIOR-PREFLIGHT-PAIR-PASS] arm={arm}; continuing full TRAIN collection", flush=True)
+     if set(combined) != set(tokens):
+         raise RuntimeError(f"PIOR {arm} combined batch metrics mismatch: {len(combined)}/{len(tokens)}")
+     arm_summary = {
+         "arm": arm,
+         "resume_mode": "validated_batches",
+         "batch_size": int(batch_size),
++        "first_batch_size": int(first_batch_size),
+         "batch_count": len(batches),
+         "scenario_count": len(tokens),
+         "scenario_token_sha256": _token_sha(tokens),
+@@ -607,6 +789,7 @@
+     ap.add_argument("--gpus", default="0,1")
+     ap.add_argument("--workers-per-arm", type=int, default=4)
+     ap.add_argument("--batch-size", type=int, default=64)
++    ap.add_argument("--first-batch-size", type=int, default=4, help="Engineering-only paired preflight batch; both arms must pass before expensive collection continues.")
+     ap.add_argument("--heartbeat-seconds", type=float, default=30.0)
+     ap.add_argument("--resume", action="store_true")
+     ap.add_argument("--allow-legacy-full-arm-resume", action="store_true")
+@@ -623,6 +806,7 @@
+     a.output_root.mkdir(parents=True, exist_ok=True)
+     print(
+         f"[PIOR-COLLECT] scenarios={len(tokens)} exact_raw_dbs={len(raw_files)} batch_size={a.batch_size} "
++        f"first_batch_size={a.first_batch_size} "
+         f"workers_per_arm={a.workers_per_arm} resume={int(a.resume)} heartbeat={a.heartbeat_seconds}s "
+         f"serialize_gpu={a.serialize_gpu_inference}",
+         flush=True,
+@@ -632,6 +816,7 @@
+     metrics_by_arm: dict[str, dict[str, dict[str, Any]]] = {}
+     errors: list[str] = []
+     lock = threading.Lock()
++    preflight_barrier = threading.Barrier(2) if int(a.first_batch_size) > 0 else None
+ 
+     def work(arm: str, gpu: str, cfg: Path) -> None:
+         try:
+@@ -643,6 +828,7 @@
+                 serialize_gpu_inference=bool(a.serialize_gpu_inference),
+                 profile_closed_loop=bool(a.profile_closed_loop),
+                 allow_legacy_full_arm_resume=bool(a.allow_legacy_full_arm_resume),
++                first_batch_size=int(a.first_batch_size), preflight_barrier=preflight_barrier,
+             )
+             with lock:
+                 metrics_by_arm[arm] = metrics
+@@ -674,7 +860,7 @@
+     report = {
+         "audit": "v64_3_50_pior_paired_closed_loop",
+         "algorithm_version": "V64.3.50-EAF-ICER-PIOR",
+-        "engineering_revision": "speed_resume_exact_db_probe_only_diag",
++        "engineering_revision": "v64_3_50_1_manifest_bound_iteration0_probe_identity_repair",
+         "challenge": a.challenge,
+         "scientific_intervention": "paired_one_shot_actual_full_set_RSMR_proposal_vs_same_incumbent_then_incumbent_only",
+         "scenario_count": len(paired),
+@@ -683,6 +869,7 @@
+         "hard_harm_count": harm,
+         "exact_raw_db_file_count": len(raw_files),
+         "batch_size": int(a.batch_size),
++        "first_batch_size": int(a.first_batch_size),
+         "workers_per_arm": int(a.workers_per_arm),
+         "serialize_gpu_inference": bool(a.serialize_gpu_inference),
+         "resume_enabled": bool(a.resume),
+--- a/NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
++++ b/NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
+@@ -1,36 +1,45 @@
+-V64.3.50 EAF-ICER-PIOR — optimized TRAIN closed-loop collection
++V64.3.50.1 EAF-ICER-PIOR — engineering repair rerun
+ 
+-1) If the old unbatched run is still active, first inspect whether it is actually progressing:
++Scientific status of the uploaded V50 result:
++- ENGINEERING/DATA STOP, not a PIOR algorithm result.
++- Do NOT use the 50/64 fired subset for PIOR AUC/retention analysis.
++- Do NOT run untouched/final validation yet.
+ 
+-  OUT=../outputs_v64_3_50_eaf_icer_pior_train_2gpu_v1
+-  tail -n 30 "$OUT/closed_loop_train/control/run.log"
+-  tail -n 30 "$OUT/closed_loop_train/treatment/run.log"
+-  grep -c '"pior_probe_fired": true' "$OUT/closed_loop_train/control/pior_closed_loop_diag.jsonl" 2>/dev/null || true
+-  grep -c '"pior_probe_fired": true' "$OUT/closed_loop_train/treatment/pior_closed_loop_diag.jsonl" 2>/dev/null || true
+-  nvidia-smi
+-
+-The old parent intentionally prints nothing while the two nuPlan children run. If you stop the old job, confirm no old evaluate_closed_loop child remains before starting the optimized package:
+-
+-  pgrep -af 'run_v64_3_50_pior_paired_closed_loop|bdse.experiments.evaluate_closed_loop' || true
+-  nvidia-smi
+-
+-2) Default optimized/resumable run. Dataset defaults already match the supplied layout:
++Recommended clean rerun (new output root is now the launcher default):
+ 
+   cd bdse_v64_3_50_eaf_icer_pior
+   bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+ 
+-Default engineering knobs:
++Default output root:
++
++  ../outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1
++
++The old failed root may be kept for audit; do not copy its batch_0000 into the new root.
++
++Default engineering controls:
+ 
+   WORKERS_PER_ARM=4
++  PIOR_FIRST_BATCH_SIZE=4
+   PIOR_BATCH_SIZE=64
+   PIOR_HEARTBEAT_SECONDS=30
+   PIOR_RESUME=1
+   PIOR_SERIALIZE_GPU_INFERENCE=0
+   PIOR_PROFILE_CLOSED_LOOP=1
+ 
+-3) Explicit form:
++The first control/treatment batch is a paired fail-fast preflight. Both 4-scene batches must certify:
++- exact scenario token;
++- iteration index 0;
++- target source = preregistered_V49_manifest_iteration0_proposal;
++- proposal action = manifest full_selected_action;
++- treatment executes proposal, control executes incumbent;
++- exactly one event per token;
++- no rerank / second-best / fallback;
++- valid per-scenario official metrics.
+ 
+-  cd bdse_v64_3_50_eaf_icer_pior
++Only after BOTH arms pass this preflight does the runner continue the expensive remaining TRAIN collection.
++
++Explicit server paths if needed:
++
+   V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+   BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2 \
+   NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
+@@ -43,35 +52,26 @@
+ 
+   export EAF_CKPT=/path/to/bdse_v64_saqa_bcc.epoch_XXXX.pt
+ 
+-4) Tuning engineering concurrency only (does not alter scientific semantics):
++Useful early inspection after the preflight starts:
+ 
+-  # If PIOR-TICK shows low GPU utilization and CPU has headroom:
+-  WORKERS_PER_ARM=6 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++  OUT=../outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1
++  grep -E '\[PIOR-PREFLIGHT|\[PIOR-BATCH|\[PIOR-TICK' "$OUT/logs/v64_3_50_paired_closed_loop.out" | tail -n 50
+ 
+-  # Coarser resume checkpoints / fewer nuPlan process reloads:
+-  PIOR_BATCH_SIZE=128 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++Expected success messages before full collection:
+ 
+-  # Finer resume checkpoints:
+-  PIOR_BATCH_SIZE=32 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++  [PIOR-PREFLIGHT-PASS] arm=control scenarios=4 ...
++  [PIOR-PREFLIGHT-PASS] arm=treatment scenarios=4 ...
++  [PIOR-PREFLIGHT-PAIR-PASS] arm=control ...
++  [PIOR-PREFLIGHT-PAIR-PASS] arm=treatment ...
+ 
+-  # Conservative fallback if unlocked shared-model CUDA execution is unstable:
+-  PIOR_SERIALIZE_GPU_INFERENCE=1 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++If preflight fails, send:
++- the traceback;
++- both batch_0000/run.log files;
++- both batch_0000/pior_probe_events.jsonl files;
++- both batch_0000/pior_probe_targets.json files.
++Do not continue to the 502-scene collection manually.
+ 
+-Resume discipline:
+-- New-format batches are skipped only with exact completion certificates (token/config/checkpoint/challenge/raw-DB-path-list/probe/metric hashes).
+-- Incomplete new batches rerun from scratch.
+-- A fully completed old pre-batch arm can be reused only after exact 502 success / 0 fail / 502 probe / 502 metric validation.
+-- A partially completed old pre-batch arm is NOT reused because old diagnostics cannot bind each finished token to its unique probe event and final metric strongly enough for the paired-intervention proof.
+-
+-Scientific discipline remains unchanged:
+-- exact 502 V49 full-set RSMR TRAIN proposal scenes;
+-- paired one-shot closed_loop_nonreactive_agents control/treatment outcomes;
+-- no replan-frequency/horizon/candidate/selector/probe/metric shortcut for speed;
+-- collection identity/metrics/probe failure => engineering/data STOP only;
+-- nested PIOR TRAIN failure => scientific STOP, no untouched validation;
+-- nested PIOR TRAIN pass => freeze PIOR, then preregister untouched paired closed-loop validation.
+-
+-
+-DB-resolution hotfix note
+--------------------------
+-The repaired package accepts dotted nuPlan log identities and crop-suffixed raw DB filenames. The normal launcher rebuilds the TRAIN manifest automatically; no manual token/DB rewrite is needed. After manifest construction, inspect `provenance/v64_3_50_pior_train_manifest.json` -> `raw_db_resolution_counts` if desired. `city_split_fallback` is correctness-safe because the exact frozen scenario-token filter remains active; it only reduces the startup speedup.
++Scientific execution discipline:
++- paired TRAIN collection complete -> run nested PIOR identification + causal-retention gate automatically;
++- TRAIN gate FAIL -> scientific STOP; no untouched closed-loop validation and no threshold/feature/loss rescue;
++- TRAIN gate PASS -> freeze PIOR; only then design/run untouched paired closed-loop validation.
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -12288,3 +12288,97 @@
+ Scientific mechanism unchanged: exact 502 V49 full-set RSMR proposal tokens, treatment/control one-shot action, candidate bank, RSMR, Q/P/E state, simulator challenge, official metrics, PIOR outcome label and nested gate are all unchanged. This hotfix changes only raw DB discovery/provenance.
+ 
+ Validation of the hotfix byte version: V50 focused **12/12 PASS**; V13→V50 targeted **254/254 PASS**; full repository **126/126 test files, 591/591 PASS** (`158 + 152 + 140 + 141`); compileall and launcher `bash -n` PASS.
++
++---
++
++# V64.3.50.1 engineering-only repair — frozen-proposal identity binding after uploaded V50 collection STOP
++
++## Uploaded V64.3.50 result reliability verdict
++
++The uploaded V64.3.50 server result is **not scientifically attributable** and must not be used to promote/reject PIOR or design V51.  It is a preregistered **ENGINEERING/DATA STOP**.
++
++Audited facts:
++
++- uploaded code ZIP SHA256: `62f9937884b70e9aeece881604c8a31421a319a328a4926c0d418aa213713ca6`;
++- the server's 913-entry V50 source manifest validates **913/913** against the uploaded code, so the failing run used the uploaded hotfix byte version;
++- server V13→V50 targeted regression: **254/254 PASS**;
++- TRAIN manifest: exact **502/502 unique** frozen V49 full-set RSMR proposal tokens;
++- all 502 cache samples are `*_it000000.npz`;
++- only `batch_0000` was executed: **64 successful / 0 failed** nuPlan simulations in each arm;
++- control probe fires: **50/64**; treatment probe fires: **50/64**;
++- fired-event iteration counts are identical across the two arms and only 16/50 fires occur at iteration 0; the rest occur at later online replans up to iteration 140;
++- the old lightweight event records contain no `scenario_token`, so the 50 fired events cannot be certified token-by-token against the 64 requested scenarios;
++- no complete paired-outcome table exists and `v64_3_50_pior_fit.json` / PIOR artifact were never created;
++- therefore nested PIOR identification/causal-retention gates were **never run**.
++
++Entering `closed_loop_nonreactive_agents` does **not** mean that V50 passed the algorithmic gates.  In V50, paired closed loop is the TRAIN supervision source required *before* the nested PIOR gate can be evaluated.  Untouched/final closed-loop validation remains forbidden unless the repaired TRAIN paired-outcome identification + retention gate later passes.
++
++This follows the V50 preregistration exactly: inability to establish complete paired token identity / one intervention per scene is an ENGINEERING/DATA STOP and only the collection implementation may be repaired.
++
++## Root cause
++
++The V50 design preregistered the treatment action as the **already frozen V49 full-set RSMR proposal** for each of the exact 502 proposal scenes.  The implementation, however, did not consume `full_selected_action` from the TRAIN manifest.  `BDSEPlannerCore._apply_selected_outcome_probe()` instead watched the newly recomputed online tournament diagnostics at every closed-loop replan and fired only when a proposal happened to reappear.
++
++Consequences:
++
++1. 14/64 batch-0 scenes completed nuPlan simulation without ever exposing an online proposal, so the required intervention never fired;
++2. even for the 50 fired cases, most interventions occurred after scenario start and therefore did not correspond to the preregistered V49 `*_it000000` proposal event;
++3. the event-only speed logger counted fires but omitted scenario-token identity, so the partial output cannot be safely repaired/post-hoc paired;
++4. analysing the 50/64 subset would introduce selection bias conditioned on online proposal reappearance and is explicitly forbidden.
++
++## V64.3.50.1 repair
++
++This is an **engineering revision only**.  The V50 algorithm, Q/P/E state, low-capacity ranker, lambda, RSMR, candidate bank, outcome label, simulator challenge, safety metrics and TRAIN gate are unchanged.
++
++### 1. Manifest-bound iteration-0 proposal identity
++
++The TRAIN manifest now stores, for every frozen token:
++
++- `scenario_token`;
++- `cache_iteration`;
++- exact NPZ `timestamp_us`;
++- exact V49 `full_selected_action`;
++- raw DB candidate set/provenance.
++
++The builder requires `cache_iteration == 0`, matching the observed preregistered population (`502/502 *_it000000.npz`).
++
++Each batch writes a `pior_probe_targets.json` identity map.  The closed-loop planner binds its first planner call to this map by the exact scenario-start timestamp (with only a deterministic <=4 microsecond conversion tolerance and ambiguity fail-closed).  The scientific intervention action is then the manifest `full_selected_action`; an online re-selected proposal is recorded only as a diagnostic replay comparison and cannot change the treatment target.
++
++Treatment at iteration 0 executes exactly the frozen manifest action once.  Control at the same event executes the current incumbent.  Later replans in both arms return to incumbent-only operation, preserving the preregistered one-shot/no-fallback contract.
++
++### 2. Token-bound event certificate
++
++Every fired event now records and is validated against:
++
++- exact `scenario_token`;
++- target/current `timestamp_us` and timestamp error;
++- iteration index == 0;
++- exact frozen proposal action;
++- incumbent action;
++- arm-specific final action;
++- target source = `preregistered_V49_manifest_iteration0_proposal`;
++- same-frozen-proposal-or-incumbent containment;
++- no rerank / second-best / fallback.
++
++A batch is complete only when the event token set equals the requested token set exactly.  Counting `N` anonymous event lines is no longer sufficient.
++
++### 3. Resume hardening
++
++Completion certificates additionally bind the batch-local target-spec SHA256 and the token-bound probe certificate.  The uploaded invalid batch-0 has no valid V50.1 certificate and cannot be reused.  The recommended rerun uses a new output root to prevent stale artifact ambiguity.
++
++### 4. Paired fail-fast preflight
++
++The default run now uses a 4-scene first batch in each arm.  A `threading.Barrier` prevents either arm from entering the expensive remaining TRAIN collection until **both** control and treatment first batches pass all exact identity/probe/metric certificates.  Any preflight error aborts the peer arm before full collection.
++
++This scheduling change does not alter tokens, folds, actions, labels or metrics.  It only reduces the cost of detecting a server-specific identity mismatch.
++
++## Scientific status after repair
++
++- V50 mechanism success: **NOT EVALUATED**;
++- V50 promotion: **NOT PERMITTED YET**;
++- convergence: **cannot be judged from the failed collection**;
++- V51 design: **intentionally not performed**;
++- next action: rerun repaired V50 TRAIN collection and evaluate the already-preregistered PIOR identification + causal-retention gate;
++- only if that TRAIN gate passes may an untouched closed-loop validation be designed/run.
++
++No previously prohibited algorithm direction is reopened by this engineering repair.
+--- a/V64_3_50_ENGINEERING_VALIDATION.txt
++++ b/V64_3_50_ENGINEERING_VALIDATION.txt
+@@ -1,36 +1,67 @@
+-V64.3.50 EAF-ICER-PIOR — engineering validation after speed/resume + DB-resolution hotfix
++V64.3.50.1 EAF-ICER-PIOR engineering validation
++================================================
+ 
+ Scope
+ -----
+-Engineering-only repair of paired TRAIN closed-loop collection. Scientific PIOR semantics are unchanged: exact 502 frozen V49 full-set RSMR proposals, same treatment/control one-shot intervention, same Q/P/E state, same ranker/lambda, same closed_loop_nonreactive_agents challenge, same hard-safety metrics and same nested TRAIN gate.
++Engineering-only repair after uploaded V64.3.50 paired collection stopped at batch_0000 with
++64/64 successful nuPlan simulations but 50/64 probe fires per arm.  No V50 algorithmic
++feature/loss/threshold/gate change is included.
+ 
+-Bug fixed
+----------
+-The first speed package incorrectly applied pathlib.Path.stem to dotted nuPlan log identities and also assumed cached log_name must equal one raw DB filename stem. Example: Path('2021.08.23.18.41.38_veh-28').stem becomes '2021.08.23.18.41'. Raw nuPlan DB filenames may additionally carry numeric crop suffixes. The hotfix preserves dotted log identities, normalizes the known crop suffix, optionally disambiguates multi-chunk log families via read-only SQLite token lookup, and otherwise widens only the raw DB search set while retaining the exact frozen scenario-token filter.
++Uploaded result reliability audit
++---------------------------------
++- uploaded code ZIP SHA256: 62f9937884b70e9aeece881604c8a31421a319a328a4926c0d418aa213713ca6
++- uploaded result ZIP SHA256: 1a509941fee856a52bdc569a736e5e5058ae28921769909c25534c8ed88fa7f7
++- server source manifest matches uploaded code: 913/913 PASS
++- server targeted regression in uploaded run: 254/254 PASS
++- exact TRAIN manifest population: 502/502 unique
++- all frozen proposal cache samples: *_it000000.npz
++- batch_0000 control: 64 success / 0 fail / 50 probe fires
++- batch_0000 treatment: 64 success / 0 fail / 50 probe fires
++- paired outcome table: NOT CREATED
++- nested PIOR fit/gate: NOT RUN
++- formal result status: preregistered ENGINEERING/DATA STOP; no PIOR attribution allowed
+ 
+-Validation
+-----------
+-Python compile / compileall: PASS
+-Launcher bash -n: PASS
+-V50 focused tests: 12/12 PASS
+-V13 -> V50 targeted regression (including V48.2 provenance lock): 254/254 PASS
+-Full repository: 126/126 test files, 591/591 PASS
+-  shard 0: 158/158 PASS
+-  shard 1: 152/152 PASS
+-  shard 2: 140/140 PASS
+-  shard 3: 141/141 PASS
+-V64.3.50 source manifest: 913/913 PASS
+-Source manifest SHA256: ea591a9ee383fd336a787d84dd34a4dcbd8c9536518556cc425f15eae2ea43ed
++Repair contracts
++----------------
++- frozen V49 full_selected_action is supplied by a batch-local target map;
++- target identity requires cache_iteration == 0 and valid timestamp_us;
++- first planner call must be iteration 0;
++- treatment executes exact manifest frozen action once;
++- control executes current incumbent at the same event;
++- online re-selected proposal is diagnostic only and cannot choose treatment target;
++- every fired event carries exact scenario_token/timestamp/action certificate;
++- requested token set must equal event token set exactly, one event/token;
++- resume certificate additionally binds target-spec SHA256 and token-bound event validation;
++- default first batch = 4 scenes and a two-arm barrier prevents expensive continuation unless both preflights pass;
++- old invalid batch_0000 cannot satisfy V50.1 completion certificate and is not reused.
+ 
+-New DB/provenance contracts tested
+----------------------------------
+-1. Dotted nuPlan log identities are preserved exactly; only a literal .db suffix is stripped.
+-2. DB crop stems such as <log>_00001_00099.db normalize to the stable cached log identity.
+-3. Multi-chunk stable-log families can be resolved by exact read-only SQLite lidar-pc/scenario-tag token membership when supported.
+-4. If a unique raw DB cannot be proven, the runner retains a safe DB candidate set rather than dropping/stopping a frozen token; exact scenario_filter.scenario_tokens remains the final scientific population filter.
+-5. Batch completion certificates bind the actual per-batch raw-DB candidate-list SHA256, so a changed DB search set invalidates resume.
+-6. Probe-only diagnostics, heartbeat, unlocked shared-model inference and deterministic batch resume remain unchanged from the speed patch.
++Final byte-version tests
++------------------------
++- V50 focused / repair contract: 17/17 PASS
++- V13->V50 targeted regression: 259/259 PASS
++- full repository: 126/126 test files, 596/596 PASS
++  - shard 0: 158/158 PASS
++  - shard 1: 152/152 PASS
++  - shard 2: 145/145 PASS
++  - shard 3: 141/141 PASS
++- Python compileall: PASS
++- launcher bash -n: PASS
++- warnings: historical Transformer/nested-tensor warning classes only; no new failure class
+ 
+-Not changed
+------------
+-No RSMR/candidate/top-K change; no treatment/control action change; no replan interval or horizon change; no scenario subsampling; no metric/label change; no fold/gate change; no fallback/rerank/second-best; no deployment future leakage.
++Scientific invariants intentionally unchanged
++---------------------------------------------
++- exact 502 V49 full-set RSMR proposal population
++- bounded interface / EAF / support / RSMR selection
++- candidate bank and action semantics
++- Q/P/E PIOR state
++- zero-bias pairwise ranker and lambda=1
++- closed_loop_nonreactive_agents TRAIN challenge
++- official score and hard-safety outcome definition
++- nested folds and preregistered identification/retention gate
++- same frozen proposal or incumbent only; no rerank, second-best, or fallback
++
++Scientific status
++-----------------
++V50 success/failure/convergence is NOT EVALUATED by the uploaded result.  Rerun V50.1 TRAIN
++paired collection.  TRAIN gate failure must STOP before untouched validation.  TRAIN gate pass
++freezes PIOR and only then permits separately preregistered untouched validation.
+--- a/V64_3_50_SOURCE_MANIFEST.sha256
++++ b/V64_3_50_SOURCE_MANIFEST.sha256
+@@ -1,4 +1,4 @@
+-4063543ffaa9ff6b9b4cf0646052f1dbc3a100bc89f8f6ec797c5405323b7801  RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++25685ffb85ddb6bfb84f618de61d8f81a7599055dcaeeb7a8f22a3555397d92c  RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+ 52c0cc0167fe6371627ed66768dc9c2c6a3beb6187b81e87789ee05f1bf94d69  RUN_V64_3_49_EAF_ICER_SIIR_SCREEN_2GPU.sh
+ a447bc2270ef2e2dc3408c4a1e9389bd9ab30e4bbbe0ad4790e9187218267650  RUN_V64_3_48_2_EAF_ICER_OCRR_SCREEN_2GPU.sh
+ 26dea4ea6c40507df06c297be58c4730bb4ee7f732b477cbfd178ef7ec51197e  .gitattributes
+@@ -517,7 +517,7 @@
+ ce56d28d3a76e7e81dd9dc38a667f3ef9e79c6df207f48998a4e90b4619189f0  bdse/planner/future_state_factorization.py
+ c9269321f45ae7982a37d51b5a6b5d567e38d6d615435ab1641dbcf409fa0bb5  bdse/planner/hab.py
+ a5a38ae85b9bcf9c09759f8760b3ea41ee9ee99e1653b870bfe0645f6ad0da7b  bdse/planner/interaction_response_field.py
+-55eb42785069dfc0801fdb2b24021e547269d2931ab11fb8f7fde978dd92fc92  bdse/planner/nuplan_planner.py
++e01f5a9a066e7850e21915a2245a5fb294f9e99bfafce397f209827f37df15ea  bdse/planner/nuplan_planner.py
+ c35425114f8438d2c644da7aea7fae57916f17390ef49f93dfe614e1ae7179c3  bdse/planner/operator_conditioned_risk_retention.py
+ 81075941f3323038ce3131cf6717d86efc583b9d6bdf443aa8f32f0ac949e154  bdse/planner/pair_builder.py
+ 31ab1761b0d96cbede2c959a7deedf04bfa4c3088dc0b4c96563d5dd3279f33d  bdse/planner/pair_screen.py
+@@ -906,8 +906,8 @@
+ 8766476a9a8d5c93ad8ab02f32444be9f4dfb01a000b7f5e6ce6e1aa43ee40ac  bdse/tools/check_v64_3_49_eaf_icer_siir_screen.py
+ 01dbedbc3fc85bbed406dcd6930f5d7f099ffdf8b55b683d0be5ce299800c37a  bdse/tools/check_v64_3_49_eaf_icer_siir_split.py
+ 54b9dddb6d402bd8be1ef269b30727ba3bdfc2914b14d687fae00f42a57bee5d  bdse/tools/fit_v64_3_49_eaf_icer_siir.py
+-dcd077eecbebe5045cbc352a5c09d9cabc894d071105ff03491edc4a3a16f2f4  bdse/tests/test_v64_3_50_eaf_icer_pior.py
+-19aead4305e5aefa78e7a83f490c80d88195aa55990d279fb2384250f7daa364  bdse/tools/build_v64_3_50_pior_train_manifest.py
++1117be261da59180b8068093c8cc108a6523c1b889031950d9926de90e92601d  bdse/tests/test_v64_3_50_eaf_icer_pior.py
++feba672b1f3c36c18366107dbbba835d3353ec2bcabc8667a31136db657eb5ec  bdse/tools/build_v64_3_50_pior_train_manifest.py
+ 315dc33bd12f0f8468be71e7627dfbe3b778eaa53ccd48ac5cc46f0badc4a821  bdse/tools/fit_v64_3_50_eaf_icer_pior.py
+-3c35aae9b75a3a7727c239c0eb8484a0e48f4eeff22b6f664cba92c0ec44577d  bdse/tools/make_v64_3_50_pior_probe_configs.py
+-9b358bfbcfb7f9b05bd1f8833e8afad9ffdd48b73c67a0e356eabb485ad2f52b  bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
++035b2ab28a131f4ffd27a67c3d8eb9d250c9b98adf36ba83b9c99599c59c4350  bdse/tools/make_v64_3_50_pior_probe_configs.py
++32610be43ebbfc23a0d33a6b9bf39676fa438f2c5233c95a51535fec986062b0  bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
+--- a/V64_3_50_UPLOADED_RESULT_ENGINEERING_AUDIT.json
++++ b/V64_3_50_UPLOADED_RESULT_ENGINEERING_AUDIT.json
+@@ -0,0 +1,82 @@
++{
++  "algorithm_promotion_allowed": false,
++  "arms": {
++    "control": {
++      "batch0_scenario_count": 64,
++      "nuplan_failed_simulations": 0,
++      "nuplan_successful_simulations": 64,
++      "probe_event_has_scenario_token": false,
++      "probe_fired_count": 50,
++      "probe_iteration_counts": {
++        "0": 16,
++        "10": 5,
++        "110": 1,
++        "140": 1,
++        "15": 6,
++        "20": 5,
++        "30": 1,
++        "35": 2,
++        "40": 1,
++        "5": 8,
++        "55": 1,
++        "70": 1,
++        "80": 1,
++        "90": 1
++      }
++    },
++    "treatment": {
++      "batch0_scenario_count": 64,
++      "nuplan_failed_simulations": 0,
++      "nuplan_successful_simulations": 64,
++      "probe_event_has_scenario_token": false,
++      "probe_fired_count": 50,
++      "probe_iteration_counts": {
++        "0": 16,
++        "10": 5,
++        "110": 1,
++        "140": 1,
++        "15": 6,
++        "20": 5,
++        "30": 1,
++        "35": 2,
++        "40": 1,
++        "5": 8,
++        "55": 1,
++        "70": 1,
++        "80": 1,
++        "90": 1
++      }
++    }
++  },
++  "audit": "v64_3_50_uploaded_result_reliability",
++  "formal_reliability_judgement": "ENGINEERING_DATA_STOP_NOT_SCIENTIFICALLY_ATTRIBUTABLE",
++  "manifest_cache_iteration_counts": {
++    "000000": 502
++  },
++  "manifest_population_count": 502,
++  "manifest_unique_count": 502,
++  "paired_scientific_artifacts_present": {
++    "v64_3_50_pior.yaml": false,
++    "v64_3_50_pior_fit.json": false,
++    "v64_3_50_pior_paired_closed_loop_outcomes.jsonl": false,
++    "v64_3_50_pior_paired_closed_loop_report.json": false
++  },
++  "partial_algorithm_attribution_allowed": false,
++  "repair_class": "V64.3.50.1 engineering-only probe-identity repair; no algorithm change",
++  "root_cause": [
++    "original probe waited for a newly recomputed online tournament proposal instead of consuming manifest full_selected_action",
++    "therefore 14/64 batch0 scenarios never fired the preregistered intervention even though simulation succeeded",
++    "probe-only event rows lacked scenario_token, so the 50 fired events cannot be certified token-by-token against the 64 batch population",
++    "all 502 frozen proposal cache files are it000000, so the intended preregistered proposal event is scenario iteration 0"
++  ],
++  "server_source_manifest_entries": 913,
++  "server_source_manifest_matches_uploaded_code": true,
++  "server_targeted_regression": "254/254 PASS",
++  "stage_timing_completed": [
++    "source_and_v49_failure_lock\t0",
++    "regression_and_checkpoint\t23",
++    "exact_train_population_and_probe_configs\t43"
++  ],
++  "uploaded_code_zip_sha256": "62f9937884b70e9aeece881604c8a31421a319a328a4926c0d418aa213713ca6",
++  "uploaded_result_zip_sha256": "1a509941fee856a52bdc569a736e5e5058ae28921769909c25534c8ed88fa7f7"
++}
+--- a/V64_3_50_UPLOADED_RESULT_ENGINEERING_STOP_AND_V64_3_50_1_PROBE_IDENTITY_REPAIR.md
++++ b/V64_3_50_UPLOADED_RESULT_ENGINEERING_STOP_AND_V64_3_50_1_PROBE_IDENTITY_REPAIR.md
+@@ -0,0 +1,96 @@
++# V64.3.50 uploaded result: engineering STOP and V64.3.50.1 probe-identity repair
++
++## Executive verdict
++
++The uploaded run is **not sufficient for V50 algorithm attribution**.  It is useful only for diagnosing the collection implementation.
++
++The server executed the exact uploaded V50 source (913/913 source-manifest match) and passed the server targeted regression (254/254), but paired TRAIN collection stopped in the first 64-scene batch because each nuPlan arm completed 64/64 simulations while only 50/64 required PIOR interventions fired.  Consequently the exact 502-scene paired table, the nested PIOR fit, and the preregistered identification/causal-retention gates do not exist.
++
++According to the V49→V50 preregistration, this is an **ENGINEERING/DATA STOP**.  No PIOR promotion/falsification, convergence claim, dominant-bottleneck update, or V51 algorithm design is valid from this run.
++
++## Why "closed loop started" is not a GO signal
++
++V50 differs from the earlier offline versions: paired closed-loop outcomes are the **TRAIN supervision source**.  The order is:
++
++1. exact V49 failure/science lock;
++2. exact 502 frozen-proposal TRAIN manifest;
++3. paired control/treatment TRAIN closed-loop outcome collection;
++4. only then: nested PIOR outcome identification and retention gate;
++5. only if TRAIN passes: freeze the artifact and later run untouched validation.
++
++The uploaded run stopped inside step 3.  Therefore it passed neither step 4 nor any untouched/final closed-loop gate.
++
++## Evidence in the uploaded result
++
++- code ZIP SHA256: `62f9937884b70e9aeece881604c8a31421a319a328a4926c0d418aa213713ca6`;
++- result ZIP SHA256: `1a509941fee856a52bdc569a736e5e5058ae28921769909c25534c8ed88fa7f7`;
++- source manifest against uploaded code: **913/913 PASS**;
++- server targeted tests: **254/254 PASS**;
++- TRAIN manifest: **502 unique proposal tokens**, all from `*_it000000.npz`;
++- DB resolution: all 502 were resolved by exact SQLite token lookup in the provided run;
++- batch 0: 64 requested scenarios per arm;
++- nuPlan: control **64 success / 0 fail**, treatment **64 success / 0 fail**;
++- PIOR probe events: control **50/64**, treatment **50/64**;
++- fired iterations in each arm: iteration 0 only 16 events; the remainder occur at later iterations 5..140;
++- old probe events omit `scenario_token`;
++- no complete paired-outcome report/table;
++- no `v64_3_50_pior_fit.json` and no emitted PIOR config.
++
++The 50/64 subset must not be used for mechanism metrics: inclusion is conditioned on the online planner happening to regenerate a proposal, creating an implementation-induced selected subset.
++
++## Root cause
++
++The manifest already contains the exact frozen V49 `full_selected_action` for each of the 502 scenes.  However, the original closed-loop probe ignored that field.  At every simulator replan it read the *current* tournament diagnostics and waited for `proposal_exists`.  If a new online proposal appeared, treatment executed that newly observed proposal and control kept the incumbent; otherwise both arms waited.
++
++That implementation does not match the preregistered causal object: **execute the already-frozen full-set V49 proposal once versus the same incumbent**.
++
++Because every frozen V49 proposal cache sample in the uploaded manifest is `it000000`, the correct intervention event for this preregistered population is scenario iteration 0.
++
++## Repair
++
++V64.3.50.1 is an engineering-only repair; it is not a new algorithm version.
++
++### Frozen target map
++
++The manifest builder stores `cache_iteration`, NPZ `timestamp_us`, and `full_selected_action`.  A batch-local `pior_probe_targets.json` is passed to the nuPlan planner.  The planner's first call must be iteration 0 and is bound to exactly one frozen target using the scenario-start timestamp.  Duplicate start timestamps are deterministically separated into different subprocess batches.
++
++### Exact action contract
++
++At iteration 0:
++
++- treatment final action = manifest frozen `full_selected_action`;
++- control final action = current incumbent/baseline;
++- manifest proposal must be a valid current candidate and must differ from incumbent;
++- online tournament proposal is diagnostic only and cannot choose/replace the target.
++
++After the one-shot event, both arms preserve incumbent-only behavior as before.
++
++### Token-level proof
++
++Every probe certificate now contains exact token, target timestamp, current timestamp, frozen action, incumbent, final action and structural containment flags.  Batch acceptance requires one and only one valid event for every requested token.
++
++### Fail-fast paired preflight
++
++Before the expensive 502-scene collection proceeds, each arm runs a 4-scene first batch.  A paired barrier requires both arms to validate successfully before either can continue.  This protects server time without altering scientific data or folds.
++
++### Resume
++
++The invalid uploaded batch has no V50.1 target-bound completion certificate and is not scientifically reusable.  Use the new default output root.  Future completed batches are resumable only when token/config/checkpoint/DB/target/event/metric hashes all match.
++
++## What is intentionally unchanged
++
++- exact 502 V49 full-set RSMR proposal population;
++- candidate generator and action indexing;
++- RSMR ordinal selector;
++- V44 occupancy / V45 response / V47 EGO-REF inputs already embedded in Q/P/E;
++- `[Q, P-Q, E-P]` PIOR state;
++- zero-bias pairwise loss and `lambda=1`;
++- `closed_loop_nonreactive_agents` TRAIN challenge;
++- official score and hard-safety metric definitions;
++- PIOR positive/negative outcome label;
++- nested folds and preregistered AUC/retention gates;
++- same winner or incumbent, no rerank, no second best, no fallback.
++
++## Next scientific decision
++
++Rerun V50.1.  If the 502 paired collection completes, then and only then inspect the preregistered TRAIN gate.  A TRAIN failure is a scientific V50 result and must stop before untouched validation.  A TRAIN pass freezes PIOR and permits a separately preregistered untouched validation.  No V51 design is justified before that result.
+--- a/V64_3_50_1_ENGINEERING_REPAIR_CHANGED_FILES.txt
++++ b/V64_3_50_1_ENGINEERING_REPAIR_CHANGED_FILES.txt
+@@ -0,0 +1,12 @@
++modified	ALGORITHM_CHANGELOG.md
++modified	NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
++modified	RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
++modified	V64_3_50_ENGINEERING_VALIDATION.txt
++modified	V64_3_50_SOURCE_MANIFEST.sha256
++added	V64_3_50_UPLOADED_RESULT_ENGINEERING_AUDIT.json
++added	V64_3_50_UPLOADED_RESULT_ENGINEERING_STOP_AND_V64_3_50_1_PROBE_IDENTITY_REPAIR.md
++modified	bdse/planner/nuplan_planner.py
++modified	bdse/tests/test_v64_3_50_eaf_icer_pior.py
++modified	bdse/tools/build_v64_3_50_pior_train_manifest.py
++modified	bdse/tools/make_v64_3_50_pior_probe_configs.py
++modified	bdse/tools/run_v64_3_50_pior_paired_closed_loop.py

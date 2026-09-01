@@ -1,0 +1,12 @@
+modified	ALGORITHM_CHANGELOG.md
+modified	NEXT_COMMANDS_V64_3_50_EAF_ICER_PIOR.txt
+modified	RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+modified	V64_3_50_ENGINEERING_VALIDATION.txt
+modified	V64_3_50_SOURCE_MANIFEST.sha256
+added	V64_3_50_UPLOADED_RESULT_ENGINEERING_AUDIT.json
+added	V64_3_50_UPLOADED_RESULT_ENGINEERING_STOP_AND_V64_3_50_1_PROBE_IDENTITY_REPAIR.md
+modified	bdse/planner/nuplan_planner.py
+modified	bdse/tests/test_v64_3_50_eaf_icer_pior.py
+modified	bdse/tools/build_v64_3_50_pior_train_manifest.py
+modified	bdse/tools/make_v64_3_50_pior_probe_configs.py
+modified	bdse/tools/run_v64_3_50_pior_paired_closed_loop.py

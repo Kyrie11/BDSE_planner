@@ -29,6 +29,22 @@ def _scalar(z: Any, key: str) -> str:
         return ""
 
 
+def _scalar_int(z: Any, key: str) -> int:
+    if key not in z:
+        return 0
+    try:
+        a = np.asarray(z[key])
+        v = a.item() if a.shape == () else a.reshape(-1)[0]
+        return int(v)
+    except Exception:
+        return 0
+
+
+def _cache_iteration(path: Path) -> int:
+    m = re.search(r"_it(\d+)\.npz$", path.name)
+    return int(m.group(1)) if m else -1
+
+
 def _eligible_tokens(candidate_audit: Path) -> tuple[list[str], dict[str, dict[str, Any]]]:
     out: list[str] = []
     meta: dict[str, dict[str, Any]] = {}
@@ -231,12 +247,26 @@ def main() -> None:
                     if tok not in wanted or tok in found:
                         continue
                     log_name = _scalar(z, "log_name") or p.parent.name
+                    timestamp_us = _scalar_int(z, "timestamp_us")
+                    cache_iteration = _cache_iteration(p)
+                    if timestamp_us <= 0:
+                        raise RuntimeError(
+                            f"V64.3.50 PIOR STOP: frozen token={tok} has no valid cache timestamp_us in {p}; "
+                            "paired iteration-0 intervention identity cannot be proven"
+                        )
+                    if cache_iteration != 0:
+                        raise RuntimeError(
+                            f"V64.3.50 PIOR STOP: frozen token={tok} comes from cache iteration={cache_iteration}, expected it000000; "
+                            "V50.1 repair is defined only for the preregistered scenario-start proposal event"
+                        )
                     found[tok] = {
                         **meta[tok],
                         "scenario_token": tok,
                         "cache_city": city,
                         "raw_db_split": CITY_TO_RAW[city],
                         "npz_path": str(p.resolve()),
+                        "cache_iteration": int(cache_iteration),
+                        "timestamp_us": int(timestamp_us),
                         "log_name": log_name,
                         "scenario_name": _scalar(z, "scenario_name"),
                         "scenario_type": _scalar(z, "scenario_type"),
@@ -250,6 +280,17 @@ def main() -> None:
     missing = sorted(wanted - set(found))
     if missing:
         raise RuntimeError(f"V64.3.50 PIOR STOP: {len(missing)} frozen RSMR TRAIN tokens missing from stated bdse_train_v2 layout; first={missing[:10]}")
+
+    # Every preregistered V49 proposal comes from *_it000000.npz.  Store the
+    # exact scenario-start timestamp so the paired runner can bind each planner
+    # instance to the frozen action.  Timestamp collisions across the full 502
+    # population are allowed: the runner deterministically separates colliding
+    # timestamps into different subprocess batches, where scenario_filter tokens
+    # provide the remaining identity constraint.
+    ts_counts: dict[int, int] = {}
+    for tok in tokens:
+        ts = int(found[tok]["timestamp_us"])
+        ts_counts[ts] = ts_counts.get(ts, 0) + 1
 
     db_index = _db_index(args.raw_split_root)
     raw_dirs = [str((args.raw_split_root / raw).resolve()) for raw in sorted(db_index)]
@@ -281,6 +322,8 @@ def main() -> None:
         "scientific_population": "exact_V49_full_set_RSMR_TRAIN_proposals_only",
         "scenario_count": len(rows),
         "unique_scenario_count": len({r["scenario_token"] for r in rows}),
+        "scenario_start_timestamp_unique_count": len(ts_counts),
+        "scenario_start_timestamp_collision_count": int(sum(max(v - 1, 0) for v in ts_counts.values())),
         "city_counts": counts,
         "npz_files_scanned_until_complete": int(scanned_npz),
         "raw_db_directories": raw_dirs,

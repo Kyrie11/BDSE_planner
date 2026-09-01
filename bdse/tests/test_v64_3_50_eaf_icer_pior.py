@@ -8,7 +8,9 @@ import pytest
 
 from bdse.planner.nuplan_planner import BDSEPlannerCore
 from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW, _stable_log_name, _resolve_raw_db_files
-from bdse.tools.run_v64_3_50_pior_paired_closed_loop import _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files
+from bdse.tools.run_v64_3_50_pior_paired_closed_loop import (
+    _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files, _validate_probe_events, _collision_safe_batches
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,6 +65,48 @@ def test_v50_control_marks_same_event_but_never_leaves_incumbent() -> None:
     assert d["pior_probe_fired"] is True
     assert d["pior_probe_proposal_action"] == 3
     assert d["pior_probe_baseline_action"] == 1
+
+
+
+def test_v50_manifest_bound_probe_fires_exact_v49_action_at_iteration0_even_when_online_proposal_absent(tmp_path, monkeypatch) -> None:
+    import json
+    ts = 1_629_745_157_950_134
+    target = tmp_path / "targets.json"
+    target.write_text(json.dumps({"targets": [{
+        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
+    }]}))
+    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
+    cfg = _cfg("treatment")
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"
+    core = BDSEPlannerCore(cfg=cfg)
+    current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
+    action, d = core._apply_selected_outcome_probe(
+        _tournament(proposal=-1, baseline=1, exists=False, action=1), 1, _candidates(), current
+    )
+    assert action == 3
+    assert d["pior_probe_fired"] is True
+    assert d["pior_probe_scenario_token"] == "tok"
+    assert d["pior_probe_proposal_action"] == 3
+    assert d["pior_probe_online_proposal_exists"] is False
+    assert d["pior_probe_online_proposal_matches_target"] is False
+    assert d["pior_probe_target_timestamp_us"] == ts
+    assert abs(d["pior_probe_current_timestamp_us"] - ts) <= 4
+
+
+def test_v50_manifest_bound_probe_refuses_nonzero_first_iteration(tmp_path, monkeypatch) -> None:
+    import json
+    ts = 1_629_745_157_950_134
+    target = tmp_path / "targets.json"
+    target.write_text(json.dumps({"targets": [{
+        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
+    }]}))
+    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
+    cfg = _cfg("control")
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"
+    core = BDSEPlannerCore(cfg=cfg)
+    current = SimpleNamespace(iteration=SimpleNamespace(index=5, time_s=ts / 1e6))
+    with pytest.raises(RuntimeError, match="iteration 0"):
+        core._apply_selected_outcome_probe(_tournament(baseline=1), 1, _candidates(), current)
 
 
 def test_v50_probe_refuses_fallback_or_second_path() -> None:
@@ -122,6 +166,14 @@ def test_v50_probe_only_diag_is_minimal_and_event_only(tmp_path, monkeypatch) ->
             "pior_probe_fired": True,
             "pior_probe_arm": "treatment",
             "pior_probe_event_count": 1,
+            "pior_probe_scenario_token": "tok",
+            "pior_probe_target_timestamp_us": 700000,
+            "pior_probe_current_timestamp_us": 700000,
+            "pior_probe_timestamp_error_us": 0,
+            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
+            "pior_probe_online_proposal_exists": False,
+            "pior_probe_online_proposal_action": -1,
+            "pior_probe_online_proposal_matches_target": False,
             "pior_probe_baseline_action": 1,
             "pior_probe_proposal_action": 3,
             "pior_probe_final_action": 3,
@@ -135,6 +187,8 @@ def test_v50_probe_only_diag_is_minimal_and_event_only(tmp_path, monkeypatch) ->
     assert len(rows) == 1
     assert rows[0]["pior_probe_fired"] is True
     assert rows[0]["pior_probe_proposal_action"] == 3
+    assert rows[0]["scenario_token"] == "tok"
+    assert rows[0]["target_timestamp_us"] == 700000
     assert "diagnostics" not in rows[0]
     assert "large_unused_payload" not in rows[0]
 
@@ -171,6 +225,7 @@ def test_v50_resume_certificate_requires_exact_hashes(tmp_path) -> None:
     diag.write_text(
         "\n".join(json.dumps({"pior_probe_fired": True, "pior_probe_arm": "control"}, sort_keys=True) for _ in tokens) + "\n"
     )
+    (root / "pior_probe_targets.json").write_text(json.dumps({"targets": []}) + "\n")
     sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
     token_sha = hashlib.sha256(("\n".join(tokens) + "\n").encode()).hexdigest()
     cert = {
@@ -251,3 +306,60 @@ def test_v50_raw_db_resolution_falls_back_without_changing_token_population(tmp_
         "tok2": {"raw_db_files": [str(b)]},
     }
     assert _batch_raw_files(["tok", "tok2"], meta) == [str(a), str(b)]
+
+
+def test_v50_probe_event_validation_is_token_bound(tmp_path: Path) -> None:
+    import json
+    tokens = ["a", "b"]
+    meta = {
+        "a": {"timestamp_us": 1000000, "cache_iteration": 0, "full_selected_action": 3},
+        "b": {"timestamp_us": 2000000, "cache_iteration": 0, "full_selected_action": 4},
+    }
+    path = tmp_path / "events.jsonl"
+    rows = []
+    for tok, base in [("a", 1), ("b", 2)]:
+        m = meta[tok]
+        rows.append({
+            "scenario_token": tok, "iteration_index": 0,
+            "pior_probe_fired": True, "pior_probe_event_count": 1, "pior_probe_arm": "treatment",
+            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
+            "target_timestamp_us": m["timestamp_us"], "current_timestamp_us": m["timestamp_us"],
+            "pior_probe_proposal_action": m["full_selected_action"], "pior_probe_baseline_action": base,
+            "pior_probe_final_action": m["full_selected_action"],
+            "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
+            "pior_probe_contract_no_rerank_second_best_fallback": True,
+            "pior_probe_online_proposal_exists": False, "pior_probe_online_proposal_matches_target": False,
+        })
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    got, audit = _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
+    assert set(got) == set(tokens)
+    assert audit["online_proposal_matches_frozen_target_count"] == 0
+    rows[1]["scenario_token"] = "a"
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    with pytest.raises(RuntimeError, match="duplicate probe event"):
+        _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
+
+
+def test_v50_collision_safe_batches_separate_equal_start_timestamps() -> None:
+    tokens = ["a", "b", "c", "d"]
+    meta = {
+        "a": {"timestamp_us": 1},
+        "b": {"timestamp_us": 2},
+        "c": {"timestamp_us": 1},
+        "d": {"timestamp_us": 3},
+    }
+    batches = _collision_safe_batches(tokens, meta, 4)
+    assert batches == [["a", "b"], ["c", "d"]]
+    for batch in batches:
+        assert len({meta[t]["timestamp_us"] for t in batch}) == len(batch)
+
+
+def test_v50_first_batch_is_small_paired_preflight_without_changing_population() -> None:
+    tokens = [f"t{i}" for i in range(10)]
+    meta = {t: {"timestamp_us": i + 1} for i, t in enumerate(tokens)}
+    batches = _collision_safe_batches(tokens, meta, batch_size=6, first_batch_size=3)
+    assert batches == [tokens[:3], tokens[3:9], tokens[9:]]
+    assert [t for batch in batches for t in batch] == tokens
+    text = (ROOT / "RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh").read_text()
+    assert 'PIOR_FIRST_BATCH_SIZE="${PIOR_FIRST_BATCH_SIZE:-4}"' in text
+    assert '--first-batch-size "$PIOR_FIRST_BATCH_SIZE"' in text

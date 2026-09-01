@@ -73,6 +73,83 @@ _CLOSED_LOOP_PROFILE_LOCK = threading.Lock()
 _CLOSED_LOOP_PROFILE: dict[str, dict[str, float]] = {}
 _CLOSED_LOOP_PROFILE_REGISTERED = False
 _CLOSED_LOOP_DIAG_WRITE_LOCK = threading.Lock()
+_PIOR_TARGET_CACHE_LOCK = threading.Lock()
+_PIOR_TARGET_CACHE: dict[str, dict[int, dict[str, Any]]] = {}
+
+
+def _load_pior_target_map() -> dict[int, dict[str, Any]]:
+    """Load the batch-local V50.1 frozen-proposal identity map.
+
+    The map is TRAIN-only instrumentation supplied by the paired-outcome runner.
+    Runtime identity is keyed by the preregistered cache/scenario start timestamp
+    (all V49 proposal samples are ``it000000``).  This avoids re-selecting a new
+    online proposal and binds treatment/control to the exact V49 frozen action.
+    """
+    raw = os.environ.get("BDSE_PIOR_TARGETS_FILE", "").strip()
+    if not raw:
+        raise RuntimeError(
+            "V64.3.50.1 PIOR target map missing: BDSE_PIOR_TARGETS_FILE is required for manifest-bound paired collection"
+        )
+    path = str(Path(raw).expanduser().resolve())
+    with _PIOR_TARGET_CACHE_LOCK:
+        cached = _PIOR_TARGET_CACHE.get(path)
+        if cached is not None:
+            return cached
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        rows = list(payload.get("targets", [])) if isinstance(payload, dict) else []
+        out: dict[int, dict[str, Any]] = {}
+        tokens: set[str] = set()
+        for row in rows:
+            ts = int(row.get("timestamp_us", 0) or 0)
+            tok = str(row.get("scenario_token", ""))
+            act = int(row.get("full_selected_action", -1))
+            if ts <= 0 or not tok or act < 0:
+                raise RuntimeError(f"V64.3.50.1 PIOR malformed target row: {row}")
+            if ts in out or tok in tokens:
+                raise RuntimeError(f"V64.3.50.1 PIOR duplicate target identity timestamp={ts} token={tok}")
+            out[ts] = {"scenario_token": tok, "timestamp_us": ts, "full_selected_action": act}
+            tokens.add(tok)
+        if not out:
+            raise RuntimeError(f"V64.3.50.1 PIOR empty target map: {path}")
+        _PIOR_TARGET_CACHE[path] = out
+        return out
+
+
+def _pior_iteration_time_us(current_input: Any) -> int:
+    iteration = getattr(current_input, "iteration", None)
+    if iteration is None:
+        return 0
+    for attr in ("time_us", "timestamp_us"):
+        value = getattr(iteration, attr, None)
+        if value is not None:
+            try:
+                return int(value)
+            except Exception:
+                pass
+    try:
+        return int(round(float(getattr(iteration, "time_s")) * 1.0e6))
+    except Exception:
+        return 0
+
+
+def _lookup_pior_target(current_input: Any) -> tuple[dict[str, Any], int]:
+    targets = _load_pior_target_map()
+    now_us = _pior_iteration_time_us(current_input)
+    if now_us <= 0:
+        raise RuntimeError("V64.3.50.1 PIOR cannot resolve current simulation timestamp")
+    exact = targets.get(now_us)
+    if exact is not None:
+        return exact, 0
+    # Float seconds at epoch scale can lose a fraction of a microsecond.  Permit
+    # only a tiny deterministic tolerance and fail on ambiguity.
+    nearby = [(abs(int(ts) - now_us), row) for ts, row in targets.items() if abs(int(ts) - now_us) <= 4]
+    nearby.sort(key=lambda x: x[0])
+    if len(nearby) == 1:
+        return nearby[0][1], int(nearby[0][0])
+    raise RuntimeError(
+        f"V64.3.50.1 PIOR cannot bind scenario-start time_us={now_us} to a unique frozen target; "
+        f"matches_within_4us={len(nearby)}"
+    )
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -321,20 +398,22 @@ class BDSEPlannerCore:
         # RSMR proposal intervention.
         self._pior_probe_used = False
         self._pior_probe_event_count = 0
+        self._pior_probe_first_call_seen = False
 
     def reset_selected_outcome_probe(self) -> None:
         self._pior_probe_used = False
         self._pior_probe_event_count = 0
+        self._pior_probe_first_call_seen = False
 
-    def _apply_selected_outcome_probe(self, tournament: Any, action: int, candidates: Any) -> tuple[int, dict[str, Any]]:
-        """Apply the V64.3.50 TRAIN-only one-shot proposal intervention.
+    def _apply_selected_outcome_probe(self, tournament: Any, action: int, candidates: Any, current_input: Any | None = None) -> tuple[int, dict[str, Any]]:
+        """Apply the V64.3.50.1 TRAIN-only one-shot frozen-proposal intervention.
 
-        The intervention never searches for an alternative.  It consumes the
-        *already frozen* full-set RSMR proposal exposed by ICER diagnostics and
-        either executes exactly that proposal once (treatment) or the incumbent
-        (control).  Every subsequent planning step returns to the same incumbent
-        path.  This changes the supervision/evidence source, not the deployed
-        selector or representation.
+        V50 preregistered the *exact V49 full-set RSMR proposal* as the treatment
+        action.  The original implementation accidentally waited for a newly
+        recomputed online proposal and therefore fired in only 50/64 scenarios.
+        The engineering repair binds each scenario at iteration 0 to the frozen
+        manifest entry by its cache/start ``timestamp_us`` and executes exactly
+        that action once (treatment) or the current incumbent (control).
         """
         pcfg = (self.cfg.get("selected_outcome_probe", {}) or {}) if isinstance(self.cfg, dict) else {}
         enabled = bool(pcfg.get("enabled", False))
@@ -351,34 +430,76 @@ class BDSEPlannerCore:
         if arm not in {"treatment", "control"}:
             raise ValueError(f"V64.3.50 PIOR selected_outcome_probe.arm must be treatment/control, got {arm!r}")
         diag = dict(getattr(tournament, "diagnostics", {}) or {})
-        proposal_exists = bool(float(diag.get("decisive_frontier_icer_scir_proposal_exists", 0.0)) > 0.5)
-        proposal = int(round(float(diag.get("decisive_frontier_icer_scir_proposal_action", -1))))
+        online_proposal_exists = bool(float(diag.get("decisive_frontier_icer_scir_proposal_exists", 0.0)) > 0.5)
+        online_proposal = int(round(float(diag.get("decisive_frontier_icer_scir_proposal_action", -1))))
         baseline = int(round(float(diag.get("decisive_frontier_icer_baseline_action", -1))))
         k = int(getattr(candidates, "K", 0))
         valid = np.asarray(getattr(candidates, "valid_mask", np.zeros((k,), dtype=bool)), dtype=bool).reshape(-1)
+
         def _valid_action(a: int) -> bool:
             return bool(0 <= int(a) < valid.shape[0] and valid[int(a)])
+
         if not _valid_action(baseline):
             raise RuntimeError(f"V64.3.50 PIOR probe requires a valid incumbent/baseline action, got {baseline}")
 
-        fired = False
+        source = str(pcfg.get("proposal_source", "")).strip()
+        manifest_bound = source == "preregistered_V49_manifest_iteration0_proposal"
         original_action = int(action)
+        fired = False
+        target: dict[str, Any] | None = None
+        timestamp_error_us = 0
+        iteration = getattr(current_input, "iteration", None) if current_input is not None else None
+        iteration_index = int(getattr(iteration, "index", -1)) if iteration is not None else -1
+
         if self._pior_probe_used:
             chosen = int(baseline)
             phase = "post_intervention_incumbent"
-        elif proposal_exists and proposal != baseline:
+            proposal = int(online_proposal)
+        elif manifest_bound:
+            if current_input is None:
+                raise RuntimeError("V64.3.50.1 PIOR manifest-bound probe requires current planner input")
+            if self._pior_probe_first_call_seen:
+                raise RuntimeError("V64.3.50.1 PIOR reached a second planner call before the required one-shot event")
+            self._pior_probe_first_call_seen = True
+            if iteration_index != 0:
+                raise RuntimeError(
+                    f"V64.3.50.1 PIOR frozen proposal must fire at scenario iteration 0, got iteration={iteration_index}"
+                )
+            target, timestamp_error_us = _lookup_pior_target(current_input)
+            proposal = int(target["full_selected_action"])
             if not _valid_action(proposal):
-                raise RuntimeError(f"V64.3.50 PIOR frozen proposal is invalid: {proposal}")
+                raise RuntimeError(
+                    f"V64.3.50.1 PIOR frozen manifest proposal is invalid at scenario start: "
+                    f"token={target['scenario_token']} action={proposal} K={valid.shape[0]}"
+                )
+            if proposal == baseline:
+                raise RuntimeError(
+                    f"V64.3.50.1 PIOR frozen proposal equals incumbent at scenario start: "
+                    f"token={target['scenario_token']} action={proposal}"
+                )
             chosen = int(proposal if arm == "treatment" else baseline)
             self._pior_probe_used = True
             self._pior_probe_event_count += 1
             fired = True
-            phase = "paired_intervention"
+            phase = "paired_manifest_iteration0_intervention"
         else:
-            # Before the unique proposal event, both arms stay on the incumbent
-            # rather than consuming a different learned post-selection decision.
-            chosen = int(baseline)
-            phase = "awaiting_frozen_proposal"
+            # Compatibility for historical/synthetic configs only. Production
+            # V50.1 configs always use the manifest-bound source above.
+            proposal = int(online_proposal)
+            if online_proposal_exists and proposal != baseline:
+                if not _valid_action(proposal):
+                    raise RuntimeError(f"V64.3.50 PIOR frozen proposal is invalid: {proposal}")
+                chosen = int(proposal if arm == "treatment" else baseline)
+                self._pior_probe_used = True
+                self._pior_probe_event_count += 1
+                fired = True
+                phase = "legacy_online_proposal_intervention"
+            else:
+                chosen = int(baseline)
+                phase = "awaiting_online_proposal"
+
+        target_token = str(target.get("scenario_token", "")) if target is not None else ""
+        target_timestamp_us = int(target.get("timestamp_us", 0)) if target is not None else 0
         return chosen, {
             "pior_probe_enabled": True,
             "pior_probe_arm": arm,
@@ -389,7 +510,17 @@ class BDSEPlannerCore:
             "pior_probe_original_post_selection_action": int(original_action),
             "pior_probe_baseline_action": int(baseline),
             "pior_probe_proposal_action": int(proposal),
-            "pior_probe_proposal_exists": bool(proposal_exists),
+            "pior_probe_proposal_exists": bool(manifest_bound or online_proposal_exists),
+            "pior_probe_target_source": source,
+            "pior_probe_scenario_token": target_token,
+            "pior_probe_target_timestamp_us": target_timestamp_us,
+            "pior_probe_current_timestamp_us": int(_pior_iteration_time_us(current_input)) if current_input is not None else 0,
+            "pior_probe_timestamp_error_us": int(timestamp_error_us),
+            "pior_probe_online_proposal_exists": bool(online_proposal_exists),
+            "pior_probe_online_proposal_action": int(online_proposal),
+            "pior_probe_online_proposal_matches_target": bool(
+                target is not None and online_proposal_exists and int(online_proposal) == int(proposal)
+            ),
             "pior_probe_final_action": int(chosen),
             "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
             "pior_probe_contract_no_rerank_second_best_fallback": True,
@@ -1555,11 +1686,11 @@ class BDSEPlannerCore:
     def _needs_fallback(self, tournament, candidates, cfg: dict[str, Any]) -> bool:
         return self._fallback_reason(tournament, cfg) not in {"disabled", "accepted", "accepted_low_delta"}
 
-    def plan_from_runtime(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
+    def plan_from_runtime(self, runtime: RuntimeFeatures, current_input: Any | None = None) -> tuple[int, np.ndarray, dict[str, Any]]:
         prediction_scope = getattr(self.model, "runtime_prediction_cache_scope", None)
         model_scope = prediction_scope() if callable(prediction_scope) else nullcontext(None)
         with runtime_safety_cache_scope() as safety_memo, model_scope as prediction_memo:
-            action, trajectory, diagnostics = self._plan_from_runtime_impl(runtime)
+            action, trajectory, diagnostics = self._plan_from_runtime_impl(runtime, current_input=current_input)
             if os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}:
                 timing = diagnostics.setdefault("timing_core", {})
                 timing["runtime_safety_cache_hits"] = int(safety_memo.hits)
@@ -1571,7 +1702,7 @@ class BDSEPlannerCore:
                     timing["runtime_prediction_cache_entries"] = int(len(prediction_memo.cache))
             return action, trajectory, diagnostics
 
-    def _plan_from_runtime_impl(self, runtime: RuntimeFeatures) -> tuple[int, np.ndarray, dict[str, Any]]:
+    def _plan_from_runtime_impl(self, runtime: RuntimeFeatures, current_input: Any | None = None) -> tuple[int, np.ndarray, dict[str, Any]]:
         profile_enabled = os.environ.get("BDSE_PROFILE_CLOSED_LOOP", "0").lower() in {"1", "true", "yes", "on"}
         timing_core: dict[str, float] = {}
         t = time.perf_counter()
@@ -1655,7 +1786,7 @@ class BDSEPlannerCore:
         # It intervenes on the already frozen RSMR proposal identity and then
         # returns to the incumbent for the rest of the scenario. Historical and
         # deployment configs do not enable this block.
-        action, pior_probe_diag = self._apply_selected_outcome_probe(tournament, action, candidates)
+        action, pior_probe_diag = self._apply_selected_outcome_probe(tournament, action, candidates, current_input)
         t_post = time.perf_counter()
         runtime_flags = runtime_safety_flags_from_runtime(runtime, candidates, cfg_stage)
         safety_diag_final = runtime_safety_diagnostics(runtime, candidates, cfg_stage)
@@ -1905,8 +2036,16 @@ class BDSEnuPlanPlanner(AbstractPlanner):
                     "pior_probe_fired": True,
                     "pior_probe_arm": str(td.get("pior_probe_arm", "")),
                     "pior_probe_event_count": int(td.get("pior_probe_event_count", 0)),
+                    "scenario_token": str(td.get("pior_probe_scenario_token", "")),
+                    "target_timestamp_us": int(td.get("pior_probe_target_timestamp_us", 0)),
+                    "current_timestamp_us": int(td.get("pior_probe_current_timestamp_us", 0)),
+                    "timestamp_error_us": int(td.get("pior_probe_timestamp_error_us", 0)),
+                    "pior_probe_target_source": str(td.get("pior_probe_target_source", "")),
                     "pior_probe_baseline_action": int(td.get("pior_probe_baseline_action", -1)),
                     "pior_probe_proposal_action": int(td.get("pior_probe_proposal_action", -1)),
+                    "pior_probe_online_proposal_exists": bool(td.get("pior_probe_online_proposal_exists", False)),
+                    "pior_probe_online_proposal_action": int(td.get("pior_probe_online_proposal_action", -1)),
+                    "pior_probe_online_proposal_matches_target": bool(td.get("pior_probe_online_proposal_matches_target", False)),
                     "pior_probe_final_action": int(td.get("pior_probe_final_action", action)),
                     "pior_probe_contract_same_frozen_proposal_or_incumbent": bool(td.get("pior_probe_contract_same_frozen_proposal_or_incumbent", False)),
                     "pior_probe_contract_no_rerank_second_best_fallback": bool(td.get("pior_probe_contract_no_rerank_second_best_fallback", False)),
@@ -2066,7 +2205,7 @@ class BDSEnuPlanPlanner(AbstractPlanner):
         t_runtime = time.perf_counter()
         runtime = self._runtime_from_planner_input(current_input)
         t1 = time.perf_counter()
-        action, trajectory, diagnostics = self.core.plan_from_runtime(runtime)
+        action, trajectory, diagnostics = self.core.plan_from_runtime(runtime, current_input=current_input)
         t2 = time.perf_counter()
         out_traj = self._to_nuplan_trajectory(trajectory, current_input)
         t3 = time.perf_counter()

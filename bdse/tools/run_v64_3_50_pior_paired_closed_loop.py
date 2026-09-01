@@ -285,13 +285,123 @@ def _batch_raw_files(tokens: list[str], meta: dict[str, dict[str, Any]]) -> list
     return out
 
 
+
+def _probe_target_payload(tokens: list[str], meta: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    seen_ts: set[int] = set()
+    for tok in tokens:
+        row = meta[tok]
+        ts = int(row.get("timestamp_us", 0) or 0)
+        cache_it = int(row.get("cache_iteration", -1))
+        act = int(row.get("full_selected_action", -1))
+        if ts <= 0 or cache_it != 0 or act < 0:
+            raise RuntimeError(
+                f"V64.3.50.1 PIOR invalid frozen target token={tok}: timestamp_us={ts} cache_iteration={cache_it} action={act}"
+            )
+        if ts in seen_ts:
+            raise RuntimeError(f"V64.3.50.1 PIOR duplicate start timestamp_us={ts} inside batch")
+        seen_ts.add(ts)
+        rows.append({"scenario_token": str(tok), "timestamp_us": ts, "full_selected_action": act})
+    return {
+        "algorithm_version": "V64.3.50.1-EAF-ICER-PIOR-ENGINEERING-REPAIR",
+        "identity": "exact_V49_manifest_it000000_timestamp_and_frozen_action",
+        "targets": rows,
+    }
+
+
+def _payload_sha256(payload: dict[str, Any]) -> str:
+    raw = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _write_probe_target_file(path: Path, payload: dict[str, Any]) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    path.write_text(text, encoding="utf-8")
+    return _sha256(path)
+
+
+def _validate_probe_events(
+    path: Path,
+    *,
+    tokens: list[str],
+    meta: dict[str, dict[str, Any]],
+    arm: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    if not path.is_file():
+        raise RuntimeError(f"V64.3.50.1 PIOR missing probe event file: {path}")
+    by_token: dict[str, dict[str, Any]] = {}
+    with path.open(encoding="utf-8") as f:
+        for line_no, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            tok = str(row.get("scenario_token", ""))
+            if not tok or tok not in meta:
+                raise RuntimeError(f"V64.3.50.1 PIOR invalid probe token at {path}:{line_no}: {tok!r}")
+            if tok in by_token:
+                raise RuntimeError(f"V64.3.50.1 PIOR duplicate probe event for token={tok}")
+            if not bool(row.get("pior_probe_fired", False)) or int(row.get("pior_probe_event_count", 0)) != 1:
+                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} does not have exactly one fired event")
+            if str(row.get("pior_probe_arm", "")) != arm:
+                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} arm mismatch {row.get('pior_probe_arm')} vs {arm}")
+            if int(row.get("iteration_index", -1)) != 0:
+                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} fired outside iteration 0")
+            if str(row.get("pior_probe_target_source", "")) != "preregistered_V49_manifest_iteration0_proposal":
+                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} target source mismatch")
+            expected_ts = int(meta[tok].get("timestamp_us", 0) or 0)
+            target_ts = int(row.get("target_timestamp_us", 0) or 0)
+            current_ts = int(row.get("current_timestamp_us", 0) or 0)
+            if target_ts != expected_ts or abs(current_ts - expected_ts) > 4:
+                raise RuntimeError(
+                    f"V64.3.50.1 PIOR token={tok} timestamp mismatch target/current/expected="
+                    f"{target_ts}/{current_ts}/{expected_ts}"
+                )
+            expected_action = int(meta[tok].get("full_selected_action", -1))
+            proposal = int(row.get("pior_probe_proposal_action", -1))
+            baseline = int(row.get("pior_probe_baseline_action", -1))
+            final = int(row.get("pior_probe_final_action", -1))
+            if proposal != expected_action or proposal < 0 or proposal == baseline:
+                raise RuntimeError(
+                    f"V64.3.50.1 PIOR token={tok} frozen action mismatch proposal={proposal} expected={expected_action} baseline={baseline}"
+                )
+            if arm == "treatment" and final != proposal:
+                raise RuntimeError(f"V64.3.50.1 PIOR treatment token={tok} did not execute frozen proposal")
+            if arm == "control" and final != baseline:
+                raise RuntimeError(f"V64.3.50.1 PIOR control token={tok} did not preserve incumbent")
+            if not bool(row.get("pior_probe_contract_same_frozen_proposal_or_incumbent", False)):
+                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} same-winner containment certificate failed")
+            if not bool(row.get("pior_probe_contract_no_rerank_second_best_fallback", False)):
+                raise RuntimeError(f"V64.3.50.1 PIOR token={tok} no-fallback certificate failed")
+            by_token[tok] = row
+    if set(by_token) != set(tokens):
+        missing = sorted(set(tokens) - set(by_token))[:20]
+        extra = sorted(set(by_token) - set(tokens))[:20]
+        raise RuntimeError(
+            f"V64.3.50.1 PIOR probe-event token mismatch {len(by_token)}/{len(tokens)} missing={missing} extra={extra}"
+        )
+    online_exists = sum(bool(r.get("pior_probe_online_proposal_exists", False)) for r in by_token.values())
+    online_match = sum(bool(r.get("pior_probe_online_proposal_matches_target", False)) for r in by_token.values())
+    audit = {
+        "scenario_count": len(tokens),
+        "token_sha256": _token_sha(tokens),
+        "online_proposal_exists_count": int(online_exists),
+        "online_proposal_matches_frozen_target_count": int(online_match),
+        "online_replay_fraction": float(online_match / max(len(tokens), 1)),
+        "scientific_intervention_identity": "manifest_frozen_V49_action_not_online_reselection",
+    }
+    return by_token, audit
+
+
 def _batch_certificate_valid(
     *, root: Path, tokens: list[str], cfg_sha: str, ckpt_sha: str, challenge: str, raw_db_file_list_sha256: str = "",
+    meta: dict[str, dict[str, Any]] | None = None, arm: str = "", probe_target_spec_sha256: str = "",
 ) -> tuple[dict[str, dict[str, Any]] | None, dict[str, Any] | None]:
     cert_path = root / ".pior_batch_complete.json"
     metrics_path = root / "scenario_metrics.jsonl"
     diag = root / "pior_probe_events.jsonl"
-    if not cert_path.is_file() or not metrics_path.is_file() or not diag.is_file():
+    target_path = root / "pior_probe_targets.json"
+    if not cert_path.is_file() or not metrics_path.is_file() or not diag.is_file() or not target_path.is_file():
         return None, None
     try:
         cert = json.loads(cert_path.read_text(encoding="utf-8"))
@@ -303,6 +413,8 @@ def _batch_certificate_valid(
             or str(cert.get("checkpoint_sha256", "")) != ckpt_sha
             or str(cert.get("challenge", "")) != challenge
             or (raw_db_file_list_sha256 and str(cert.get("raw_db_file_list_sha256", "")) != raw_db_file_list_sha256)
+            or (probe_target_spec_sha256 and str(cert.get("probe_target_spec_sha256", "")) != probe_target_spec_sha256)
+            or (probe_target_spec_sha256 and _sha256(target_path) != probe_target_spec_sha256)
             or int(cert.get("successful", -1)) != len(tokens)
             or int(cert.get("failed", -1)) != 0
             or int(cert.get("probe_fired_count", -1)) != len(tokens)
@@ -311,6 +423,8 @@ def _batch_certificate_valid(
         ):
             return None, None
         metrics = _read_normalized_metrics(metrics_path, tokens)
+        if meta is not None and arm:
+            _validate_probe_events(diag, tokens=tokens, meta=meta, arm=arm)
         return metrics, cert
     except Exception:
         return None, None
@@ -366,10 +480,13 @@ def _run_batch(
     root = arm_root / "batches" / f"batch_{batch_index:04d}"
     raw_files = _batch_raw_files(tokens, meta)
     raw_db_file_list_sha256 = hashlib.sha256(("\n".join(raw_files) + "\n").encode("utf-8")).hexdigest()
+    target_payload = _probe_target_payload(tokens, meta)
+    probe_target_spec_sha256 = _payload_sha256(target_payload)
     if resume:
         metrics, cert = _batch_certificate_valid(
             root=root, tokens=tokens, cfg_sha=cfg_sha, ckpt_sha=ckpt_sha, challenge=challenge,
-            raw_db_file_list_sha256=raw_db_file_list_sha256,
+            raw_db_file_list_sha256=raw_db_file_list_sha256, meta=meta, arm=arm,
+            probe_target_spec_sha256=probe_target_spec_sha256,
         )
         if metrics is not None and cert is not None:
             print(
@@ -383,6 +500,10 @@ def _run_batch(
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     (root / "scenario_tokens.json").write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+    target_file = root / "pior_probe_targets.json"
+    written_target_sha = _write_probe_target_file(target_file, target_payload)
+    if written_target_sha != probe_target_spec_sha256:
+        raise RuntimeError("V64.3.50.1 PIOR target-spec serialization hash mismatch")
     token_override = "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":"))
     diag = root / "pior_probe_events.jsonl"
     profile = root / "bdse_closed_loop_profile.json"
@@ -414,6 +535,7 @@ def _run_batch(
         # per-tick diagnostics are pure I/O overhead for this experiment.
         "BDSE_CLOSED_LOOP_DIAG": str(diag.resolve()),
         "BDSE_CLOSED_LOOP_DIAG_MODE": "pior_probe_events",
+        "BDSE_PIOR_TARGETS_FILE": str(target_file.resolve()),
         "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
         "BDSE_PROFILE_CLOSED_LOOP": "1" if profile_closed_loop else "0",
         "BDSE_CLOSED_LOOP_PROFILE_JSON": str(profile.resolve()),
@@ -456,6 +578,7 @@ def _run_batch(
             f"PIOR {arm} batch={batch_index} invalid return={returncode} success={succ} failed={fail} "
             f"probe_fired={fired} expected={len(tokens)}; see {log}\n--- tail ---\n{tail}"
         )
+    _, probe_audit = _validate_probe_events(diag, tokens=tokens, meta=meta, arm=arm)
     metrics, metric_file = _extract_scenario_metrics(root, tokens, meta)
     normalized = root / "scenario_metrics.jsonl"
     _write_normalized_metrics(normalized, metrics, tokens)
@@ -475,6 +598,10 @@ def _run_batch(
         "raw_db_file_count": len(raw_files),
         "raw_db_files": raw_files,
         "raw_db_file_list_sha256": raw_db_file_list_sha256,
+        "probe_target_spec_file": str(target_file),
+        "probe_target_spec_sha256": probe_target_spec_sha256,
+        "probe_event_token_sha256": _token_sha(tokens),
+        "probe_identity_audit": probe_audit,
         "workers": int(workers),
         "serialize_gpu_inference": bool(serialize_gpu_inference),
         "wall_time_s": float(wall),
@@ -495,11 +622,44 @@ def _run_batch(
     return metrics, cert
 
 
+
+def _collision_safe_batches(
+    tokens: list[str], meta: dict[str, dict[str, Any]], batch_size: int, first_batch_size: int | None = None
+) -> list[list[str]]:
+    """Deterministically batch tokens while keeping start timestamps unique per subprocess.
+
+    ``first_batch_size`` is an engineering-only paired preflight.  It changes no
+    token, intervention, metric, label, or fold; it merely makes the first
+    completion certificate small enough to fail fast on a server-side identity
+    mismatch before the remaining expensive TRAIN collection is allowed to run.
+    """
+    normal_limit = max(1, int(batch_size))
+    first_limit = normal_limit if first_batch_size is None else max(1, min(int(first_batch_size), normal_limit))
+    out: list[list[str]] = []
+    cur: list[str] = []
+    seen_ts: set[int] = set()
+    limit = first_limit
+    for tok in tokens:
+        ts = int(meta[tok].get("timestamp_us", 0) or 0)
+        if ts <= 0:
+            raise RuntimeError(f"V64.3.50.1 PIOR token={tok} missing timestamp_us for batching")
+        if cur and (len(cur) >= limit or ts in seen_ts):
+            out.append(cur)
+            cur = []
+            seen_ts = set()
+            limit = normal_limit
+        cur.append(tok)
+        seen_ts.add(ts)
+    if cur:
+        out.append(cur)
+    return out
+
+
 def _run_arm(
     *, arm: str, gpu: str, cfg: Path, checkpoint: Path, tokens: list[str], meta: dict[str, dict[str, Any]],
     nuplan_root: Path, challenge: str, output_root: Path, workers: int, batch_size: int, resume: bool,
     heartbeat_seconds: float, serialize_gpu_inference: bool, profile_closed_loop: bool,
-    allow_legacy_full_arm_resume: bool,
+    allow_legacy_full_arm_resume: bool, first_batch_size: int, preflight_barrier: threading.Barrier | None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     root = output_root / arm
     root.mkdir(parents=True, exist_ok=True)
@@ -518,28 +678,50 @@ def _run_arm(
             return metrics, {"arm": arm, "resume_mode": "legacy_full_arm", "batches": [cert]}
 
     batch_size = max(1, int(batch_size))
-    batches = [tokens[i:i + batch_size] for i in range(0, len(tokens), batch_size)]
+    batches = _collision_safe_batches(tokens, meta, batch_size, first_batch_size=first_batch_size)
     combined: dict[str, dict[str, Any]] = {}
     certs: list[dict[str, Any]] = []
     for bi, batch_tokens in enumerate(batches):
-        metrics, cert = _run_batch(
-            arm=arm, gpu=gpu, cfg=cfg, checkpoint=checkpoint, tokens=batch_tokens, meta=meta,
-            nuplan_root=nuplan_root, challenge=challenge, arm_root=root, workers=workers,
-            batch_index=bi, batch_count=len(batches), resume=resume, heartbeat_seconds=heartbeat_seconds,
-            serialize_gpu_inference=serialize_gpu_inference, profile_closed_loop=profile_closed_loop,
-            cfg_sha=cfg_sha, ckpt_sha=ckpt_sha,
-        )
+        try:
+            metrics, cert = _run_batch(
+                arm=arm, gpu=gpu, cfg=cfg, checkpoint=checkpoint, tokens=batch_tokens, meta=meta,
+                nuplan_root=nuplan_root, challenge=challenge, arm_root=root, workers=workers,
+                batch_index=bi, batch_count=len(batches), resume=resume, heartbeat_seconds=heartbeat_seconds,
+                serialize_gpu_inference=serialize_gpu_inference, profile_closed_loop=profile_closed_loop,
+                cfg_sha=cfg_sha, ckpt_sha=ckpt_sha,
+            )
+        except Exception:
+            if bi == 0 and preflight_barrier is not None:
+                try:
+                    preflight_barrier.abort()
+                except Exception:
+                    pass
+            raise
         overlap = set(combined) & set(metrics)
         if overlap:
             raise RuntimeError(f"PIOR duplicate tokens across completed batches: {sorted(overlap)[:10]}")
         combined.update(metrics)
         certs.append(cert)
+        if bi == 0 and preflight_barrier is not None:
+            print(
+                f"[PIOR-PREFLIGHT-PASS] arm={arm} scenarios={len(batch_tokens)}; "
+                "waiting for paired arm before full TRAIN collection",
+                flush=True,
+            )
+            try:
+                preflight_barrier.wait(timeout=300.0)
+            except threading.BrokenBarrierError as exc:
+                raise RuntimeError(
+                    f"V64.3.50.1 PIOR paired preflight peer failed; arm={arm} will not continue expensive collection"
+                ) from exc
+            print(f"[PIOR-PREFLIGHT-PAIR-PASS] arm={arm}; continuing full TRAIN collection", flush=True)
     if set(combined) != set(tokens):
         raise RuntimeError(f"PIOR {arm} combined batch metrics mismatch: {len(combined)}/{len(tokens)}")
     arm_summary = {
         "arm": arm,
         "resume_mode": "validated_batches",
         "batch_size": int(batch_size),
+        "first_batch_size": int(first_batch_size),
         "batch_count": len(batches),
         "scenario_count": len(tokens),
         "scenario_token_sha256": _token_sha(tokens),
@@ -607,6 +789,7 @@ def main() -> None:
     ap.add_argument("--gpus", default="0,1")
     ap.add_argument("--workers-per-arm", type=int, default=4)
     ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--first-batch-size", type=int, default=4, help="Engineering-only paired preflight batch; both arms must pass before expensive collection continues.")
     ap.add_argument("--heartbeat-seconds", type=float, default=30.0)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--allow-legacy-full-arm-resume", action="store_true")
@@ -623,6 +806,7 @@ def main() -> None:
     a.output_root.mkdir(parents=True, exist_ok=True)
     print(
         f"[PIOR-COLLECT] scenarios={len(tokens)} exact_raw_dbs={len(raw_files)} batch_size={a.batch_size} "
+        f"first_batch_size={a.first_batch_size} "
         f"workers_per_arm={a.workers_per_arm} resume={int(a.resume)} heartbeat={a.heartbeat_seconds}s "
         f"serialize_gpu={a.serialize_gpu_inference}",
         flush=True,
@@ -632,6 +816,7 @@ def main() -> None:
     metrics_by_arm: dict[str, dict[str, dict[str, Any]]] = {}
     errors: list[str] = []
     lock = threading.Lock()
+    preflight_barrier = threading.Barrier(2) if int(a.first_batch_size) > 0 else None
 
     def work(arm: str, gpu: str, cfg: Path) -> None:
         try:
@@ -643,6 +828,7 @@ def main() -> None:
                 serialize_gpu_inference=bool(a.serialize_gpu_inference),
                 profile_closed_loop=bool(a.profile_closed_loop),
                 allow_legacy_full_arm_resume=bool(a.allow_legacy_full_arm_resume),
+                first_batch_size=int(a.first_batch_size), preflight_barrier=preflight_barrier,
             )
             with lock:
                 metrics_by_arm[arm] = metrics
@@ -674,7 +860,7 @@ def main() -> None:
     report = {
         "audit": "v64_3_50_pior_paired_closed_loop",
         "algorithm_version": "V64.3.50-EAF-ICER-PIOR",
-        "engineering_revision": "speed_resume_exact_db_probe_only_diag",
+        "engineering_revision": "v64_3_50_1_manifest_bound_iteration0_probe_identity_repair",
         "challenge": a.challenge,
         "scientific_intervention": "paired_one_shot_actual_full_set_RSMR_proposal_vs_same_incumbent_then_incumbent_only",
         "scenario_count": len(paired),
@@ -683,6 +869,7 @@ def main() -> None:
         "hard_harm_count": harm,
         "exact_raw_db_file_count": len(raw_files),
         "batch_size": int(a.batch_size),
+        "first_batch_size": int(a.first_batch_size),
         "workers_per_arm": int(a.workers_per_arm),
         "serialize_gpu_inference": bool(a.serialize_gpu_inference),
         "resume_enabled": bool(a.resume),

@@ -1,36 +1,45 @@
-V64.3.50 EAF-ICER-PIOR — optimized TRAIN closed-loop collection
+V64.3.50.1 EAF-ICER-PIOR — engineering repair rerun
 
-1) If the old unbatched run is still active, first inspect whether it is actually progressing:
+Scientific status of the uploaded V50 result:
+- ENGINEERING/DATA STOP, not a PIOR algorithm result.
+- Do NOT use the 50/64 fired subset for PIOR AUC/retention analysis.
+- Do NOT run untouched/final validation yet.
 
-  OUT=../outputs_v64_3_50_eaf_icer_pior_train_2gpu_v1
-  tail -n 30 "$OUT/closed_loop_train/control/run.log"
-  tail -n 30 "$OUT/closed_loop_train/treatment/run.log"
-  grep -c '"pior_probe_fired": true' "$OUT/closed_loop_train/control/pior_closed_loop_diag.jsonl" 2>/dev/null || true
-  grep -c '"pior_probe_fired": true' "$OUT/closed_loop_train/treatment/pior_closed_loop_diag.jsonl" 2>/dev/null || true
-  nvidia-smi
-
-The old parent intentionally prints nothing while the two nuPlan children run. If you stop the old job, confirm no old evaluate_closed_loop child remains before starting the optimized package:
-
-  pgrep -af 'run_v64_3_50_pior_paired_closed_loop|bdse.experiments.evaluate_closed_loop' || true
-  nvidia-smi
-
-2) Default optimized/resumable run. Dataset defaults already match the supplied layout:
+Recommended clean rerun (new output root is now the launcher default):
 
   cd bdse_v64_3_50_eaf_icer_pior
   bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
 
-Default engineering knobs:
+Default output root:
+
+  ../outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1
+
+The old failed root may be kept for audit; do not copy its batch_0000 into the new root.
+
+Default engineering controls:
 
   WORKERS_PER_ARM=4
+  PIOR_FIRST_BATCH_SIZE=4
   PIOR_BATCH_SIZE=64
   PIOR_HEARTBEAT_SECONDS=30
   PIOR_RESUME=1
   PIOR_SERIALIZE_GPU_INFERENCE=0
   PIOR_PROFILE_CLOSED_LOOP=1
 
-3) Explicit form:
+The first control/treatment batch is a paired fail-fast preflight. Both 4-scene batches must certify:
+- exact scenario token;
+- iteration index 0;
+- target source = preregistered_V49_manifest_iteration0_proposal;
+- proposal action = manifest full_selected_action;
+- treatment executes proposal, control executes incumbent;
+- exactly one event per token;
+- no rerank / second-best / fallback;
+- valid per-scenario official metrics.
 
-  cd bdse_v64_3_50_eaf_icer_pior
+Only after BOTH arms pass this preflight does the runner continue the expensive remaining TRAIN collection.
+
+Explicit server paths if needed:
+
   V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
   BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2 \
   NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
@@ -43,35 +52,26 @@ If checkpoint auto-resolution is unavailable:
 
   export EAF_CKPT=/path/to/bdse_v64_saqa_bcc.epoch_XXXX.pt
 
-4) Tuning engineering concurrency only (does not alter scientific semantics):
+Useful early inspection after the preflight starts:
 
-  # If PIOR-TICK shows low GPU utilization and CPU has headroom:
-  WORKERS_PER_ARM=6 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+  OUT=../outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1
+  grep -E '\[PIOR-PREFLIGHT|\[PIOR-BATCH|\[PIOR-TICK' "$OUT/logs/v64_3_50_paired_closed_loop.out" | tail -n 50
 
-  # Coarser resume checkpoints / fewer nuPlan process reloads:
-  PIOR_BATCH_SIZE=128 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+Expected success messages before full collection:
 
-  # Finer resume checkpoints:
-  PIOR_BATCH_SIZE=32 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+  [PIOR-PREFLIGHT-PASS] arm=control scenarios=4 ...
+  [PIOR-PREFLIGHT-PASS] arm=treatment scenarios=4 ...
+  [PIOR-PREFLIGHT-PAIR-PASS] arm=control ...
+  [PIOR-PREFLIGHT-PAIR-PASS] arm=treatment ...
 
-  # Conservative fallback if unlocked shared-model CUDA execution is unstable:
-  PIOR_SERIALIZE_GPU_INFERENCE=1 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+If preflight fails, send:
+- the traceback;
+- both batch_0000/run.log files;
+- both batch_0000/pior_probe_events.jsonl files;
+- both batch_0000/pior_probe_targets.json files.
+Do not continue to the 502-scene collection manually.
 
-Resume discipline:
-- New-format batches are skipped only with exact completion certificates (token/config/checkpoint/challenge/raw-DB-path-list/probe/metric hashes).
-- Incomplete new batches rerun from scratch.
-- A fully completed old pre-batch arm can be reused only after exact 502 success / 0 fail / 502 probe / 502 metric validation.
-- A partially completed old pre-batch arm is NOT reused because old diagnostics cannot bind each finished token to its unique probe event and final metric strongly enough for the paired-intervention proof.
-
-Scientific discipline remains unchanged:
-- exact 502 V49 full-set RSMR TRAIN proposal scenes;
-- paired one-shot closed_loop_nonreactive_agents control/treatment outcomes;
-- no replan-frequency/horizon/candidate/selector/probe/metric shortcut for speed;
-- collection identity/metrics/probe failure => engineering/data STOP only;
-- nested PIOR TRAIN failure => scientific STOP, no untouched validation;
-- nested PIOR TRAIN pass => freeze PIOR, then preregister untouched paired closed-loop validation.
-
-
-DB-resolution hotfix note
--------------------------
-The repaired package accepts dotted nuPlan log identities and crop-suffixed raw DB filenames. The normal launcher rebuilds the TRAIN manifest automatically; no manual token/DB rewrite is needed. After manifest construction, inspect `provenance/v64_3_50_pior_train_manifest.json` -> `raw_db_resolution_counts` if desired. `city_split_fallback` is correctness-safe because the exact frozen scenario-token filter remains active; it only reduces the startup speedup.
+Scientific execution discipline:
+- paired TRAIN collection complete -> run nested PIOR identification + causal-retention gate automatically;
+- TRAIN gate FAIL -> scientific STOP; no untouched closed-loop validation and no threshold/feature/loss rescue;
+- TRAIN gate PASS -> freeze PIOR; only then design/run untouched paired closed-loop validation.

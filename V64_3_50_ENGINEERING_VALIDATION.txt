@@ -1,36 +1,67 @@
-V64.3.50 EAF-ICER-PIOR — engineering validation after speed/resume + DB-resolution hotfix
+V64.3.50.1 EAF-ICER-PIOR engineering validation
+================================================
 
 Scope
 -----
-Engineering-only repair of paired TRAIN closed-loop collection. Scientific PIOR semantics are unchanged: exact 502 frozen V49 full-set RSMR proposals, same treatment/control one-shot intervention, same Q/P/E state, same ranker/lambda, same closed_loop_nonreactive_agents challenge, same hard-safety metrics and same nested TRAIN gate.
+Engineering-only repair after uploaded V64.3.50 paired collection stopped at batch_0000 with
+64/64 successful nuPlan simulations but 50/64 probe fires per arm.  No V50 algorithmic
+feature/loss/threshold/gate change is included.
 
-Bug fixed
----------
-The first speed package incorrectly applied pathlib.Path.stem to dotted nuPlan log identities and also assumed cached log_name must equal one raw DB filename stem. Example: Path('2021.08.23.18.41.38_veh-28').stem becomes '2021.08.23.18.41'. Raw nuPlan DB filenames may additionally carry numeric crop suffixes. The hotfix preserves dotted log identities, normalizes the known crop suffix, optionally disambiguates multi-chunk log families via read-only SQLite token lookup, and otherwise widens only the raw DB search set while retaining the exact frozen scenario-token filter.
-
-Validation
-----------
-Python compile / compileall: PASS
-Launcher bash -n: PASS
-V50 focused tests: 12/12 PASS
-V13 -> V50 targeted regression (including V48.2 provenance lock): 254/254 PASS
-Full repository: 126/126 test files, 591/591 PASS
-  shard 0: 158/158 PASS
-  shard 1: 152/152 PASS
-  shard 2: 140/140 PASS
-  shard 3: 141/141 PASS
-V64.3.50 source manifest: 913/913 PASS
-Source manifest SHA256: ea591a9ee383fd336a787d84dd34a4dcbd8c9536518556cc425f15eae2ea43ed
-
-New DB/provenance contracts tested
+Uploaded result reliability audit
 ---------------------------------
-1. Dotted nuPlan log identities are preserved exactly; only a literal .db suffix is stripped.
-2. DB crop stems such as <log>_00001_00099.db normalize to the stable cached log identity.
-3. Multi-chunk stable-log families can be resolved by exact read-only SQLite lidar-pc/scenario-tag token membership when supported.
-4. If a unique raw DB cannot be proven, the runner retains a safe DB candidate set rather than dropping/stopping a frozen token; exact scenario_filter.scenario_tokens remains the final scientific population filter.
-5. Batch completion certificates bind the actual per-batch raw-DB candidate-list SHA256, so a changed DB search set invalidates resume.
-6. Probe-only diagnostics, heartbeat, unlocked shared-model inference and deterministic batch resume remain unchanged from the speed patch.
+- uploaded code ZIP SHA256: 62f9937884b70e9aeece881604c8a31421a319a328a4926c0d418aa213713ca6
+- uploaded result ZIP SHA256: 1a509941fee856a52bdc569a736e5e5058ae28921769909c25534c8ed88fa7f7
+- server source manifest matches uploaded code: 913/913 PASS
+- server targeted regression in uploaded run: 254/254 PASS
+- exact TRAIN manifest population: 502/502 unique
+- all frozen proposal cache samples: *_it000000.npz
+- batch_0000 control: 64 success / 0 fail / 50 probe fires
+- batch_0000 treatment: 64 success / 0 fail / 50 probe fires
+- paired outcome table: NOT CREATED
+- nested PIOR fit/gate: NOT RUN
+- formal result status: preregistered ENGINEERING/DATA STOP; no PIOR attribution allowed
 
-Not changed
------------
-No RSMR/candidate/top-K change; no treatment/control action change; no replan interval or horizon change; no scenario subsampling; no metric/label change; no fold/gate change; no fallback/rerank/second-best; no deployment future leakage.
+Repair contracts
+----------------
+- frozen V49 full_selected_action is supplied by a batch-local target map;
+- target identity requires cache_iteration == 0 and valid timestamp_us;
+- first planner call must be iteration 0;
+- treatment executes exact manifest frozen action once;
+- control executes current incumbent at the same event;
+- online re-selected proposal is diagnostic only and cannot choose treatment target;
+- every fired event carries exact scenario_token/timestamp/action certificate;
+- requested token set must equal event token set exactly, one event/token;
+- resume certificate additionally binds target-spec SHA256 and token-bound event validation;
+- default first batch = 4 scenes and a two-arm barrier prevents expensive continuation unless both preflights pass;
+- old invalid batch_0000 cannot satisfy V50.1 completion certificate and is not reused.
+
+Final byte-version tests
+------------------------
+- V50 focused / repair contract: 17/17 PASS
+- V13->V50 targeted regression: 259/259 PASS
+- full repository: 126/126 test files, 596/596 PASS
+  - shard 0: 158/158 PASS
+  - shard 1: 152/152 PASS
+  - shard 2: 145/145 PASS
+  - shard 3: 141/141 PASS
+- Python compileall: PASS
+- launcher bash -n: PASS
+- warnings: historical Transformer/nested-tensor warning classes only; no new failure class
+
+Scientific invariants intentionally unchanged
+---------------------------------------------
+- exact 502 V49 full-set RSMR proposal population
+- bounded interface / EAF / support / RSMR selection
+- candidate bank and action semantics
+- Q/P/E PIOR state
+- zero-bias pairwise ranker and lambda=1
+- closed_loop_nonreactive_agents TRAIN challenge
+- official score and hard-safety outcome definition
+- nested folds and preregistered identification/retention gate
+- same frozen proposal or incumbent only; no rerank, second-best, or fallback
+
+Scientific status
+-----------------
+V50 success/failure/convergence is NOT EVALUATED by the uploaded result.  Rerun V50.1 TRAIN
+paired collection.  TRAIN gate failure must STOP before untouched validation.  TRAIN gate pass
+freezes PIOR and only then permits separately preregistered untouched validation.

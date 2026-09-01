@@ -16,7 +16,7 @@ export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
-OUT_ROOT="${OUT_ROOT:-../outputs_v64_3_50_eaf_icer_pior_train_2gpu_v1}"
+OUT_ROOT="${OUT_ROOT:-../outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1}"
 V49_ROOT="${V49_ROOT:-../outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
 BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
 NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
@@ -28,6 +28,7 @@ WORKERS_PER_ARM="${WORKERS_PER_ARM:-4}"
 # population, full-set RSMR proposal, one-shot treatment/control action, metric
 # definition, or PIOR fitting gate.
 PIOR_BATCH_SIZE="${PIOR_BATCH_SIZE:-64}"
+PIOR_FIRST_BATCH_SIZE="${PIOR_FIRST_BATCH_SIZE:-4}"
 PIOR_HEARTBEAT_SECONDS="${PIOR_HEARTBEAT_SECONDS:-30}"
 PIOR_RESUME="${PIOR_RESUME:-1}"
 PIOR_SERIALIZE_GPU_INFERENCE="${PIOR_SERIALIZE_GPU_INFERENCE:-0}"
@@ -141,7 +142,7 @@ python -m bdse.tools.run_v64_3_50_pior_paired_closed_loop \
   --manifest "$TRAIN_MANIFEST" --treatment-config "$TREAT_CFG" --control-config "$CTRL_CFG" \
   --checkpoint "$EAF_CKPT" --nuplan-root "$NUPLAN_ROOT" --challenge closed_loop_nonreactive_agents \
   --output-root "$OUT_ROOT/closed_loop_train" --gpus "$GPU0,$GPU1" --workers-per-arm "$WORKERS_PER_ARM" \
-  --batch-size "$PIOR_BATCH_SIZE" --heartbeat-seconds "$PIOR_HEARTBEAT_SECONDS" \
+  --batch-size "$PIOR_BATCH_SIZE" --first-batch-size "$PIOR_FIRST_BATCH_SIZE" --heartbeat-seconds "$PIOR_HEARTBEAT_SECONDS" \
   --serialize-gpu-inference "$PIOR_SERIALIZE_GPU_INFERENCE" --profile-closed-loop "$PIOR_PROFILE_CLOSED_LOOP" \
   "${PIOR_RESUME_ARGS[@]}" \
   --output-paired-outcomes "$PAIRED" --output-report "$PAIR_REPORT" \

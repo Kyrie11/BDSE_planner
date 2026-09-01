@@ -12288,3 +12288,97 @@ Hotfix:
 Scientific mechanism unchanged: exact 502 V49 full-set RSMR proposal tokens, treatment/control one-shot action, candidate bank, RSMR, Q/P/E state, simulator challenge, official metrics, PIOR outcome label and nested gate are all unchanged. This hotfix changes only raw DB discovery/provenance.
 
 Validation of the hotfix byte version: V50 focused **12/12 PASS**; V13→V50 targeted **254/254 PASS**; full repository **126/126 test files, 591/591 PASS** (`158 + 152 + 140 + 141`); compileall and launcher `bash -n` PASS.
+
+---
+
+# V64.3.50.1 engineering-only repair — frozen-proposal identity binding after uploaded V50 collection STOP
+
+## Uploaded V64.3.50 result reliability verdict
+
+The uploaded V64.3.50 server result is **not scientifically attributable** and must not be used to promote/reject PIOR or design V51.  It is a preregistered **ENGINEERING/DATA STOP**.
+
+Audited facts:
+
+- uploaded code ZIP SHA256: `62f9937884b70e9aeece881604c8a31421a319a328a4926c0d418aa213713ca6`;
+- the server's 913-entry V50 source manifest validates **913/913** against the uploaded code, so the failing run used the uploaded hotfix byte version;
+- server V13→V50 targeted regression: **254/254 PASS**;
+- TRAIN manifest: exact **502/502 unique** frozen V49 full-set RSMR proposal tokens;
+- all 502 cache samples are `*_it000000.npz`;
+- only `batch_0000` was executed: **64 successful / 0 failed** nuPlan simulations in each arm;
+- control probe fires: **50/64**; treatment probe fires: **50/64**;
+- fired-event iteration counts are identical across the two arms and only 16/50 fires occur at iteration 0; the rest occur at later online replans up to iteration 140;
+- the old lightweight event records contain no `scenario_token`, so the 50 fired events cannot be certified token-by-token against the 64 requested scenarios;
+- no complete paired-outcome table exists and `v64_3_50_pior_fit.json` / PIOR artifact were never created;
+- therefore nested PIOR identification/causal-retention gates were **never run**.
+
+Entering `closed_loop_nonreactive_agents` does **not** mean that V50 passed the algorithmic gates.  In V50, paired closed loop is the TRAIN supervision source required *before* the nested PIOR gate can be evaluated.  Untouched/final closed-loop validation remains forbidden unless the repaired TRAIN paired-outcome identification + retention gate later passes.
+
+This follows the V50 preregistration exactly: inability to establish complete paired token identity / one intervention per scene is an ENGINEERING/DATA STOP and only the collection implementation may be repaired.
+
+## Root cause
+
+The V50 design preregistered the treatment action as the **already frozen V49 full-set RSMR proposal** for each of the exact 502 proposal scenes.  The implementation, however, did not consume `full_selected_action` from the TRAIN manifest.  `BDSEPlannerCore._apply_selected_outcome_probe()` instead watched the newly recomputed online tournament diagnostics at every closed-loop replan and fired only when a proposal happened to reappear.
+
+Consequences:
+
+1. 14/64 batch-0 scenes completed nuPlan simulation without ever exposing an online proposal, so the required intervention never fired;
+2. even for the 50 fired cases, most interventions occurred after scenario start and therefore did not correspond to the preregistered V49 `*_it000000` proposal event;
+3. the event-only speed logger counted fires but omitted scenario-token identity, so the partial output cannot be safely repaired/post-hoc paired;
+4. analysing the 50/64 subset would introduce selection bias conditioned on online proposal reappearance and is explicitly forbidden.
+
+## V64.3.50.1 repair
+
+This is an **engineering revision only**.  The V50 algorithm, Q/P/E state, low-capacity ranker, lambda, RSMR, candidate bank, outcome label, simulator challenge, safety metrics and TRAIN gate are unchanged.
+
+### 1. Manifest-bound iteration-0 proposal identity
+
+The TRAIN manifest now stores, for every frozen token:
+
+- `scenario_token`;
+- `cache_iteration`;
+- exact NPZ `timestamp_us`;
+- exact V49 `full_selected_action`;
+- raw DB candidate set/provenance.
+
+The builder requires `cache_iteration == 0`, matching the observed preregistered population (`502/502 *_it000000.npz`).
+
+Each batch writes a `pior_probe_targets.json` identity map.  The closed-loop planner binds its first planner call to this map by the exact scenario-start timestamp (with only a deterministic <=4 microsecond conversion tolerance and ambiguity fail-closed).  The scientific intervention action is then the manifest `full_selected_action`; an online re-selected proposal is recorded only as a diagnostic replay comparison and cannot change the treatment target.
+
+Treatment at iteration 0 executes exactly the frozen manifest action once.  Control at the same event executes the current incumbent.  Later replans in both arms return to incumbent-only operation, preserving the preregistered one-shot/no-fallback contract.
+
+### 2. Token-bound event certificate
+
+Every fired event now records and is validated against:
+
+- exact `scenario_token`;
+- target/current `timestamp_us` and timestamp error;
+- iteration index == 0;
+- exact frozen proposal action;
+- incumbent action;
+- arm-specific final action;
+- target source = `preregistered_V49_manifest_iteration0_proposal`;
+- same-frozen-proposal-or-incumbent containment;
+- no rerank / second-best / fallback.
+
+A batch is complete only when the event token set equals the requested token set exactly.  Counting `N` anonymous event lines is no longer sufficient.
+
+### 3. Resume hardening
+
+Completion certificates additionally bind the batch-local target-spec SHA256 and the token-bound probe certificate.  The uploaded invalid batch-0 has no valid V50.1 certificate and cannot be reused.  The recommended rerun uses a new output root to prevent stale artifact ambiguity.
+
+### 4. Paired fail-fast preflight
+
+The default run now uses a 4-scene first batch in each arm.  A `threading.Barrier` prevents either arm from entering the expensive remaining TRAIN collection until **both** control and treatment first batches pass all exact identity/probe/metric certificates.  Any preflight error aborts the peer arm before full collection.
+
+This scheduling change does not alter tokens, folds, actions, labels or metrics.  It only reduces the cost of detecting a server-specific identity mismatch.
+
+## Scientific status after repair
+
+- V50 mechanism success: **NOT EVALUATED**;
+- V50 promotion: **NOT PERMITTED YET**;
+- convergence: **cannot be judged from the failed collection**;
+- V51 design: **intentionally not performed**;
+- next action: rerun repaired V50 TRAIN collection and evaluate the already-preregistered PIOR identification + causal-retention gate;
+- only if that TRAIN gate passes may an untouched closed-loop validation be designed/run.
+
+No previously prohibited algorithm direction is reopened by this engineering repair.
