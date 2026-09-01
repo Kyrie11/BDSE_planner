@@ -269,7 +269,6 @@ def main() -> None:
     cal = [r for r in rows if int(r["outer_test_fold"]) == 0]
     model = _fit_sign_ranker(fit, False)
     tau, cal_info = _conformal_threshold(cal, model, alpha)
-    _decorate(a.v49_siir_config, model, tau, a.output_config)
 
     report = {
         "audit": "v64_3_50_eaf_icer_pior_fit",
@@ -303,9 +302,27 @@ def main() -> None:
     }
     a.output_report.parent.mkdir(parents=True, exist_ok=True)
     a.output_report.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps({"pass": bool(nested["train_gate_pass"]), "failure_diagnosis": nested["failure_diagnosis"], "output_config": str(a.output_config)}, sort_keys=True))
     if not nested["train_gate_pass"]:
+        # Do not leave a deployment-looking YAML after a scientific failure.
+        try:
+            if a.output_config.exists():
+                a.output_config.unlink()
+        except OSError:
+            pass
+        print(json.dumps({
+            "pass": False,
+            "failure_diagnosis": nested["failure_diagnosis"],
+            "output_config_emitted": False,
+        }, sort_keys=True))
         raise SystemExit(f"V64.3.50 PIOR nested TRAIN gate failed ({nested['failure_diagnosis']}); STOP before untouched closed-loop validation")
+
+    _decorate(a.v49_siir_config, model, tau, a.output_config)
+    print(json.dumps({
+        "pass": True,
+        "failure_diagnosis": nested["failure_diagnosis"],
+        "output_config": str(a.output_config),
+        "output_config_emitted": True,
+    }, sort_keys=True))
 
 
 if __name__ == "__main__":

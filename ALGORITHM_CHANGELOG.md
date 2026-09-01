@@ -12399,3 +12399,27 @@ This revision changes **no scientific mechanism**. It only makes repository/outp
 - a minimal set of historical launcher/science-lock fixtures remains because the current V13→V50 regression suite explicitly reads them.
 
 Changing a checksummed launcher necessarily invalidates the old V50 source manifest. The clean package therefore regenerates `V64_3_50_SOURCE_MANIFEST.sha256` after all path/cleanup edits; the checksum is not bypassed or weakened.
+
+---
+
+## V64.3.50.1 target-spec hash / resume fail-closed engineering hotfix
+
+This revision fixes a **pre-simulation engineering bug only**; it changes no PIOR scientific mechanism, token population, frozen V49 action, control/treatment intervention, metric, Q/P/E state, RSMR selector, retention objective, or TRAIN GO/STOP gate.
+
+### Root cause
+
+`run_v64_3_50_pior_paired_closed_loop.py` computed `probe_target_spec_sha256` from compact canonical JSON (`separators=(",", ":")`) but wrote `pior_probe_targets.json` using indented pretty JSON, then compared the pretty file-byte SHA256 against the canonical semantic SHA256. The two hashes necessarily differ despite representing the exact same target specification, so both arms stopped before launching nuPlan with `target-spec serialization hash mismatch`.
+
+### Repair
+
+- define target-spec scientific identity as canonical JSON semantic SHA256;
+- after writing the human-readable target file, re-parse and canonicalize it before comparing semantic identity;
+- record a second independent `probe_target_file_sha256` for exact file-byte integrity;
+- resume requires **both** semantic target identity and exact target-file byte integrity, in addition to the existing token/config/checkpoint/DB/metric/probe certificates;
+- V50.0 legacy full-arm resume is now prohibited because those arms used the invalid online-proposal-reappearance intervention semantics and cannot satisfy the V50.1 manifest-bound target contract;
+- paired preflight no longer has a fixed 300-second peer timeout; any peer exception explicitly aborts the barrier, while healthy asymmetric GPU startup does not create a false failure;
+- a failed PIOR TRAIN gate no longer leaves a deployment-looking `v64_3_50_pior.yaml`; only a passing TRAIN gate may emit the runtime config.
+
+### Scientific status
+
+The reported hash error occurred before the simulator subprocess started. It produces **no new V50 scientific evidence** and does not change the preregistered V50 convergence/GO/STOP interpretation. Rerun the same V50.1 launcher; normal V50.1 batch resume remains allowed only from token/action/timestamp-bound completion certificates.

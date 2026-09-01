@@ -143,7 +143,7 @@ PAIRED="$OUT_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
 PAIR_REPORT="$OUT_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
 PIOR_RESUME_ARGS=()
 if [[ "$PIOR_RESUME" == "1" ]]; then
-  PIOR_RESUME_ARGS+=(--resume --allow-legacy-full-arm-resume)
+  PIOR_RESUME_ARGS+=(--resume)
 fi
 python -m bdse.tools.run_v64_3_50_pior_paired_closed_loop \
   --manifest "$TRAIN_MANIFEST" --treatment-config "$TREAT_CFG" --control-config "$CTRL_CFG" \

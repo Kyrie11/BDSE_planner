@@ -9,7 +9,8 @@ import pytest
 from bdse.planner.nuplan_planner import BDSEPlannerCore
 from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW, _stable_log_name, _resolve_raw_db_files
 from bdse.tools.run_v64_3_50_pior_paired_closed_loop import (
-    _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files, _validate_probe_events, _collision_safe_batches
+    _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files, _validate_probe_events, _collision_safe_batches,
+    _payload_sha256, _write_probe_target_file, _probe_target_file_semantic_sha256
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -199,7 +200,8 @@ def test_v50_optimized_launcher_has_exact_db_resume_and_ticks() -> None:
     assert "PIOR_HEARTBEAT_SECONDS" in text
     assert "PIOR_RESUME" in text
     assert "PIOR_SERIALIZE_GPU_INFERENCE" in text
-    assert "--resume" in text and "--allow-legacy-full-arm-resume" in text
+    assert "--resume" in text
+    assert "PIOR_RESUME_ARGS+=(--resume --allow-legacy-full-arm-resume)" not in text
     runner = (ROOT / "bdse/tools/run_v64_3_50_pior_paired_closed_loop.py").read_text()
     assert "[PIOR-TICK]" in runner
     assert "BDSE_CLOSED_LOOP_DIAG_MODE" in runner
@@ -363,3 +365,107 @@ def test_v50_first_batch_is_small_paired_preflight_without_changing_population()
     text = (ROOT / "RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh").read_text()
     assert 'PIOR_FIRST_BATCH_SIZE="${PIOR_FIRST_BATCH_SIZE:-4}"' in text
     assert '--first-batch-size "$PIOR_FIRST_BATCH_SIZE"' in text
+
+
+
+def test_v50_target_spec_semantic_hash_is_pretty_print_invariant(tmp_path: Path) -> None:
+    import hashlib, json
+    payload = {
+        "algorithm_version": "V64.3.50.1-EAF-ICER-PIOR-ENGINEERING-REPAIR",
+        "identity": "exact_V49_manifest_it000000_timestamp_and_frozen_action",
+        "targets": [
+            {"scenario_token": "tok", "timestamp_us": 1629745157950134, "full_selected_action": 3},
+        ],
+    }
+    expected = _payload_sha256(payload)
+    path = tmp_path / "targets.json"
+    returned = _write_probe_target_file(path, payload)
+    assert returned == expected
+    assert _probe_target_file_semantic_sha256(path) == expected
+    # Pretty JSON bytes are intentionally a different integrity object from the
+    # canonical semantic identity; this was the V50.1 runtime bug.
+    assert hashlib.sha256(path.read_bytes()).hexdigest() != expected
+    # Reformatting without changing JSON meaning preserves semantic identity.
+    path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+    assert _probe_target_file_semantic_sha256(path) == expected
+
+
+def test_v50_resume_certificate_binds_semantic_target_and_file_bytes(tmp_path: Path) -> None:
+    import hashlib, json
+    root = tmp_path / "batch_0000"
+    root.mkdir()
+    tokens = ["a", "b"]
+    meta = {
+        "a": {"timestamp_us": 1_000_000, "cache_iteration": 0, "full_selected_action": 3},
+        "b": {"timestamp_us": 2_000_000, "cache_iteration": 0, "full_selected_action": 4},
+    }
+    metrics = root / "scenario_metrics.jsonl"
+    metrics.write_text(
+        "\n".join(json.dumps({"scenario_token": t, "identity": {}, "metrics": {"score": 1.0}}, sort_keys=True) for t in tokens) + "\n"
+    )
+    diag = root / "pior_probe_events.jsonl"
+    rows = []
+    for tok, base in [("a", 1), ("b", 2)]:
+        m = meta[tok]
+        rows.append({
+            "scenario_token": tok, "iteration_index": 0,
+            "pior_probe_fired": True, "pior_probe_event_count": 1, "pior_probe_arm": "control",
+            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
+            "target_timestamp_us": m["timestamp_us"], "current_timestamp_us": m["timestamp_us"],
+            "pior_probe_proposal_action": m["full_selected_action"], "pior_probe_baseline_action": base,
+            "pior_probe_final_action": base,
+            "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
+            "pior_probe_contract_no_rerank_second_best_fallback": True,
+            "pior_probe_online_proposal_exists": False, "pior_probe_online_proposal_matches_target": False,
+        })
+    diag.write_text("\n".join(json.dumps(r, sort_keys=True) for r in rows) + "\n")
+    payload = {
+        "algorithm_version": "V64.3.50.1-EAF-ICER-PIOR-ENGINEERING-REPAIR",
+        "identity": "exact_V49_manifest_it000000_timestamp_and_frozen_action",
+        "targets": [
+            {"scenario_token": t, "timestamp_us": meta[t]["timestamp_us"], "full_selected_action": meta[t]["full_selected_action"]}
+            for t in tokens
+        ],
+    }
+    target = root / "pior_probe_targets.json"
+    semantic_sha = _write_probe_target_file(target, payload)
+    sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    token_sha = hashlib.sha256(("\n".join(tokens) + "\n").encode()).hexdigest()
+    cert = {
+        "complete": True, "scenario_count": 2, "scenario_token_sha256": token_sha,
+        "config_sha256": "cfg", "checkpoint_sha256": "ckpt",
+        "challenge": "closed_loop_nonreactive_agents", "successful": 2, "failed": 0,
+        "raw_db_file_list_sha256": "dbhash", "probe_fired_count": 2,
+        "scenario_metrics_sha256": sha(metrics), "probe_events_sha256": sha(diag),
+        "probe_target_spec_sha256": semantic_sha, "probe_target_file_sha256": sha(target),
+    }
+    (root / ".pior_batch_complete.json").write_text(json.dumps(cert))
+    got, _ = _batch_certificate_valid(
+        root=root, tokens=tokens, cfg_sha="cfg", ckpt_sha="ckpt", challenge="closed_loop_nonreactive_agents",
+        raw_db_file_list_sha256="dbhash", meta=meta, arm="control", probe_target_spec_sha256=semantic_sha,
+    )
+    assert got is not None
+    # Harmless reformatting changes byte integrity, so resume is rejected even
+    # though semantic identity remains the same. This is conservative by design.
+    target.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
+    got2, cert2 = _batch_certificate_valid(
+        root=root, tokens=tokens, cfg_sha="cfg", ckpt_sha="ckpt", challenge="closed_loop_nonreactive_agents",
+        raw_db_file_list_sha256="dbhash", meta=meta, arm="control", probe_target_spec_sha256=semantic_sha,
+    )
+    assert got2 is None and cert2 is None
+
+
+def test_v50_launcher_refuses_scientifically_invalid_v50_0_legacy_arm_reuse() -> None:
+    text = (ROOT / "RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh").read_text()
+    assert 'PIOR_RESUME_ARGS+=(--resume)' in text
+    assert 'PIOR_RESUME_ARGS+=(--resume --allow-legacy-full-arm-resume)' not in text
+    runner = (ROOT / "bdse/tools/run_v64_3_50_pior_paired_closed_loop.py").read_text()
+    assert "refuses legacy full-arm resume" in runner
+
+
+def test_v50_failed_train_gate_does_not_leave_runtime_config_source_contract() -> None:
+    text = (ROOT / "bdse/tools/fit_v64_3_50_eaf_icer_pior.py").read_text()
+    fail_pos = text.index('if not nested["train_gate_pass"]:')
+    decorate_pos = text.index('_decorate(a.v49_siir_config, model, tau, a.output_config)')
+    assert decorate_pos > fail_pos
+    assert 'a.output_config.unlink()' in text

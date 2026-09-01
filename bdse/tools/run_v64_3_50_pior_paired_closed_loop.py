@@ -309,16 +309,37 @@ def _probe_target_payload(tokens: list[str], meta: dict[str, dict[str, Any]]) ->
     }
 
 
+def _canonical_payload_bytes(payload: dict[str, Any]) -> bytes:
+    """Canonical semantic serialization used for scientific target identity.
+
+    Pretty-print whitespace is deliberately excluded from the identity hash.
+    The on-disk byte hash is recorded separately in the batch certificate.
+    """
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+
+
 def _payload_sha256(payload: dict[str, Any]) -> str:
-    raw = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+    return hashlib.sha256(_canonical_payload_bytes(payload)).hexdigest()
+
+
+def _probe_target_file_semantic_sha256(path: Path) -> str:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"V64.3.50.1 PIOR target spec must be a JSON object: {path}")
+    return _payload_sha256(payload)
 
 
 def _write_probe_target_file(path: Path, payload: dict[str, Any]) -> str:
+    """Write a human-readable target spec and return its semantic hash.
+
+    Re-read the file before hashing so the check proves serialization preserved
+    the scientific payload rather than accidentally comparing two in-memory
+    objects.  File-byte integrity is checked independently by resume metadata.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     path.write_text(text, encoding="utf-8")
-    return _sha256(path)
+    return _probe_target_file_semantic_sha256(path)
 
 
 def _validate_probe_events(
@@ -414,7 +435,8 @@ def _batch_certificate_valid(
             or str(cert.get("challenge", "")) != challenge
             or (raw_db_file_list_sha256 and str(cert.get("raw_db_file_list_sha256", "")) != raw_db_file_list_sha256)
             or (probe_target_spec_sha256 and str(cert.get("probe_target_spec_sha256", "")) != probe_target_spec_sha256)
-            or (probe_target_spec_sha256 and _sha256(target_path) != probe_target_spec_sha256)
+            or (probe_target_spec_sha256 and _probe_target_file_semantic_sha256(target_path) != probe_target_spec_sha256)
+            or (probe_target_spec_sha256 and str(cert.get("probe_target_file_sha256", "")) != _sha256(target_path))
             or int(cert.get("successful", -1)) != len(tokens)
             or int(cert.get("failed", -1)) != 0
             or int(cert.get("probe_fired_count", -1)) != len(tokens)
@@ -503,7 +525,11 @@ def _run_batch(
     target_file = root / "pior_probe_targets.json"
     written_target_sha = _write_probe_target_file(target_file, target_payload)
     if written_target_sha != probe_target_spec_sha256:
-        raise RuntimeError("V64.3.50.1 PIOR target-spec serialization hash mismatch")
+        raise RuntimeError(
+            "V64.3.50.1 PIOR target-spec semantic hash mismatch after serialization; "
+            "the written JSON no longer represents the preregistered batch target payload"
+        )
+    probe_target_file_sha256 = _sha256(target_file)
     token_override = "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":"))
     diag = root / "pior_probe_events.jsonl"
     profile = root / "bdse_closed_loop_profile.json"
@@ -600,6 +626,8 @@ def _run_batch(
         "raw_db_file_list_sha256": raw_db_file_list_sha256,
         "probe_target_spec_file": str(target_file),
         "probe_target_spec_sha256": probe_target_spec_sha256,
+        "probe_target_file_sha256": probe_target_file_sha256,
+        "probe_target_hash_contract": "canonical_JSON_semantic_SHA256_plus_independent_file_byte_SHA256",
         "probe_event_token_sha256": _token_sha(tokens),
         "probe_identity_audit": probe_audit,
         "workers": int(workers),
@@ -709,7 +737,9 @@ def _run_arm(
                 flush=True,
             )
             try:
-                preflight_barrier.wait(timeout=300.0)
+                # No fixed short timeout: the two GPUs may have asymmetric startup
+                # cost. Any peer exception aborts the barrier explicitly below.
+                preflight_barrier.wait()
             except threading.BrokenBarrierError as exc:
                 raise RuntimeError(
                     f"V64.3.50.1 PIOR paired preflight peer failed; arm={arm} will not continue expensive collection"
@@ -792,12 +822,21 @@ def main() -> None:
     ap.add_argument("--first-batch-size", type=int, default=4, help="Engineering-only paired preflight batch; both arms must pass before expensive collection continues.")
     ap.add_argument("--heartbeat-seconds", type=float, default=30.0)
     ap.add_argument("--resume", action="store_true")
-    ap.add_argument("--allow-legacy-full-arm-resume", action="store_true")
+    ap.add_argument(
+        "--allow-legacy-full-arm-resume", action="store_true",
+        help="Deprecated/forbidden for V50.1: V50.0 full arms used the wrong online-reappearance probe identity.",
+    )
     ap.add_argument("--serialize-gpu-inference", type=int, choices=[0, 1], default=0)
     ap.add_argument("--profile-closed-loop", type=int, choices=[0, 1], default=1)
     ap.add_argument("--output-paired-outcomes", type=Path, required=True)
     ap.add_argument("--output-report", type=Path, required=True)
     a = ap.parse_args()
+
+    if a.allow_legacy_full_arm_resume:
+        raise RuntimeError(
+            "V64.3.50.1 PIOR refuses legacy full-arm resume: V50.0 probe identity was scientifically invalid "
+            "because it waited for online proposal reappearance. Resume is allowed only from V50.1 token/action/timestamp-bound batch certificates."
+        )
 
     tokens, meta, raw_files = _manifest(a.manifest)
     gpus = [x.strip() for x in a.gpus.split(",") if x.strip()]
@@ -834,6 +873,11 @@ def main() -> None:
                 metrics_by_arm[arm] = metrics
                 results[arm] = summary
         except Exception as exc:
+            if preflight_barrier is not None:
+                try:
+                    preflight_barrier.abort()
+                except Exception:
+                    pass
             with lock:
                 errors.append(f"{arm}: {type(exc).__name__}: {exc}")
 
