@@ -12423,3 +12423,40 @@ This revision fixes a **pre-simulation engineering bug only**; it changes no PIO
 ### Scientific status
 
 The reported hash error occurred before the simulator subprocess started. It produces **no new V50 scientific evidence** and does not change the preregistered V50 convergence/GO/STOP interpretation. Rerun the same V50.1 launcher; normal V50.1 batch resume remains allowed only from token/action/timestamp-bound completion certificates.
+
+---
+
+# V64.3.50.2 engineering-only repair — nuPlan pre-roll / frozen-anchor time alignment
+
+This revision is **not a new PIOR algorithm** and must not be treated as a scientific result. It repairs the V50.1 paired-collection implementation after the 4-scene preflight produced `2 success / 2 failure` in both control and treatment arms.
+
+## Uploaded preflight diagnosis
+
+The two failed scenario tokens were identical in both arms and failed before the control/treatment action split, inside the manifest target lookup:
+
+- `00f4aedf9b3c5f65`: simulation iteration-0 time was about `2,999,698 us` before the frozen V49 cache timestamp;
+- `02fca515559f520d`: simulation iteration-0 time was about `2,999,474 us` before the frozen V49 cache timestamp.
+
+The other two preflight tokens started exactly at the frozen timestamp and succeeded. Therefore this is an engineering time-alignment failure, not evidence that the treatment proposal is unsafe or that PIOR is ineffective.
+
+`*_it000000.npz` identifies the cached V49 **proposal anchor event**. It does not imply that nuPlan closed-loop simulation iteration 0 is always that event: tagged nuPlan scenarios can include a negative context/pre-roll window before the scenario trigger. V50.1 incorrectly promoted cache iteration 0 into a universal `simulation iteration == 0` contract.
+
+## Repair contract
+
+- scenario iteration 0 is used only to bind the planner instance to one unique future frozen V49 anchor in a conservative `0..3.5 s` pre-roll window;
+- before the anchor, **both** treatment and control follow the incumbent path;
+- the treatment/control split occurs only when the current simulation timestamp matches the exact frozen V49 anchor (`<=4 us` conversion tolerance): treatment executes the manifest `full_selected_action` once, control preserves the incumbent;
+- after the anchor, both arms return to incumbent-only operation exactly as preregistered;
+- widening the actual intervention-time tolerance to ~3 s is forbidden: the 3 s window is for scenario-to-anchor binding only, never for moving the intervention;
+- normal cached-plan reuse is forcibly bypassed at/past a pending anchor so `replan_interval_ticks` cannot silently skip the intervention; if simulation sampling passes the anchor without an exact event, collection fails closed;
+- obsolete `preregistered_V49_manifest_iteration0_proposal` configs are explicitly rejected and cannot fall back to the historical online-proposal path;
+- event certificates now include scenario-start timestamp and anchor offset, and batch validation requires exact anchor-time intervention plus exact token/action/no-fallback contracts;
+- subprocess batches are pre-roll-conflict safe. The 4-scene preflight remains a contiguous auditable prefix; remaining tokens use deterministic conflict-aware first-fit packing to reduce nuPlan restarts without changing the 502-token scientific population, folds, outcomes, or labels.
+
+The repeated `[PIOR-TICK] ... Simulation failed!` heartbeat text in the uploaded log was not a sequence of new failures: the monitor repeatedly displayed the current last relevant child-log line. Each arm had exactly two failed simulations, on the same two tokens.
+
+## Scientific status
+
+V50 remains **NOT YET SCIENTIFICALLY EVALUATED**. No PIOR promotion/rejection or V51 design is permitted from the failed preflight. The repaired V50 TRAIN collection must first complete the already preregistered paired-outcome identification and causal-retention gates. Untouched validation remains forbidden unless those TRAIN gates pass.
+
+No algorithm-level prohibited branch is reopened, and RSMR, Q/P/E, candidate bank, paired outcome definition, safety metrics, risk learner, lambda, retention calibration and no-fallback containment are unchanged.

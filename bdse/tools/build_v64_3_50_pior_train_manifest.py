@@ -252,12 +252,12 @@ def main() -> None:
                     if timestamp_us <= 0:
                         raise RuntimeError(
                             f"V64.3.50 PIOR STOP: frozen token={tok} has no valid cache timestamp_us in {p}; "
-                            "paired iteration-0 intervention identity cannot be proven"
+                            "paired frozen-anchor intervention identity cannot be proven"
                         )
                     if cache_iteration != 0:
                         raise RuntimeError(
                             f"V64.3.50 PIOR STOP: frozen token={tok} comes from cache iteration={cache_iteration}, expected it000000; "
-                            "V50.1 repair is defined only for the preregistered scenario-start proposal event"
+                            "V50.2 repair is defined only for the preregistered frozen proposal anchor event"
                         )
                     found[tok] = {
                         **meta[tok],
@@ -282,8 +282,10 @@ def main() -> None:
         raise RuntimeError(f"V64.3.50 PIOR STOP: {len(missing)} frozen RSMR TRAIN tokens missing from stated bdse_train_v2 layout; first={missing[:10]}")
 
     # Every preregistered V49 proposal comes from *_it000000.npz.  Store the
-    # exact scenario-start timestamp so the paired runner can bind each planner
-    # instance to the frozen action.  Timestamp collisions across the full 502
+    # exact frozen proposal *anchor-event* timestamp. nuPlan tagged scenarios may
+    # start before this anchor because scenario extraction uses a negative offset;
+    # the paired runner binds at scenario start but intervenes only at this exact
+    # anchor timestamp. Timestamp collisions across the full 502
     # population are allowed: the runner deterministically separates colliding
     # timestamps into different subprocess batches, where scenario_filter tokens
     # provide the remaining identity constraint.
@@ -322,8 +324,8 @@ def main() -> None:
         "scientific_population": "exact_V49_full_set_RSMR_TRAIN_proposals_only",
         "scenario_count": len(rows),
         "unique_scenario_count": len({r["scenario_token"] for r in rows}),
-        "scenario_start_timestamp_unique_count": len(ts_counts),
-        "scenario_start_timestamp_collision_count": int(sum(max(v - 1, 0) for v in ts_counts.values())),
+        "anchor_timestamp_unique_count": len(ts_counts),
+        "anchor_timestamp_collision_count": int(sum(max(v - 1, 0) for v in ts_counts.values())),
         "city_counts": counts,
         "npz_files_scanned_until_complete": int(scanned_npz),
         "raw_db_directories": raw_dirs,

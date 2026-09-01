@@ -69,7 +69,7 @@ def test_v50_control_marks_same_event_but_never_leaves_incumbent() -> None:
 
 
 
-def test_v50_manifest_bound_probe_fires_exact_v49_action_at_iteration0_even_when_online_proposal_absent(tmp_path, monkeypatch) -> None:
+def test_v50_manifest_bound_probe_fires_exact_v49_action_at_anchor_even_when_online_proposal_absent(tmp_path, monkeypatch) -> None:
     import json
     ts = 1_629_745_157_950_134
     target = tmp_path / "targets.json"
@@ -78,7 +78,7 @@ def test_v50_manifest_bound_probe_fires_exact_v49_action_at_iteration0_even_when
     }]}))
     monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
     cfg = _cfg("treatment")
-    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
     core = BDSEPlannerCore(cfg=cfg)
     current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
     action, d = core._apply_selected_outcome_probe(
@@ -94,7 +94,47 @@ def test_v50_manifest_bound_probe_fires_exact_v49_action_at_iteration0_even_when
     assert abs(d["pior_probe_current_timestamp_us"] - ts) <= 4
 
 
-def test_v50_manifest_bound_probe_refuses_nonzero_first_iteration(tmp_path, monkeypatch) -> None:
+def test_v50_manifest_bound_probe_allows_nuplan_preroll_but_fires_only_at_exact_anchor(tmp_path, monkeypatch) -> None:
+    import json
+    ts = 1_629_745_160_949_608
+    start_ts = ts - 2_999_474
+    target = tmp_path / "targets.json"
+    target.write_text(json.dumps({"targets": [{
+        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
+    }]}))
+    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
+    cfg = _cfg("treatment")
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
+    core = BDSEPlannerCore(cfg=cfg)
+
+    start = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=start_ts / 1e6))
+    action0, d0 = core._apply_selected_outcome_probe(
+        _tournament(proposal=-1, baseline=1, exists=False, action=1), 1, _candidates(), start
+    )
+    assert action0 == 1
+    assert d0["pior_probe_fired"] is False
+    assert d0["pior_probe_phase"] == "pre_anchor_incumbent"
+    assert d0["pior_probe_anchor_offset_us"] == ts - start_ts
+    assert core._pior_probe_event_count == 0
+
+    # Cache reuse is an engineering speedup and may never skip the anchor.
+    before = SimpleNamespace(iteration=SimpleNamespace(index=29, time_s=(ts - 100_000) / 1e6))
+    assert core.selected_outcome_probe_requires_replan(before) is False
+    at_anchor = SimpleNamespace(iteration=SimpleNamespace(index=30, time_s=ts / 1e6))
+    assert core.selected_outcome_probe_requires_replan(at_anchor) is True
+
+    action1, d1 = core._apply_selected_outcome_probe(
+        _tournament(proposal=-1, baseline=1, exists=False, action=1), 1, _candidates(), at_anchor
+    )
+    assert action1 == 3
+    assert d1["pior_probe_fired"] is True
+    assert d1["pior_probe_scenario_token"] == "tok"
+    assert d1["pior_probe_target_timestamp_us"] == ts
+    assert abs(d1["pior_probe_current_timestamp_us"] - ts) <= 4
+    assert core._pior_probe_event_count == 1
+
+
+def test_v50_manifest_bound_probe_refuses_nonzero_first_planner_call(tmp_path, monkeypatch) -> None:
     import json
     ts = 1_629_745_157_950_134
     target = tmp_path / "targets.json"
@@ -103,12 +143,11 @@ def test_v50_manifest_bound_probe_refuses_nonzero_first_iteration(tmp_path, monk
     }]}))
     monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
     cfg = _cfg("control")
-    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
     core = BDSEPlannerCore(cfg=cfg)
     current = SimpleNamespace(iteration=SimpleNamespace(index=5, time_s=ts / 1e6))
-    with pytest.raises(RuntimeError, match="iteration 0"):
+    with pytest.raises(RuntimeError, match="first planner call must be scenario iteration 0"):
         core._apply_selected_outcome_probe(_tournament(baseline=1), 1, _candidates(), current)
-
 
 def test_v50_probe_refuses_fallback_or_second_path() -> None:
     core = BDSEPlannerCore(cfg=_cfg("treatment", fallback=True))
@@ -171,7 +210,9 @@ def test_v50_probe_only_diag_is_minimal_and_event_only(tmp_path, monkeypatch) ->
             "pior_probe_target_timestamp_us": 700000,
             "pior_probe_current_timestamp_us": 700000,
             "pior_probe_timestamp_error_us": 0,
-            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
+            "pior_probe_scenario_start_timestamp_us": 700000,
+            "pior_probe_anchor_offset_us": 0,
+            "pior_probe_target_source": "preregistered_V49_manifest_anchor_timestamp_proposal",
             "pior_probe_online_proposal_exists": False,
             "pior_probe_online_proposal_action": -1,
             "pior_probe_online_proposal_matches_target": False,
@@ -324,8 +365,9 @@ def test_v50_probe_event_validation_is_token_bound(tmp_path: Path) -> None:
         rows.append({
             "scenario_token": tok, "iteration_index": 0,
             "pior_probe_fired": True, "pior_probe_event_count": 1, "pior_probe_arm": "treatment",
-            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
+            "pior_probe_target_source": "preregistered_V49_manifest_anchor_timestamp_proposal",
             "target_timestamp_us": m["timestamp_us"], "current_timestamp_us": m["timestamp_us"],
+            "scenario_start_timestamp_us": m["timestamp_us"], "anchor_offset_us": 0,
             "pior_probe_proposal_action": m["full_selected_action"], "pior_probe_baseline_action": base,
             "pior_probe_final_action": m["full_selected_action"],
             "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
@@ -342,23 +384,25 @@ def test_v50_probe_event_validation_is_token_bound(tmp_path: Path) -> None:
         _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
 
 
-def test_v50_collision_safe_batches_separate_equal_start_timestamps() -> None:
+def test_v50_collision_safe_batches_separate_preroll_ambiguous_anchor_timestamps() -> None:
     tokens = ["a", "b", "c", "d"]
     meta = {
-        "a": {"timestamp_us": 1},
-        "b": {"timestamp_us": 2},
-        "c": {"timestamp_us": 1},
-        "d": {"timestamp_us": 3},
+        "a": {"timestamp_us": 1_000_000},
+        "b": {"timestamp_us": 6_000_000},
+        # c is only ~3 s from b and must live in another subprocess target map.
+        "c": {"timestamp_us": 9_000_000},
+        "d": {"timestamp_us": 15_000_000},
     }
     batches = _collision_safe_batches(tokens, meta, 4)
     assert batches == [["a", "b"], ["c", "d"]]
     for batch in batches:
-        assert len({meta[t]["timestamp_us"] for t in batch}) == len(batch)
+        times = [meta[t]["timestamp_us"] for t in batch]
+        assert all(abs(a - b) > 3_500_004 for i, a in enumerate(times) for b in times[i + 1:])
 
 
 def test_v50_first_batch_is_small_paired_preflight_without_changing_population() -> None:
     tokens = [f"t{i}" for i in range(10)]
-    meta = {t: {"timestamp_us": i + 1} for i, t in enumerate(tokens)}
+    meta = {t: {"timestamp_us": (i + 1) * 10_000_000} for i, t in enumerate(tokens)}
     batches = _collision_safe_batches(tokens, meta, batch_size=6, first_batch_size=3)
     assert batches == [tokens[:3], tokens[3:9], tokens[9:]]
     assert [t for batch in batches for t in batch] == tokens
@@ -371,8 +415,10 @@ def test_v50_first_batch_is_small_paired_preflight_without_changing_population()
 def test_v50_target_spec_semantic_hash_is_pretty_print_invariant(tmp_path: Path) -> None:
     import hashlib, json
     payload = {
-        "algorithm_version": "V64.3.50.1-EAF-ICER-PIOR-ENGINEERING-REPAIR",
-        "identity": "exact_V49_manifest_it000000_timestamp_and_frozen_action",
+        "algorithm_version": "V64.3.50.2-EAF-ICER-PIOR-ANCHOR-TIME-REPAIR",
+        "identity": "exact_V49_manifest_anchor_timestamp_and_frozen_action",
+        "scenario_start_binding": "unique_future_anchor_within_3p5s_preroll_window",
+        "intervention_time_contract": "fire_only_at_exact_frozen_anchor_timestamp",
         "targets": [
             {"scenario_token": "tok", "timestamp_us": 1629745157950134, "full_selected_action": 3},
         ],
@@ -410,8 +456,9 @@ def test_v50_resume_certificate_binds_semantic_target_and_file_bytes(tmp_path: P
         rows.append({
             "scenario_token": tok, "iteration_index": 0,
             "pior_probe_fired": True, "pior_probe_event_count": 1, "pior_probe_arm": "control",
-            "pior_probe_target_source": "preregistered_V49_manifest_iteration0_proposal",
+            "pior_probe_target_source": "preregistered_V49_manifest_anchor_timestamp_proposal",
             "target_timestamp_us": m["timestamp_us"], "current_timestamp_us": m["timestamp_us"],
+            "scenario_start_timestamp_us": m["timestamp_us"], "anchor_offset_us": 0,
             "pior_probe_proposal_action": m["full_selected_action"], "pior_probe_baseline_action": base,
             "pior_probe_final_action": base,
             "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
@@ -420,8 +467,10 @@ def test_v50_resume_certificate_binds_semantic_target_and_file_bytes(tmp_path: P
         })
     diag.write_text("\n".join(json.dumps(r, sort_keys=True) for r in rows) + "\n")
     payload = {
-        "algorithm_version": "V64.3.50.1-EAF-ICER-PIOR-ENGINEERING-REPAIR",
-        "identity": "exact_V49_manifest_it000000_timestamp_and_frozen_action",
+        "algorithm_version": "V64.3.50.2-EAF-ICER-PIOR-ANCHOR-TIME-REPAIR",
+        "identity": "exact_V49_manifest_anchor_timestamp_and_frozen_action",
+        "scenario_start_binding": "unique_future_anchor_within_3p5s_preroll_window",
+        "intervention_time_contract": "fire_only_at_exact_frozen_anchor_timestamp",
         "targets": [
             {"scenario_token": t, "timestamp_us": meta[t]["timestamp_us"], "full_selected_action": meta[t]["full_selected_action"]}
             for t in tokens
@@ -469,3 +518,29 @@ def test_v50_failed_train_gate_does_not_leave_runtime_config_source_contract() -
     decorate_pos = text.index('_decorate(a.v49_siir_config, model, tau, a.output_config)')
     assert decorate_pos > fail_pos
     assert 'a.output_config.unlink()' in text
+
+
+def test_v50_obsolete_iteration0_manifest_source_fails_closed(tmp_path, monkeypatch) -> None:
+    import json
+    ts = 1_629_745_157_950_134
+    target = tmp_path / "targets.json"
+    target.write_text(json.dumps({"targets": [{
+        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
+    }]}))
+    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
+    cfg = _cfg("treatment")
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"
+    core = BDSEPlannerCore(cfg=cfg)
+    current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
+    with pytest.raises(RuntimeError, match="refuses obsolete manifest probe source"):
+        core._apply_selected_outcome_probe(_tournament(baseline=1), 1, _candidates(), current)
+
+
+def test_v50_nuplan_wrapper_cache_cannot_skip_pending_anchor() -> None:
+    from bdse.planner.nuplan_planner import BDSEnuPlanPlanner
+
+    planner = object.__new__(BDSEnuPlanPlanner)
+    planner._cached_local_trajectory = np.zeros((2, 3), dtype=np.float32)
+    planner.core = SimpleNamespace(selected_outcome_probe_requires_replan=lambda _: True)
+    current = SimpleNamespace(iteration=SimpleNamespace(index=1, time_s=0.1))
+    assert planner._can_reuse_cached_plan(current) is False

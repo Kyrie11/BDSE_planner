@@ -1,6 +1,6 @@
 # BDSE current runnable package
 
-This package intentionally keeps only the current V64.3.50.1 PIOR entrypoint, the two external-baseline entrypoints used by the current workflow, the BDSE source/config/test tree, the algorithm changelog, and the small legacy launcher/science-lock fixtures required by the V50 startup regression suite.
+This package intentionally keeps only the current V64.3.50 PIOR entrypoint (V50.2 engineering revision), the two external-baseline entrypoints used by the current workflow, the BDSE source/config/test tree, the algorithm changelog, and the small legacy launcher/science-lock fixtures required by the V50 startup regression suite.
 
 ## Repository/output layout
 
@@ -76,3 +76,17 @@ The current package fixes a pre-simulation target-spec checksum bug. The target 
 cd /home/senzeyu2/code/BDSE_planner
 bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
 ```
+
+
+## V50.2 frozen-anchor time-alignment repair
+
+The current package keeps the V64.3.50 PIOR algorithm unchanged but repairs nuPlan scenario pre-roll handling. A cached `*_it000000` V49 proposal is an anchor event, while some nuPlan tagged scenarios begin roughly 3 seconds before that anchor. The paired runner now binds the scenario at iteration 0, preserves the incumbent in both arms during pre-roll, and executes the treatment/control split only at the exact frozen anchor timestamp. Cached-plan reuse cannot skip the anchor. Obsolete iteration-0 manifest probe configs fail closed.
+
+The user-facing command and output root are unchanged:
+
+```bash
+cd /home/senzeyu2/code/BDSE_planner
+bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+```
+
+The existing failed preflight batch has no valid completion certificate and is automatically rerun. Do not copy or force-resume V50.0/V50.1 legacy arms.

@@ -75,15 +75,21 @@ _CLOSED_LOOP_PROFILE_REGISTERED = False
 _CLOSED_LOOP_DIAG_WRITE_LOCK = threading.Lock()
 _PIOR_TARGET_CACHE_LOCK = threading.Lock()
 _PIOR_TARGET_CACHE: dict[str, dict[int, dict[str, Any]]] = {}
+_PIOR_MAX_SCENARIO_PREROLL_US = 3_500_000
+_PIOR_ANCHOR_MATCH_TOLERANCE_US = 4
 
 
 def _load_pior_target_map() -> dict[int, dict[str, Any]]:
     """Load the batch-local V50.1 frozen-proposal identity map.
 
     The map is TRAIN-only instrumentation supplied by the paired-outcome runner.
-    Runtime identity is keyed by the preregistered cache/scenario start timestamp
-    (all V49 proposal samples are ``it000000``).  This avoids re-selecting a new
-    online proposal and binds treatment/control to the exact V49 frozen action.
+    Runtime identity is keyed by the preregistered V49 *anchor-event* timestamp.
+    ``it000000`` identifies the cached proposal event, but nuPlan may start a
+    tagged simulation several seconds before that event because scenario
+    extraction uses a negative pre-roll.  The planner therefore binds a scenario
+    to one unique future anchor at its first call, then fires only when the exact
+    anchor timestamp is reached.  This avoids online re-selection while preserving
+    the original V49 proposal time.
     """
     raw = os.environ.get("BDSE_PIOR_TARGETS_FILE", "").strip()
     if not raw:
@@ -132,24 +138,41 @@ def _pior_iteration_time_us(current_input: Any) -> int:
         return 0
 
 
-def _lookup_pior_target(current_input: Any) -> tuple[dict[str, Any], int]:
+def _bind_pior_target_from_scenario_start(current_input: Any) -> tuple[dict[str, Any], int]:
+    """Bind one planner instance to its frozen V49 anchor event.
+
+    nuPlan's standard tagged-scenario extraction starts about 3 s before the
+    scenario trigger/anchor.  Therefore simulation iteration 0 is not always the
+    V49 cached proposal timestamp.  At the first planner call we only *bind* the
+    unique target whose anchor lies in the deterministic pre-roll window.  The
+    intervention itself is never shifted: it still fires only at the exact anchor
+    timestamp (within the tiny float-conversion tolerance below).
+    """
     targets = _load_pior_target_map()
     now_us = _pior_iteration_time_us(current_input)
     if now_us <= 0:
-        raise RuntimeError("V64.3.50.1 PIOR cannot resolve current simulation timestamp")
-    exact = targets.get(now_us)
-    if exact is not None:
-        return exact, 0
-    # Float seconds at epoch scale can lose a fraction of a microsecond.  Permit
-    # only a tiny deterministic tolerance and fail on ambiguity.
-    nearby = [(abs(int(ts) - now_us), row) for ts, row in targets.items() if abs(int(ts) - now_us) <= 4]
-    nearby.sort(key=lambda x: x[0])
-    if len(nearby) == 1:
-        return nearby[0][1], int(nearby[0][0])
-    raise RuntimeError(
-        f"V64.3.50.1 PIOR cannot bind scenario-start time_us={now_us} to a unique frozen target; "
-        f"matches_within_4us={len(nearby)}"
-    )
+        raise RuntimeError("V64.3.50.2 PIOR cannot resolve scenario-start simulation timestamp")
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for ts, row in targets.items():
+        delta = int(ts) - int(now_us)
+        if -_PIOR_ANCHOR_MATCH_TOLERANCE_US <= delta <= _PIOR_MAX_SCENARIO_PREROLL_US:
+            candidates.append((delta, row))
+    candidates.sort(key=lambda x: (abs(x[0]), x[0], str(x[1].get("scenario_token", ""))))
+    if len(candidates) != 1:
+        raise RuntimeError(
+            f"V64.3.50.2 PIOR cannot uniquely bind scenario-start time_us={now_us} to a frozen V49 anchor; "
+            f"candidates_within_preroll={[(int(d), str(r.get('scenario_token',''))) for d, r in candidates]} "
+            f"window_us={_PIOR_MAX_SCENARIO_PREROLL_US}"
+        )
+    delta, row = candidates[0]
+    return row, int(delta)
+
+
+def _pior_anchor_match_error_us(current_input: Any, target: dict[str, Any]) -> int:
+    now_us = _pior_iteration_time_us(current_input)
+    if now_us <= 0:
+        raise RuntimeError("V64.3.50.2 PIOR cannot resolve current simulation timestamp")
+    return int(now_us - int(target["timestamp_us"]))
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -399,11 +422,42 @@ class BDSEPlannerCore:
         self._pior_probe_used = False
         self._pior_probe_event_count = 0
         self._pior_probe_first_call_seen = False
+        self._pior_bound_target: dict[str, Any] | None = None
+        self._pior_scenario_start_timestamp_us = 0
+        self._pior_anchor_offset_us = 0
 
     def reset_selected_outcome_probe(self) -> None:
         self._pior_probe_used = False
         self._pior_probe_event_count = 0
         self._pior_probe_first_call_seen = False
+        self._pior_bound_target = None
+        self._pior_scenario_start_timestamp_us = 0
+        self._pior_anchor_offset_us = 0
+
+    def selected_outcome_probe_requires_replan(self, current_input: Any) -> bool:
+        """Return True when the pending manifest-bound PIOR anchor must hit the core.
+
+        The normal closed-loop speed path may reuse a cached trajectory for several
+        simulator ticks.  That cache must never jump over the frozen V49 anchor:
+        once the current timestamp reaches the exact anchor neighborhood, force a
+        core evaluation.  If sampling somehow steps past the anchor, the core then
+        fails closed instead of silently losing the paired intervention.
+        """
+        pcfg = (self.cfg.get("selected_outcome_probe", {}) or {}) if isinstance(self.cfg, dict) else {}
+        if not bool(pcfg.get("enabled", False)) or self._pior_probe_used:
+            return False
+        source = str(pcfg.get("proposal_source", "")).strip()
+        if source != "preregistered_V49_manifest_anchor_timestamp_proposal":
+            return False
+        target = self._pior_bound_target
+        if target is None:
+            # The first call is never reusable because no cached plan exists.
+            return False
+        try:
+            err_us = _pior_anchor_match_error_us(current_input, target)
+        except Exception:
+            return True
+        return int(err_us) >= -_PIOR_ANCHOR_MATCH_TOLERANCE_US
 
     def _apply_selected_outcome_probe(self, tournament: Any, action: int, candidates: Any, current_input: Any | None = None) -> tuple[int, dict[str, Any]]:
         """Apply the V64.3.50.1 TRAIN-only one-shot frozen-proposal intervention.
@@ -411,9 +465,11 @@ class BDSEPlannerCore:
         V50 preregistered the *exact V49 full-set RSMR proposal* as the treatment
         action.  The original implementation accidentally waited for a newly
         recomputed online proposal and therefore fired in only 50/64 scenarios.
-        The engineering repair binds each scenario at iteration 0 to the frozen
-        manifest entry by its cache/start ``timestamp_us`` and executes exactly
-        that action once (treatment) or the current incumbent (control).
+        The engineering repair binds each planner instance at scenario iteration
+        0 to the unique future V49 *anchor-event* timestamp in its batch.  Before
+        the anchor both arms preserve the incumbent; at the exact anchor the
+        treatment executes the frozen V49 action once while control preserves the
+        incumbent; afterwards both remain on the incumbent path.
         """
         pcfg = (self.cfg.get("selected_outcome_probe", {}) or {}) if isinstance(self.cfg, dict) else {}
         enabled = bool(pcfg.get("enabled", False))
@@ -443,7 +499,12 @@ class BDSEPlannerCore:
             raise RuntimeError(f"V64.3.50 PIOR probe requires a valid incumbent/baseline action, got {baseline}")
 
         source = str(pcfg.get("proposal_source", "")).strip()
-        manifest_bound = source == "preregistered_V49_manifest_iteration0_proposal"
+        manifest_bound = source == "preregistered_V49_manifest_anchor_timestamp_proposal"
+        if source.startswith("preregistered_V49_manifest_") and not manifest_bound:
+            raise RuntimeError(
+                f"V64.3.50.2 PIOR refuses obsolete manifest probe source={source!r}; "
+                "V50.0/V50.1 iteration-0 semantics were engineering-invalid"
+            )
         original_action = int(action)
         fired = False
         target: dict[str, Any] | None = None
@@ -457,31 +518,53 @@ class BDSEPlannerCore:
             proposal = int(online_proposal)
         elif manifest_bound:
             if current_input is None:
-                raise RuntimeError("V64.3.50.1 PIOR manifest-bound probe requires current planner input")
-            if self._pior_probe_first_call_seen:
-                raise RuntimeError("V64.3.50.1 PIOR reached a second planner call before the required one-shot event")
-            self._pior_probe_first_call_seen = True
-            if iteration_index != 0:
-                raise RuntimeError(
-                    f"V64.3.50.1 PIOR frozen proposal must fire at scenario iteration 0, got iteration={iteration_index}"
-                )
-            target, timestamp_error_us = _lookup_pior_target(current_input)
+                raise RuntimeError("V64.3.50.2 PIOR manifest-bound probe requires current planner input")
+            now_us = _pior_iteration_time_us(current_input)
+            if not self._pior_probe_first_call_seen:
+                self._pior_probe_first_call_seen = True
+                if iteration_index != 0:
+                    raise RuntimeError(
+                        f"V64.3.50.2 PIOR first planner call must be scenario iteration 0, got iteration={iteration_index}"
+                    )
+                target, anchor_offset_us = _bind_pior_target_from_scenario_start(current_input)
+                self._pior_bound_target = dict(target)
+                self._pior_scenario_start_timestamp_us = int(now_us)
+                self._pior_anchor_offset_us = int(anchor_offset_us)
+            target = self._pior_bound_target
+            if target is None:
+                raise RuntimeError("V64.3.50.2 PIOR internal error: manifest target was not bound")
             proposal = int(target["full_selected_action"])
-            if not _valid_action(proposal):
+            target_ts = int(target["timestamp_us"])
+            timestamp_error_us = _pior_anchor_match_error_us(current_input, target)
+
+            if timestamp_error_us < -_PIOR_ANCHOR_MATCH_TOLERANCE_US:
+                # nuPlan tagged scenarios may start before the trigger token. Both
+                # paired arms must follow the same incumbent path until the exact
+                # frozen V49 proposal event is reached.
+                chosen = int(baseline)
+                phase = "pre_anchor_incumbent"
+            elif abs(timestamp_error_us) <= _PIOR_ANCHOR_MATCH_TOLERANCE_US:
+                if not _valid_action(proposal):
+                    raise RuntimeError(
+                        f"V64.3.50.2 PIOR frozen manifest proposal is invalid at anchor: "
+                        f"token={target['scenario_token']} action={proposal} K={valid.shape[0]}"
+                    )
+                if proposal == baseline:
+                    raise RuntimeError(
+                        f"V64.3.50.2 PIOR frozen proposal equals incumbent at anchor: "
+                        f"token={target['scenario_token']} action={proposal}"
+                    )
+                chosen = int(proposal if arm == "treatment" else baseline)
+                self._pior_probe_used = True
+                self._pior_probe_event_count += 1
+                fired = True
+                phase = "paired_manifest_anchor_intervention"
+            else:
                 raise RuntimeError(
-                    f"V64.3.50.1 PIOR frozen manifest proposal is invalid at scenario start: "
-                    f"token={target['scenario_token']} action={proposal} K={valid.shape[0]}"
+                    f"V64.3.50.2 PIOR passed frozen anchor without an exact probe event: "
+                    f"token={target['scenario_token']} current_us={now_us} target_us={target_ts} "
+                    f"error_us={timestamp_error_us}"
                 )
-            if proposal == baseline:
-                raise RuntimeError(
-                    f"V64.3.50.1 PIOR frozen proposal equals incumbent at scenario start: "
-                    f"token={target['scenario_token']} action={proposal}"
-                )
-            chosen = int(proposal if arm == "treatment" else baseline)
-            self._pior_probe_used = True
-            self._pior_probe_event_count += 1
-            fired = True
-            phase = "paired_manifest_iteration0_intervention"
         else:
             # Compatibility for historical/synthetic configs only. Production
             # V50.1 configs always use the manifest-bound source above.
@@ -516,6 +599,8 @@ class BDSEPlannerCore:
             "pior_probe_target_timestamp_us": target_timestamp_us,
             "pior_probe_current_timestamp_us": int(_pior_iteration_time_us(current_input)) if current_input is not None else 0,
             "pior_probe_timestamp_error_us": int(timestamp_error_us),
+            "pior_probe_scenario_start_timestamp_us": int(self._pior_scenario_start_timestamp_us),
+            "pior_probe_anchor_offset_us": int(self._pior_anchor_offset_us),
             "pior_probe_online_proposal_exists": bool(online_proposal_exists),
             "pior_probe_online_proposal_action": int(online_proposal),
             "pior_probe_online_proposal_matches_target": bool(
@@ -2040,6 +2125,8 @@ class BDSEnuPlanPlanner(AbstractPlanner):
                     "target_timestamp_us": int(td.get("pior_probe_target_timestamp_us", 0)),
                     "current_timestamp_us": int(td.get("pior_probe_current_timestamp_us", 0)),
                     "timestamp_error_us": int(td.get("pior_probe_timestamp_error_us", 0)),
+                    "scenario_start_timestamp_us": int(td.get("pior_probe_scenario_start_timestamp_us", 0)),
+                    "anchor_offset_us": int(td.get("pior_probe_anchor_offset_us", 0)),
                     "pior_probe_target_source": str(td.get("pior_probe_target_source", "")),
                     "pior_probe_baseline_action": int(td.get("pior_probe_baseline_action", -1)),
                     "pior_probe_proposal_action": int(td.get("pior_probe_proposal_action", -1)),
@@ -2128,6 +2215,11 @@ class BDSEnuPlanPlanner(AbstractPlanner):
 
     def _can_reuse_cached_plan(self, current_input: Any) -> bool:
         if getattr(self, "_cached_local_trajectory", None) is None:
+            return False
+        # V50.2 engineering contract: cache reuse is only a speed optimization.
+        # It must not skip the exact frozen V49 anchor at which the paired
+        # treatment/control intervention is defined.
+        if self.core.selected_outcome_probe_requires_replan(current_input):
             return False
         interval = self._planner_replan_interval_ticks()
         if interval <= 1:
