@@ -1,0 +1,33 @@
+V64.3.50.4 EAF-ICER-PIOR cross-replay physical-identity engineering repair
+Scientific mechanism: unchanged V64.3.50 PIOR
+Uploaded V50.3 scientific status: ENGINEERING/DATA STOP; V50 algorithm NOT EVALUATED; V51 NOT DESIGNED
+
+Uploaded-run audit:
+- V50 TRAIN frozen manifest population: 502/502 unique tokens
+- uploaded server source manifest: 913/913 PASS
+- uploaded server targeted regression: 269/269 PASS
+- preflight batch_0000: control 4/4, treatment 4/4
+- first production batch_0001: control 63 success / 1 failed / 63 events; treatment same
+- identical failed token: 188773ba51c15df2
+- direct error: frozen proposal slot 3 equals runtime incumbent slot 3
+- no complete paired outcome table / no nested PIOR identification or causal-retention gate
+- repeated Simulation failed heartbeat: stale child-log tail, not repeated failures
+
+V50.4 root-cause repair:
+- integer action slot is diagnostic only across replay
+- cached V49 proposal trajectory + SHA256 remains authoritative treatment identity
+- runtime incumbent physical trajectory SHA256 is now recorded independently
+- frozen-proposal vs runtime-incumbent physical geometry error/hash equality are audited explicitly
+- action-slot collision can no longer create a false engineering STOP
+- treatment cached-trajectory override / control no-override / exact token/time/K/hash / one-shot / no-fallback remain fail-closed
+- heartbeat emits last_new only on a changed child-log event and last_unchanged otherwise
+- new output root prevents V50.3 incomplete batch reuse
+
+Validation:
+- V50.4 focused: 28/28 PASS
+- V13->V50 targeted: 270/270 PASS (2 historical Transformer warnings)
+- full repository: 607/607 PASS across exhaustive node-id shards 152+152+152+151
+- Python compileall: PASS
+- launcher bash -n: PASS
+- V50.4 source manifest: 913/913 PASS
+- V50.4 source manifest SHA256: ffd0eece559cd0830a9b5f202140e7c7156d68043c166d0c8a94744b9021ff18

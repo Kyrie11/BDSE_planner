@@ -1,0 +1,21 @@
+{
+  "audit": "v64_3_50_3_uploaded_result_engineering_audit_for_v64_3_50_4",
+  "scientific_status": "ENGINEERING_DATA_STOP",
+  "v50_algorithm_evaluated": false,
+  "v51_design_permitted": false,
+  "manifest_population": 502,
+  "server_targeted_regression_passed": 269,
+  "paired_preflight": {"control_success": 4, "treatment_success": 4, "control_failed": 0, "treatment_failed": 0},
+  "first_production_batch": {"expected_per_arm": 64, "control_success": 63, "treatment_success": 63, "control_failed": 1, "treatment_failed": 1, "control_probe_events": 63, "treatment_probe_events": 63},
+  "failed_token": "188773ba51c15df2",
+  "failed_frozen_action_slot": 3,
+  "failed_frozen_candidate_bank_size": 32,
+  "failed_frozen_maneuver_id": 6,
+  "failed_frozen_proposal_trajectory_sha256": "a900cf53cf97f1c4b74612c30514bc826fe07ffc77ded52e0b483241ea6fb472",
+  "direct_failure": "V64.3.50.3 PIOR frozen proposal equals incumbent at exact anchor",
+  "root_cause": "cross_replay_integer_action_slot_was_incorrectly_used_as_physical_action_identity",
+  "runner_63_of_64_behavior": "correct_fail_closed_on_incomplete_nuplan_batch",
+  "heartbeat_repeated_failure_text": "stale_child_log_tail_repeated_by_parent_monitor_not_repeated_failures",
+  "repair": "V64.3.50.4 cross-replay physical identity separation",
+  "science_changed": false
+}

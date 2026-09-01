@@ -112,6 +112,9 @@ def test_v50_manifest_bound_probe_requires_exact_anchor_and_executes_cached_froz
     assert d["pior_probe_current_slot_valid"] is True
     assert d["pior_probe_current_slot_geometry_max_abs_error"] == 0.0
     assert d["pior_probe_current_slot_maneuver_matches_frozen"] is True
+    assert d["pior_probe_action_slot_collision_diagnostic_only"] is False
+    assert d["pior_probe_runtime_incumbent_trajectory_sha256"]
+    assert d["pior_probe_physical_identity_contract"] == "cached_V49_proposal_trajectory_vs_runtime_incumbent_trajectory"
     np.testing.assert_array_equal(core._pior_frozen_trajectory_override, np.asarray(row["frozen_proposal_trajectory"], dtype=np.float32))
     assert d["pior_probe_anchor_offset_us"] == 0
 
@@ -161,6 +164,52 @@ def test_v50_manifest_bound_probe_treats_online_slot_and_selector_drift_as_diagn
     assert d["pior_probe_frozen_proposal_trajectory_override_used"] is True
     np.testing.assert_array_equal(core._pior_frozen_trajectory_override, np.asarray(row["frozen_proposal_trajectory"], dtype=np.float32))
 
+
+
+def test_v50_manifest_bound_probe_allows_cross_replay_slot_collision_when_physical_proposal_is_frozen(tmp_path, monkeypatch) -> None:
+    """Regression for uploaded V50.3 token 188773ba51c15df2 failure class.
+
+    A frozen V49 action id and the regenerated runtime incumbent may reuse the
+    same integer slot while representing different physical trajectories. The
+    cached V49 trajectory, not the local slot id, defines treatment identity.
+    """
+    ts = 1_629_745_157_950_134
+    target = tmp_path / "targets.json"
+    row = _target_row(ts, action=3)
+    target.write_text(json.dumps({"targets": [row]}))
+    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
+    current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
+
+    regenerated = _candidates()
+    regenerated.trajectories = regenerated.trajectories.copy()
+    # Slot 3 is now the runtime incumbent but its physical trajectory differs
+    # from the frozen V49 proposal that historically also used slot id 3.
+    regenerated.trajectories[3, :, 0] += 7.0
+
+    tcfg = _cfg("treatment")
+    tcfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
+    tcore = BDSEPlannerCore(cfg=tcfg)
+    ta, td = tcore._apply_selected_outcome_probe(
+        _tournament(proposal=2, baseline=3, exists=True, action=3), 3, regenerated, current
+    )
+    assert ta == 3  # slot numbers collide; physical execution does not.
+    assert td["pior_probe_fired"] is True
+    assert td["pior_probe_action_slot_collision_diagnostic_only"] is True
+    assert td["pior_probe_frozen_equals_runtime_incumbent_physical"] is False
+    assert td["pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error"] > 0.0
+    assert td["pior_probe_frozen_proposal_trajectory_override_used"] is True
+    np.testing.assert_array_equal(tcore._pior_frozen_trajectory_override, np.asarray(row["frozen_proposal_trajectory"], dtype=np.float32))
+
+    ccfg = _cfg("control")
+    ccfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
+    ccore = BDSEPlannerCore(cfg=ccfg)
+    ca, cd = ccore._apply_selected_outcome_probe(
+        _tournament(proposal=2, baseline=3, exists=True, action=3), 3, regenerated, current
+    )
+    assert ca == 3
+    assert cd["pior_probe_action_slot_collision_diagnostic_only"] is True
+    assert cd["pior_probe_frozen_proposal_trajectory_override_used"] is False
+    assert cd["pior_probe_runtime_incumbent_trajectory_sha256"] != row["frozen_proposal_trajectory_sha256"]
 
 def test_v50_manifest_bound_probe_refuses_candidate_bank_size_drift(tmp_path, monkeypatch) -> None:
     ts = 1_629_745_157_950_134
@@ -281,6 +330,11 @@ def test_v50_probe_only_diag_is_minimal_and_event_only(tmp_path, monkeypatch) ->
             "pior_probe_current_slot_valid": False,
             "pior_probe_current_slot_geometry_max_abs_error": 0.25,
             "pior_probe_current_slot_maneuver_matches_frozen": False,
+            "pior_probe_action_slot_collision_diagnostic_only": False,
+            "pior_probe_runtime_incumbent_trajectory_sha256": "inc-sha",
+            "pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error": 0.5,
+            "pior_probe_frozen_equals_runtime_incumbent_physical": False,
+            "pior_probe_physical_identity_contract": "cached_V49_proposal_trajectory_vs_runtime_incumbent_trajectory",
             "pior_probe_baseline_action": 1,
             "pior_probe_proposal_action": 3,
             "pior_probe_final_action": 3,
@@ -296,6 +350,8 @@ def test_v50_probe_only_diag_is_minimal_and_event_only(tmp_path, monkeypatch) ->
     assert rows[0]["pior_probe_proposal_action"] == 3
     assert rows[0]["scenario_token"] == "tok"
     assert rows[0]["target_timestamp_us"] == 700000
+    assert rows[0]["pior_probe_runtime_incumbent_trajectory_sha256"] == "inc-sha"
+    assert rows[0]["pior_probe_physical_identity_contract"] == "cached_V49_proposal_trajectory_vs_runtime_incumbent_trajectory"
     assert "diagnostics" not in rows[0]
     assert "large_unused_payload" not in rows[0]
 
@@ -445,12 +501,19 @@ def test_v50_probe_event_validation_is_token_bound_and_online_reselection_is_dia
             "pior_probe_current_slot_valid": False,
             "pior_probe_current_slot_geometry_max_abs_error": 0.5,
             "pior_probe_current_slot_maneuver_matches_frozen": False,
+            "pior_probe_action_slot_collision_diagnostic_only": bool(m["full_selected_action"] == base),
+            "pior_probe_runtime_incumbent_trajectory_sha256": "runtime-incumbent-" + tok,
+            "pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error": 0.5,
+            "pior_probe_frozen_equals_runtime_incumbent_physical": False,
+            "pior_probe_physical_identity_contract": "cached_V49_proposal_trajectory_vs_runtime_incumbent_trajectory",
         })
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     got, audit = _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
     assert set(got) == set(tokens)
     assert audit["online_proposal_matches_frozen_target_count"] == 0
     assert audit["cached_frozen_trajectory_override_count"] == len(tokens)
+    assert audit["action_slot_collision_count_diagnostic_only"] == 0
+    assert audit["physical_proposal_equals_runtime_incumbent_count"] == 0
     rows[1]["scenario_token"] = "a"
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     with pytest.raises(RuntimeError, match="duplicate probe event"):
@@ -534,6 +597,11 @@ def test_v50_resume_certificate_binds_semantic_target_and_file_bytes(tmp_path: P
             "pior_probe_current_slot_valid": False,
             "pior_probe_current_slot_geometry_max_abs_error": 0.5,
             "pior_probe_current_slot_maneuver_matches_frozen": False,
+            "pior_probe_action_slot_collision_diagnostic_only": bool(m["full_selected_action"] == base),
+            "pior_probe_runtime_incumbent_trajectory_sha256": "runtime-incumbent-" + tok,
+            "pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error": 0.5,
+            "pior_probe_frozen_equals_runtime_incumbent_physical": False,
+            "pior_probe_physical_identity_contract": "cached_V49_proposal_trajectory_vs_runtime_incumbent_trajectory",
         })
     diag.write_text("\n".join(json.dumps(r, sort_keys=True) for r in rows) + "\n")
     payload = _probe_target_payload(tokens, meta)

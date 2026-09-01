@@ -12501,3 +12501,66 @@ No RSMR/Q/P/E/risk/lambda/outcome/safety/retention threshold change; no feature 
 ## Next step
 
 Rerun the repaired V50 TRAIN launcher. Science remains blocked until the paired collection reaches exact 502/502 token identity with one valid control/treatment event each and the original preregistered V50 identification + causal-retention gates are actually executed.
+
+---
+
+# V64.3.50.4 engineering-only repair — cross-replay slot/physical identity separation
+
+## Uploaded V50.3 reliability verdict
+
+The uploaded `outputs_v64_3_50_3_eaf_icer_pior_train_2gpu_v1` is a preregistered **ENGINEERING/DATA STOP**, not a PIOR scientific success/failure.
+
+- exact TRAIN manifest: **502/502** frozen full-set RSMR proposal tokens;
+- source lock on the uploaded server run: **913/913 PASS**;
+- server targeted regression: **269/269 PASS**;
+- paired preflight `batch_0000`: control/treatment both **4/4 PASS**;
+- first 64-scene production batch: control/treatment both **63 success / 1 failed / 63 probe events**;
+- both arms fail on exactly the same token `188773ba51c15df2` before a valid paired event is emitted;
+- no complete 502-pair outcome table, no PIOR nested identification result and no causal-retention gate result exist.
+
+Therefore V50 remains **NOT SCIENTIFICALLY EVALUATED** and V51 must not be designed from this run.
+
+## Root cause
+
+The failed token raises:
+
+`V64.3.50.3 PIOR frozen proposal equals incumbent at exact anchor: token=188773ba51c15df2 action=3`.
+
+This is an engineering identity bug. V50.3 correctly made the cached V49 physical proposal trajectory + SHA256 authoritative because regenerated action-slot identity is unstable, but one stale guard still tested `frozen_proposal_action_id == runtime_incumbent_action_id` and treated equality of those **local integer slots** as equality of the physical actions.
+
+The uploaded successful events independently falsify that assumption: in the 63 successful events of the first production batch, the regenerated online proposal matches the frozen V49 action id only 3 times; current-slot geometry has median max-absolute error about 47.3 and exact/near-exact geometry only 5/63. The same action index therefore cannot be used as cross-replay physical identity.
+
+The repeated parent heartbeat line ending in `Simulation failed!` is not repeated new simulation failures. The monitor was repeatedly printing the unchanged tail line from the child log while the other 63 scenarios continued to run.
+
+## V50.4 repair contract
+
+The scientific V50 mechanism is unchanged. V50.4 changes only identity auditing and monitoring:
+
+- treatment identity remains the exact cached V49 proposal trajectory + SHA256 at the exact frozen anchor;
+- control remains the runtime incumbent at the same event; afterwards both arms remain incumbent-only;
+- an integer action-slot collision between the historical frozen proposal id and the regenerated runtime incumbent id is **diagnostic only** and can no longer abort the scenario;
+- each event now records the runtime incumbent trajectory SHA256 and the exact frozen-proposal-vs-runtime-incumbent geometry error;
+- the batch certificate reports action-slot collision count and physical-trajectory equality count separately;
+- raw CandidateBank.K, anchor time, target token, frozen proposal trajectory hash, one-shot event count, treatment cached-trajectory override, control no-override, same-winner/no-fallback and per-scenario metrics remain fail-closed;
+- heartbeat prints a child-log tail as `last_new=...` only when it changes; unchanged old failures are rendered as `last_unchanged=true` rather than repeatedly replaying the same warning;
+- default output root is new: `outputs/outputs_v64_3_50_4_eaf_icer_pior_train_2gpu_v1`, so invalid/incomplete V50.3 production batches cannot be mistaken for V50.4 completion certificates.
+
+A physical proposal/runtime-incumbent equality is retained as an explicit audited null-effect pair rather than being inferred from integer slot equality. This does not change the selected 502-token population or manufacture a different treatment action.
+
+## Scientific mechanism and prohibited directions remain frozen
+
+No RSMR, Q/P/E state, PIOR feature, pairwise sign-risk loss, lambda, retention calibration, paired outcome definition, safety metric, candidate bank, B/M, top-K, threshold, CVaR, variance/temporal feature, AGENT-2D, multiplicity, random-prefix SIIR, reranking, second-best or fallback change is made.
+
+All directions closed by V46--V49 remain closed. In particular, this engineering repair is **not** permission to return to offline feature/threshold sweeps.
+
+## Validation
+
+- V50.4 focused: **28/28 PASS**;
+- V13→V50 targeted: **270/270 PASS** (only historical Transformer warnings);
+- full repository: **607/607 PASS**, exhaustive four-way node-id partition `152+152+152+151`;
+- Python compileall: **PASS**;
+- launcher `bash -n`: **PASS**.
+
+## Next scientific step
+
+Rerun V50.4 TRAIN collection. No V50 success/failure attribution and no V51 algorithm branch is permitted until the original V50 preregistered data gate reaches exact **502/502 paired token identity** with one valid control/treatment event per token and the original PIOR identification + causal-retention gates are executed.

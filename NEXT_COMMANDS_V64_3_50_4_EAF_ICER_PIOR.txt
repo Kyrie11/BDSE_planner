@@ -1,0 +1,14 @@
+# V64.3.50.4 — engineering rerun only. Scientific V50 mechanism is unchanged.
+cd bdse_v64_3_50_4_eaf_icer_pior_physical_identity_repair
+bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+
+# Optional explicit historical roots if your server layout differs:
+# V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+# EAF_V64_3_13_ROOT=/path/to/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+# BDSE_TRAIN_CACHE=/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2 \
+# NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
+# bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+
+# Do NOT run untouched validation yet.
+# Required next evidence: exact 502/502 paired control+treatment events, followed
+# by the existing frozen V50 identification and causal-retention TRAIN gates.

@@ -309,11 +309,11 @@ def _probe_target_payload(tokens: list[str], meta: dict[str, dict[str, Any]]) ->
         bank_size = int(row.get("frozen_candidate_bank_size", 0) or 0)
         if ts <= 0 or cache_it != 0 or act < 0 or bank_size <= 0 or not isinstance(traj, list) or not traj_sha:
             raise RuntimeError(
-                f"V64.3.50.3 PIOR invalid frozen target token={tok}: timestamp_us={ts} "
+                f"V64.3.50.4 PIOR invalid frozen target token={tok}: timestamp_us={ts} "
                 f"cache_iteration={cache_it} action={act} frozen_K={bank_size} traj_sha={bool(traj_sha)}"
             )
         if ts in seen_ts:
-            raise RuntimeError(f"V64.3.50.3 PIOR duplicate frozen anchor timestamp_us={ts} inside batch")
+            raise RuntimeError(f"V64.3.50.4 PIOR duplicate frozen anchor timestamp_us={ts} inside batch")
         seen_ts.add(ts)
         rows.append({
             "scenario_token": str(tok),
@@ -325,7 +325,7 @@ def _probe_target_payload(tokens: list[str], meta: dict[str, dict[str, Any]]) ->
             "frozen_proposal_maneuver_id": int(row.get("frozen_proposal_maneuver_id", -1)),
         })
     return {
-        "algorithm_version": "V64.3.50.3-EAF-ICER-PIOR-ANCHOR-IDENTITY-REPAIR",
+        "algorithm_version": "V64.3.50.4-EAF-ICER-PIOR-PHYSICAL-IDENTITY-REPAIR",
         "identity": "exact_V49_anchor_timestamp_action_and_cached_local_trajectory_sha256",
         "scenario_start_binding": "nuPlan_scenario_starts_at_exact_V49_anchor_no_planner_preroll",
         "intervention_time_contract": "iteration0_equals_exact_frozen_anchor_timestamp",
@@ -346,7 +346,7 @@ def _payload_sha256(payload: dict[str, Any]) -> str:
 def _probe_target_file_semantic_sha256(path: Path) -> str:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise RuntimeError(f"V64.3.50.3 PIOR target spec must be a JSON object: {path}")
+        raise RuntimeError(f"V64.3.50.4 PIOR target spec must be a JSON object: {path}")
     return _payload_sha256(payload)
 
 
@@ -367,19 +367,19 @@ def _anchor_start_mapping_overrides() -> list[str]:
     spec = importlib.util.find_spec("nuplan")
     roots = list(spec.submodule_search_locations or []) if spec is not None else []
     if not roots:
-        raise RuntimeError("V64.3.50.3 PIOR cannot locate installed nuplan package for anchor-start mapping")
+        raise RuntimeError("V64.3.50.4 PIOR cannot locate installed nuplan package for anchor-start mapping")
     mapping_path = Path(roots[0]) / "planning/script/config/common/scenario_builder/scenario_mapping/nuplan_scenario_mapping.yaml"
     if not mapping_path.is_file():
-        raise RuntimeError(f"V64.3.50.3 PIOR cannot locate nuPlan scenario mapping: {mapping_path}")
+        raise RuntimeError(f"V64.3.50.4 PIOR cannot locate nuPlan scenario mapping: {mapping_path}")
     payload = yaml.safe_load(mapping_path.read_text(encoding="utf-8")) or {}
     scenario_map = payload.get("scenario_map", {}) or {}
     if not isinstance(scenario_map, dict) or not scenario_map:
-        raise RuntimeError(f"V64.3.50.3 PIOR malformed nuPlan scenario mapping: {mapping_path}")
+        raise RuntimeError(f"V64.3.50.4 PIOR malformed nuPlan scenario mapping: {mapping_path}")
     overrides: list[str] = []
     for typ in sorted(scenario_map):
         vals = list(scenario_map[typ])
         if len(vals) not in {2, 3}:
-            raise RuntimeError(f"V64.3.50.3 PIOR unexpected mapping entry {typ}={vals}")
+            raise RuntimeError(f"V64.3.50.4 PIOR unexpected mapping entry {typ}={vals}")
         repaired = [float(vals[0]), 0.0] + ([float(vals[2])] if len(vals) == 3 else [])
         rendered = "[" + ",".join(f"{x:g}" for x in repaired) + "]"
         overrides.append(f"scenario_builder.scenario_mapping.scenario_map.{typ}={rendered}")
@@ -394,7 +394,7 @@ def _validate_probe_events(
     arm: str,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     if not path.is_file():
-        raise RuntimeError(f"V64.3.50.3 PIOR missing probe event file: {path}")
+        raise RuntimeError(f"V64.3.50.4 PIOR missing probe event file: {path}")
     by_token: dict[str, dict[str, Any]] = {}
     for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -402,17 +402,17 @@ def _validate_probe_events(
         row = json.loads(line)
         tok = str(row.get("scenario_token", ""))
         if not tok or tok not in meta:
-            raise RuntimeError(f"V64.3.50.3 PIOR invalid probe token at {path}:{line_no}: {tok!r}")
+            raise RuntimeError(f"V64.3.50.4 PIOR invalid probe token at {path}:{line_no}: {tok!r}")
         if tok in by_token:
-            raise RuntimeError(f"V64.3.50.3 PIOR duplicate probe event for token={tok}")
+            raise RuntimeError(f"V64.3.50.4 PIOR duplicate probe event for token={tok}")
         if not bool(row.get("pior_probe_fired", False)) or int(row.get("pior_probe_event_count", 0)) != 1:
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} does not have exactly one fired event")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} does not have exactly one fired event")
         if str(row.get("pior_probe_arm", "")) != arm:
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} arm mismatch {row.get('pior_probe_arm')} vs {arm}")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} arm mismatch {row.get('pior_probe_arm')} vs {arm}")
         if int(row.get("iteration_index", -1)) != 0:
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} intervention must occur at iteration0")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} intervention must occur at iteration0")
         if str(row.get("pior_probe_target_source", "")) != "preregistered_V49_manifest_anchor_timestamp_proposal":
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} target source mismatch")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} target source mismatch")
         expected_ts = int(meta[tok].get("timestamp_us", 0) or 0)
         target_ts = int(row.get("target_timestamp_us", 0) or 0)
         current_ts = int(row.get("current_timestamp_us", 0) or 0)
@@ -420,50 +420,66 @@ def _validate_probe_events(
         anchor_offset_us = int(row.get("anchor_offset_us", 0) or 0)
         if target_ts != expected_ts or abs(current_ts - expected_ts) > PIOR_ANCHOR_MATCH_TOLERANCE_US:
             raise RuntimeError(
-                f"V64.3.50.3 PIOR token={tok} anchor timestamp mismatch target/current/expected="
+                f"V64.3.50.4 PIOR token={tok} anchor timestamp mismatch target/current/expected="
                 f"{target_ts}/{current_ts}/{expected_ts}"
             )
         if abs(start_ts - expected_ts) > PIOR_ANCHOR_MATCH_TOLERANCE_US or abs(anchor_offset_us) > PIOR_ANCHOR_MATCH_TOLERANCE_US:
             raise RuntimeError(
-                f"V64.3.50.3 PIOR token={tok} scenario did not start at frozen anchor: "
+                f"V64.3.50.4 PIOR token={tok} scenario did not start at frozen anchor: "
                 f"start={start_ts} expected={expected_ts} offset={anchor_offset_us}"
             )
         expected_action = int(meta[tok].get("full_selected_action", -1))
         proposal = int(row.get("pior_probe_proposal_action", -1))
         baseline = int(row.get("pior_probe_baseline_action", -1))
         final = int(row.get("pior_probe_final_action", -1))
-        if proposal != expected_action or proposal < 0 or proposal == baseline:
+        if proposal != expected_action or proposal < 0:
             raise RuntimeError(
-                f"V64.3.50.3 PIOR token={tok} frozen action mismatch proposal={proposal} expected={expected_action} baseline={baseline}"
+                f"V64.3.50.4 PIOR token={tok} frozen action mismatch proposal={proposal} expected={expected_action} baseline={baseline}"
             )
+        slot_collision = bool(row.get("pior_probe_action_slot_collision_diagnostic_only", False))
+        if slot_collision != bool(proposal == baseline):
+            raise RuntimeError(
+                f"V64.3.50.4 PIOR token={tok} action-slot collision audit mismatch: "
+                f"reported={slot_collision} proposal={proposal} baseline={baseline}"
+            )
+        if str(row.get("pior_probe_physical_identity_contract", "")) != "cached_V49_proposal_trajectory_vs_runtime_incumbent_trajectory":
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} missing physical identity contract")
+        incumbent_sha = str(row.get("pior_probe_runtime_incumbent_trajectory_sha256", ""))
+        if not incumbent_sha:
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} missing runtime incumbent trajectory hash")
         expected_sha = str(meta[tok].get("frozen_proposal_trajectory_sha256", ""))
         event_sha = str(row.get("pior_probe_frozen_proposal_trajectory_sha256", ""))
         override_used = bool(row.get("pior_probe_frozen_proposal_trajectory_override_used", False))
         if event_sha != expected_sha or not event_sha:
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} frozen physical trajectory hash mismatch")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} frozen physical trajectory hash mismatch")
         if arm == "treatment" and not override_used:
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} treatment did not execute cached frozen trajectory")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} treatment did not execute cached frozen trajectory")
         if arm == "control" and override_used:
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} control unexpectedly executed frozen treatment trajectory")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} control unexpectedly executed frozen treatment trajectory")
         if arm == "treatment" and final != proposal:
-            raise RuntimeError(f"V64.3.50.3 PIOR treatment token={tok} did not execute frozen proposal")
+            raise RuntimeError(f"V64.3.50.4 PIOR treatment token={tok} did not execute frozen proposal")
         if arm == "control" and final != baseline:
-            raise RuntimeError(f"V64.3.50.3 PIOR control token={tok} did not preserve incumbent")
+            raise RuntimeError(f"V64.3.50.4 PIOR control token={tok} did not preserve incumbent")
         if not bool(row.get("pior_probe_contract_same_frozen_proposal_or_incumbent", False)):
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} same-winner containment certificate failed")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} same-winner containment certificate failed")
         if not bool(row.get("pior_probe_contract_no_rerank_second_best_fallback", False)):
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} no-fallback certificate failed")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} no-fallback certificate failed")
         by_token[tok] = row
     if set(by_token) != set(tokens):
         missing = sorted(set(tokens) - set(by_token))[:20]
         extra = sorted(set(by_token) - set(tokens))[:20]
         raise RuntimeError(
-            f"V64.3.50.3 PIOR probe-event token mismatch {len(by_token)}/{len(tokens)} missing={missing} extra={extra}"
+            f"V64.3.50.4 PIOR probe-event token mismatch {len(by_token)}/{len(tokens)} missing={missing} extra={extra}"
         )
     finite_geo = [
         float(r.get("pior_probe_current_slot_geometry_max_abs_error"))
         for r in by_token.values()
         if math.isfinite(float(r.get("pior_probe_current_slot_geometry_max_abs_error", float("nan"))))
+    ]
+    finite_pair_geo = [
+        float(r.get("pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error"))
+        for r in by_token.values()
+        if math.isfinite(float(r.get("pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error", float("nan"))))
     ]
     online_exists = sum(bool(r.get("pior_probe_online_proposal_exists", False)) for r in by_token.values())
     online_match = sum(bool(r.get("pior_probe_online_proposal_matches_target", False)) for r in by_token.values())
@@ -481,7 +497,11 @@ def _validate_probe_events(
         "anchor_offset_us_max": max(int(r.get("anchor_offset_us", 0)) for r in by_token.values()) if by_token else 0,
         "pre_rolled_scenario_count": 0,
         "current_slot_geometry_max_abs_error_diagnostic_only": max(finite_geo) if finite_geo else None,
-        "scientific_intervention_identity": "exact_anchor_start_plus_manifest_action_plus_cached_V49_local_trajectory_sha256",
+        "action_slot_collision_count_diagnostic_only": int(sum(bool(r.get("pior_probe_action_slot_collision_diagnostic_only", False)) for r in by_token.values())),
+        "physical_proposal_equals_runtime_incumbent_count": int(sum(bool(r.get("pior_probe_frozen_equals_runtime_incumbent_physical", False)) for r in by_token.values())),
+        "frozen_vs_runtime_incumbent_geometry_max_abs_error_max": max(finite_pair_geo) if finite_pair_geo else None,
+        "scientific_intervention_identity": "exact_anchor_start_plus_cached_V49_proposal_trajectory_sha256_vs_runtime_incumbent_physical_trajectory",
+        "action_slot_identity_role": "diagnostic_only_never_defines_cross_replay_physical_equality",
         "online_reselection_role": "diagnostic_only_never_defines_treatment",
     }
     return by_token, audit
@@ -598,7 +618,7 @@ def _run_batch(
     written_target_sha = _write_probe_target_file(target_file, target_payload)
     if written_target_sha != probe_target_spec_sha256:
         raise RuntimeError(
-            "V64.3.50.3 PIOR target-spec semantic hash mismatch after serialization; "
+            "V64.3.50.4 PIOR target-spec semantic hash mismatch after serialization; "
             "the written JSON no longer represents the preregistered batch target payload"
         )
     probe_target_file_sha256 = _sha256(target_file)
@@ -651,6 +671,7 @@ def _run_batch(
     with log.open("w", encoding="utf-8") as f:
         proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
     heartbeat = max(5.0, float(heartbeat_seconds))
+    last_tail_reported = ""
     while True:
         try:
             returncode = proc.wait(timeout=heartbeat)
@@ -660,13 +681,16 @@ def _run_batch(
             fires = max(0, _count_probe_fires(diag))
             util, mem = _gpu_stats(gpu)
             tail = _tail_log(log)
+            tail_changed = bool(tail and tail != last_tail_reported)
             print(
                 f"[PIOR-TICK] arm={arm} batch={batch_index + 1}/{batch_count} pid={proc.pid} "
                 f"elapsed={elapsed / 60.0:.1f}min probe_events={fires}/{len(tokens)} "
                 f"gpu_util={util} gpu_mem={mem} phase={_phase(log)}"
-                + (f" last='{tail}'" if tail else ""),
+                + (f" last_new='{tail}'" if tail_changed else (" last_unchanged=true" if tail else "")),
                 flush=True,
             )
+            if tail_changed:
+                last_tail_reported = tail
     wall = time.time() - started
     text = log.read_text(encoding="utf-8", errors="replace")
     succ, fail = _parse_success(text)
@@ -742,7 +766,7 @@ def _collision_safe_batches(
     def _ts(tok: str) -> int:
         value = int(meta[tok].get("timestamp_us", 0) or 0)
         if value <= 0:
-            raise RuntimeError(f"V64.3.50.3 PIOR token={tok} missing anchor timestamp_us for batching")
+            raise RuntimeError(f"V64.3.50.4 PIOR token={tok} missing anchor timestamp_us for batching")
         return value
 
     def _compatible(tok: str, batch: list[str]) -> bool:
@@ -835,7 +859,7 @@ def _run_arm(
                 preflight_barrier.wait()
             except threading.BrokenBarrierError as exc:
                 raise RuntimeError(
-                    f"V64.3.50.3 PIOR paired preflight peer failed; arm={arm} will not continue expensive collection"
+                    f"V64.3.50.4 PIOR paired preflight peer failed; arm={arm} will not continue expensive collection"
                 ) from exc
             print(f"[PIOR-PREFLIGHT-PAIR-PASS] arm={arm}; continuing full TRAIN collection", flush=True)
     if set(combined) != set(tokens):
@@ -927,8 +951,8 @@ def main() -> None:
 
     if a.allow_legacy_full_arm_resume:
         raise RuntimeError(
-            "V64.3.50.3 PIOR refuses legacy full-arm resume: V50.0 probe identity was scientifically invalid "
-            "because it waited for online proposal reappearance. Resume is allowed only from V50.3 exact-anchor/action/trajectory-hash batch certificates."
+            "V64.3.50.4 PIOR refuses legacy full-arm resume: V50.0 probe identity was scientifically invalid "
+            "because it waited for online proposal reappearance. Resume is allowed only from V50.4 physical-identity batch certificates."
         )
 
     tokens, meta, raw_files = _manifest(a.manifest)
@@ -997,7 +1021,7 @@ def main() -> None:
     report = {
         "audit": "v64_3_50_pior_paired_closed_loop",
         "algorithm_version": "V64.3.50-EAF-ICER-PIOR",
-        "engineering_revision": "v64_3_50_3_anchor_start_and_frozen_proposal_geometry_identity_repair",
+        "engineering_revision": "v64_3_50_4_cross_replay_physical_identity_repair",
         "challenge": a.challenge,
         "scientific_intervention": "paired_one_shot_actual_full_set_RSMR_proposal_vs_same_incumbent_then_incumbent_only",
         "scenario_count": len(paired),
