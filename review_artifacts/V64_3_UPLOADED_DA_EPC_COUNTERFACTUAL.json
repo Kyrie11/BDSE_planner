@@ -1,7 +1,0 @@
-{
-  "counterfactual_da_epc_exact_target_preservation_rate": 0.901,
-  "diagnostic_only": true,
-  "historical_pairwise_aocc_certified_rate": 0.066,
-  "note": "DA-EPC reuses the exact full-TopM target action and exact selected-B residual-disabled downstream action. This counterfactual does not replace a fresh V64.3.1 run.",
-  "num_scenarios": 1000
-}
