@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from pathlib import Path
+import hashlib
+import json
 
 import numpy as np
 import pytest
@@ -10,7 +12,7 @@ from bdse.planner.nuplan_planner import BDSEPlannerCore
 from bdse.tools.build_v64_3_50_pior_train_manifest import CITY_TO_RAW, _stable_log_name, _resolve_raw_db_files
 from bdse.tools.run_v64_3_50_pior_paired_closed_loop import (
     _pair, SAFETY_METRICS, _batch_certificate_valid, _batch_raw_files, _validate_probe_events, _collision_safe_batches,
-    _payload_sha256, _write_probe_target_file, _probe_target_file_semantic_sha256
+    _payload_sha256, _write_probe_target_file, _probe_target_file_semantic_sha256, _anchor_start_mapping_overrides, _probe_target_payload
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,7 +30,26 @@ def _tournament(proposal: int = 3, baseline: int = 1, exists: bool = True, actio
 
 
 def _candidates():
-    return SimpleNamespace(K=5, valid_mask=np.asarray([True, True, True, True, True], dtype=bool))
+    trajectories = np.zeros((5, 4, 5), dtype=np.float32)
+    for i in range(5):
+        trajectories[i, :, 0] = np.linspace(0.0, float(i + 1), 4, dtype=np.float32)
+        trajectories[i, :, 3] = float(i + 1)
+        trajectories[i, :, 4] = np.arange(4, dtype=np.float32) * 0.5
+    return SimpleNamespace(
+        K=5, valid_mask=np.asarray([True, True, True, True, True], dtype=bool),
+        trajectories=trajectories, maneuver_ids=np.arange(5, dtype=np.int64),
+    )
+
+
+def _target_row(ts: int, *, tok: str = "tok", action: int = 3) -> dict:
+    traj = np.ascontiguousarray(_candidates().trajectories[action], dtype=np.float32)
+    return {
+        "scenario_token": tok, "timestamp_us": ts, "scenario_type": "following_lane_with_lead",
+        "full_selected_action": action, "frozen_candidate_bank_size": _candidates().K,
+        "frozen_proposal_trajectory": traj.tolist(),
+        "frozen_proposal_trajectory_sha256": hashlib.sha256(traj.tobytes(order="C")).hexdigest(),
+        "frozen_proposal_maneuver_id": action,
+    }
 
 
 def _cfg(arm: str | None, *, fallback: bool = False):
@@ -69,78 +90,99 @@ def test_v50_control_marks_same_event_but_never_leaves_incumbent() -> None:
 
 
 
-def test_v50_manifest_bound_probe_fires_exact_v49_action_at_anchor_even_when_online_proposal_absent(tmp_path, monkeypatch) -> None:
-    import json
+def test_v50_manifest_bound_probe_requires_exact_anchor_and_executes_cached_frozen_trajectory(tmp_path, monkeypatch) -> None:
     ts = 1_629_745_157_950_134
     target = tmp_path / "targets.json"
-    target.write_text(json.dumps({"targets": [{
-        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
-    }]}))
+    row = _target_row(ts)
+    target.write_text(json.dumps({"targets": [row]}))
     monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
     cfg = _cfg("treatment")
     cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
     core = BDSEPlannerCore(cfg=cfg)
     current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
     action, d = core._apply_selected_outcome_probe(
-        _tournament(proposal=-1, baseline=1, exists=False, action=1), 1, _candidates(), current
+        _tournament(proposal=3, baseline=1, exists=True, action=1), 1, _candidates(), current
     )
     assert action == 3
     assert d["pior_probe_fired"] is True
     assert d["pior_probe_scenario_token"] == "tok"
-    assert d["pior_probe_proposal_action"] == 3
-    assert d["pior_probe_online_proposal_exists"] is False
-    assert d["pior_probe_online_proposal_matches_target"] is False
-    assert d["pior_probe_target_timestamp_us"] == ts
-    assert abs(d["pior_probe_current_timestamp_us"] - ts) <= 4
+    assert d["pior_probe_online_proposal_matches_target"] is True
+    assert d["pior_probe_frozen_proposal_trajectory_override_used"] is True
+    assert d["pior_probe_frozen_proposal_trajectory_sha256"] == row["frozen_proposal_trajectory_sha256"]
+    assert d["pior_probe_current_slot_valid"] is True
+    assert d["pior_probe_current_slot_geometry_max_abs_error"] == 0.0
+    assert d["pior_probe_current_slot_maneuver_matches_frozen"] is True
+    np.testing.assert_array_equal(core._pior_frozen_trajectory_override, np.asarray(row["frozen_proposal_trajectory"], dtype=np.float32))
+    assert d["pior_probe_anchor_offset_us"] == 0
 
 
-def test_v50_manifest_bound_probe_allows_nuplan_preroll_but_fires_only_at_exact_anchor(tmp_path, monkeypatch) -> None:
-    import json
+def test_v50_manifest_bound_probe_refuses_nuplan_preroll(tmp_path, monkeypatch) -> None:
     ts = 1_629_745_160_949_608
     start_ts = ts - 2_999_474
     target = tmp_path / "targets.json"
-    target.write_text(json.dumps({"targets": [{
-        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
-    }]}))
+    target.write_text(json.dumps({"targets": [_target_row(ts)]}))
     monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
     cfg = _cfg("treatment")
     cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
     core = BDSEPlannerCore(cfg=cfg)
-
     start = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=start_ts / 1e6))
-    action0, d0 = core._apply_selected_outcome_probe(
-        _tournament(proposal=-1, baseline=1, exists=False, action=1), 1, _candidates(), start
-    )
-    assert action0 == 1
-    assert d0["pior_probe_fired"] is False
-    assert d0["pior_probe_phase"] == "pre_anchor_incumbent"
-    assert d0["pior_probe_anchor_offset_us"] == ts - start_ts
-    assert core._pior_probe_event_count == 0
+    with pytest.raises(RuntimeError, match="scenario must start at exactly one frozen V49 anchor"):
+        core._apply_selected_outcome_probe(
+            _tournament(proposal=3, baseline=1, exists=True, action=1), 1, _candidates(), start
+        )
 
-    # Cache reuse is an engineering speedup and may never skip the anchor.
-    before = SimpleNamespace(iteration=SimpleNamespace(index=29, time_s=(ts - 100_000) / 1e6))
-    assert core.selected_outcome_probe_requires_replan(before) is False
-    at_anchor = SimpleNamespace(iteration=SimpleNamespace(index=30, time_s=ts / 1e6))
-    assert core.selected_outcome_probe_requires_replan(at_anchor) is True
 
-    action1, d1 = core._apply_selected_outcome_probe(
-        _tournament(proposal=-1, baseline=1, exists=False, action=1), 1, _candidates(), at_anchor
+def test_v50_manifest_bound_probe_treats_online_slot_and_selector_drift_as_diagnostic_only(tmp_path, monkeypatch) -> None:
+    ts = 1_629_745_157_950_134
+    target = tmp_path / "targets.json"
+    row = _target_row(ts)
+    target.write_text(json.dumps({"targets": [row]}))
+    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
+    cfg = _cfg("treatment")
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
+    current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
+
+    # Deliberately make the currently regenerated slot disagree with the cached
+    # V49 proposal and make online RSMR choose another slot. Neither may redefine
+    # treatment: the exact cached physical trajectory is executed once.
+    drifted = _candidates()
+    drifted.trajectories = drifted.trajectories.copy()
+    drifted.trajectories[3, 0, 0] += 0.01
+    drifted.valid_mask = drifted.valid_mask.copy()
+    drifted.valid_mask[3] = False
+    core = BDSEPlannerCore(cfg=cfg)
+    action, d = core._apply_selected_outcome_probe(
+        _tournament(proposal=2, baseline=1, exists=True), 1, drifted, current
     )
-    assert action1 == 3
-    assert d1["pior_probe_fired"] is True
-    assert d1["pior_probe_scenario_token"] == "tok"
-    assert d1["pior_probe_target_timestamp_us"] == ts
-    assert abs(d1["pior_probe_current_timestamp_us"] - ts) <= 4
-    assert core._pior_probe_event_count == 1
+    assert action == 3
+    assert d["pior_probe_online_proposal_matches_target"] is False
+    assert d["pior_probe_current_slot_valid"] is False
+    assert d["pior_probe_current_slot_geometry_max_abs_error"] > 0.0
+    assert d["pior_probe_frozen_proposal_trajectory_override_used"] is True
+    np.testing.assert_array_equal(core._pior_frozen_trajectory_override, np.asarray(row["frozen_proposal_trajectory"], dtype=np.float32))
+
+
+def test_v50_manifest_bound_probe_refuses_candidate_bank_size_drift(tmp_path, monkeypatch) -> None:
+    ts = 1_629_745_157_950_134
+    target = tmp_path / "targets.json"
+    target.write_text(json.dumps({"targets": [_target_row(ts)]}))
+    monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
+    cfg = _cfg("control")
+    cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
+    current = SimpleNamespace(iteration=SimpleNamespace(index=0, time_s=ts / 1e6))
+    drifted = _candidates()
+    drifted.K = 6
+    with pytest.raises(RuntimeError, match="CandidateBank.K drift"):
+        BDSEPlannerCore(cfg=cfg)._apply_selected_outcome_probe(
+            _tournament(proposal=2, baseline=1, exists=True), 1, drifted, current
+        )
 
 
 def test_v50_manifest_bound_probe_refuses_nonzero_first_planner_call(tmp_path, monkeypatch) -> None:
     import json
     ts = 1_629_745_157_950_134
     target = tmp_path / "targets.json"
-    target.write_text(json.dumps({"targets": [{
-        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
-    }]}))
+    target.write_text(json.dumps({"targets": [_target_row(ts)]}))
     monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
     cfg = _cfg("control")
     cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_anchor_timestamp_proposal"
@@ -162,6 +204,24 @@ def test_v50_dataset_contract_matches_user_train_and_raw_db_layout() -> None:
         "train_singapore": "train_singapore",
         "train_vegas_2": "train_vegas",
     }
+
+
+def test_v50_anchor_start_mapping_preserves_duration_and_sampling_but_sets_offset_zero(tmp_path: Path, monkeypatch) -> None:
+    pkg = tmp_path / "nuplan"
+    mapping = pkg / "planning/script/config/common/scenario_builder/scenario_mapping/nuplan_scenario_mapping.yaml"
+    mapping.parent.mkdir(parents=True)
+    mapping.write_text(
+        "scenario_map:\n  following_lane_with_lead: [15.0, -3.0]\n  custom: [12.0, -2.5, 0.5]\n",
+        encoding="utf-8",
+    )
+    fake_spec = SimpleNamespace(submodule_search_locations=[str(pkg)])
+    monkeypatch.setattr(
+        "bdse.tools.run_v64_3_50_pior_paired_closed_loop.importlib.util.find_spec",
+        lambda name: fake_spec if name == "nuplan" else None,
+    )
+    got = _anchor_start_mapping_overrides()
+    assert "scenario_builder.scenario_mapping.scenario_map.following_lane_with_lead=[15,0]" in got
+    assert "scenario_builder.scenario_mapping.scenario_map.custom=[12,0,0.5]" in got
 
 
 def test_v50_paired_outcome_is_positive_only_when_score_improves_without_hard_safety_degradation() -> None:
@@ -213,9 +273,14 @@ def test_v50_probe_only_diag_is_minimal_and_event_only(tmp_path, monkeypatch) ->
             "pior_probe_scenario_start_timestamp_us": 700000,
             "pior_probe_anchor_offset_us": 0,
             "pior_probe_target_source": "preregistered_V49_manifest_anchor_timestamp_proposal",
-            "pior_probe_online_proposal_exists": False,
-            "pior_probe_online_proposal_action": -1,
+            "pior_probe_online_proposal_exists": True,
+            "pior_probe_online_proposal_action": 3,
             "pior_probe_online_proposal_matches_target": False,
+            "pior_probe_frozen_proposal_trajectory_override_used": True,
+            "pior_probe_frozen_proposal_trajectory_sha256": "sha",
+            "pior_probe_current_slot_valid": False,
+            "pior_probe_current_slot_geometry_max_abs_error": 0.25,
+            "pior_probe_current_slot_maneuver_matches_frozen": False,
             "pior_probe_baseline_action": 1,
             "pior_probe_proposal_action": 3,
             "pior_probe_final_action": 3,
@@ -351,12 +416,11 @@ def test_v50_raw_db_resolution_falls_back_without_changing_token_population(tmp_
     assert _batch_raw_files(["tok", "tok2"], meta) == [str(a), str(b)]
 
 
-def test_v50_probe_event_validation_is_token_bound(tmp_path: Path) -> None:
-    import json
+def test_v50_probe_event_validation_is_token_bound_and_online_reselection_is_diagnostic_only(tmp_path: Path) -> None:
     tokens = ["a", "b"]
     meta = {
-        "a": {"timestamp_us": 1000000, "cache_iteration": 0, "full_selected_action": 3},
-        "b": {"timestamp_us": 2000000, "cache_iteration": 0, "full_selected_action": 4},
+        "a": {"timestamp_us": 1_000_000, "cache_iteration": 0, **_target_row(1_000_000, tok="a", action=3)},
+        "b": {"timestamp_us": 2_000_000, "cache_iteration": 0, **_target_row(2_000_000, tok="b", action=4)},
     }
     path = tmp_path / "events.jsonl"
     rows = []
@@ -372,32 +436,40 @@ def test_v50_probe_event_validation_is_token_bound(tmp_path: Path) -> None:
             "pior_probe_final_action": m["full_selected_action"],
             "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
             "pior_probe_contract_no_rerank_second_best_fallback": True,
-            "pior_probe_online_proposal_exists": False, "pior_probe_online_proposal_matches_target": False,
+            # The uploaded V50.2 preflight already showed that online reselection
+            # can disagree even at offset 0. This is intentionally diagnostic only.
+            "pior_probe_online_proposal_exists": False, "pior_probe_online_proposal_action": -1,
+            "pior_probe_online_proposal_matches_target": False,
+            "pior_probe_frozen_proposal_trajectory_override_used": True,
+            "pior_probe_frozen_proposal_trajectory_sha256": m["frozen_proposal_trajectory_sha256"],
+            "pior_probe_current_slot_valid": False,
+            "pior_probe_current_slot_geometry_max_abs_error": 0.5,
+            "pior_probe_current_slot_maneuver_matches_frozen": False,
         })
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     got, audit = _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
     assert set(got) == set(tokens)
     assert audit["online_proposal_matches_frozen_target_count"] == 0
+    assert audit["cached_frozen_trajectory_override_count"] == len(tokens)
     rows[1]["scenario_token"] = "a"
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     with pytest.raises(RuntimeError, match="duplicate probe event"):
         _validate_probe_events(path, tokens=tokens, meta=meta, arm="treatment")
 
 
-def test_v50_collision_safe_batches_separate_preroll_ambiguous_anchor_timestamps() -> None:
+def test_v50_collision_safe_batches_only_separate_timestamp_identity_collisions() -> None:
     tokens = ["a", "b", "c", "d"]
     meta = {
         "a": {"timestamp_us": 1_000_000},
         "b": {"timestamp_us": 6_000_000},
-        # c is only ~3 s from b and must live in another subprocess target map.
-        "c": {"timestamp_us": 9_000_000},
+        "c": {"timestamp_us": 6_000_002},
         "d": {"timestamp_us": 15_000_000},
     }
     batches = _collision_safe_batches(tokens, meta, 4)
     assert batches == [["a", "b"], ["c", "d"]]
     for batch in batches:
         times = [meta[t]["timestamp_us"] for t in batch]
-        assert all(abs(a - b) > 3_500_004 for i, a in enumerate(times) for b in times[i + 1:])
+        assert all(abs(a - b) > 4 for i, a in enumerate(times) for b in times[i + 1:])
 
 
 def test_v50_first_batch_is_small_paired_preflight_without_changing_population() -> None:
@@ -413,16 +485,8 @@ def test_v50_first_batch_is_small_paired_preflight_without_changing_population()
 
 
 def test_v50_target_spec_semantic_hash_is_pretty_print_invariant(tmp_path: Path) -> None:
-    import hashlib, json
-    payload = {
-        "algorithm_version": "V64.3.50.2-EAF-ICER-PIOR-ANCHOR-TIME-REPAIR",
-        "identity": "exact_V49_manifest_anchor_timestamp_and_frozen_action",
-        "scenario_start_binding": "unique_future_anchor_within_3p5s_preroll_window",
-        "intervention_time_contract": "fire_only_at_exact_frozen_anchor_timestamp",
-        "targets": [
-            {"scenario_token": "tok", "timestamp_us": 1629745157950134, "full_selected_action": 3},
-        ],
-    }
+    meta = {"tok": {"timestamp_us": 1_629_745_157_950_134, "cache_iteration": 0, **_target_row(1_629_745_157_950_134)}}
+    payload = _probe_target_payload(["tok"], meta)
     expected = _payload_sha256(payload)
     path = tmp_path / "targets.json"
     returned = _write_probe_target_file(path, payload)
@@ -442,8 +506,8 @@ def test_v50_resume_certificate_binds_semantic_target_and_file_bytes(tmp_path: P
     root.mkdir()
     tokens = ["a", "b"]
     meta = {
-        "a": {"timestamp_us": 1_000_000, "cache_iteration": 0, "full_selected_action": 3},
-        "b": {"timestamp_us": 2_000_000, "cache_iteration": 0, "full_selected_action": 4},
+        "a": {"timestamp_us": 1_000_000, "cache_iteration": 0, **_target_row(1_000_000, tok="a", action=3)},
+        "b": {"timestamp_us": 2_000_000, "cache_iteration": 0, **_target_row(2_000_000, tok="b", action=4)},
     }
     metrics = root / "scenario_metrics.jsonl"
     metrics.write_text(
@@ -463,19 +527,16 @@ def test_v50_resume_certificate_binds_semantic_target_and_file_bytes(tmp_path: P
             "pior_probe_final_action": base,
             "pior_probe_contract_same_frozen_proposal_or_incumbent": True,
             "pior_probe_contract_no_rerank_second_best_fallback": True,
-            "pior_probe_online_proposal_exists": False, "pior_probe_online_proposal_matches_target": False,
+            "pior_probe_online_proposal_exists": True, "pior_probe_online_proposal_action": m["full_selected_action"],
+            "pior_probe_online_proposal_matches_target": False,
+            "pior_probe_frozen_proposal_trajectory_override_used": False,
+            "pior_probe_frozen_proposal_trajectory_sha256": m["frozen_proposal_trajectory_sha256"],
+            "pior_probe_current_slot_valid": False,
+            "pior_probe_current_slot_geometry_max_abs_error": 0.5,
+            "pior_probe_current_slot_maneuver_matches_frozen": False,
         })
     diag.write_text("\n".join(json.dumps(r, sort_keys=True) for r in rows) + "\n")
-    payload = {
-        "algorithm_version": "V64.3.50.2-EAF-ICER-PIOR-ANCHOR-TIME-REPAIR",
-        "identity": "exact_V49_manifest_anchor_timestamp_and_frozen_action",
-        "scenario_start_binding": "unique_future_anchor_within_3p5s_preroll_window",
-        "intervention_time_contract": "fire_only_at_exact_frozen_anchor_timestamp",
-        "targets": [
-            {"scenario_token": t, "timestamp_us": meta[t]["timestamp_us"], "full_selected_action": meta[t]["full_selected_action"]}
-            for t in tokens
-        ],
-    }
+    payload = _probe_target_payload(tokens, meta)
     target = root / "pior_probe_targets.json"
     semantic_sha = _write_probe_target_file(target, payload)
     sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -524,9 +585,7 @@ def test_v50_obsolete_iteration0_manifest_source_fails_closed(tmp_path, monkeypa
     import json
     ts = 1_629_745_157_950_134
     target = tmp_path / "targets.json"
-    target.write_text(json.dumps({"targets": [{
-        "scenario_token": "tok", "timestamp_us": ts, "full_selected_action": 3,
-    }]}))
+    target.write_text(json.dumps({"targets": [_target_row(ts)]}))
     monkeypatch.setenv("BDSE_PIOR_TARGETS_FILE", str(target))
     cfg = _cfg("treatment")
     cfg["selected_outcome_probe"]["proposal_source"] = "preregistered_V49_manifest_iteration0_proposal"

@@ -20,13 +20,13 @@ def _write(base: dict, arm: str, out: Path) -> None:
         "proposal_source": "preregistered_V49_manifest_anchor_timestamp_proposal",
         "control_action": "same_ICER_incumbent_baseline",
         "event_time": "exact_frozen_V49_anchor_timestamp_us",
-        "scenario_start_binding": "unique_anchor_within_standard_nuPlan_preroll_window",
-        "identity_binding": "exact_anchor_timestamp_us_plus_scenario_token_certificate",
+        "scenario_start_binding": "nuPlan_scenario_starts_at_exact_frozen_V49_anchor",
+        "identity_binding": "exact_anchor_timestamp_plus_cached_local_trajectory_sha256_online_reselection_diagnostic_only",
         "after_intervention": "incumbent_only",
         "teacher_or_future_label_input": False,
         "runtime_deployment_feature": False,
     }
-    v = f"V64.3.50-EAF-ICER-PIOR-PROBE-{arm.upper()}"
+    v = f"V64.3.50.3-EAF-ICER-PIOR-ANCHOR-IDENTITY-REPAIR-PROBE-{arm.upper()}"
     cfg.setdefault("metadata", {})["algorithm_version"] = v
     cfg.setdefault("provenance", {})["algorithm_version"] = v
     cfg.setdefault("experiment", {})["name"] = f"v64_3_50_eaf_icer_pior_probe_{arm}"
@@ -42,8 +42,9 @@ def main() -> None:
     ap.add_argument("--output-control", type=Path, required=True)
     a = ap.parse_args()
     base = yaml.safe_load(a.v49_siir_config.read_text(encoding="utf-8"))
-    # Fail closed: V50 instrumentation assumes the V49 full-set RSMR proposal is
-    # still exposed by the unchanged ICER post-selection path.
+    # Fail closed: the unchanged ICER post-selection path must remain enabled so
+    # control uses the same incumbent semantics and online V49-state replay remains
+    # auditable. The treatment identity itself comes only from the frozen manifest.
     sc = base["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]["selection_conditioned_intervention_recovery"]
     if not bool(sc.get("post_selection_value_enabled", False)):
         raise RuntimeError("V64.3.50 PIOR requires V49 post-selection path to expose the frozen RSMR proposal")

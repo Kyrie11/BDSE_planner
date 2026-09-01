@@ -1,0 +1,31 @@
+V64.3.50.3 EAF-ICER-PIOR anchor/proposal-identity engineering repair
+Scientific mechanism: unchanged V64.3.50 PIOR
+Uploaded V50.2 scientific status: ENGINEERING/DATA STOP; V50 algorithm NOT EVALUATED; V51 NOT DESIGNED
+
+Uploaded-run audit:
+- uploaded server source manifest: 913/913 PASS against uploaded code
+- uploaded server targeted regression: 266/266 PASS (2 historical warnings)
+- exact V49 proposal manifest population: 502/502 unique tokens
+- paired first batch: control 3 success / 1 fail / 3 events; treatment 3 success / 1 fail / 3 events
+- same failed token: 00f4aedf9b3c5f65, frozen action=21, runtime K=32
+- all 3 successful events: online proposal does not match frozen V49 target in both arms
+- two of the 3 successful events already have anchor_offset_us=0
+- no complete paired outcome table / no nested PIOR scientific gate
+
+V50.3 repair:
+- exact cached proposal trajectory + SHA256 + maneuver + raw CandidateBank.K persisted in manifest
+- tagged nuPlan scenario extraction offset changed to 0 while preserving installed duration/subsample mapping
+- treatment executes exact cached frozen local trajectory once at iteration0/anchor
+- control preserves incumbent; both arms incumbent-only afterwards
+- online RSMR / current slot validity / slot geometry are diagnostics only
+- exact token/action/trajectory-hash/iteration0/no-fallback certificates remain fail-closed
+- new default output root prevents invalid V50.2 batch resume
+
+Validation:
+- V50.3 focused: 27/27 PASS
+- V13->V50 targeted: 269/269 PASS (2 historical Transformer warnings)
+- full repository: 606/606 PASS across 126 test files, four exhaustive shards 158+152+155+141
+- Python compileall: PASS
+- launcher bash -n: PASS
+- V50 source manifest: 913/913 PASS
+- V50 source manifest SHA256: 5cf285c8e7e57d92b6849386060bad829629d0c4e0239c172b6a7a0eea06a4df

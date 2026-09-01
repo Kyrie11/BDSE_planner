@@ -1,0 +1,105 @@
+{
+  "audit": "V64_3_50_2_uploaded_result_engineering_stop_for_V64_3_50_3",
+  "failed_manifest_row": {
+    "cache_iteration": 0,
+    "full_selected_action": 21,
+    "npz_path": "/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2/train_boston/2021.08.23.18.41.38_veh-28/00f4aedf9b3c5f65_it000000.npz",
+    "scenario_token": "00f4aedf9b3c5f65",
+    "timestamp_us": 1629744498799642,
+    "v49_candidate_count": 16,
+    "v49_candidate_count_semantics": "post-admissibility RSMR population size, not raw CandidateBank.K"
+  },
+  "paired_preflight": {
+    "control": {
+      "failed": 1,
+      "probe_events": 3,
+      "successful": 3
+    },
+    "expected_per_arm": 4,
+    "failure_message": "V64.3.50.2 PIOR frozen manifest proposal is invalid at anchor: token=00f4aedf9b3c5f65 action=21 K=32",
+    "same_failed_token_both_arms": "00f4aedf9b3c5f65",
+    "treatment": {
+      "failed": 1,
+      "probe_events": 3,
+      "successful": 3
+    }
+  },
+  "reliability_verdict": "ENGINEERING_DATA_STOP",
+  "root_cause": [
+    "V50.2 aligned intervention time but still used a regenerated action slot as the physical proposal identity.",
+    "nuPlan tagged scenarios normally use a negative extraction offset; planner-controlled pre-roll can change the ego state and regenerated candidate bank before the frozen anchor.",
+    "Even two uploaded successful probes with anchor_offset_us=0 had online RSMR proposals different from the frozen V49 proposal, so exact timestamp alone is insufficient for proposal identity.",
+    "The treatment contract must execute the cached V49 physical trajectory; online reselection/current slot replay is diagnostic only."
+  ],
+  "science_evaluable": false,
+  "scientific_mechanism_unchanged": [
+    "RSMR",
+    "Q/P/E state",
+    "pairwise sign-risk family",
+    "lambda=1",
+    "paired outcome definition",
+    "hard-safety coordinates",
+    "retention calibration",
+    "veto-only same-winner/incumbent",
+    "no rerank/second-best/fallback"
+  ],
+  "scientific_population": {
+    "manifest_rows": 502,
+    "unique_tokens": 502
+  },
+  "successful_probe_count": 3,
+  "successful_probe_online_match_count": 0,
+  "successful_probe_online_reselection_diagnostics": [
+    {
+      "anchor_offset_us": 0,
+      "control_online_matches_frozen": false,
+      "control_online_proposal_action": 13,
+      "control_online_proposal_exists": true,
+      "frozen_action": 24,
+      "scenario_token": "0395a156348a5041",
+      "treatment_online_matches_frozen": false,
+      "treatment_online_proposal_action": 13,
+      "treatment_online_proposal_exists": true
+    },
+    {
+      "anchor_offset_us": 0,
+      "control_online_matches_frozen": false,
+      "control_online_proposal_action": 2,
+      "control_online_proposal_exists": false,
+      "frozen_action": 5,
+      "scenario_token": "034da27cd2f75292",
+      "treatment_online_matches_frozen": false,
+      "treatment_online_proposal_action": 2,
+      "treatment_online_proposal_exists": false
+    },
+    {
+      "anchor_offset_us": 2999474,
+      "control_online_matches_frozen": false,
+      "control_online_proposal_action": 7,
+      "control_online_proposal_exists": true,
+      "frozen_action": 0,
+      "scenario_token": "02fca515559f520d",
+      "treatment_online_matches_frozen": false,
+      "treatment_online_proposal_action": 7,
+      "treatment_online_proposal_exists": true
+    }
+  ],
+  "uploaded_code_source_manifest": {
+    "entries": 913,
+    "mismatches": 0,
+    "validated_against_uploaded_code": 913
+  },
+  "uploaded_server_targeted_regression": {
+    "passed": 266,
+    "warnings": 2
+  },
+  "v50_3_repair_contract": [
+    "Persist cached frozen proposal trajectory, SHA256, maneuver id, and raw CandidateBank.K in the TRAIN manifest.",
+    "Start tagged nuPlan scenarios at the exact V49 anchor by changing only extraction_offset to 0 while preserving configured duration/subsample ratio.",
+    "Treatment executes the cached V49 local trajectory exactly once; control preserves incumbent; afterwards both return to incumbent-only operation.",
+    "Online RSMR proposal and same-slot geometry/validity are diagnostic only and cannot redefine treatment.",
+    "Batch certificate requires exact token, iteration0 anchor, manifest action, frozen trajectory SHA256, one-shot containment, and zero failed simulations."
+  ],
+  "v50_algorithm_success_or_failure": "NOT_EVALUATED",
+  "v51_design_permitted": false
+}

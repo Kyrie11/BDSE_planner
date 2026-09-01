@@ -12460,3 +12460,44 @@ The repeated `[PIOR-TICK] ... Simulation failed!` heartbeat text in the uploaded
 V50 remains **NOT YET SCIENTIFICALLY EVALUATED**. No PIOR promotion/rejection or V51 design is permitted from the failed preflight. The repaired V50 TRAIN collection must first complete the already preregistered paired-outcome identification and causal-retention gates. Untouched validation remains forbidden unless those TRAIN gates pass.
 
 No algorithm-level prohibited branch is reopened, and RSMR, Q/P/E, candidate bank, paired outcome definition, safety metrics, risk learner, lambda, retention calibration and no-fallback containment are unchanged.
+
+
+---
+
+# V64.3.50.3 engineering-only repair — exact-anchor cached-proposal identity
+
+## Uploaded V50.2 reliability verdict
+
+The uploaded `outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1` is a preregistered **ENGINEERING/DATA STOP**, not a PIOR scientific success/failure. Only the 4-scene paired preflight ran. Control and treatment both produced `3 success / 1 failure / 3 probe events`, with the same failed token `00f4aedf9b3c5f65` and the same pre-arm-split error: frozen action 21 was invalid in the regenerated runtime slot. No 502-pair outcome table or nested PIOR gate exists. Therefore no V51 design is permitted from this run.
+
+The repeated `[PIOR-TICK] ... Simulation failed!` heartbeat is only the parent monitor repeating the child log tail; it is not a new failure every heartbeat.
+
+## Stronger root-cause evidence
+
+V50.2 repaired frozen-anchor **time** alignment but still conflated the integer action slot with physical proposal identity. The three successful uploaded events all have `online_proposal_matches_target=false` in both arms; two already have `anchor_offset_us=0`. Thus exact timestamp plus online re-selection cannot define the preregistered V49 treatment.
+
+Also, V49 candidate-audit `candidate_count` is the post-admissibility RSMR population size, not raw `CandidateBank.K`; V50.3 explicitly keeps these quantities separate.
+
+## Repair contract
+
+- TRAIN manifest persists the exact cached V49 selected local trajectory, its SHA256, maneuver id, raw cached CandidateBank.K, timestamp and frozen action id.
+- The paired runner reads the installed nuPlan scenario mapping and changes only tagged-scenario extraction offset to `0`, preserving each configured duration and optional subsample ratio. Thus simulation iteration 0 is the frozen V49 anchor and there is no planner-controlled pre-roll before the causal event.
+- Treatment executes the cached frozen V49 local trajectory **directly once**. The dynamically regenerated trajectory at the same integer slot is never substituted. Control preserves the incumbent; afterwards both arms are incumbent-only.
+- Online RSMR re-selection, current-slot validity, current-slot geometry and maneuver equality are diagnostics only. They cannot redefine treatment or create a STOP merely because the OOF V49 proposal is not reproduced by the online/final model.
+- Raw CandidateBank.K drift, malformed/hash-corrupted cached proposal, nonzero anchor offset, non-iteration0 intervention, duplicate/missing token event, failed scenario, fallback/rerank/second-best or treatment/control action-contract violation all remain fail-closed.
+- Default output root is new: `outputs/outputs_v64_3_50_3_eaf_icer_pior_train_2gpu_v1`; invalid V50.2 batch certificates cannot be reused.
+
+## Scientific mechanism unchanged
+
+No RSMR/Q/P/E/risk/lambda/outcome/safety/retention threshold change; no feature expansion; no offline-risk rescue; no candidate/top-K sweep; no rerank/second-best/fallback. This is V50.3 engineering repair, **not V51**.
+
+## Validation
+
+- V50.3 focused: 27/27 PASS.
+- V13→V50 targeted: 269/269 PASS.
+- Full repository: 606/606 PASS across 126 test files (`158+152+155+141`).
+- compile/launcher syntax: PASS.
+
+## Next step
+
+Rerun the repaired V50 TRAIN launcher. Science remains blocked until the paired collection reaches exact 502/502 token identity with one valid control/treatment event each and the original preregistered V50 identification + causal-retention gates are actually executed.

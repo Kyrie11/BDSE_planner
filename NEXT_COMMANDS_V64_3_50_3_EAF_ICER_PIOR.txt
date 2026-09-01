@@ -1,0 +1,16 @@
+V64.3.50.3 engineering rerun (scientific V50 mechanism unchanged)
+
+cd bdse_v64_3_50_3_eaf_icer_pior_anchor_identity_repair
+bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+
+Expected first paired preflight before full TRAIN collection:
+- control: 4/4 success, 0 failed, 4/4 probe events
+- treatment: 4/4 success, 0 failed, 4/4 probe events
+- every probe event at iteration_index=0 and anchor_offset_us ~= 0
+- treatment: frozen_proposal_trajectory_override_used=true and hash matches manifest
+- control: frozen_proposal_trajectory_override_used=false
+- online proposal match is diagnostic only and may be false
+
+If the 4-scene preflight fails, STOP and inspect/upload the new batch logs; do not run PIOR science or design V51.
+If it passes, the launcher continues all 502 pairs and runs the existing preregistered V50 fit/gates automatically.
+Untouched validation remains forbidden unless TRAIN PASS.

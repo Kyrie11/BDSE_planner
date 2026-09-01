@@ -1,0 +1,13 @@
+ALGORITHM_CHANGELOG.md
+NEXT_COMMANDS_V64_3_50_3_EAF_ICER_PIOR.txt
+RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+V64_3_50_2_ENGINEERING_AUDIT_FOR_V64_3_50_3.json
+V64_3_50_2_RESULT_ENGINEERING_STOP_AND_V64_3_50_3_REPAIR.md
+V64_3_50_2_TO_V64_3_50_3.patch
+V64_3_50_3_ENGINEERING_VALIDATION.txt
+V64_3_50_SOURCE_MANIFEST.sha256
+bdse/planner/nuplan_planner.py
+bdse/tests/test_v64_3_50_eaf_icer_pior.py
+bdse/tools/build_v64_3_50_pior_train_manifest.py
+bdse/tools/make_v64_3_50_pior_probe_configs.py
+bdse/tools/run_v64_3_50_pior_paired_closed_loop.py

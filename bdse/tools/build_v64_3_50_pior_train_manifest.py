@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sqlite3
@@ -259,6 +260,25 @@ def main() -> None:
                             f"V64.3.50 PIOR STOP: frozen token={tok} comes from cache iteration={cache_iteration}, expected it000000; "
                             "V50.2 repair is defined only for the preregistered frozen proposal anchor event"
                         )
+                    action = int(meta[tok]["full_selected_action"])
+                    trajectories = np.asarray(z["candidate_trajectories"], dtype=np.float32)
+                    candidate_valid = np.asarray(z["candidate_valid"], dtype=bool).reshape(-1)
+                    maneuver_ids = np.asarray(z["candidate_maneuver_ids"], dtype=np.int64).reshape(-1)
+                    if trajectories.ndim != 3 or trajectories.shape[0] != candidate_valid.shape[0]:
+                        raise RuntimeError(
+                            f"V64.3.50.3 PIOR STOP: malformed frozen candidate bank token={tok} "
+                            f"trajectories={trajectories.shape} valid={candidate_valid.shape}"
+                        )
+                    # V49 candidate_count is the size of the post-admissibility RSMR
+                    # population, not the raw CandidateBank.K.  Do not compare those
+                    # quantities.  Persist the raw cached bank size separately as an
+                    # engineering identity invariant for closed-loop replay.
+                    if not (0 <= action < trajectories.shape[0]) or not bool(candidate_valid[action]):
+                        raise RuntimeError(
+                            f"V64.3.50.3 PIOR STOP: frozen V49 proposal is not a valid cache action "
+                            f"token={tok} action={action} K={trajectories.shape[0]}"
+                        )
+                    frozen_traj = np.ascontiguousarray(trajectories[action], dtype=np.float32)
                     found[tok] = {
                         **meta[tok],
                         "scenario_token": tok,
@@ -270,6 +290,16 @@ def main() -> None:
                         "log_name": log_name,
                         "scenario_name": _scalar(z, "scenario_name"),
                         "scenario_type": _scalar(z, "scenario_type"),
+                        # V50.3 engineering identity repair: an integer slot is not
+                        # a stable physical action under a changed closed-loop state.
+                        # Persist the selected local trajectory and maneuver so the
+                        # runtime can prove that the intervention is the exact cached
+                        # V49 proposal rather than merely the same slot number.
+                        "frozen_candidate_bank_size": int(trajectories.shape[0]),
+                        "frozen_proposal_trajectory": frozen_traj.tolist(),
+                        "frozen_proposal_trajectory_sha256": hashlib.sha256(frozen_traj.tobytes(order="C")).hexdigest(),
+                        "frozen_proposal_maneuver_id": int(maneuver_ids[action]) if action < maneuver_ids.shape[0] else -1,
+                        "frozen_proposal_valid": True,
                     }
             except Exception as exc:
                 raise RuntimeError(f"failed to read TRAIN npz {p}: {exc}") from exc
@@ -281,11 +311,11 @@ def main() -> None:
     if missing:
         raise RuntimeError(f"V64.3.50 PIOR STOP: {len(missing)} frozen RSMR TRAIN tokens missing from stated bdse_train_v2 layout; first={missing[:10]}")
 
-    # Every preregistered V49 proposal comes from *_it000000.npz.  Store the
-    # exact frozen proposal *anchor-event* timestamp. nuPlan tagged scenarios may
-    # start before this anchor because scenario extraction uses a negative offset;
-    # the paired runner binds at scenario start but intervenes only at this exact
-    # anchor timestamp. Timestamp collisions across the full 502
+    # Every preregistered V49 proposal comes from *_it000000.npz. Store the
+    # exact frozen proposal *anchor-event* timestamp. V50.3 changes only nuPlan's
+    # scenario extraction offset so each paired simulation begins at this anchor;
+    # no planner-controlled pre-roll is permitted before the intervention.
+    # Timestamp collisions across the full 502
     # population are allowed: the runner deterministically separates colliding
     # timestamps into different subprocess batches, where scenario_filter tokens
     # provide the remaining identity constraint.
@@ -320,7 +350,7 @@ def main() -> None:
         counts[r["cache_city"]] = counts.get(r["cache_city"], 0) + 1
     report = {
         "audit": "v64_3_50_pior_train_manifest",
-        "algorithm_version": "V64.3.50-EAF-ICER-PIOR",
+        "algorithm_version": "V64.3.50.3-EAF-ICER-PIOR-ANCHOR-IDENTITY-REPAIR",
         "scientific_population": "exact_V49_full_set_RSMR_TRAIN_proposals_only",
         "scenario_count": len(rows),
         "unique_scenario_count": len({r["scenario_token"] for r in rows}),

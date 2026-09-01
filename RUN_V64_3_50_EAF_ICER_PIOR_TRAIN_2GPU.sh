@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# V64.3.50 EAF-ICER-PIOR
+# V64.3.50.3 EAF-ICER-PIOR engineering repair (scientific mechanism unchanged)
 # Paired Interventional Outcome Retention.
 # Scientific rule inherited from V49 preregistration:
 #   V49 nested TRAIN failure closes the offline selected-risk family.
@@ -23,7 +23,7 @@ export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
 
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
-OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1}"
+OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_3_eaf_icer_pior_train_2gpu_v1}"
 V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
 BDSE_TRAIN_CACHE="${BDSE_TRAIN_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_train_v2}"
 NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
@@ -31,6 +31,7 @@ NUPLAN_DB_SPLIT_ROOT="${NUPLAN_DB_SPLIT_ROOT:-$NUPLAN_ROOT/nuplan-v1.1/splits}"
 EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
 EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/train_log.jsonl}"
 WORKERS_PER_ARM="${WORKERS_PER_ARM:-4}"
+# V50.3 starts nuPlan scenarios at the exact frozen V49 anchor and executes the cached frozen proposal trajectory directly.
 # Engineering-only speed/resume knobs. They do not change the 502-scene
 # population, full-set RSMR proposal, one-shot treatment/control action, metric
 # definition, or PIOR fitting gate.
