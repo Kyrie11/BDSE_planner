@@ -12620,3 +12620,46 @@ For the current paper-grade V50 experiment, do not:
 - disable/approximate planner certificate stages merely for speed.
 
 These would either change the deployed policy/causal estimand or weaken the exact paired-data proof.
+
+---
+
+# V64.3.50.5 engineering-only metric-safety repair — no scientific attribution
+
+## Uploaded V50.4 resume result verdict
+
+**ENGINEERING/DATA STOP; V50 GO/STOP is NOT EVALUATED.**
+
+The uploaded `outputs_v64_3_50_4_eaf_icer_pior_train_2gpu_v1` reaches only **324/502 paired certified scenarios** (control 452/502, treatment 324/502) and contains neither the full paired-outcome artifact nor the nested PIOR identification/causal-retention result. Therefore the preregistered V50 gate has not executed and no algorithm attribution is allowed.
+
+The new blocker is a nuPlan metric-engine failure rather than a PIOR mechanism result:
+
+- treatment `batch_0006`: 63/64 success, token `a2326fd4694d5191` fails in `drivable_area_compliance` TimeSeries length assertion;
+- control `batch_0008`: 49/50 success, token `fbd37ced14a15418` fails at the same metric assertion;
+- both incomplete batches have all intended PIOR probe events, localizing the failure after one-shot proposal execution in the metric callback.
+
+## Root cause / repair
+
+nuPlan reuses a stateful metric engine per scenario type; `drivable_area_compliance` reads mutable route state produced by `ego_lane_change`. Under V50.4's `single_machine_thread_pool` with four scenario workers, concurrent metric callbacks can interleave that shared state. This can produce the observed timestamp/value length mismatch and can in principle silently contaminate successful metric outputs.
+
+V64.3.50.5 therefore:
+
+- leaves the frozen V50 scientific collector and all planner/fit files byte-identical;
+- adds an engineering child-entrypoint wrapper that serializes the entire nuPlan `run_metric_engine` callback within each arm process;
+- preserves two-GPU arm parallelism and **4 simulation workers/arm**; only metric evaluation is serialized;
+- adds a fail-closed 4-scenario/arm engineering sentinel containing both observed failure tokens;
+- adds a full-run audit requiring the metric-safe marker and valid certificates for all 502 scenarios in both arms;
+- uses a new output root `outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1`;
+- **does not reuse V50.4 metric certificates**, because a state race can corrupt metric values without necessarily raising an exception.
+
+## Algorithm-family status
+
+This round is engineering-only. **No new algorithm family is promoted or closed.** The V49 preregistered transition to V50 PIOR and all previously closed families remain unchanged. In particular, this result is not evidence for or against paired selected-outcome supervision, Q/P/E sufficiency, or the low-capacity PIOR retention functional.
+
+Do not design V51 until V50.5 obtains exact 502/502 paired data and executes the original V50 identification + causal-retention gates.
+
+## Next command
+
+```bash
+cd bdse_v64_3_50_5_eaf_icer_pior_metricsafe
+bash RUN_V64_3_50_5_EAF_ICER_PIOR_TRAIN_2GPU.sh
+```

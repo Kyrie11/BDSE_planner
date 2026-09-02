@@ -1,0 +1,25 @@
+# V64.3.50.5 — run only the engineering-repaired V50 experiment.
+# Do NOT resume V50.4 certificates and do NOT design/run V51 yet.
+
+cd bdse_v64_3_50_5_eaf_icer_pior_metricsafe
+bash RUN_V64_3_50_5_EAF_ICER_PIOR_TRAIN_2GPU.sh
+
+# The launcher automatically performs, in order:
+# 1) frozen V50 source/science checks;
+# 2) V50.5 engineering manifest check;
+# 3) exact 502 TRAIN manifest + unchanged treatment/control configs;
+# 4) 4-scenario/arm metric-safety sentinel (includes both V50.4 failure tokens);
+# 5) full NEW 502x2 paired closed-loop collection with 2 GPUs and 4 simulation workers/arm;
+# 6) fail-closed metric-safety provenance audit;
+# 7) unchanged V50 PIOR nested identification + causal-retention TRAIN gate.
+
+# Default new output root:
+# outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1
+# The launcher refuses the V50.4 output root and refuses unsafe legacy certificates.
+
+# If your dataset/checkpoint roots differ, override only paths, not scientific knobs, e.g.:
+# EAF_CKPT=/path/to/checkpoint.pt \
+# BDSE_TRAIN_CACHE=/path/to/bdse_train_v2 \
+# NUPLAN_ROOT=/path/to/nuplan \
+# NUPLAN_DB_SPLIT_ROOT=/path/to/nuplan-v1.1/splits \
+# bash RUN_V64_3_50_5_EAF_ICER_PIOR_TRAIN_2GPU.sh

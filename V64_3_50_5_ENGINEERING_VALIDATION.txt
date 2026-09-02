@@ -1,0 +1,55 @@
+V64.3.50.5 EAF-ICER-PIOR metric-safety engineering validation
+===============================================================
+
+Scientific status
+-----------------
+V50 scientific mechanism: UNCHANGED.
+Current uploaded V50.4 result: ENGINEERING/DATA STOP; no algorithm attribution.
+V50.5 purpose: make nuPlan closed-loop metrics thread-safe without reducing simulation/planner concurrency.
+
+Science lock
+------------
+PASS: 9/9 science-critical V50.4 files exactly match frozen uploaded SHA256 values.
+PASS: original V64_3_50_SOURCE_MANIFEST.sha256 verifies all listed V50 source files.
+PASS: frozen paired collector SHA256 remains
+      7c5472442e5a76ee6cbb6ef3189e086e4e800e8337deb14cacb26488b9050d53
+PASS: tournament.py SHA256 remains
+      291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044
+
+New repair tests
+----------------
+PASS: existing V50 focused + V50.5 metric-safety focused = 33/33.
+PASS: metric callback concurrency unit test observes peak concurrent run_metric_engine calls == 1.
+PASS: patch installation is idempotent.
+PASS: child-spawn shim rewrites only the official nuPlan simulation module and injects the safety env flag.
+PASS: child-spawn shim fails closed if the frozen nuPlan entrypoint changes.
+PASS: science-critical file hashes are checked by test.
+
+Repository regression
+---------------------
+PASS: Python compileall.
+PASS: launcher `bash -n`.
+PASS: CLI parser/help smoke checks for safe collector, sentinel preflight and full audit.
+PASS: full repository test collection = 612 tests.
+PASS: exhaustive four-way file shard regression:
+      shard 0: 157/157
+      shard 1: 148/148
+      shard 2: 138/138
+      shard 3: 169/169
+      total:   612/612
+Historical Transformer/external-baseline warnings only; V50.5 focused tests add no warning class.
+
+Engineering provenance
+----------------------
+PASS: V64_3_50_5_ENGINEERING_MANIFEST.sha256 verifies all new runtime repair files.
+PASS: new launcher refuses the V50.4 output root.
+PASS: new launcher refuses any resume certificate whose run.log lacks the V50.5 metric-safe marker.
+PASS: full 502x2 run is audited for metric-safe marker + complete certificate + zero failed simulations before PIOR fit.
+PASS: engineering sentinel is separate from scientific PIOR fit and contains both V50.4 observed metric-failure tokens.
+
+Server-only validation still required before scientific attribution
+-----------------------------------------------------------------
+The local artifact environment does not contain the user's nuPlan installation/raw DBs/checkpoint, so the new
+4-scenario/arm metric-race sentinel cannot be executed here. The provided launcher executes it fail-closed on the
+server before starting the long 502x2 collection. V50 remains scientifically unevaluated until that full collection
+and the unchanged nested identification + causal-retention gate finish.
