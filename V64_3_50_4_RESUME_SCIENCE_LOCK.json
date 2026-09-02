@@ -1,0 +1,60 @@
+{
+  "schema": "v64.3.50.4-resume-science-lock-v1",
+  "all_scientific_files_byte_identical": true,
+  "files": [
+    {
+      "path": "RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh",
+      "uploaded_sha256": "2e77acd54f1e2d19d3f47607cd4de28fc52518a44093cc0ac6ed1aa8fa164a89",
+      "resume_package_sha256": "2e77acd54f1e2d19d3f47607cd4de28fc52518a44093cc0ac6ed1aa8fa164a89",
+      "byte_identical": true
+    },
+    {
+      "path": "V64_3_50_SOURCE_MANIFEST.sha256",
+      "uploaded_sha256": "ffd0eece559cd0830a9b5f202140e7c7156d68043c166d0c8a94744b9021ff18",
+      "resume_package_sha256": "ffd0eece559cd0830a9b5f202140e7c7156d68043c166d0c8a94744b9021ff18",
+      "byte_identical": true
+    },
+    {
+      "path": "bdse/planner/nuplan_planner.py",
+      "uploaded_sha256": "c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef",
+      "resume_package_sha256": "c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef",
+      "byte_identical": true
+    },
+    {
+      "path": "bdse/planner/tournament.py",
+      "uploaded_sha256": "291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044",
+      "resume_package_sha256": "291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044",
+      "byte_identical": true
+    },
+    {
+      "path": "bdse/tools/build_v64_3_50_pior_train_manifest.py",
+      "uploaded_sha256": "02b027447bd5dbfbe44e8d58ca39380df44c709a48a8e1523057826b354e5225",
+      "resume_package_sha256": "02b027447bd5dbfbe44e8d58ca39380df44c709a48a8e1523057826b354e5225",
+      "byte_identical": true
+    },
+    {
+      "path": "bdse/tools/make_v64_3_50_pior_probe_configs.py",
+      "uploaded_sha256": "6d8cd2f869cde7856d07cb09a9260c08907e2f11042d49ea8603668c838b9fad",
+      "resume_package_sha256": "6d8cd2f869cde7856d07cb09a9260c08907e2f11042d49ea8603668c838b9fad",
+      "byte_identical": true
+    },
+    {
+      "path": "bdse/tools/run_v64_3_50_pior_paired_closed_loop.py",
+      "uploaded_sha256": "7c5472442e5a76ee6cbb6ef3189e086e4e800e8337deb14cacb26488b9050d53",
+      "resume_package_sha256": "7c5472442e5a76ee6cbb6ef3189e086e4e800e8337deb14cacb26488b9050d53",
+      "byte_identical": true
+    },
+    {
+      "path": "bdse/tools/fit_v64_3_50_eaf_icer_pior.py",
+      "uploaded_sha256": "c1c1d297766d8a2e43430739d639ff1ed73f866ec193b47a5dc9e7cb997727aa",
+      "resume_package_sha256": "c1c1d297766d8a2e43430739d639ff1ed73f866ec193b47a5dc9e7cb997727aa",
+      "byte_identical": true
+    },
+    {
+      "path": "bdse/tests/test_v64_3_50_eaf_icer_pior.py",
+      "uploaded_sha256": "4290f9910cc6c8bd9fa01822112fed440ad1f9a04115ec25e50d64d7b9899eb4",
+      "resume_package_sha256": "4290f9910cc6c8bd9fa01822112fed440ad1f9a04115ec25e50d64d7b9899eb4",
+      "byte_identical": true
+    }
+  ]
+}

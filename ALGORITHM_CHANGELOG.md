@@ -12564,3 +12564,59 @@ All directions closed by V46--V49 remain closed. In particular, this engineering
 ## Next scientific step
 
 Rerun V50.4 TRAIN collection. No V50 success/failure attribution and no V51 algorithm branch is permitted until the original V50 preregistered data gate reaches exact **502/502 paired token identity** with one valid control/treatment event per token and the original PIOR identification + causal-retention gates are executed.
+
+---
+
+# V64.3.50.4-R engineering-only resume / runtime-cost audit (no scientific mechanism change)
+
+## Reliability status of the uploaded V50.4 result package
+
+The uploaded `outputs_v64_3_50_4_eaf_icer_pior_train_2gpu_v1` is a **mid-run / incomplete paired collection**, not a PIOR scientific success or failure.
+
+- control has valid batch completion certificates for `batch_0000..0004`: **260/502** certified scenarios;
+- treatment has the same valid prefix: **260/502** certified scenarios;
+- every completed certificate has `successful=scenario_count`, `failed=0`, and `probe_fired_count=scenario_count`;
+- `batch_0005` exists in both arms but has no completion certificate and was still simulating when the result archive was created;
+- therefore no 502-pair table, nested PIOR identification gate, or causal-retention gate exists yet.
+
+Per the V50 preregistration, **algorithm attribution remains forbidden until exact 502/502 paired completion**. Partial `batch_0005` probe/metric artifacts are diagnostic only and are not promoted to scientific evidence.
+
+## Runtime diagnosis
+
+The long wall time is dominated by the intended nuPlan closed-loop workload rather than launcher/test overhead.
+
+- completed 64-scene batches take roughly **163--190 min per arm**;
+- median throughput is about **22--23 scenarios/hour/arm**;
+- the two arms already run concurrently on two GPUs;
+- GPU utilization is commonly near saturation and memory is roughly 15--16.5 GB/GPU;
+- `replan_interval_ticks=5` already yields about **80% cached planner ticks**;
+- the expensive non-cached planner/certificate path is the dominant runtime component;
+- source/provenance checks, regression and manifest/config construction are negligible relative to closed-loop simulation.
+
+Therefore V50.4-R deliberately does **not** change `replan_interval_ticks`, worker count, batch population/partition, candidate bank, RSMR, Q/P/E, planner logic, simulator challenge, or metric definition. Those changes could alter the causal estimand or make already-certified batches non-comparable.
+
+## Safe engineering optimization
+
+This revision adds only:
+
+1. `bdse.tools.audit_v64_3_50_pior_progress`, which counts only valid batch certificates, reports partial batches as diagnostic-only, estimates remaining wall time from completed-batch throughput, and makes the 502/502 science gate explicit;
+2. `RUN_V64_3_50_4_EAF_ICER_PIOR_RESUME_2GPU.sh`, a resume-only wrapper that reuses the existing source-manifest-locked launcher and the exact same output root, so the already certified 260+260 scenarios are not rerun;
+3. parent heartbeat polling defaults to 120 s in the wrapper, while closed-loop profiling remains ON for homogeneous instrumentation.
+
+The original `RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh`, planner, tournament, V50 runner, config generation, fit code and all files listed by `V64_3_50_SOURCE_MANIFEST.sha256` remain byte-identical to the uploaded V50.4 code. This is **not V51** and changes no preregistered GO/STOP condition.
+
+## Explicitly rejected speed shortcuts
+
+For the current paper-grade V50 experiment, do not:
+
+- increase `replan_interval_ticks`;
+- reduce the 502-token population or run only one arm;
+- pool partial/incomplete batches;
+- salvage `.pickle.temp` rows as if they were completed simulations;
+- change worker count based on the current saturated-GPU run without a separate equivalence benchmark;
+- change batch size mid-run, which would invalidate deterministic certificate reuse;
+- skip the control arm using heuristic matching;
+- reuse older V50.2/V50.3 closed-loop outputs as V50.4 evidence;
+- disable/approximate planner certificate stages merely for speed.
+
+These would either change the deployed policy/causal estimand or weaken the exact paired-data proof.

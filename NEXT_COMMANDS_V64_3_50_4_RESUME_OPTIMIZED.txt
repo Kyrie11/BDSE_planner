@@ -1,0 +1,15 @@
+# IMPORTANT: first check whether the original V50.4 job is still alive.
+# If it is still running, DO NOT launch a duplicate; let it finish.
+
+cd /home/senzeyu2/code/BDSE_planner/bdse_v64_3_50_4_eaf_icer_pior_resume_optimized
+
+# Point to the SAME V50.4 output root so certified batch_0000..0004 are reused.
+export OUT_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_4_eaf_icer_pior_train_2gpu_v1
+
+# Audit current certificate-only progress (partial batch rows remain diagnostic only).
+python -m bdse.tools.audit_v64_3_50_pior_progress --output-root "$OUT_ROOT"
+
+# If the previous process was interrupted, resume. This does not rerun valid completed batches.
+bash RUN_V64_3_50_4_EAF_ICER_PIOR_RESUME_2GPU.sh
+
+# Do NOT run untouched validation before the original V50 TRAIN identification + causal-retention gates pass.
