@@ -1,0 +1,19 @@
+# V64.3.53 EAF-ICER-POTR
+
+cd bdse_v64_3_53_eaf_icer_potr
+
+V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V51_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_51_eaf_icer_pocr_train_v1 \
+V52_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_52_eaf_icer_hodr_train_v1 \
+NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
+bash RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
+
+# If checkpoint discovery does not match your server, additionally export:
+# EAF_CKPT=/absolute/path/to/checkpoint.pt
+
+# Scientific rules:
+# - this run first collects one treatment-only 502-scene pre-execution state replay;
+# - it reuses the exact V50.5 paired outcome labels and does NOT recollect 502x2 outcomes;
+# - do not consume untouched validation unless V53 TRAIN passes all preregistered gates;
+# - do not tune D transforms, DCT basis/mode count, threshold, lambda, loss, safety weights or MLP after seeing TRAIN.

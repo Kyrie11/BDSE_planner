@@ -1,0 +1,1893 @@
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -12975,3 +12975,197 @@
+ ## No-repeat constraints after V51
+ 
+ All historical closures remain active: no QPE-only/V51 sign-only rescue; no state expansion during the V52 functional test; no loss/lambda/class/focal/catastrophe weighting; no threshold/calibration sweep or alpha split; no bigger MLP/attention; no standalone binary catastrophe veto; no learned safety scalarization; no K/logK; no new offline future observable; no V46 variance/handcrafted temporal-profile resurrection; no V47 AGENT-2D; no V49 SIIR/random-prefix; no CVaR; no selected translation; no RSMR/B/M/top-K/candidate-count changes; no rerank/second-best/fallback; no validation pooling.
++
++---
++
++# V64.3.52 scientific result — effect support identified, conditional outcome order not identified
++
++## Reliability
++
++V52 is valid for TRAIN-level attribution.
++
++- uploaded V52 code ZIP SHA256: `c75ffd833a62c57d2ea3132aeec90950e4307c2142129285e62d9222bb45f9e2`, exact V52 delivery identity;
++- curated result-defining science manifest: **10/10 PASS**;
++- parent V51 fit lock: exact SHA `54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049`;
++- paired evidence: exact **502/502** metric-safe population, SHA `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`;
++- server targeted regression: **57/57 PASS**; independent uploaded-code replay: **57/57 PASS**;
++- termination: preregistered TRAIN scientific STOP; untouched validation unconsumed.
++
++Therefore no engineering repair is needed before attribution.
++
++## Preregistered V52 verdict
++
++### Shared effect-support hurdle — identified and retained
++
++The scalar QPE+D state robustly identifies structural null/effect support:
++
++- aggregate effect-support AUC: **`0.6516244589`**;
++- folds above random: **5/5**.
++
++This is a genuine supporting mechanism.  It refines the V51 observation that scalar operator dose D predicts whether an intervention has any effect.  V52 shows the signal survives honest nested fitting after the structural-null hurdle is made explicit.
++
++### HURDLE-SIGN — identification FAIL / deployment FAIL
++
++Conditional on an actual closed-loop effect:
++
++- conditional sign AUC: **`0.4802924348`**;
++- exact V51 conditional-sign control AUC: `0.4964580874`;
++- HURDLE-SIGN > V51: **2/5 folds**.
++
++So the conditional outcome functional is not identified.
++
++Its OOF deployment aggregate is diagnostically useful but cannot be promoted:
++
++- selected: `446`;
++- beneficial retained: `110/121 = 90.91%` — **beneficial-retention FAIL** under frozen alpha;
++- nonbeneficial: `381 -> 336` — reduction PASS;
++- hard harm: `25 -> 22` — tail improves;
++- score-delta sum: `-4.2409 -> -3.2021` — aggregate utility improves;
++- negative RMS: `0.15486 -> 0.14609` — improves;
++- all-fold nonharm: **FAIL**.
++
++The mechanism therefore contains useful effect-support filtering but does not stably order effectful good/bad interventions.  The aggregate improvements are not promotion evidence because the preregistered identification and beneficial-retention gates fail.
++
++### HURDLE-PARETO — identification FAIL / deployment FAIL
++
++- Pareto concordance: **`0.4977285319`**;
++- exact V51 Pareto-control concordance: `0.4879778393`;
++- PARETO > control: **3/5 folds**, below the preregistered 4/5 requirement;
++- beneficial retained: `111/121 = 91.74%` — FAIL;
++- hard harm: `24` — hard-tail FAIL;
++- score-delta sum: **`-5.3254`** — utility FAIL;
++- all-fold nonharm: FAIL.
++
++Thus unweighted static Pareto ordering does not rescue the same scalar QPE+D state.  Do not tune safety weights or scalarize the safety coordinates after seeing this result.
++
++## Mechanism interpretation
++
++V52 cleanly separates two selected-outcome questions that V51 mixed together:
++
++1. **Effect support:** will executing the frozen proposal rather than the incumbent change the paired closed-loop outcome at all?  QPE+D can answer this with stable OOF signal.
++2. **Conditional effect direction/order:** once an intervention is known to have an effect, is that effect beneficial, harmful, or safety-dominated?  The same static scalar state cannot answer this stably.
++
++Therefore the V51 statement "operator-relative state is identified" must be refined: the identified part is first-order **effect-support sufficiency**, not full effectful-outcome-order sufficiency.
++
++Evidence-chain extension:
++
++`selected-outcome state sufficiency != effect-support sufficiency != conditional-outcome-order sufficiency`.
++
++## Dominant bottleneck after V52
++
++**Effectful selected-outcome state sufficiency / directional-temporal operator-contrast sufficiency.**
++
++The bottleneck moves from the generic "structured functional" diagnosis of V51 to a more precise state problem: scalar dose D tells how much the selected operator differs from incumbent in magnitude, but discards the signed channel and temporal shape of the treatment.  Once structural nulls are removed, that missing relational geometry becomes first-order.
++
++The paper headline remains stable:
++
++**Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface.**
++
++Outcome Sufficiency is now refined by the claim that selected outcomes are both intervention-relative and hierarchy-structured: effect support and conditional outcome order require different sufficient statistics.
++
++## Newly retained mechanism
++
++Retain **structural-null / effect-support factorization** as a supporting mechanism and freeze the QPE+D effect-support head for the next experiment.
++
++Do **not** promote either complete V52 retention arm.
++
++## Newly closed optimization directions
++
++Close as deployment-sufficient solutions:
++
++- static conditional sign ranking over QPE+D after the effect hurdle;
++- static unweighted Pareto ordering over QPE+D after the effect hurdle.
++
++Do not generalize this closure to all Pareto/structured-outcome methods: V52 simultaneously shows the conditional state is insufficient, so changing the order functional on the same state is confounded by missing state.
++
++Continue to prohibit all historical no-repeat directions: threshold/calibration/lambda/loss/class/focal/catastrophe-weight rescue; safety scalarization; larger MLP/attention; K/logK; SIIR/random-prefix; CVaR; selected translation; V46 variance/handcrafted agent-occupancy temporal profile; V47 AGENT-2D; new offline future observables; RSMR/B/M/top-K/candidate-count changes; rerank/second-best/fallback; validation pooling.
++
++---
++
++# V64.3.53 EAF-ICER-POTR — Paired Operator-Trajectory Retention
++
++## Scientific role
++
++V53 executes the exact V52 preregistered branch:
++
++`effect support identified + conditional order not identified -> acquire richer paired/on-policy treatment-control state`.
++
++It freezes the successful V52 effect-support hurdle and changes **only** the conditional-outcome state.
++
++## State acquisition without outcome leakage
++
++The historical V50.5 planner/collector remains byte-identical.  V53 uses a dedicated process-local nuPlan entrypoint to record a sidecar at the exact treatment intervention event **before the action is executed**:
++
++- frozen cached full-set RSMR proposal trajectory;
++- actual runtime incumbent trajectory;
++- no closed-loop score/safety label is used to construct the state.
++
++Only the treatment side is replayed because both treatment and control trajectory objects are already present at that anchor.  The metric-safe V50.5 502x2 paired outcomes remain the frozen supervision source and are not recollected or redefined.
++
++Hard engineering identity gate:
++
++- exactly 502 unique TRAIN tokens;
++- profile schema fixed;
++- profile L-infinity contrast must replay the historical V51/V52 scalar D token-by-token;
++- physical-equality proposals must have zero profile;
++- historical `nuplan_planner.py` remains byte-identical to its V50.5 science-lock SHA.
++
++## Frozen effect-support component
++
++For every outer fold, V53 refits the **exact V52 QPE+D effect-support model** with the identical split, state, pairwise loss and `lambda=1`, then requires its V52 fold AUC signature to replay exactly.  Any drift is ENGINEERING STOP.
++
++## Arm A — ENDPOINT
++
++Conditional-outcome state:
++
++`[Q, P-Q, E-P, D, dx_T, dy_T, wrap(dyaw_T), dv_T]`.
++
++This is the minimum directional treatment-control state.  It asks whether scalar intervention magnitude failed only because it erased the direction/channel of the frozen proposal relative to incumbent.
++
++## Arm B — TEMPORAL
++
++Only if the endpoint family does not yield the complete promotion result, extend ENDPOINT with a fixed orthonormal DCT-II basis:
++
++- cosine modes `k=1,2` of signed `dx(t), dy(t), dyaw(t), dv(t)`;
++- 8 fixed additional coordinates;
++- no learned attention;
++- no peak/early statistic;
++- no horizon, mode-count, basis, or bandwidth sweep.
++
++This tests whether temporal treatment shape is necessary beyond terminal direction.
++
++This does **not** resurrect V46's closed handcrafted temporal-profile family.  V46 compressed predicted agent-interaction/occupancy consequences into hand statistics; V53 represents the **pre-execution proposal-vs-incumbent operator treatment itself** under paired selected-outcome supervision.
++
++## Conditional functional and runtime operator
++
++Both arms keep the simplest conditional functional on purpose:
++
++- zero-bias pairwise effectful beneficial/nonbeneficial ranker;
++- fixed `lambda=1`;
++- exact frozen V52 support risk;
++- fixed `max(support_risk, conditional_outcome_risk)`;
++- one unchanged beneficial split-conformal threshold;
++- same frozen RSMR winner or incumbent only;
++- no rerank, second-best, fallback or standalone safety veto.
++
++This gives an orthogonal test of state sufficiency before revisiting functional capacity.
++
++## Preregistered identification gate
++
++ENDPOINT must:
++
++- conditional bad-outcome AUC > 0.5 in aggregate and >=4/5 folds;
++- beat exact V52 scalar HURDLE-SIGN conditional AUC in aggregate and >=4/5 folds;
++- beat exact V51 scalar conditional-sign control in aggregate and >=4/5 folds;
++- then pass the unchanged paired deployment gate.
++
++TEMPORAL must satisfy the same conditions and, to support a temporal-necessity claim, additionally beat ENDPOINT in aggregate and >=4/5 folds.
++
++## Promotion order and fail-closed branches
++
++1. ENDPOINT identification + deployment PASS -> promote the simplest signed terminal state and freeze.
++2. Else TEMPORAL identification + temporal-necessity + deployment PASS -> promote temporal treatment shape and freeze.
++3. If a state identifies the effectful outcome but deployment still fails -> state is solved; the bottleneck returns to a richer paired deployment functional, with no further state expansion.
++4. If both pre-execution state families fail identification -> close pre-execution operator-trajectory geometry as sufficient; next evidence/state must come from **post-intervention paired dynamic response/outcome process**, still on-policy/paired rather than offline feature expansion.
++
++Untouched validation remains unconsumed until a TRAIN arm passes all gates.
+--- a/README_CURRENT.md
++++ b/README_CURRENT.md
+@@ -1,100 +1,53 @@
+-# Current branch: V64.3.52 EAF-ICER-HODR
++# BDSE current algorithm — V64.3.53 EAF-ICER-POTR
+ 
+-V51 POCR is scientifically attributable: the minimal operator-relative QPE+D state is identified, but both sign-only retention arms fail the unchanged paired deployment gate. V52 follows the preregistered `state identified but deployment fail` branch and changes only the paired selected-outcome functional.
++**Paired Operator-Trajectory Retention**
+ 
+-HODR factorizes structural null/effect support from the conditional outcome order. The first arm keeps conditional sign ranking; the second replaces sign compression with an unweighted Pareto order over paired official-score and hard-safety deltas. Runtime state remains `[Q,P-Q,E-P,D]`, RSMR remains frozen, and the operator is still same-winner-or-incumbent with no rerank/fallback.
++V53 is the preregistered follow-up to the reliable V52 HODR result.
+ 
+-Run `RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh`. It reuses V50.5 paired evidence and V51 fit result; no 502x2 closed-loop rerun is required.
++## Scientific status before V53
+ 
+-# BDSE current runnable package
++V52 showed:
+ 
+-This package intentionally keeps only the current V64.3.50 PIOR entrypoint (V50.2 engineering revision), the two external-baseline entrypoints used by the current workflow, the BDSE source/config/test tree, the algorithm changelog, and the small legacy launcher/science-lock fixtures required by the V50 startup regression suite.
++- QPE+D structural-null/effect-support identification: **PASS**, AUC `0.6516244589`, 5/5 folds > random;
++- conditional HURDLE-SIGN on the same state: **not identified**;
++- conditional HURDLE-PARETO on the same state: **not identified**;
++- no V52 runtime arm is promoted.
+ 
+-## Repository/output layout
++The current dominant bottleneck is **effectful selected-outcome state sufficiency**: scalar operator magnitude tells whether the intervention matters, but not the direction/order of its effect.
+ 
+-The repository root is resolved as `BDSE_ROOT` (default: the directory containing the launcher). All experiment outputs are rooted at:
++## V53 change
+ 
+-```text
+-$BDSE_ROOT/outputs/
++Freeze:
++
++- full-set RSMR winner;
++- Q/P/E;
++- exact V52 QPE+D effect-support hurdle;
++- exact V50.5 metric-safe 502/502 paired outcome labels;
++- pairwise lambda=1, alpha/calibration and no-fallback containment.
++
++Change only the effectful conditional-outcome state.
++
++### ENDPOINT
++
++`[Q, P-Q, E-P, D, dx_T, dy_T, wrap(dyaw_T), dv_T]`
++
++### TEMPORAL
++
++ENDPOINT plus two fixed DCT-II modes for signed `dx(t),dy(t),dyaw(t),dv(t)`.
++
++No horizon/basis sweep, attention, MLP, safety weight, new offline future observable, rerank, fallback or new threshold.
++
++## State acquisition
++
++The exact historical V50.5 planner remains byte-identical. V53 uses a dedicated process-local nuPlan wrapper to record a treatment-only pre-execution sidecar containing frozen-proposal vs actual-runtime-incumbent trajectory contrast. The old paired outcome labels are reused; they are not recollected.
++
++## Run
++
++```bash
++cd bdse_v64_3_53_eaf_icer_potr
++bash RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
+ ```
+ 
+-For the user's deployment this is:
++Set `V49_ROOT`, `V50_5_ROOT`, `V51_ROOT`, `V52_ROOT`, `NUPLAN_ROOT` or `EAF_CKPT` only if your server layout differs from the defaults.
+ 
+-```text
+-/home/senzeyu2/code/BDSE_planner/outputs/
+-```
+-
+-## Current V50.1 PIOR TRAIN
+-
+-```bash
+-cd /home/senzeyu2/code/BDSE_planner
+-bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+-```
+-
+-Default output:
+-
+-```text
+-$BDSE_ROOT/outputs/outputs_v64_3_50_1_eaf_icer_pior_train_2gpu_v1/
+-```
+-
+-Historical prerequisites are read from:
+-
+-```text
+-$BDSE_ROOT/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1/
+-$BDSE_ROOT/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1/
+-```
+-
+-## External baselines
+-
+-Training:
+-
+-```bash
+-GPUS=0,1 bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
+-```
+-
+-Checkpoints/configs:
+-
+-```text
+-$BDSE_ROOT/outputs/external_fixed_budget/
+-```
+-
+-Closed-loop test:
+-
+-```bash
+-GPUS=0,1 \
+-CL_WORKERS_PER_JOB=4 \
+-bash RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
+-```
+-
+-Closed-loop outputs:
+-
+-```text
+-$BDSE_ROOT/outputs/closed_loop/external_fixed_budget_test/
+-```
+-
+-## Intentionally retained legacy root files
+-
+-A small number of old launchers and `V64_3_48_OCRR_SCIENCE_LOCK.sha256` remain only because the current V13→V50 regression tests read them as frozen historical fixtures. They are not current experiment entrypoints and should not be used for new runs.
+-
+-## V50.1 target-spec hash hotfix
+-
+-The current package fixes a pre-simulation target-spec checksum bug. The target JSON now has two distinct integrity concepts: a canonical semantic SHA256 used for scientific target identity and a file-byte SHA256 used for resume/file integrity. Do not re-enable V50.0 legacy full-arm resume; only V50.1 manifest-bound batch certificates are reusable. The user-facing command remains unchanged:
+-
+-```bash
+-cd /home/senzeyu2/code/BDSE_planner
+-bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+-```
+-
+-
+-## V50.2 frozen-anchor time-alignment repair
+-
+-The current package keeps the V64.3.50 PIOR algorithm unchanged but repairs nuPlan scenario pre-roll handling. A cached `*_it000000` V49 proposal is an anchor event, while some nuPlan tagged scenarios begin roughly 3 seconds before that anchor. The paired runner now binds the scenario at iteration 0, preserves the incumbent in both arms during pre-roll, and executes the treatment/control split only at the exact frozen anchor timestamp. Cached-plan reuse cannot skip the anchor. Obsolete iteration-0 manifest probe configs fail closed.
+-
+-The user-facing command and output root are unchanged:
+-
+-```bash
+-cd /home/senzeyu2/code/BDSE_planner
+-bash RUN_V64_3_50_EAF_ICER_PIOR_TRAIN_2GPU.sh
+-```
+-
+-The existing failed preflight batch has no valid completion certificate and is automatically rerun. Do not copy or force-resume V50.0/V50.1 legacy arms.
++Untouched validation must remain unconsumed unless a preregistered V53 arm passes identification **and** the unchanged deployment gate.
+--- a/bdse/planner/tournament.py
++++ b/bdse/planner/tournament.py
+@@ -15,6 +15,7 @@
+ from bdse.planner.operator_conditioned_risk_retention import operator_state as _ocrr_operator_state, runtime_certificate as _ocrr_runtime_certificate
+ from bdse.planner.paired_operator_contrast_retention import operator_state as _pocr_operator_state, runtime_certificate as _pocr_runtime_certificate
+ from bdse.planner.paired_outcome_dominance_retention import operator_state as _hodr_operator_state, runtime_certificate as _hodr_runtime_certificate
++from bdse.planner.paired_operator_trajectory_retention import runtime_states as _potr_runtime_states, runtime_certificate as _potr_runtime_certificate
+ from bdse.utils import softmin_np
+ 
+ 
+@@ -2607,7 +2608,7 @@
+     if bool(scir_cfg.get("scene_reservation_enabled", False)):
+         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
+     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
+-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}
++    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}
+     if mode not in allowed:
+         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
+     b = int(proposal_action)
+@@ -2632,7 +2633,7 @@
+     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
+         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
+ 
+-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
++    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}:
+         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
+             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
+         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
+@@ -2667,7 +2668,7 @@
+         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
+         value_feature = phi
+         value_names = [f"post_value::{n}" for n in runtime_value_names]
+-        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
++        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}:
+             if value_observable_matrix is None or value_observable_names is None:
+                 raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
+             om = np.asarray(value_observable_matrix, dtype=np.float64)
+@@ -2722,12 +2723,12 @@
+                                + [f"observable_improvement::{n}" for n in qnames]
+                                + [f"ocrr_state::{n}" for n in rcfg.get("feature_names", [])]
+                                + ["ocrr_risk"])
+-            elif mode in {"endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
++            elif mode in {"endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}:
+                 if candidate_trajectories is None:
+-                    raise ValueError("EAF-ICER V51 POCR requires candidate trajectories for treatment/control contrast")
++                    raise ValueError("EAF-ICER paired operator-relative retention requires candidate trajectories for treatment/control contrast")
+                 ct = np.asarray(candidate_trajectories, dtype=np.float64)
+                 if ct.ndim != 3 or not (0 <= legacy < ct.shape[0]) or not (0 <= b < ct.shape[0]):
+-                    raise ValueError("EAF-ICER V51 POCR candidate trajectory matrix is invalid")
++                    raise ValueError("EAF-ICER paired operator-relative retention candidate trajectory matrix is invalid")
+                 pnames = [str(x) for x in scir_cfg.get("selected_policy_risk_plan_response_names", [])]
+                 pscale = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_scales", []), dtype=np.float64).reshape(-1)
+                 pw = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_weights", []), dtype=np.float64).reshape(-1)
+@@ -2756,7 +2757,7 @@
+                                    + [f"observable_improvement::{n}" for n in qnames]
+                                    + [f"pocr_state::{n}" for n in pcfg.get("feature_names", [])]
+                                    + ["pocr_risk"])
+-                else:
++                elif mode == "endpoint_potential_quality_paired_outcome_dominance_retention":
+                     hcfg = scir_cfg.get("paired_outcome_dominance_retention", {})
+                     zhodr = _hodr_operator_state(quality_value, plan_value, ego_value, ct[b], ct[legacy])
+                     cert, rrisk, rparts = _hodr_runtime_certificate(zhodr, hcfg)
+@@ -2766,6 +2767,20 @@
+                                    + [f"observable_improvement::{n}" for n in qnames]
+                                    + [f"hodr_state::{n}" for n in hcfg.get("feature_names", [])]
+                                    + ["hodr_risk"])
++                else:
++                    pcfg = scir_cfg.get("paired_operator_trajectory_retention", {})
++                    support_z, outcome_z, _profile = _potr_runtime_states(
++                        quality_value, plan_value, ego_value, ct[b], ct[legacy],
++                        state_family=str(pcfg.get("state_family", "")),
++                    )
++                    cert, rrisk, rparts = _potr_runtime_certificate(support_z, outcome_z, pcfg)
++                    value = float(np.clip(cert, -40.0, 40.0))
++                    value_feature = np.concatenate([phi, qobs, support_z, outcome_z, np.asarray([rrisk], dtype=np.float64)])
++                    value_names = ([f"post_value::{n}" for n in runtime_value_names]
++                                   + [f"observable_improvement::{n}" for n in qnames]
++                                   + [f"potr_support_state::{n}" for n in pcfg.get("components", {}).get("effect_support_risk", {}).get("feature_names", [])]
++                                   + [f"potr_outcome_state::{n}" for n in pcfg.get("components", {}).get("conditional_outcome_risk", {}).get("feature_names", [])]
++                                   + ["potr_risk"])
+             elif mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+                 rnames = [str(x) for x in scir_cfg.get("post_selection_future_response_observable_names", [])]
+                 if not rnames or any(n not in on for n in rnames):
+--- a/RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
++++ b/RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
+@@ -0,0 +1,135 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# V64.3.53 POTR: preregistered V52 support-identified / conditional-order-failed branch.
++# One treatment-only state replay acquires pre-execution proposal-vs-incumbent
++# trajectory contrast. The V50.5 502/502 paired outcome labels are reused exactly.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
++cd "$BDSE_ROOT"
++export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
++export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
++
++GPU0="${GPU0:-0}"
++V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
++V50_5_ROOT="${V50_5_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1}"
++V51_ROOT="${V51_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_51_eaf_icer_pocr_train_v1}"
++V52_ROOT="${V52_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_52_eaf_icer_hodr_train_v1}"
++OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_53_eaf_icer_potr_train_v1}"
++NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
++EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/train_log.jsonl}"
++WORKERS="${WORKERS:-4}"
++BATCH_SIZE="${BATCH_SIZE:-64}"
++HEARTBEAT_SECONDS="${HEARTBEAT_SECONDS:-30}"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs" "$OUT_ROOT/operator_profile_probe"
++
++V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
++V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
++V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
++V49_CONFIG="$V49_ROOT/provenance/v64_3_49_siir.yaml"
++TRAIN_MANIFEST="$V50_5_ROOT/provenance/v64_3_50_pior_train_manifest.json"
++TREAT_CFG="$V50_5_ROOT/provenance/v64_3_50_pior_probe_treatment.yaml"
++PAIRED="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
++PAIR_REPORT="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
++METRIC_AUDIT="$V50_5_ROOT/provenance/v64_3_50_5_metric_safety_full_audit.json"
++V51_FIT="$V51_ROOT/provenance/v64_3_51_pocr_fit.json"
++V52_FIT="$V52_ROOT/provenance/v64_3_52_hodr_fit.json"
++
++for f in "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CONFIG" "$TRAIN_MANIFEST" "$TREAT_CFG" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" "$V51_FIT" "$V52_FIT"; do
++  [[ -s "$f" ]] || { echo "V53 ENGINEERING STOP missing prerequisite $f" >&2; exit 2; }
++done
++
++sha256sum -c V64_3_53_SCIENCE_MANIFEST.sha256 | tee "$OUT_ROOT/logs/v64_3_53_science_manifest.out"
++
++python - "$V52_FIT" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_53_parent_and_evidence_lock.out"
++import hashlib,json,sys
++from pathlib import Path
++v52,paired,report,metric=map(Path,sys.argv[1:])
++want_v52='7a21fead5383ebd6aafaeb5da586346a77e5707050cb359511a06971b742a16b'
++want_pair='d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43'
++if hashlib.sha256(v52.read_bytes()).hexdigest()!=want_v52: raise SystemExit('V53 ENGINEERING STOP: V52 fit hash drift')
++d=json.load(open(v52)); n=d.get('nested_crossfit',{})
++if d.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='effect_support_identified_but_operator_state_does_not_identify_conditional_outcome_order':
++    raise SystemExit('V53 ENGINEERING STOP: wrong V52 preregistered branch')
++for a in ('hurdle_sign','hurdle_pareto'):
++    ri=n.get('arms',{}).get(a,{}).get('identification',{})
++    if ri.get('support_identified') is not True or ri.get('functional_identified') is not False:
++        raise SystemExit(f'V53 ENGINEERING STOP: V52 {a} signature drift')
++if hashlib.sha256(paired.read_bytes()).hexdigest()!=want_pair: raise SystemExit('V53 ENGINEERING STOP: paired outcome hash drift')
++r=json.load(open(report)); m=json.load(open(metric))
++if r.get('pass') is not True or int(r.get('scenario_count',-1))!=502 or m.get('pass') is not True:
++    raise SystemExit('V53 ENGINEERING STOP: paired evidence/metric-safe audit invalid')
++print(json.dumps({'pass':True,'v52_fit_sha256':want_v52,'paired_sha256':want_pair,'branch':n['failure_diagnosis']},sort_keys=True))
++PY
++
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_53_eaf_icer_potr.py \
++  bdse/tests/test_v64_3_52_eaf_icer_hodr.py \
++  bdse/tests/test_v64_3_51_eaf_icer_pocr.py \
++  bdse/tests/test_v64_3_50_6_pior_fit_repair.py \
++  bdse/tests/test_v64_3_50_eaf_icer_pior.py \
++  bdse/tests/test_v64_3_50_5_pior_metric_safety.py \
++  bdse/tests/test_v64_3_48_eaf_icer_ocrr.py \
++  | tee "$OUT_ROOT/logs/v64_3_53_targeted_regression.out"
++
++if [[ -z "${EAF_CKPT:-}" ]]; then
++  [[ -s "$EAF_TRAIN_LOG" ]] || { echo "V53 ENGINEERING STOP missing EAF_TRAIN_LOG=$EAF_TRAIN_LOG; set EAF_CKPT explicitly" >&2; exit 2; }
++  python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen \
++    --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_53_POTR \
++    --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_53.json" \
++    > "$OUT_ROOT/logs/v64_3_13_reaudit_v64_3_53.out"
++  SELECTED_EPOCH=$(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_53.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1])); print(int(r['selected_epoch']))
++PY
++)
++  EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"
++fi
++export EAF_CKPT
++[[ -s "$EAF_CKPT" ]] || { echo "V53 ENGINEERING STOP missing checkpoint $EAF_CKPT" >&2; exit 2; }
++
++PROFILE_JSONL="$OUT_ROOT/provenance/v64_3_53_operator_trajectory_profiles.jsonl"
++PROFILE_REPORT="$OUT_ROOT/provenance/v64_3_53_operator_profile_probe_report.json"
++if [[ -s "$PROFILE_JSONL" && -s "$PROFILE_REPORT" && "${V53_FORCE_PROFILE_REPLAY:-0}" != "1" ]]; then
++  python - "$PROFILE_JSONL" "$PROFILE_REPORT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_53_operator_profile_reuse.out"
++import json,sys
++p,r=sys.argv[1:]; rows=[json.loads(x) for x in open(p) if x.strip()]; d=json.load(open(r))
++if len(rows)!=502 or len({x['scenario_token'] for x in rows})!=502 or d.get('pass') is not True or d.get('scalar_D_exact_replay_all') is not True:
++    raise SystemExit('V53 ENGINEERING STOP: existing state-only profile is not a valid 502/502 replay')
++print('PASS V53: reusing completed state-only profile replay')
++PY
++else
++  rm -rf "$OUT_ROOT/operator_profile_probe"
++  mkdir -p "$OUT_ROOT/operator_profile_probe"
++  python -m bdse.tools.run_v64_3_53_operator_profile_probe \
++    --manifest "$TRAIN_MANIFEST" --treatment-config "$TREAT_CFG" --checkpoint "$EAF_CKPT" \
++    --nuplan-root "$NUPLAN_ROOT" --challenge closed_loop_nonreactive_agents \
++    --output-root "$OUT_ROOT/operator_profile_probe" --output-profiles "$PROFILE_JSONL" --output-report "$PROFILE_REPORT" \
++    --gpu "$GPU0" --workers "$WORKERS" --batch-size "$BATCH_SIZE" --heartbeat-seconds "$HEARTBEAT_SECONDS" \
++    | tee "$OUT_ROOT/logs/v64_3_53_operator_profile_probe.out"
++fi
++
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_53_potr_fit.json"
++POTR_CONFIG="$OUT_ROOT/provenance/v64_3_53_potr.yaml"
++set +e
++python -m bdse.tools.fit_v64_3_53_eaf_icer_potr \
++  --v49-fit-report "$V49_FIT" --v49-candidate-audit "$V49_CAND" --v49-scene-audit "$V49_SCENE" --v49-siir-config "$V49_CONFIG" \
++  --paired-outcomes "$PAIRED" --v50-5-root "$V50_5_ROOT" --v51-fit-report "$V51_FIT" --v52-fit-report "$V52_FIT" \
++  --operator-profiles "$PROFILE_JSONL" --output-config "$POTR_CONFIG" --output-report "$FIT_REPORT" \
++  2>&1 | tee "$OUT_ROOT/logs/v64_3_53_potr_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}
++set -e
++
++cp "$V52_FIT" "$OUT_ROOT/provenance/v64_3_52_hodr_fit_reused.json"
++cp "$METRIC_AUDIT" "$OUT_ROOT/provenance/v64_3_50_5_metric_safety_full_audit_reused.json"
++sha256sum "$PAIRED" "$V51_FIT" "$V52_FIT" "$PROFILE_JSONL" "$PROFILE_REPORT" > "$OUT_ROOT/provenance/V64_3_53_REUSED_EVIDENCE_AND_STATE_SHA256SUMS.txt"
++
++if [[ $FIT_STATUS -ne 0 ]]; then
++  echo "V64.3.53 POTR scientific STOP. Do not consume untouched validation; follow v64_3_53_potr_fit.json." >&2
++  exit "$FIT_STATUS"
++fi
++
++echo "V64.3.53 POTR TRAIN PASS. Freeze the preferred state immediately; do not tune with TRAIN or consume validation except under the frozen next-stage protocol."
+--- a/NEXT_COMMANDS_V64_3_53_EAF_ICER_POTR.txt
++++ b/NEXT_COMMANDS_V64_3_53_EAF_ICER_POTR.txt
+@@ -0,0 +1,19 @@
++# V64.3.53 EAF-ICER-POTR
++
++cd bdse_v64_3_53_eaf_icer_potr
++
++V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
++V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
++V51_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_51_eaf_icer_pocr_train_v1 \
++V52_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_52_eaf_icer_hodr_train_v1 \
++NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
++bash RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
++
++# If checkpoint discovery does not match your server, additionally export:
++# EAF_CKPT=/absolute/path/to/checkpoint.pt
++
++# Scientific rules:
++# - this run first collects one treatment-only 502-scene pre-execution state replay;
++# - it reuses the exact V50.5 paired outcome labels and does NOT recollect 502x2 outcomes;
++# - do not consume untouched validation unless V53 TRAIN passes all preregistered gates;
++# - do not tune D transforms, DCT basis/mode count, threshold, lambda, loss, safety weights or MLP after seeing TRAIN.
+--- a/V64_3_52_RESULT_POSTMORTEM_AND_V64_3_53_POTR_DESIGN.md
++++ b/V64_3_52_RESULT_POSTMORTEM_AND_V64_3_53_POTR_DESIGN.md
+@@ -0,0 +1,136 @@
++# V64.3.52 result postmortem and V64.3.53 POTR design
++
++## 1. Reliability verdict
++
++V64.3.52 is engineering/provenance valid and may be scientifically attributed.
++
++The uploaded code ZIP SHA256 is `c75ffd833a62c57d2ea3132aeec90950e4307c2142129285e62d9222bb45f9e2`, exactly the preregistered V52 delivery. The uploaded result ZIP SHA256 is `387397d1d60b08f101259000ef54d44b464a25fae69c88e358aa64614feb8b9e`. The 10-file curated science manifest passes. The V51 parent fit is exact (`54d366...23049`). The metric-safe paired evidence is exact 502/502 with SHA `d592baa3...39d43`, 121 beneficial and 25 hard-harm events. Server targeted regression is 57/57 PASS and the exact uploaded code independently replays 57/57. V52 terminates at the preregistered scientific STOP and untouched validation is unconsumed.
++
++Therefore no V52 engineering repair is warranted.
++
++## 2. V52 preregistered branches
++
++### Shared effect-support hurdle: GO as a supporting mechanism
++
++The effect-support risk reaches AUC `0.6516244589` with all 5/5 folds above random. This is the strongest stable mechanism in V52. It independently confirms the V51 scalar-D diagnostic after explicit cross-fitted factorization: QPE+D can distinguish structural null from interventions that actually change paired closed-loop outcome.
++
++This mechanism is retained, but it is not by itself a deployment policy.
++
++### HURDLE-SIGN: STOP
++
++Conditional on an effect, AUC is `0.4802924348`, below the exact V51 conditional control `0.4964580874`; only 2/5 folds improve. Thus the conditional sign functional is not identified.
++
++OOF deployment nevertheless produces a useful diagnostic rotation: hard harm drops 25->22, nonbeneficial 381->336, score sum improves -4.2409->-3.2021 and NegRMS improves .15486->.14609. But it retains only 110/121 beneficial events (90.91%), below the frozen conformal recall requirement, and fails fold-wise nonharm. These aggregate gains cannot override the preregistered identification/recall gates.
++
++Interpretation: the support hurdle removes genuinely inactive interventions, but the conditional ranker still cannot distinguish valuable from harmful effectful interventions.
++
++### HURDLE-PARETO: STOP
++
++The unweighted Pareto concordance is `0.4977285319`; only 3/5 folds beat the V51 control. It is therefore not identified. Deployment is also worse: 111/121 beneficial retained, 24 hard harms, score sum `-5.3254`, utility and fold-wise nonharm failures.
++
++This falsifies the specific hypothesis that changing only the order relation on the same scalar QPE+D state is sufficient. It does not justify tuning safety weights; the experiment was intentionally weight-free, and the state is now shown to be the more immediate missing factor.
++
++## 3. Key V52 mechanism conclusion
++
++V52 decomposes selected-outcome sufficiency into two distinct questions:
++
++1. **Effect support:** does executing the selected proposal instead of incumbent change the closed-loop outcome at all?
++2. **Conditional outcome order:** if it changes the outcome, is the change beneficial, harmful, or safety dominated?
++
++The same scalar state is sufficient for (1) and insufficient for (2). Hence:
++
++`effect-support sufficiency != conditional-outcome-order sufficiency`.
++
++This also refines the V51 conclusion. V51's operator-relative state signal was real, but a substantial part of it was effect-support structure. Once nulls are removed, scalar D erases directional and temporal treatment geometry that can separate opposite outcome directions at similar intervention magnitude.
++
++## 4. Evidence chain through V52
++
++The cross-version chain is now:
++
++- V34: ordinal extremal selection becomes the mature learned selector.
++- V40: pure generic value-head expansion is falsified.
++- V41-V45: endpoint/current/prospective interaction mediators are progressively identified; V44 ungated prospective support and V45 agent-local response are retained.
++- V46: better ordinary prediction can worsen extremal deployment decisions: prediction sufficiency != decision sufficiency.
++- V47: identifiable future-state features need not be deployment sufficient; representation expansion is stopped.
++- V48: in-domain selected-risk signal need not transport to fresh selection regimes.
++- V49: changing offline selection measure does not identify the deployed selected-outcome law.
++- V50: deployment-aligned paired outcome evidence does not make QPE-only state sufficient.
++- V51: scalar operator contrast is an identified relational state, but sign-only retention remains insufficient.
++- **V52: scalar relational state identifies effect support but not conditional effect direction/order.**
++
++The paper line therefore remains stable as **Selection-Valuation-Outcome Sufficiency under a Bounded Auditable Planner Interface**, with a sharper Outcome Sufficiency hierarchy.
++
++## 5. Dominant bottleneck
++
++The dominant bottleneck is now:
++
++**effectful selected-outcome state sufficiency / directional-temporal operator-contrast sufficiency.**
++
++The model has learned whether the frozen operator is likely to matter, but not what signed treatment it applies relative to incumbent when it matters.
++
++## 6. What is learned and what remains missing
++
++Retain/freeze:
++
++- bounded EAF interface, exact attribution, support/admissibility;
++- full-set frozen RSMR ordinal selector;
++- incumbent/no-fallback containment;
++- V44 ungated prospective interaction support;
++- V45 agent-local longitudinal response;
++- V47 EGO-REF supporting consequence coordinate;
++- V50 metric-safe paired one-shot outcome evidence;
++- V51/V52 QPE+D **effect-support** factorization.
++
++Still missing:
++
++- stable ordering of beneficial vs harmful **effectful** interventions;
++- signed proposal-vs-incumbent treatment channels rather than only `||contrast||_inf`;
++- if endpoint sign is insufficient, minimal temporal shape of the treatment itself.
++
++## 7. Newly closed directions
++
++Close static conditional sign and static unweighted Pareto ordering **on QPE+D** as sufficient deployment solutions. Do not rescue them by threshold, lambda, weighting, bigger MLP, safety scalarization, or post-hoc policy union.
++
++Do not close all structured/Pareto functionals globally: V52 simultaneously falsifies the conditional state, so more expressive functionals on the same state cannot be cleanly attributed.
++
++All prior closures remain active.
++
++## 8. V64.3.53 POTR
++
++V53 changes one scientific object only: the conditional-outcome state.
++
++The V52 QPE+D effect-support model is frozen/replayed exactly. The paired labels remain the exact V50.5 metric-safe 502/502 outcomes. Runtime remains frozen RSMR winner or incumbent only.
++
++### State-only acquisition
++
++Old artifacts contain scalar D but not the full runtime incumbent trajectory. V53 therefore runs a treatment-only, label-free state replay at the exact V50 intervention anchor. A V53-specific process-local nuPlan entrypoint wraps the historical byte-identical planner and writes a sidecar before treatment execution. It records the cached frozen proposal vs the actual runtime incumbent trajectory. It never changes the action and never reads outcome labels.
++
++This avoids touching historical science-critical `nuplan_planner.py` and avoids recollecting the 502x2 outcome experiment.
++
++### ENDPOINT arm
++
++State:
++
++`[Q, P-Q, E-P, D, dx_T, dy_T, wrap(dyaw_T), dv_T]`.
++
++This is the minimum signed/channel factorization. If it passes, direction rather than temporal shape was the missing statistic and the simpler arm is promoted.
++
++### TEMPORAL arm
++
++If ENDPOINT does not yield a complete promotion result, add fixed orthonormal DCT-II modes k=1,2 for each signed channel `dx(t),dy(t),dyaw(t),dv(t)`, adding exactly eight coordinates.
++
++There is no basis/horizon/mode sweep, no attention, no peak/early statistic. This is a minimal falsification of whether treatment temporal shape is needed.
++
++### Why this is not V46 temporal-profile resurrection
++
++V46's closed direction used handcrafted temporal statistics of predicted agent interaction/occupancy consequence. V53 instead represents the **pre-execution operator treatment**: proposal trajectory minus incumbent trajectory, learned against real paired selected outcomes. The statistical object, evidence source and causal question are different.
++
++### Identification and promotion
++
++ENDPOINT must beat random, exact V52 scalar HURDLE-SIGN conditional risk, and exact V51 conditional control in aggregate and >=4/5 folds, then pass the unchanged deployment gate.
++
++TEMPORAL must satisfy those gates and additionally beat ENDPOINT in aggregate and >=4/5 folds to support temporal necessity.
++
++Promotion order is ENDPOINT then TEMPORAL.
++
++If state identifies but deployment fails, the state bottleneck is considered solved and the next version may revisit a richer paired functional without more state expansion. If both state arms fail identification, pre-execution operator trajectory geometry is closed as sufficient and the next evidence must be a post-intervention paired dynamic response/outcome process.
+--- a/V64_3_52_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_53.json
++++ b/V64_3_52_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_53.json
+@@ -0,0 +1,72 @@
++{
++  "audit": "v64_3_52_uploaded_result_reliability_and_scientific_audit_for_v64_3_53",
++  "reliability": {
++    "pass": true,
++    "uploaded_code_zip_sha256": "c75ffd833a62c57d2ea3132aeec90950e4307c2142129285e62d9222bb45f9e2",
++    "uploaded_result_zip_sha256": "387397d1d60b08f101259000ef54d44b464a25fae69c88e358aa64614feb8b9e",
++    "v52_fit_sha256": "7a21fead5383ebd6aafaeb5da586346a77e5707050cb359511a06971b742a16b",
++    "code_matches_preregistered_delivery": true,
++    "science_manifest_pass": "10/10",
++    "server_targeted_regression": "57/57 PASS",
++    "independent_uploaded_code_targeted_replay": "57/57 PASS",
++    "v51_parent_fit_sha256": "54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049",
++    "paired_evidence_count": 502,
++    "paired_evidence_unique": 502,
++    "paired_evidence_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
++    "paired_beneficial": 121,
++    "paired_hard_harm": 25,
++    "metric_safe_control": "502/502 PASS",
++    "metric_safe_treatment": "502/502 PASS",
++    "termination": "preregistered TRAIN scientific STOP",
++    "untouched_validation_consumed": false
++  },
++  "v52_result": {
++    "failure_diagnosis": "effect_support_identified_but_operator_state_does_not_identify_conditional_outcome_order",
++    "preferred_promotion_arm": null,
++    "effect_support": {
++      "auc": 0.6516244589283049,
++      "folds_above_random": 5,
++      "identified": true,
++      "retain_as_supporting_mechanism": true
++    },
++    "hurdle_sign": {
++      "conditional_sign_auc": 0.48029243483788936,
++      "v51_conditional_sign_control_auc": 0.4964580873671783,
++      "better_control_folds": 2,
++      "functional_identified": false,
++      "aggregate": {
++        "selected": 446,
++        "beneficial_selected": 110,
++        "beneficial_total": 121,
++        "beneficial_recall": 0.9090909090909091,
++        "nonbeneficial_selected": 336,
++        "hard_harm_selected": 22,
++        "closed_loop_score_delta_sum": -3.20209373082581,
++        "closed_loop_negative_rms": 0.1460886742297128
++      },
++      "deployment_pass": false,
++      "failed_subgates": ["beneficial_retention", "all_folds_nonharm"]
++    },
++    "hurdle_pareto": {
++      "pareto_concordance": 0.49772853185595567,
++      "v51_pareto_control_concordance": 0.4879778393351801,
++      "better_control_folds": 3,
++      "functional_identified": false,
++      "aggregate": {
++        "selected": 470,
++        "beneficial_selected": 111,
++        "beneficial_total": 121,
++        "beneficial_recall": 0.9173553719008265,
++        "nonbeneficial_selected": 359,
++        "hard_harm_selected": 24,
++        "closed_loop_score_delta_sum": -5.325415216100435,
++        "closed_loop_negative_rms": 0.15502281404006676
++      },
++      "deployment_pass": false,
++      "failed_subgates": ["beneficial_retention", "hard_tail", "utility_nonharm", "all_folds_nonharm"]
++    }
++  },
++  "scientific_conclusion": "Scalar QPE+D is sufficient for identifying structural null/effect support but not sufficient for stable conditional outcome direction/order among effectful selected interventions.",
++  "dominant_bottleneck": "effectful selected-outcome state sufficiency / directional-temporal operator-contrast sufficiency",
++  "next_preregistered_version": "V64.3.53-EAF-ICER-POTR"
++}
+--- a/V64_3_53_PREREGISTRATION.json
++++ b/V64_3_53_PREREGISTRATION.json
+@@ -0,0 +1,62 @@
++{
++  "algorithm_version": "V64.3.53-EAF-ICER-POTR",
++  "name": "Paired Operator-Trajectory Retention",
++  "scientific_trigger": "V52 effect-support hurdle identified (AUC 0.6516244589283049, 5/5 folds > 0.5) while both conditional sign and Pareto order failed identification; execute the preregistered branch that acquires richer paired/on-policy treatment-control state rather than tuning the functional.",
++  "dominant_bottleneck": "effectful selected-outcome state sufficiency: scalar operator dose identifies whether the frozen proposal changes closed-loop outcome, but not the direction/order of that change",
++  "frozen_contract": {
++    "RSMR_selector": "unchanged full-set frozen winner",
++    "effect_support": "exact V52 QPE+D zero-bias pairwise support hurdle, fixed lambda=1",
++    "paired_outcome_labels": "exact V50.5 metric-safe 502/502 one-shot treatment-control outcomes",
++    "QPE_coordinates": "unchanged",
++    "retention_alpha": 0.07791855203619909,
++    "calibration": "single split-conformal threshold on beneficial calibration events",
++    "runtime_operator": "same frozen RSMR winner or incumbent only; no rerank, no second best, no fallback"
++  },
++  "state_acquisition": {
++    "role": "TRAIN-only label-free state replay; paired outcome labels are not recollected or redefined",
++    "arm": "treatment only",
++    "event": "exact V50 metric-safe frozen full-set RSMR intervention anchor before action execution",
++    "objects": "cached frozen proposal trajectory versus actual runtime incumbent trajectory",
++    "engineering_identity_gate": "502/502 unique tokens and profile scalar L_inf must replay V51/V52 D token-by-token",
++    "deployment_availability": "same candidate proposal and incumbent trajectories already exist at runtime"
++  },
++  "arms": [
++    {
++      "name": "ENDPOINT",
++      "conditional_outcome_state": ["Q", "P-Q", "E-P", "D", "signed terminal dx", "signed terminal dy", "wrapped terminal dyaw", "signed terminal dv"],
++      "question": "Is directional terminal treatment-control geometry sufficient once effect support is frozen?"
++    },
++    {
++      "name": "TEMPORAL",
++      "conditional_outcome_state": "ENDPOINT plus fixed orthonormal DCT-II k=1,2 coefficients of signed dx(t),dy(t),dyaw(t),dv(t)",
++      "question": "If endpoint direction is insufficient, is minimal temporal treatment shape necessary?",
++      "no_sweep": true
++    }
++  ],
++  "identification_gates": {
++    "effect_support_replay": "exact V52 support AUC/fold signature must replay or ENGINEERING STOP",
++    "endpoint": "aggregate conditional bad-outcome AUC > 0.5, > exact V52 scalar-hurdle conditional AUC, > exact V51 scalar conditional AUC; each comparison and >0.5 must hold in >=4/5 folds",
++    "temporal": "same gates as ENDPOINT, plus aggregate AUC > ENDPOINT and TEMPORAL > ENDPOINT in >=4/5 folds to claim temporal necessity"
++  },
++  "deployment_gate": "exact unchanged V50/V51/V52 paired causal retention gate after identification",
++  "promotion_order": ["ENDPOINT", "TEMPORAL"],
++  "branches": {
++    "endpoint_pass": "promote minimal signed terminal operator contrast; freeze immediately and use untouched paired validation",
++    "only_temporal_pass": "promote temporal operator-contrast state; claim temporal treatment shape is necessary beyond terminal direction",
++    "state_identified_but_deployment_fail": "state is sufficient for identification but low-capacity sign functional is deployment-insufficient; next algorithm may change structured paired functional but not add state",
++    "both_fail_identification": "close pre-execution operator-trajectory geometry as deployment-sufficient state; next evidence/state must be post-intervention paired dynamic response process"
++  },
++  "prohibited": [
++    "D transform or D*QPE interaction sweep",
++    "trajectory horizon, cosine-mode count, basis, peak, early or threshold sweep",
++    "attention or larger MLP",
++    "V46 handcrafted agent-occupancy temporal profile resurrection",
++    "loss/lambda/class/focal/catastrophe weighting",
++    "safety scalarization or standalone catastrophe veto",
++    "new offline future observable",
++    "K/logK/SIIR/CVaR/selected translation",
++    "RSMR/B/M/top-K/candidate-count changes",
++    "rerank/second-best/fallback",
++    "untouched validation pooling"
++  ]
++}
+--- a/V64_3_53_ENGINEERING_VALIDATION.txt
++++ b/V64_3_53_ENGINEERING_VALIDATION.txt
+@@ -0,0 +1,59 @@
++V64.3.53 EAF-ICER-POTR ENGINEERING VALIDATION
++================================================
++
++Scientific status
++-----------------
++V53 is implemented but NOT scientifically claimed successful. Its real 502-scene
++state-only profile replay and nested TRAIN fit must run on the server before any
++ENDPOINT/TEMPORAL conclusion.
++
++Source/provenance
++-----------------
++PASS  V53 curated result-defining science manifest: 15/15 files OK.
++PASS  Historical V50.5 bdse/planner/nuplan_planner.py remains byte-identical:
++      c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef
++PASS  Historical V50 paired collector remains protected by its existing frozen SHA lock.
++PASS  V53 state collection is implemented by a V53-specific process-local nuPlan
++      wrapper/sidecar; it does not patch historical planner source or returned action.
++
++Syntax/compile
++--------------
++PASS  python -m compileall -q bdse
++PASS  bash -n RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
++
++Focused/causal regression
++-------------------------
++PASS  V53 new focused tests: 7/7.
++PASS  V53 + V52 + V51 + V50.6 + V50 + V50.5 + V48 curated regression: 64/64.
++
++Full repository regression
++--------------------------
++The monolithic pytest invocation exceeded the local single-call execution window
++without a test failure. The complete test-file set was then partitioned into four
++mutually exclusive and exhaustive file shards and all completed:
++
++  shard 0: 185/185 PASS
++  shard 1: 154/154 PASS
++  shard 2: 144/144 PASS
++  shard 3: 153/153 PASS
++  total  : 636/636 PASS
++
++Test files covered: 131/131.
++Warnings are historical torch/nested-tensor warnings; no V53 failure class was observed.
++
++Runtime/data contracts implemented
++----------------------------------
++PASS  Treatment-only profile replay uses the exact frozen V50 manifest/treatment config.
++PASS  V50.5 metric-engine serialization remains enabled in the V53 child process.
++PASS  Profile is recorded pre-execution from frozen proposal vs actual runtime incumbent.
++PASS  Profile scalar L_inf is required to replay legacy V51/V52 D within 1e-9.
++PASS  502/502 unique profile population is required before fitting.
++PASS  V52 effect-support fold signature is exact-replay gated before V53 attribution.
++PASS  Paired outcome SHA remains independently locked to d592baa3...39d43.
++PASS  No rerank, second-best, fallback, safety weighting, threshold sweep, or new offline future observable.
++
++Not locally executable
++----------------------
++The current environment does not contain the user's nuPlan raw DB/checkpoint/server
++output roots, so the real 502-scene state-only profile collection and V53 nested fit
++were not run locally. The launcher performs those fail-closed on the server.
+--- a/V64_3_53_SCIENCE_MANIFEST.sha256
++++ b/V64_3_53_SCIENCE_MANIFEST.sha256
+@@ -0,0 +1,15 @@
++8bffea6385a8d11669c5a17c9058ed55acc0a856e707e2f1fd055bc817c71f2c  RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
++82fae691a612605373855add2c888e9d38f927cb1a3639d0f6ceae58e1132b21  V64_3_53_PREREGISTRATION.json
++c3951efd8e646bdf548d3938a48b6477cfe38de75c2e1e0ff702739f485f28a8  bdse/planner/paired_operator_trajectory_retention.py
++472c99d4f61a1032a8358e019da8f1166c4b7047ee0cbd2df6848bf0fc74a67e  bdse/tools/fit_v64_3_53_eaf_icer_potr.py
++a56d5d409b7c26d8cdc433e4fe762c78ef4a80f863611cf029e3b538a463e363  bdse/tools/run_v64_3_53_operator_profile_probe.py
++38e6563f786174bfb3a1f050a69f266de67bf66275158cd21231775727c1ff28  bdse/tools/nuplan_v53_operator_profile_run_simulation.py
++0ed17fd2688ba25cf44990b08674d72a26168097b4738822b39fb51f7c4f26c5  bdse/planner/tournament.py
++c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef  bdse/planner/nuplan_planner.py
++e45e11fea46b199648bd3f73719c9433e9b9093299d6802b39be8df002be97da  bdse/tools/fit_v64_3_52_eaf_icer_hodr.py
++c842ed2ee1a1ecee7f70e48c789e165f9f7090894dc38214c9b7acab13c9bac5  bdse/tools/fit_v64_3_51_eaf_icer_pocr.py
++7c5472442e5a76ee6cbb6ef3189e086e4e800e8337deb14cacb26488b9050d53  bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
++dda695a4bc884c410ae6cdfb0d8f4f2d82a2c9dfa3d06070b7b1be2460511bfa  bdse/tools/run_v64_3_50_5_pior_paired_closed_loop.py
++abf64e7adca5b7a245f22aa6d25d167238377d9106ed1f8c30ce80be05e9d91c  bdse/planner/paired_outcome_dominance_retention.py
++9f41ec949dcecd11cd90ee2325a6e84055777ff8fb52455f7aa42939b6fd7de9  bdse/planner/paired_operator_contrast_retention.py
++ce2ba94f46b99d7ab7db34ca52662b3654b6e41bb1659f7a074bf1a5a0c9e5ad  bdse/tests/test_v64_3_53_eaf_icer_potr.py
+--- a/bdse/planner/paired_operator_trajectory_retention.py
++++ b/bdse/planner/paired_operator_trajectory_retention.py
+@@ -0,0 +1,184 @@
++from __future__ import annotations
++
++"""V64.3.53 POTR: Paired Operator-Trajectory Retention.
++
++V52 showed that QPE+D reliably identifies whether the one-shot proposal has any
++closed-loop effect, but not the direction/order of the effect once structural
++nulls are removed.  POTR therefore freezes the V52 scalar effect-support layer
++and changes only the conditional-outcome state.
++
++Two preregistered state families are supported:
++  * endpoint: QPE+D plus the signed terminal proposal-incumbent contrast;
++  * temporal: endpoint state plus two fixed cosine-basis coefficients per
++    signed physical contrast channel.  No learned attention, horizon sweep,
++    peak/early statistic, or offline future observable is introduced.
++"""
++
++from typing import Any
++import math
++import numpy as np
++
++from bdse.planner.paired_operator_contrast_retention import (
++    POCR_ADDITIVE_STATE_NAMES,
++    execution_contrast_linf,
++)
++
++CHANNEL_NAMES = ["dx_m", "dy_m", "dyaw_rad", "dv_mps"]
++ENDPOINT_EXTRA_NAMES = [f"operator_terminal_{n}" for n in CHANNEL_NAMES]
++TEMPORAL_EXTRA_NAMES = [f"operator_cos{k}_{n}" for k in (1, 2) for n in CHANNEL_NAMES]
++POTR_SUPPORT_STATE_NAMES = list(POCR_ADDITIVE_STATE_NAMES)
++POTR_ENDPOINT_STATE_NAMES = POTR_SUPPORT_STATE_NAMES + ENDPOINT_EXTRA_NAMES
++POTR_TEMPORAL_STATE_NAMES = POTR_ENDPOINT_STATE_NAMES + TEMPORAL_EXTRA_NAMES
++POTR_STATE_FAMILIES = {"endpoint", "temporal"}
++PROFILE_SCHEMA = "v64.3.53-operator-trajectory-contrast-v1"
++
++
++def _signed_channels(proposal_trajectory: np.ndarray, incumbent_trajectory: np.ndarray) -> np.ndarray:
++    p = np.asarray(proposal_trajectory, dtype=np.float64)
++    i = np.asarray(incumbent_trajectory, dtype=np.float64)
++    if p.ndim != 2 or i.ndim != 2 or p.shape != i.shape or p.shape[0] < 2 or p.shape[1] < 5:
++        raise ValueError(f"V53 POTR trajectory shape mismatch {p.shape} vs {i.shape}; expected [T,5+] with T>=2")
++    if np.any(~np.isfinite(p)) or np.any(~np.isfinite(i)):
++        raise ValueError("V53 POTR trajectory contrast contains non-finite values")
++    dx = p[:, 0] - i[:, 0]
++    dy = p[:, 1] - i[:, 1]
++    dyaw_raw = p[:, 2] - i[:, 2]
++    dyaw = np.arctan2(np.sin(dyaw_raw), np.cos(dyaw_raw))
++    dv = p[:, 3] - i[:, 3]
++    return np.stack([dx, dy, dyaw, dv], axis=1)
++
++
++def _cosine_coefficients(channels: np.ndarray) -> np.ndarray:
++    """Fixed orthonormal DCT-II modes k=1,2 for each signed channel.
++
++    k=0 is deliberately omitted: endpoint signed contrast already tests the
++    static/directional hypothesis, while k=1,2 add the minimum fixed temporal
++    shape basis (trend + curvature) without a bandwidth/horizon hyperparameter.
++    """
++    x = np.asarray(channels, dtype=np.float64)
++    if x.ndim != 2 or x.shape[1] != 4 or x.shape[0] < 2:
++        raise ValueError("V53 POTR cosine basis requires [T,4] signed channels")
++    n = x.shape[0]
++    t = np.arange(n, dtype=np.float64) + 0.5
++    coeffs: list[float] = []
++    for k in (1, 2):
++        basis = math.sqrt(2.0 / n) * np.cos(math.pi * k * t / n)
++        for c in range(4):
++            coeffs.append(float(basis @ x[:, c]))
++    out = np.asarray(coeffs, dtype=np.float64)
++    if out.shape != (8,) or np.any(~np.isfinite(out)):
++        raise ValueError("V53 POTR cosine coefficients invalid")
++    return out
++
++
++def trajectory_contrast_profile(proposal_trajectory: np.ndarray, incumbent_trajectory: np.ndarray) -> dict[str, Any]:
++    ch = _signed_channels(proposal_trajectory, incumbent_trajectory)
++    endpoint = np.asarray(ch[-1], dtype=np.float64)
++    temporal = _cosine_coefficients(ch)
++    d = execution_contrast_linf(proposal_trajectory, incumbent_trajectory)
++    return {
++        "schema": PROFILE_SCHEMA,
++        "execution_contrast_linf": float(d),
++        "endpoint_signed": [float(v) for v in endpoint],
++        "cosine_modes_1_2": [float(v) for v in temporal],
++        "trajectory_steps": int(ch.shape[0]),
++    }
++
++
++def support_state(quality_value: float, plan_control_value: float, ego_reference_value: float, d: float) -> np.ndarray:
++    q = float(quality_value); p = float(plan_control_value); e = float(ego_reference_value); dd = float(d)
++    z = np.asarray([q, p - q, e - p, dd], dtype=np.float64)
++    if z.shape != (4,) or np.any(~np.isfinite(z)) or dd < 0.0:
++        raise ValueError("V53 POTR support state invalid")
++    return z
++
++
++def outcome_state_from_profile(
++    quality_value: float,
++    plan_control_value: float,
++    ego_reference_value: float,
++    profile: dict[str, Any],
++    *,
++    state_family: str,
++) -> np.ndarray:
++    fam = str(state_family).strip().lower()
++    if fam not in POTR_STATE_FAMILIES:
++        raise ValueError(f"V53 POTR unknown state_family={state_family}")
++    if str(profile.get("schema", "")) != PROFILE_SCHEMA:
++        raise ValueError("V53 POTR profile schema mismatch")
++    d = float(profile.get("execution_contrast_linf", float("nan")))
++    base = support_state(quality_value, plan_control_value, ego_reference_value, d)
++    endpoint = np.asarray(profile.get("endpoint_signed", []), dtype=np.float64).reshape(-1)
++    temporal = np.asarray(profile.get("cosine_modes_1_2", []), dtype=np.float64).reshape(-1)
++    if endpoint.size != 4 or temporal.size != 8 or np.any(~np.isfinite(endpoint)) or np.any(~np.isfinite(temporal)):
++        raise ValueError("V53 POTR profile payload invalid")
++    z = np.concatenate([base, endpoint])
++    if fam == "temporal":
++        z = np.concatenate([z, temporal])
++    names = POTR_ENDPOINT_STATE_NAMES if fam == "endpoint" else POTR_TEMPORAL_STATE_NAMES
++    if z.shape != (len(names),) or np.any(~np.isfinite(z)):
++        raise ValueError("V53 POTR outcome state invalid")
++    return z
++
++
++def runtime_states(
++    quality_value: float,
++    plan_control_value: float,
++    ego_reference_value: float,
++    proposal_trajectory: np.ndarray,
++    incumbent_trajectory: np.ndarray,
++    *,
++    state_family: str,
++) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
++    profile = trajectory_contrast_profile(proposal_trajectory, incumbent_trajectory)
++    sz = support_state(quality_value, plan_control_value, ego_reference_value, float(profile["execution_contrast_linf"]))
++    oz = outcome_state_from_profile(quality_value, plan_control_value, ego_reference_value, profile, state_family=state_family)
++    return sz, oz, profile
++
++
++def _component_risk(z: np.ndarray, model: dict[str, Any], expected_names: list[str]) -> float:
++    names = [str(x) for x in model.get("feature_names", [])]
++    if names != expected_names:
++        raise ValueError(f"V53 POTR feature schema mismatch: {names} != {expected_names}")
++    mean = np.asarray(model.get("feature_mean", []), dtype=np.float64).reshape(-1)
++    std = np.asarray(model.get("feature_std", []), dtype=np.float64).reshape(-1)
++    w = np.asarray(model.get("weights", []), dtype=np.float64).reshape(-1)
++    d = len(expected_names)
++    if mean.size != d or std.size != d or w.size != d:
++        raise ValueError("V53 POTR component parameter size mismatch")
++    if np.any(~np.isfinite(mean)) or np.any(~np.isfinite(std)) or np.any(std <= 0.0) or np.any(~np.isfinite(w)):
++        raise ValueError("V53 POTR component parameters invalid")
++    if abs(float(model.get("bias", 0.0))) > 1.0e-12 or abs(float(model.get("lambda", 1.0)) - 1.0) > 1.0e-12:
++        raise ValueError("V53 POTR requires zero bias and fixed lambda=1")
++    raw = float(((np.asarray(z, dtype=np.float64) - mean) / np.maximum(std, 1.0e-6)) @ w)
++    bmean = float(model.get("fit_beneficial_score_mean", float("nan")))
++    bstd = float(model.get("fit_beneficial_score_std", float("nan")))
++    if not math.isfinite(bmean) or not math.isfinite(bstd) or bstd <= 0.0:
++        raise ValueError("V53 POTR beneficial-score normalization invalid")
++    return float((raw - bmean) / max(bstd, 1.0e-6))
++
++
++def runtime_certificate(support_z: np.ndarray, outcome_z: np.ndarray, cfg: dict[str, Any]) -> tuple[float, float, dict[str, float]]:
++    fam = str(cfg.get("state_family", "")).strip().lower()
++    if fam not in POTR_STATE_FAMILIES:
++        raise ValueError(f"V53 POTR unknown runtime state_family={fam}")
++    snames = POTR_SUPPORT_STATE_NAMES
++    onames = POTR_ENDPOINT_STATE_NAMES if fam == "endpoint" else POTR_TEMPORAL_STATE_NAMES
++    sz = np.asarray(support_z, dtype=np.float64).reshape(-1)
++    oz = np.asarray(outcome_z, dtype=np.float64).reshape(-1)
++    if sz.size != len(snames) or oz.size != len(onames) or np.any(~np.isfinite(sz)) or np.any(~np.isfinite(oz)):
++        raise ValueError("V53 POTR runtime state shape invalid")
++    if str(cfg.get("aggregation", "max_support_outcome")).strip().lower() != "max_support_outcome":
++        raise ValueError("V53 POTR aggregation fixed to max_support_outcome")
++    comp = cfg.get("components", {}) if isinstance(cfg, dict) else {}
++    sr = _component_risk(sz, dict(comp.get("effect_support_risk", {})), snames)
++    orisk = _component_risk(oz, dict(comp.get("conditional_outcome_risk", {})), onames)
++    risk = float(max(sr, orisk))
++    tau = float(cfg.get("retention_threshold", float("nan")))
++    if not math.isfinite(tau):
++        raise ValueError("V53 POTR retention threshold invalid")
++    return float(tau - risk), risk, {
++        "effect_support_risk": float(sr),
++        "conditional_outcome_risk": float(orisk),
++        "execution_contrast_linf": float(sz[3]),
++    }
+--- a/bdse/tools/fit_v64_3_53_eaf_icer_potr.py
++++ b/bdse/tools/fit_v64_3_53_eaf_icer_potr.py
+@@ -0,0 +1,376 @@
++from __future__ import annotations
++
++"""V64.3.53 EAF-ICER-POTR nested TRAIN state experiment.
++
++V52 cleanly identified the scalar QPE+D effect-support hurdle, but neither the
++conditional sign nor Pareto order was stable once structural nulls were
++removed.  V53 therefore freezes the V52 support model and changes only the
++conditional-outcome state using pre-execution proposal-vs-incumbent trajectory
++contrast collected at the exact paired intervention event.
++"""
++
++import argparse
++import hashlib
++import json
++import math
++from pathlib import Path
++from typing import Any, Callable
++
++import numpy as np
++import yaml
++
++from bdse.planner.paired_operator_trajectory_retention import (
++    PROFILE_SCHEMA,
++    POTR_ENDPOINT_STATE_NAMES,
++    POTR_TEMPORAL_STATE_NAMES,
++    outcome_state_from_profile,
++)
++from bdse.tools import fit_v64_3_50_eaf_icer_pior as v50
++from bdse.tools import fit_v64_3_50_6_eaf_icer_pior as v506
++from bdse.tools import fit_v64_3_51_eaf_icer_pocr as v51
++from bdse.tools import fit_v64_3_52_eaf_icer_hodr as v52
++from bdse.tools.fit_v64_3_49_eaf_icer_siir import _auc
++
++EPS = 1.0e-12
++FOLDS = 5
++RIDGE_LAMBDA = 1.0
++ARMS = ("endpoint", "temporal")
++EXPECTED_V52_FIT_SHA256 = "7a21fead5383ebd6aafaeb5da586346a77e5707050cb359511a06971b742a16b"
++EXPECTED_V52_FAILURE = "effect_support_identified_but_operator_state_does_not_identify_conditional_outcome_order"
++EXPECTED_V52_SUPPORT_AUC = 0.6516244589283049
++EXPECTED_V52_SUPPORT_FOLDS = 5
++
++
++def _sha256(path: Path) -> str:
++    h = hashlib.sha256()
++    with path.open("rb") as f:
++        for chunk in iter(lambda: f.read(1024 * 1024), b""):
++            h.update(chunk)
++    return h.hexdigest()
++
++
++def _check_v52(path: Path) -> dict[str, Any]:
++    if _sha256(path) != EXPECTED_V52_FIT_SHA256:
++        raise RuntimeError(f"V53 ENGINEERING STOP: V52 fit JSON SHA drift {_sha256(path)}")
++    d = json.loads(path.read_text(encoding="utf-8"))
++    n = d.get("nested_crossfit", {})
++    if d.get("train_gate_pass") is not False or n.get("train_gate_pass") is not False:
++        raise RuntimeError("V53 ENGINEERING STOP: V52 must be the preregistered TRAIN STOP")
++    if n.get("failure_diagnosis") != EXPECTED_V52_FAILURE or n.get("preferred_promotion_arm") is not None:
++        raise RuntimeError(f"V53 ENGINEERING STOP: V52 branch drift {n.get('failure_diagnosis')}")
++    for arm in ("hurdle_sign", "hurdle_pareto"):
++        ri = n.get("arms", {}).get(arm, {}).get("identification", {})
++        if ri.get("support_identified") is not True or ri.get("functional_identified") is not False:
++            raise RuntimeError(f"V53 ENGINEERING STOP: V52 {arm} identification signature drift")
++        if abs(float(ri.get("support_auc", float("nan"))) - EXPECTED_V52_SUPPORT_AUC) > 1e-12:
++            raise RuntimeError(f"V53 ENGINEERING STOP: V52 {arm} support AUC drift")
++        if int(ri.get("support_folds_above_random", -1)) != EXPECTED_V52_SUPPORT_FOLDS:
++            raise RuntimeError(f"V53 ENGINEERING STOP: V52 {arm} support fold signature drift")
++    return d
++
++
++def _load_profiles(path: Path, expected_tokens: set[str]) -> dict[str, dict[str, Any]]:
++    by: dict[str, dict[str, Any]] = {}
++    for line in path.read_text(encoding="utf-8").splitlines():
++        if not line.strip():
++            continue
++        r = json.loads(line)
++        tok = str(r.get("scenario_token", ""))
++        if tok in by:
++            raise RuntimeError(f"V53 ENGINEERING STOP: duplicate operator profile {tok}")
++        if str(r.get("schema", "")) != PROFILE_SCHEMA:
++            raise RuntimeError(f"V53 ENGINEERING STOP: profile schema mismatch {tok}")
++        if len(r.get("endpoint_signed", [])) != 4 or len(r.get("cosine_modes_1_2", [])) != 8:
++            raise RuntimeError(f"V53 ENGINEERING STOP: profile feature size mismatch {tok}")
++        by[tok] = r
++    if set(by) != expected_tokens:
++        raise RuntimeError(f"V53 ENGINEERING STOP: profile token identity mismatch {len(by)}/{len(expected_tokens)}")
++    return by
++
++
++def _state(r: dict[str, Any], arm: str) -> np.ndarray:
++    return outcome_state_from_profile(
++        float(r["quality_value"]), float(r["plan_control_value"]), float(r["ego_ref_value"]),
++        dict(r["operator_trajectory_profile"]), state_family=arm,
++    )
++
++
++def _names(arm: str) -> list[str]:
++    if arm == "endpoint": return list(POTR_ENDPOINT_STATE_NAMES)
++    if arm == "temporal": return list(POTR_TEMPORAL_STATE_NAMES)
++    raise ValueError(arm)
++
++
++def _sign_pairs(rows: list[dict[str, Any]]) -> list[tuple[int, int]]:
++    good = [i for i, r in enumerate(rows) if v52._effect_support(r) and bool(r["closed_loop_beneficial"])]
++    bad = [i for i, r in enumerate(rows) if v52._effect_support(r) and not bool(r["closed_loop_beneficial"])]
++    return [(i, j) for i in bad for j in good]
++
++
++def _fit_outcome(rows: list[dict[str, Any]], arm: str) -> dict[str, Any]:
++    pairs = _sign_pairs(rows)
++    if len(rows) < 64 or len(pairs) < 64:
++        raise ValueError(f"V53 {arm} insufficient fit support rows={len(rows)} pairs={len(pairs)}")
++    X = np.stack([_state(r, arm) for r in rows])
++    mean = X.mean(axis=0); std = np.maximum(X.std(axis=0), 1.0e-6)
++    Z = (X - mean[None, :]) / std[None, :]
++    D = np.stack([Z[i] - Z[j] for i, j in pairs])
++    w = np.zeros((Z.shape[1],), dtype=np.float64)
++    before = float(D.shape[0] * math.log(2.0))
++    for _ in range(80):
++        s = D @ w
++        q = 1.0 / (1.0 + np.exp(np.clip(s, -60.0, 60.0)))
++        grad = -(D.T @ q) + RIDGE_LAMBDA * w
++        hw = q * (1.0 - q)
++        H = (D.T * hw) @ D + RIDGE_LAMBDA * np.eye(D.shape[1], dtype=np.float64)
++        step = np.linalg.solve(H, grad)
++        w -= step
++        if float(np.linalg.norm(step)) < 1.0e-9:
++            break
++    s = D @ w
++    after = float(np.sum(np.logaddexp(0.0, -s)) + 0.5 * RIDGE_LAMBDA * np.dot(w, w))
++    raw = Z @ w
++    ben = raw[np.asarray([bool(r["closed_loop_beneficial"]) for r in rows], dtype=bool)]
++    if ben.size < 24:
++        raise ValueError(f"V53 {arm} insufficient beneficial normalization support={ben.size}")
++    return {
++        "model": "zero_bias_pairwise_effectful_conditional_sign_risk",
++        "state_family": arm,
++        "feature_names": _names(arm),
++        "feature_mean": [float(x) for x in mean], "feature_std": [float(x) for x in std],
++        "weights": [float(x) for x in w], "bias": 0.0, "lambda": RIDGE_LAMBDA,
++        "fit_row_count": len(rows), "pair_count": len(pairs),
++        "objective_at_zero": before, "objective_final": after,
++        "fit_beneficial_score_mean": float(ben.mean()),
++        "fit_beneficial_score_std": max(float(ben.std()), 1.0e-6),
++    }
++
++
++def _outcome_risk(r: dict[str, Any], model: dict[str, Any]) -> float:
++    z = _state(r, str(model["state_family"]))
++    mean = np.asarray(model["feature_mean"], dtype=np.float64)
++    std = np.asarray(model["feature_std"], dtype=np.float64)
++    w = np.asarray(model["weights"], dtype=np.float64)
++    raw = float(((z - mean) / np.maximum(std, 1.0e-6)) @ w)
++    return float((raw - float(model["fit_beneficial_score_mean"])) / max(float(model["fit_beneficial_score_std"]), 1.0e-6))
++
++
++def _support_risk(r: dict[str, Any], support_model: dict[str, Any]) -> float:
++    return v52._component_risk(r, support_model)
++
++
++def _threshold(cal: list[dict[str, Any]], support_model: dict[str, Any], outcome_model: dict[str, Any], alpha: float) -> tuple[float, dict[str, Any]]:
++    vals = sorted(max(_support_risk(r, support_model), _outcome_risk(r, outcome_model)) for r in cal if bool(r["closed_loop_beneficial"]))
++    n = len(vals); rank = int(math.ceil((n + 1) * (1.0 - alpha))) if n else 1
++    min_n = int(math.ceil((1.0 - alpha) / alpha))
++    if n == 0 or rank > n:
++        raise ValueError(f"V53 calibration insufficient n={n} min={min_n} rank={rank}")
++    return float(vals[rank - 1]), {
++        "positive_calibration_count": n, "conformal_rank": rank, "alpha": float(alpha),
++        "threshold": float(vals[rank - 1]), "single_joint_threshold": True, "no_alpha_split": True,
++        "finite_sample_condition": "ceil((n+1)*(1-alpha))<=n",
++        "minimum_positive_count_for_finite_rank": min_n,
++    }
++
++
++def _nested(rows: list[dict[str, Any]], alpha: float, v52_report: dict[str, Any]) -> dict[str, Any]:
++    safety_names = v52._safety_names(rows)
++    scalar_report = v52_report["nested_crossfit"]["arms"]["hurdle_sign"]
++    arms: dict[str, Any] = {}
++    oof_outcome_risk: dict[str, dict[str, float]] = {a: {} for a in ARMS}
++
++    for arm in ARMS:
++        folds=[]; keep_by_token={}
++        all_y=[]; all_r=[]; all_v52=[]; all_v51=[]
++        above_random = better_v52 = better_v51 = 0
++        for k in range(FOLDS):
++            cf=(k+1)%FOLDS
++            fit=[r for r in rows if int(r["outer_test_fold"]) not in {k,cf}]
++            cal=[r for r in rows if int(r["outer_test_fold"])==cf]
++            test=[r for r in rows if int(r["outer_test_fold"])==k]
++
++            # Freeze exact V52 support hurdle; same split/state/loss.
++            scalar_models=v52._fit_models(fit,"hurdle_sign",safety_names)
++            support_model=scalar_models["effect_support_risk"]
++            scalar_outcome_model=scalar_models["conditional_outcome_risk"]
++            om=_fit_outcome(fit,arm)
++            tau,ci=_threshold(cal,support_model,om,alpha)
++            srisk=np.asarray([_support_risk(r,support_model) for r in test],dtype=np.float64)
++            orisk=np.asarray([_outcome_risk(r,om) for r in test],dtype=np.float64)
++            scalar_risk=np.asarray([v52._component_risk(r,scalar_outcome_model) for r in test],dtype=np.float64)
++            cm=v51._fit_ranker(fit,"qpe_dose")
++            v51risk=np.asarray([v51._risk(r,cm) for r in test],dtype=np.float64)
++            joint=np.maximum(srisk,orisk)
++            keep=[bool(x<=tau) for x in joint]
++            for r,kk,rr in zip(test,keep,orisk):
++                tok=str(r["scenario_token"])
++                if tok in keep_by_token: raise RuntimeError(f"V53 duplicate OOF token {tok}")
++                keep_by_token[tok]=kk; oof_outcome_risk[arm][tok]=float(rr)
++
++            # Exact support replay gate.
++            null_y=np.asarray([not v52._effect_support(r) for r in test],dtype=bool)
++            support_auc=_auc(null_y,srisk)
++            expected_support=float(scalar_report["folds"][k]["effect_support_auc"])
++            if abs(support_auc-expected_support)>1e-12:
++                raise RuntimeError(f"V53 ENGINEERING STOP: V52 support fold {k} replay drift {support_auc} vs {expected_support}")
++
++            eff=[i for i,r in enumerate(test) if v52._effect_support(r)]
++            y=np.asarray([not bool(test[i]["closed_loop_beneficial"]) for i in eff],dtype=bool)
++            idx=np.asarray(eff,dtype=np.int64)
++            auc=_auc(y,orisk[idx]); s_auc=_auc(y,scalar_risk[idx]); v51_auc=_auc(y,v51risk[idx])
++            exp_scalar=float(scalar_report["folds"][k]["conditional_sign_auc"])
++            exp_v51=float(scalar_report["folds"][k]["v51_control_conditional_sign_auc"])
++            if abs(s_auc-exp_scalar)>1e-12 or abs(v51_auc-exp_v51)>1e-12:
++                raise RuntimeError(f"V53 ENGINEERING STOP: scalar control replay drift fold={k}")
++            ar=bool(math.isfinite(auc) and auc>0.5+EPS)
++            bv52=bool(math.isfinite(auc) and math.isfinite(s_auc) and auc>s_auc+EPS)
++            bv51=bool(math.isfinite(auc) and math.isfinite(v51_auc) and auc>v51_auc+EPS)
++            above_random+=int(ar); better_v52+=int(bv52); better_v51+=int(bv51)
++            all_y.extend(y.tolist()); all_r.extend(orisk[idx].tolist()); all_v52.extend(scalar_risk[idx].tolist()); all_v51.extend(v51risk[idx].tolist())
++            bm=v50._delta_metrics(test,[True]*len(test)); pm=v50._delta_metrics(test,keep)
++            folds.append({
++                "fold":k,"fit_events":len(fit),"calibration_events":len(cal),"test_events":len(test),
++                "rsmr":bm,"potr":pm,"calibration":ci,"effect_support_auc":support_auc,
++                "conditional_sign_auc":auc,"v52_scalar_conditional_sign_auc":s_auc,"v51_conditional_sign_auc":v51_auc,
++                "above_random":ar,"better_v52_scalar":bv52,"better_v51_scalar":bv51,
++            })
++
++        auc=_auc(np.asarray(all_y,dtype=bool),np.asarray(all_r,dtype=np.float64))
++        v52_auc=_auc(np.asarray(all_y,dtype=bool),np.asarray(all_v52,dtype=np.float64))
++        v51_auc=_auc(np.asarray(all_y,dtype=bool),np.asarray(all_v51,dtype=np.float64))
++        expected_scalar=float(scalar_report["identification"]["conditional_sign_auc"])
++        expected_v51=float(scalar_report["identification"]["v51_control_conditional_sign_auc"])
++        if abs(v52_auc-expected_scalar)>1e-12 or abs(v51_auc-expected_v51)>1e-12:
++            raise RuntimeError("V53 ENGINEERING STOP: scalar aggregate controls do not replay V52")
++        identified=bool(
++            math.isfinite(auc) and auc>0.5+EPS and auc>v52_auc+EPS and auc>v51_auc+EPS
++            and above_random>=4 and better_v52>=4 and better_v51>=4
++        )
++        keep=v506._align_oof_keep_by_token(rows,keep_by_token)
++        base=v50._delta_metrics(rows,[True]*len(rows)); chosen=v50._delta_metrics(rows,keep)
++        dep=v50._gate(base,chosen,alpha,[{"rsmr":f["rsmr"],"pior":f["potr"]} for f in folds])
++        arms[arm]={
++            "folds":folds,
++            "identification":{
++                "aggregate_auc":auc,"v52_scalar_conditional_sign_auc":v52_auc,"v51_conditional_sign_auc":v51_auc,
++                "folds_above_random":above_random,"better_v52_scalar_fold_count":better_v52,
++                "better_v51_scalar_fold_count":better_v51,"identified":identified,
++            },
++            "aggregate":chosen,"deployment_gate":dep,"pass":bool(identified and dep["pass"]),
++        }
++
++    # Temporal necessity is a stronger claim: it must beat the endpoint state itself.
++    ep=arms["endpoint"]; tp=arms["temporal"]
++    both_tokens=sorted(oof_outcome_risk["endpoint"])
++    effrows={str(r["scenario_token"]):r for r in rows if v52._effect_support(r)}
++    y=np.asarray([not bool(effrows[t]["closed_loop_beneficial"]) for t in both_tokens if t in effrows],dtype=bool)
++    ep_r=np.asarray([oof_outcome_risk["endpoint"][t] for t in both_tokens if t in effrows],dtype=np.float64)
++    tp_r=np.asarray([oof_outcome_risk["temporal"][t] for t in both_tokens if t in effrows],dtype=np.float64)
++    ep_auc=_auc(y,ep_r); tp_auc=_auc(y,tp_r)
++    temporal_better_folds=sum(int(float(tp["folds"][k]["conditional_sign_auc"]) > float(ep["folds"][k]["conditional_sign_auc"]) + EPS) for k in range(FOLDS))
++    tp["identification"]["endpoint_control_auc"] = ep_auc
++    tp["identification"]["better_endpoint_fold_count"] = temporal_better_folds
++    tp["identification"]["temporal_necessity_identified"] = bool(tp["identification"]["identified"] and tp_auc > ep_auc + EPS and temporal_better_folds >= 4)
++    tp["pass"] = bool(tp["identification"]["temporal_necessity_identified"] and tp["deployment_gate"]["pass"])
++
++    preferred="endpoint" if ep["pass"] else "temporal" if tp["pass"] else None
++    if preferred=="endpoint": diagnosis="signed_terminal_operator_contrast_is_sufficient_for_effectful_selected_outcome"
++    elif preferred=="temporal": diagnosis="fixed_temporal_operator_contrast_shape_is_required_beyond_terminal_direction"
++    elif ep["identification"]["identified"] or tp["identification"]["temporal_necessity_identified"]:
++        diagnosis="operator_trajectory_state_identified_but_static_sign_retention_functional_still_deployment_insufficient"
++    else:
++        diagnosis="preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order"
++    return {
++        "retention_alpha":alpha,
++        "v52_effect_support_control":{"auc":EXPECTED_V52_SUPPORT_AUC,"folds_above_random":EXPECTED_V52_SUPPORT_FOLDS,"frozen":True},
++        "arms":arms,"preferred_promotion_arm":preferred,"train_gate_pass":preferred is not None,"failure_diagnosis":diagnosis,
++    }
++
++
++def _decorate(base_cfg: Path, support_model: dict[str,Any], outcome_model: dict[str,Any], tau: float, arm: str, out: Path) -> None:
++    cfg=yaml.safe_load(base_cfg.read_text(encoding="utf-8"))
++    ic=cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    sc=ic["selection_conditioned_intervention_recovery"]
++    sc["post_selection_value_mode"]="endpoint_potential_quality_paired_operator_trajectory_retention"
++    sc["paired_operator_trajectory_retention"]={
++        "state_family":arm,
++        "aggregation":"max_support_outcome",
++        "components":{"effect_support_risk":support_model,"conditional_outcome_risk":outcome_model},
++        "retention_threshold":float(tau),
++        "support_state":"exact_frozen_V52_QPE_plus_scalar_D_effect_support",
++        "conditional_outcome_state":"preexecution_signed_frozen_proposal_vs_runtime_incumbent_trajectory_contrast",
++        "outcome_supervision":"frozen_V50_metric_safe_paired_one_shot_closed_loop_outcomes",
++        "runtime_candidate_set":"full_frozen_deployment_candidate_set",
++    }
++    sc["post_selection_selected_bias"]=0.0
++    sc["post_selection_value_training"]="frozen_effect_support_plus_pairwise_effectful_conditional_sign_fixed_lambda_1"
++    sc["post_selection_operator"]="freeze_full_set_RSMR_winner_then_POTR_veto_only_same_winner_or_incumbent_no_rerank_no_fallback"
++    cfg.setdefault("version",{})["algorithm"]="V64.3.53-EAF-ICER-POTR"
++    out.parent.mkdir(parents=True,exist_ok=True); out.write_text(yaml.safe_dump(cfg,sort_keys=False),encoding="utf-8")
++
++
++def main() -> None:
++    p=argparse.ArgumentParser()
++    p.add_argument("--v49-fit-report",type=Path,required=True); p.add_argument("--v49-candidate-audit",type=Path,required=True)
++    p.add_argument("--v49-scene-audit",type=Path,required=True); p.add_argument("--v49-siir-config",type=Path,required=True)
++    p.add_argument("--paired-outcomes",type=Path,required=True); p.add_argument("--v50-5-root",type=Path,required=True); p.add_argument("--v51-fit-report",type=Path,required=True)
++    p.add_argument("--v52-fit-report",type=Path,required=True); p.add_argument("--operator-profiles",type=Path,required=True)
++    p.add_argument("--output-config",type=Path,required=True); p.add_argument("--output-report",type=Path,required=True)
++    a=p.parse_args()
++
++    v52_report=_check_v52(a.v52_fit_report)
++    v51_report=v52_report["nested_crossfit"]  # only alpha is needed from V52 below
++    states=v50._candidate_states(a.v49_candidate_audit); obs=v50._obs_risk(a.v49_scene_audit)
++    rows=v50._join(states,a.paired_outcomes,obs)
++    # Reuse exact V51 D and require the newly acquired profile to reproduce it token-by-token.
++    scalar_d=v51._load_treatment_contrast(a.v50_5_root,set(states))
++    profiles=_load_profiles(a.operator_profiles,set(states))
++    for r in rows:
++        tok=str(r["scenario_token"]); prof=profiles[tok]; d=float(prof["execution_contrast_linf"])
++        if abs(d-float(scalar_d[tok]))>1.0e-9:
++            raise RuntimeError(f"V53 ENGINEERING STOP: profile D does not replay V51 scalar D token={tok}: {d} vs {scalar_d[tok]}")
++        r["operator_execution_contrast_linf"]=d; r["operator_trajectory_profile"]=prof
++    # Cross-check the parent scientific signature independently of the state-only replay.
++    _ = v52._check_v51(a.v51_fit_report)
++    alpha=float(v52_report["nested_crossfit"]["retention_alpha"])
++    nested=_nested(rows,alpha,v52_report)
++    preferred=nested["preferred_promotion_arm"]
++    final=None
++    if preferred is not None:
++        safety=v52._safety_names(rows); fit=[r for r in rows if int(r["outer_test_fold"])!=0]; cal=[r for r in rows if int(r["outer_test_fold"])==0]
++        scalar=v52._fit_models(fit,"hurdle_sign",safety); sm=scalar["effect_support_risk"]; om=_fit_outcome(fit,preferred)
++        tau,ci=_threshold(cal,sm,om,alpha); final={"state_family":preferred,"support_model":sm,"outcome_model":om,"calibration":ci}
++
++    report={
++        "audit":"v64_3_53_eaf_icer_potr_fit","algorithm_version":"V64.3.53-EAF-ICER-POTR",
++        "scientific_role":"preregistered_V52_support_identified_conditional_order_failed_branch_operator_trajectory_state",
++        "mechanism_hypothesis":"Freeze the identified QPE+D effect-support hurdle and test whether effectful outcome direction requires signed proposal-vs-incumbent treatment geometry: terminal contrast first, then a fixed two-mode temporal contrast basis.",
++        "frozen_contract":{
++            "RSMR_selector_unchanged":True,"V52_effect_support_state_and_functional_unchanged":True,
++            "paired_outcome_labels_unchanged":True,"lambda":1.0,"retention_alpha_and_single_conformal_threshold_unchanged":True,
++            "same_winner_or_incumbent_only":True,"no_rerank_second_best_fallback":True,"no_new_offline_future_observable":True,
++            "no_safety_weight_or_catastrophe_veto":True,
++        },
++        "operator_profile_source":"TRAIN_only_state_replay_at_exact_metric_safe_V50_treatment_anchor; preexecution; labels reused, not recollected",
++        "nested_crossfit":nested,"final_runtime_fit":final,"train_gate_pass":bool(nested["train_gate_pass"]),
++        "preregistered_branch_order":["endpoint","temporal"],
++        "preregistered_next_branch":{
++            "if_endpoint_pass":"promote minimal signed terminal operator contrast; freeze and use untouched paired validation",
++            "if_only_temporal_pass":"temporal treatment shape is necessary beyond terminal direction; freeze and use untouched paired validation",
++            "if_state_identified_but_deployment_fail":"operator state solved; return bottleneck to deployment functional using paired evidence, not more state",
++            "if_both_state_arms_fail_identification":"close preexecution operator-trajectory geometry as sufficient; next evidence/state must be post-intervention paired dynamic response process",
++        },
++        "prohibited_tuning":["D transform/interaction sweep","trajectory horizon or basis sweep","peak/early handcrafted features","attention/MLP",
++            "V46 agent-occupancy temporal-profile resurrection","threshold/calibration/lambda/loss/class/focal/catastrophe weighting","safety scalarization",
++            "new offline future observable","RSMR/B/M/topK/candidate-count change","rerank/second-best/fallback","validation pooling"],
++    }
++    a.output_report.parent.mkdir(parents=True,exist_ok=True); a.output_report.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
++    if not nested["train_gate_pass"]:
++        if a.output_config.exists(): a.output_config.unlink()
++        print(json.dumps({"pass":False,"failure_diagnosis":nested["failure_diagnosis"],"output_config_emitted":False},sort_keys=True))
++        raise SystemExit(f"V64.3.53 POTR TRAIN scientific STOP ({nested['failure_diagnosis']}); do not consume untouched validation")
++    assert final is not None
++    _decorate(a.v49_siir_config,final["support_model"],final["outcome_model"],float(final["calibration"]["threshold"]),preferred,a.output_config)
++    print(json.dumps({"pass":True,"preferred_promotion_arm":preferred,"output_config":str(a.output_config)},sort_keys=True))
++
++if __name__=="__main__": main()
+--- a/bdse/tools/run_v64_3_53_operator_profile_probe.py
++++ b/bdse/tools/run_v64_3_53_operator_profile_probe.py
+@@ -0,0 +1,162 @@
++from __future__ import annotations
++
++"""Collect V64.3.53 pre-execution proposal-vs-incumbent trajectory state.
++
++This is a state-only replay of the frozen V50.5 treatment arm.  It does not
++redefine or recollect the paired outcome label.  The scientific outcome rows
++remain the metric-safe V50.5 502/502 treatment-control pairs; this probe only
++records the exact runtime incumbent trajectory contrast already present at the
++one-shot intervention event.
++"""
++
++import argparse
++import hashlib
++import json
++import os
++import subprocess as _subprocess
++from pathlib import Path
++from typing import Any
++
++from bdse.planner.paired_operator_trajectory_retention import PROFILE_SCHEMA
++from bdse.tools import run_v64_3_50_pior_paired_closed_loop as _base
++from bdse.tools import run_v64_3_50_5_pior_paired_closed_loop as _safe
++
++_OFFICIAL_MODULE = "nuplan.planning.script.run_simulation"
++_V53_MODULE = "bdse.tools.nuplan_v53_operator_profile_run_simulation"
++
++class _ProfileSubprocessProxy:
++    def __getattr__(self, name: str) -> Any:
++        return getattr(_subprocess, name)
++    @staticmethod
++    def Popen(cmd: Any, *args: Any, **kwargs: Any):  # noqa: N802
++        if isinstance(cmd, (list, tuple)) and "bdse.experiments.evaluate_closed_loop" in cmd:
++            rewritten=list(cmd)
++            try: i=rewritten.index("--nuplan-module")
++            except ValueError as exc: raise RuntimeError("V53 profile child lacks --nuplan-module") from exc
++            if i+1>=len(rewritten) or rewritten[i+1] != _OFFICIAL_MODULE:
++                raise RuntimeError(f"V53 profile unexpected frozen nuPlan module {rewritten[i+1] if i+1<len(rewritten) else '<missing>'}")
++            rewritten[i+1]=_V53_MODULE
++            env=dict(kwargs.get("env") or os.environ)
++            env["BDSE_PIOR_METRIC_ENGINE_SERIALIZATION"]="1"
++            env["BDSE_V53_OPERATOR_PROFILE"]="1"
++            kwargs["env"]=env
++            cmd=rewritten
++        return _subprocess.Popen(cmd,*args,**kwargs)
++
++
++def _sha256(path: Path) -> str:
++    h = hashlib.sha256()
++    with path.open("rb") as f:
++        for chunk in iter(lambda: f.read(1024 * 1024), b""):
++            h.update(chunk)
++    return h.hexdigest()
++
++
++def _read_profile_events(root: Path, expected_tokens: set[str]) -> list[dict[str, Any]]:
++    rows: dict[str, dict[str, Any]] = {}
++    for path in sorted((root / "treatment" / "batches").glob("batch_*/v53_operator_profile_events.jsonl")):
++        for line in path.read_text(encoding="utf-8").splitlines():
++            if not line.strip():
++                continue
++            r = json.loads(line)
++            if not bool(r.get("pior_probe_fired", False)):
++                continue
++            tok = str(r.get("scenario_token") or r.get("pior_probe_scenario_token") or "")
++            if not tok:
++                raise RuntimeError(f"V53 profile event lacks scenario_token: {path}")
++            if tok in rows:
++                raise RuntimeError(f"V53 duplicate fired profile event for token={tok}")
++            p = r.get("operator_trajectory_profile")
++            if not isinstance(p, dict) or str(p.get("schema", "")) != PROFILE_SCHEMA:
++                raise RuntimeError(f"V53 missing/invalid operator profile token={tok} file={path}")
++            d = float(p.get("execution_contrast_linf", float("nan")))
++            legacy_d = float(r.get("pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error", float("nan")))
++            if not (d >= 0.0 and abs(d - legacy_d) <= 1.0e-9):
++                raise RuntimeError(f"V53 profile D replay mismatch token={tok}: profile={d} legacy={legacy_d}")
++            endpoint = [float(x) for x in p.get("endpoint_signed", [])]
++            temporal = [float(x) for x in p.get("cosine_modes_1_2", [])]
++            if len(endpoint) != 4 or len(temporal) != 8 or int(p.get("trajectory_steps", 0)) < 2:
++                raise RuntimeError(f"V53 profile shape invalid token={tok}: {p}")
++            physical_equal = bool(r.get("pior_probe_frozen_equals_runtime_incumbent_physical", False))
++            if physical_equal and (max([abs(x) for x in endpoint + temporal] + [abs(d)]) > 1.0e-8):
++                raise RuntimeError(f"V53 physical-equal proposal has nonzero trajectory contrast token={tok}")
++            rows[tok] = {
++                "scenario_token": tok,
++                "schema": PROFILE_SCHEMA,
++                "execution_contrast_linf": d,
++                "endpoint_signed": endpoint,
++                "cosine_modes_1_2": temporal,
++                "trajectory_steps": int(p["trajectory_steps"]),
++                "frozen_equals_runtime_incumbent_physical": physical_equal,
++                "frozen_proposal_trajectory_sha256": str(r.get("pior_probe_frozen_proposal_trajectory_sha256", "")),
++                "runtime_incumbent_trajectory_sha256": str(r.get("pior_probe_runtime_incumbent_trajectory_sha256", "")),
++            }
++    if set(rows) != expected_tokens:
++        miss = sorted(expected_tokens - set(rows))[:10]
++        extra = sorted(set(rows) - expected_tokens)[:10]
++        raise RuntimeError(f"V53 profile population mismatch {len(rows)}/{len(expected_tokens)} missing={miss} extra={extra}")
++    return [rows[t] for t in sorted(rows)]
++
++
++def main() -> None:
++    p = argparse.ArgumentParser()
++    p.add_argument("--manifest", type=Path, required=True)
++    p.add_argument("--treatment-config", type=Path, required=True)
++    p.add_argument("--checkpoint", type=Path, required=True)
++    p.add_argument("--nuplan-root", type=Path, required=True)
++    p.add_argument("--output-root", type=Path, required=True)
++    p.add_argument("--output-profiles", type=Path, required=True)
++    p.add_argument("--output-report", type=Path, required=True)
++    p.add_argument("--gpu", default="0")
++    p.add_argument("--workers", type=int, default=4)
++    p.add_argument("--batch-size", type=int, default=64)
++    p.add_argument("--heartbeat-seconds", type=float, default=30.0)
++    p.add_argument("--challenge", default="closed_loop_nonreactive_agents")
++    a = p.parse_args()
++
++    _safe._assert_frozen_base_runner()
++    _base.subprocess = _ProfileSubprocessProxy()
++    tokens, meta, raw_files = _base._manifest(a.manifest)
++    if len(tokens) != 502 or len(set(tokens)) != 502:
++        raise RuntimeError(f"V53 requires exact frozen 502 proposal population, got {len(tokens)}/{len(set(tokens))}")
++
++    _metrics, summary = _base._run_arm(
++        arm="treatment", gpu=str(a.gpu), cfg=a.treatment_config, checkpoint=a.checkpoint,
++        tokens=tokens, meta=meta, nuplan_root=a.nuplan_root, challenge=str(a.challenge),
++        output_root=a.output_root, workers=int(a.workers), batch_size=int(a.batch_size),
++        resume=False, heartbeat_seconds=float(a.heartbeat_seconds), serialize_gpu_inference=False,
++        profile_closed_loop=False, allow_legacy_full_arm_resume=False,
++        first_batch_size=0, preflight_barrier=None,
++    )
++
++    profiles = _read_profile_events(a.output_root, set(tokens))
++    a.output_profiles.parent.mkdir(parents=True, exist_ok=True)
++    with a.output_profiles.open("w", encoding="utf-8") as f:
++        for r in profiles:
++            f.write(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n")
++    digest = _sha256(a.output_profiles)
++    equal_count = sum(bool(r["frozen_equals_runtime_incumbent_physical"]) for r in profiles)
++    report = {
++        "audit": "v64_3_53_operator_profile_probe",
++        "algorithm_version": "V64.3.53-EAF-ICER-POTR",
++        "scientific_role": "state_only_preexecution_operator_trajectory_contrast_replay",
++        "paired_outcome_labels_recollected": False,
++        "arm_replayed": "treatment_only",
++        "scenario_count": len(profiles),
++        "scenario_token_sha256": _base._token_sha(tokens),
++        "raw_db_count": len(raw_files),
++        "profile_schema": PROFILE_SCHEMA,
++        "profile_sha256": digest,
++        "physical_equal_count": equal_count,
++        "scalar_D_exact_replay_all": True,
++        "metric_safe_child_runner": True,
++        "arm_summary": summary,
++        "pass": True,
++    }
++    a.output_report.parent.mkdir(parents=True, exist_ok=True)
++    a.output_report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    print(json.dumps({"pass": True, "profiles": len(profiles), "profile_sha256": digest, "physical_equal": equal_count}, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
+--- a/bdse/tools/nuplan_v53_operator_profile_run_simulation.py
++++ b/bdse/tools/nuplan_v53_operator_profile_run_simulation.py
+@@ -0,0 +1,106 @@
++"""V53 state-only nuPlan entrypoint.
++
++Preserves the byte-identical historical planner and installs two process-local
++engineering hooks only for the V53 treatment replay:
++  1) V50.5 metric-engine serialization;
++  2) a read-only wrapper around the frozen selected-outcome probe that records
++     proposal-vs-runtime-incumbent trajectory contrast to a sidecar *before*
++     the treatment action is executed.
++
++The hook never changes the returned action or diagnostic dictionary and never
++reads closed-loop outcome labels.
++"""
++from __future__ import annotations
++
++import functools
++import hashlib
++import json
++import os
++from pathlib import Path
++import runpy
++import threading
++from typing import Any
++
++import numpy as np
++
++from bdse.planner.paired_operator_trajectory_retention import trajectory_contrast_profile
++from bdse.tools.nuplan_metric_safe_run_simulation import install_metric_engine_serialization
++
++_WRITE_LOCK = threading.RLock()
++_PATCH_MARKER = "_bdse_v64_3_53_operator_profile_sidecar"
++
++
++def _sha(a: np.ndarray) -> str:
++    return hashlib.sha256(np.ascontiguousarray(a, dtype=np.float32).tobytes(order="C")).hexdigest()
++
++
++def install_operator_profile_sidecar() -> None:
++    from bdse.planner.nuplan_planner import BDSEPlannerCore
++
++    original = BDSEPlannerCore._apply_selected_outcome_probe
++    if bool(getattr(original, _PATCH_MARKER, False)):
++        return
++
++    @functools.wraps(original)
++    def wrapped(self: Any, tournament: Any, action: int, candidates: Any, current_input: Any | None = None):
++        chosen, diag = original(self, tournament, action, candidates, current_input)
++        if os.environ.get("BDSE_V53_OPERATOR_PROFILE", "0").strip() != "1":
++            return chosen, diag
++        if not bool(diag.get("pior_probe_fired", False)) or str(diag.get("pior_probe_arm", "")) != "treatment":
++            return chosen, diag
++        target = getattr(self, "_pior_bound_target", None)
++        if not isinstance(target, dict):
++            raise RuntimeError("V53 profile hook missing frozen manifest-bound target")
++        expected = np.asarray(target.get("frozen_proposal_trajectory", []), dtype=np.float32)
++        ct = np.asarray(getattr(candidates, "trajectories", []), dtype=np.float32)
++        baseline = int(diag.get("pior_probe_baseline_action", -1))
++        if expected.ndim != 2 or expected.shape[0] < 2 or ct.ndim != 3 or not (0 <= baseline < ct.shape[0]):
++            raise RuntimeError("V53 profile hook cannot recover proposal/runtime-incumbent trajectories")
++        incumbent = np.ascontiguousarray(ct[baseline], dtype=np.float32)
++        if incumbent.shape != expected.shape:
++            raise RuntimeError(f"V53 profile hook shape mismatch {expected.shape} vs {incumbent.shape}")
++        profile = trajectory_contrast_profile(expected, incumbent)
++        d = float(profile["execution_contrast_linf"])
++        legacy_d = float(diag.get("pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error", float("nan")))
++        if not np.isfinite(legacy_d) or abs(d - legacy_d) > 1.0e-9:
++            raise RuntimeError(f"V53 profile hook D replay mismatch profile={d} legacy={legacy_d}")
++        diag_path = os.environ.get("BDSE_CLOSED_LOOP_DIAG", "").strip()
++        if not diag_path:
++            raise RuntimeError("V53 profile hook requires BDSE_CLOSED_LOOP_DIAG sidecar anchor")
++        out = Path(diag_path).with_name("v53_operator_profile_events.jsonl")
++        row = {
++            "scenario_token": str(diag.get("pior_probe_scenario_token", "")),
++            "pior_probe_arm": "treatment",
++            "pior_probe_fired": True,
++            "pior_probe_event_count": int(diag.get("pior_probe_event_count", 0)),
++            "pior_probe_physical_identity_contract": str(diag.get("pior_probe_physical_identity_contract", "")),
++            "pior_probe_contract_same_frozen_proposal_or_incumbent": bool(diag.get("pior_probe_contract_same_frozen_proposal_or_incumbent", False)),
++            "pior_probe_contract_no_rerank_second_best_fallback": bool(diag.get("pior_probe_contract_no_rerank_second_best_fallback", False)),
++            "pior_probe_frozen_equals_runtime_incumbent_physical": bool(diag.get("pior_probe_frozen_equals_runtime_incumbent_physical", False)),
++            "pior_probe_frozen_proposal_trajectory_sha256": _sha(expected),
++            "pior_probe_runtime_incumbent_trajectory_sha256": _sha(incumbent),
++            "pior_probe_frozen_vs_runtime_incumbent_geometry_max_abs_error": legacy_d,
++            "operator_trajectory_profile": profile,
++        }
++        out.parent.mkdir(parents=True, exist_ok=True)
++        with _WRITE_LOCK:
++            with out.open("a", encoding="utf-8") as f:
++                f.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
++        return chosen, diag
++
++    setattr(wrapped, _PATCH_MARKER, True)
++    setattr(BDSEPlannerCore, "_apply_selected_outcome_probe", wrapped)
++
++
++def main() -> None:
++    if os.environ.get("BDSE_PIOR_METRIC_ENGINE_SERIALIZATION") != "1":
++        raise RuntimeError("V53 state probe requires V50.5 metric-engine serialization")
++    if os.environ.get("BDSE_V53_OPERATOR_PROFILE") != "1":
++        raise RuntimeError("V53 operator-profile wrapper requires BDSE_V53_OPERATOR_PROFILE=1")
++    install_metric_engine_serialization()
++    install_operator_profile_sidecar()
++    print("[BDSE-V53-POTR-PROFILE] metric-safe pre-execution operator-profile sidecar enabled; planner source/action unchanged", flush=True)
++    runpy.run_module("nuplan.planning.script.run_simulation", run_name="__main__")
++
++if __name__ == "__main__":
++    main()
+--- a/bdse/tests/test_v64_3_53_eaf_icer_potr.py
++++ b/bdse/tests/test_v64_3_53_eaf_icer_potr.py
+@@ -0,0 +1,103 @@
++from __future__ import annotations
++
++import numpy as np
++import pytest
++
++from bdse.planner.paired_operator_trajectory_retention import (
++    PROFILE_SCHEMA, POTR_SUPPORT_STATE_NAMES, POTR_ENDPOINT_STATE_NAMES, POTR_TEMPORAL_STATE_NAMES,
++    trajectory_contrast_profile, outcome_state_from_profile, runtime_states, runtime_certificate,
++)
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
++from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES
++from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
++from bdse.tools.fit_v64_3_53_eaf_icer_potr import _fit_outcome, _outcome_risk
++
++
++def _component(names, w):
++    return {"model":"unit","feature_names":list(names),"feature_mean":[0.0]*len(names),"feature_std":[1.0]*len(names),"weights":list(w),"bias":0.0,"lambda":1.0,"fit_beneficial_score_mean":0.0,"fit_beneficial_score_std":1.0}
++
++
++def test_v53_profile_replays_scalar_D_and_zero_is_exact_null():
++    inc=np.zeros((5,5)); prop=inc.copy(); prop[-1,0]=3.; prop[-1,3]=1.5
++    p=trajectory_contrast_profile(prop,inc)
++    assert p["schema"]==PROFILE_SCHEMA
++    assert p["execution_contrast_linf"]==pytest.approx(3.0)
++    assert p["endpoint_signed"]==pytest.approx([3.,0.,0.,1.5])
++    z=trajectory_contrast_profile(inc,inc)
++    assert z["execution_contrast_linf"]==0.0
++    assert max(abs(x) for x in z["endpoint_signed"]+z["cosine_modes_1_2"])<1e-12
++
++
++def test_v53_signed_yaw_uses_wrapped_operator_contrast():
++    inc=np.zeros((4,5)); prop=np.zeros((4,5))
++    inc[-1,2]=np.pi-0.1; prop[-1,2]=-np.pi+0.1
++    p=trajectory_contrast_profile(prop,inc)
++    assert p["endpoint_signed"][2]==pytest.approx(0.2,abs=1e-10)
++
++
++def test_v53_endpoint_and_temporal_states_are_nested_fixed_families():
++    inc=np.zeros((8,5)); prop=inc.copy(); prop[:,0]=np.linspace(0,2,8); prop[:,1]=np.linspace(0,-1,8)
++    profile=trajectory_contrast_profile(prop,inc)
++    ze=outcome_state_from_profile(1.,2.5,2.,profile,state_family="endpoint")
++    zt=outcome_state_from_profile(1.,2.5,2.,profile,state_family="temporal")
++    assert ze.shape==(len(POTR_ENDPOINT_STATE_NAMES),)
++    assert zt.shape==(len(POTR_TEMPORAL_STATE_NAMES),)
++    assert zt[:len(ze)].tolist()==pytest.approx(ze.tolist())
++    assert POTR_ENDPOINT_STATE_NAMES[:4]==POTR_SUPPORT_STATE_NAMES
++    assert len(POTR_TEMPORAL_STATE_NAMES)-len(POTR_ENDPOINT_STATE_NAMES)==8
++
++
++def test_v53_pairwise_outcome_ranker_can_use_direction_after_scalar_D_is_matched():
++    rows=[]
++    for i in range(40):
++        p=np.zeros((6,5)); q=np.zeros((6,5)); p[-1,0]=2.; p[-1,1]=+1.+.01*i
++        prof=trajectory_contrast_profile(p,q)
++        rows.append({"scenario_token":f"g{i}","quality_value":0.,"plan_control_value":0.,"ego_ref_value":0.,"operator_execution_contrast_linf":prof["execution_contrast_linf"],"operator_trajectory_profile":prof,"closed_loop_beneficial":True,"closed_loop_score_delta":1.,"safety_delta":{"collision":0.},"closed_loop_hard_harm":False})
++    for i in range(40):
++        p=np.zeros((6,5)); q=np.zeros((6,5)); p[-1,0]=2.; p[-1,1]=-1.-.01*i
++        prof=trajectory_contrast_profile(p,q)
++        rows.append({"scenario_token":f"b{i}","quality_value":0.,"plan_control_value":0.,"ego_ref_value":0.,"operator_execution_contrast_linf":prof["execution_contrast_linf"],"operator_trajectory_profile":prof,"closed_loop_beneficial":False,"closed_loop_score_delta":-1.,"safety_delta":{"collision":0.},"closed_loop_hard_harm":False})
++    m=_fit_outcome(rows,"endpoint")
++    assert m["lambda"]==1.0 and m["bias"]==0.0
++    assert m["objective_final"]<m["objective_at_zero"]
++    assert _outcome_risk(rows[-1],m)>_outcome_risk(rows[0],m)
++
++
++def test_v53_runtime_keeps_frozen_support_and_combines_one_threshold():
++    inc=np.zeros((6,5)); prop=inc.copy(); prop[-1,0]=2.; prop[-1,1]=-1.
++    sz,oz,_=runtime_states(0.,0.,0.,prop,inc,state_family="endpoint")
++    support=_component(POTR_SUPPORT_STATE_NAMES,[0,0,0,1])
++    ow=[0.0]*len(POTR_ENDPOINT_STATE_NAMES); ow[5]=1.0
++    outcome=_component(POTR_ENDPOINT_STATE_NAMES,ow)
++    cfg={"state_family":"endpoint","aggregation":"max_support_outcome","components":{"effect_support_risk":support,"conditional_outcome_risk":outcome},"retention_threshold":1.5}
++    cert,risk,parts=runtime_certificate(sz,oz,cfg)
++    assert parts["effect_support_risk"]==pytest.approx(2.0)
++    assert risk>=2.0 and cert==pytest.approx(1.5-risk)
++
++
++def test_v53_tournament_only_changes_retention_certificate_not_winner():
++    raw_names=list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    feature_names=[f"delta::{n}" for n in raw_names]+["delta::support_logit"]
++    obs_names=VALUE_OBSERVABLE_NAMES+FSFR_OBSERVABLE_NAMES
++    pnames=["fsfr_plan_1d_occupancy_cost"]; enames=["fsfr_plan_1d_occupancy_cost","fsfr_predicted_demo_cost"]
++    support=_component(POTR_SUPPORT_STATE_NAMES,[0.,0.,0.,1.])
++    ow=[0.]*len(POTR_ENDPOINT_STATE_NAMES); ow[4]=1.
++    outcome=_component(POTR_ENDPOINT_STATE_NAMES,ow)
++    sc={"feature_names":feature_names,"feature_mean":[0.]*19,"feature_std":[1.]*19,"weights":[0.]*19,"bias":0.,"base_feature_names":raw_names,"post_selection_value_enabled":True,"post_selection_value_mode":"endpoint_potential_quality_paired_operator_trajectory_retention","post_selection_endpoint_feature_names":EPV_NAMES,"post_selection_endpoint_feature_scale":[1.]*38,"post_selection_endpoint_weights":[0.]*38,"post_selection_endpoint_bias":0.,"post_selection_observable_names":obs_names,"post_selection_quality_observable_names":["route_deviation_cost","progress_deficit_cost","global_comfort_cost"],"post_selection_quality_observable_scale":[1.]*3,"post_selection_quality_observable_weights":[0.]*3,"selected_policy_risk_plan_response_names":pnames,"selected_policy_risk_plan_response_scales":[1.],"selected_policy_risk_plan_response_weights":[0.],"selected_policy_risk_ego_reference_names":enames,"selected_policy_risk_ego_reference_scales":[1.,1.],"selected_policy_risk_ego_reference_weights":[0.,0.],"paired_operator_trajectory_retention":{"state_family":"endpoint","aggregation":"max_support_outcome","components":{"effect_support_risk":support,"conditional_outcome_risk":outcome},"retention_threshold":1.0}}
++    raw=np.zeros((2,len(raw_names))); sup=np.zeros(2); X=np.zeros((2,19)); mu=np.zeros(2); obs=np.zeros((2,len(obs_names)))
++    traj=np.zeros((2,6,5)); traj[1,-1,0]=3.
++    v,_,names=_icer_post_selection_value(1,mu,X,feature_names,sc,raw_feat=raw,raw_feature_names=raw_names,support_logits=sup,legacy_action=0,value_observable_matrix=obs,value_observable_names=obs_names,candidate_trajectories=traj)
++    assert v<0.0
++    assert "potr_risk" in names
++
++
++def test_v53_nuplan_profile_hook_is_process_local_and_historical_planner_unchanged():
++    import hashlib, inspect
++    from pathlib import Path
++    from bdse.tools import nuplan_v53_operator_profile_run_simulation as hook
++    src=inspect.getsource(hook.install_operator_profile_sidecar)
++    assert 'trajectory_contrast_profile(expected, incumbent)' in src
++    assert 'return chosen, diag' in src
++    root=Path(__file__).resolve().parents[2]
++    assert hashlib.sha256((root/'bdse/planner/nuplan_planner.py').read_bytes()).hexdigest() == 'c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef'

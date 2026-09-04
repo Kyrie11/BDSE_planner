@@ -1,0 +1,72 @@
+{
+  "audit": "v64_3_52_uploaded_result_reliability_and_scientific_audit_for_v64_3_53",
+  "reliability": {
+    "pass": true,
+    "uploaded_code_zip_sha256": "c75ffd833a62c57d2ea3132aeec90950e4307c2142129285e62d9222bb45f9e2",
+    "uploaded_result_zip_sha256": "387397d1d60b08f101259000ef54d44b464a25fae69c88e358aa64614feb8b9e",
+    "v52_fit_sha256": "7a21fead5383ebd6aafaeb5da586346a77e5707050cb359511a06971b742a16b",
+    "code_matches_preregistered_delivery": true,
+    "science_manifest_pass": "10/10",
+    "server_targeted_regression": "57/57 PASS",
+    "independent_uploaded_code_targeted_replay": "57/57 PASS",
+    "v51_parent_fit_sha256": "54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049",
+    "paired_evidence_count": 502,
+    "paired_evidence_unique": 502,
+    "paired_evidence_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
+    "paired_beneficial": 121,
+    "paired_hard_harm": 25,
+    "metric_safe_control": "502/502 PASS",
+    "metric_safe_treatment": "502/502 PASS",
+    "termination": "preregistered TRAIN scientific STOP",
+    "untouched_validation_consumed": false
+  },
+  "v52_result": {
+    "failure_diagnosis": "effect_support_identified_but_operator_state_does_not_identify_conditional_outcome_order",
+    "preferred_promotion_arm": null,
+    "effect_support": {
+      "auc": 0.6516244589283049,
+      "folds_above_random": 5,
+      "identified": true,
+      "retain_as_supporting_mechanism": true
+    },
+    "hurdle_sign": {
+      "conditional_sign_auc": 0.48029243483788936,
+      "v51_conditional_sign_control_auc": 0.4964580873671783,
+      "better_control_folds": 2,
+      "functional_identified": false,
+      "aggregate": {
+        "selected": 446,
+        "beneficial_selected": 110,
+        "beneficial_total": 121,
+        "beneficial_recall": 0.9090909090909091,
+        "nonbeneficial_selected": 336,
+        "hard_harm_selected": 22,
+        "closed_loop_score_delta_sum": -3.20209373082581,
+        "closed_loop_negative_rms": 0.1460886742297128
+      },
+      "deployment_pass": false,
+      "failed_subgates": ["beneficial_retention", "all_folds_nonharm"]
+    },
+    "hurdle_pareto": {
+      "pareto_concordance": 0.49772853185595567,
+      "v51_pareto_control_concordance": 0.4879778393351801,
+      "better_control_folds": 3,
+      "functional_identified": false,
+      "aggregate": {
+        "selected": 470,
+        "beneficial_selected": 111,
+        "beneficial_total": 121,
+        "beneficial_recall": 0.9173553719008265,
+        "nonbeneficial_selected": 359,
+        "hard_harm_selected": 24,
+        "closed_loop_score_delta_sum": -5.325415216100435,
+        "closed_loop_negative_rms": 0.15502281404006676
+      },
+      "deployment_pass": false,
+      "failed_subgates": ["beneficial_retention", "hard_tail", "utility_nonharm", "all_folds_nonharm"]
+    }
+  },
+  "scientific_conclusion": "Scalar QPE+D is sufficient for identifying structural null/effect support but not sufficient for stable conditional outcome direction/order among effectful selected interventions.",
+  "dominant_bottleneck": "effectful selected-outcome state sufficiency / directional-temporal operator-contrast sufficiency",
+  "next_preregistered_version": "V64.3.53-EAF-ICER-POTR"
+}

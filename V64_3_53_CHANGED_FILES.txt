@@ -1,0 +1,15 @@
+modified	ALGORITHM_CHANGELOG.md
+modified	README_CURRENT.md
+modified	bdse/planner/tournament.py
+added	RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
+added	NEXT_COMMANDS_V64_3_53_EAF_ICER_POTR.txt
+added	V64_3_52_RESULT_POSTMORTEM_AND_V64_3_53_POTR_DESIGN.md
+added	V64_3_52_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_53.json
+added	V64_3_53_PREREGISTRATION.json
+added	V64_3_53_ENGINEERING_VALIDATION.txt
+added	V64_3_53_SCIENCE_MANIFEST.sha256
+added	bdse/planner/paired_operator_trajectory_retention.py
+added	bdse/tools/fit_v64_3_53_eaf_icer_potr.py
+added	bdse/tools/run_v64_3_53_operator_profile_probe.py
+added	bdse/tools/nuplan_v53_operator_profile_run_simulation.py
+added	bdse/tests/test_v64_3_53_eaf_icer_potr.py

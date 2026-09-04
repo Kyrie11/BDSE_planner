@@ -1,0 +1,59 @@
+V64.3.53 EAF-ICER-POTR ENGINEERING VALIDATION
+================================================
+
+Scientific status
+-----------------
+V53 is implemented but NOT scientifically claimed successful. Its real 502-scene
+state-only profile replay and nested TRAIN fit must run on the server before any
+ENDPOINT/TEMPORAL conclusion.
+
+Source/provenance
+-----------------
+PASS  V53 curated result-defining science manifest: 15/15 files OK.
+PASS  Historical V50.5 bdse/planner/nuplan_planner.py remains byte-identical:
+      c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef
+PASS  Historical V50 paired collector remains protected by its existing frozen SHA lock.
+PASS  V53 state collection is implemented by a V53-specific process-local nuPlan
+      wrapper/sidecar; it does not patch historical planner source or returned action.
+
+Syntax/compile
+--------------
+PASS  python -m compileall -q bdse
+PASS  bash -n RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
+
+Focused/causal regression
+-------------------------
+PASS  V53 new focused tests: 7/7.
+PASS  V53 + V52 + V51 + V50.6 + V50 + V50.5 + V48 curated regression: 64/64.
+
+Full repository regression
+--------------------------
+The monolithic pytest invocation exceeded the local single-call execution window
+without a test failure. The complete test-file set was then partitioned into four
+mutually exclusive and exhaustive file shards and all completed:
+
+  shard 0: 185/185 PASS
+  shard 1: 154/154 PASS
+  shard 2: 144/144 PASS
+  shard 3: 153/153 PASS
+  total  : 636/636 PASS
+
+Test files covered: 131/131.
+Warnings are historical torch/nested-tensor warnings; no V53 failure class was observed.
+
+Runtime/data contracts implemented
+----------------------------------
+PASS  Treatment-only profile replay uses the exact frozen V50 manifest/treatment config.
+PASS  V50.5 metric-engine serialization remains enabled in the V53 child process.
+PASS  Profile is recorded pre-execution from frozen proposal vs actual runtime incumbent.
+PASS  Profile scalar L_inf is required to replay legacy V51/V52 D within 1e-9.
+PASS  502/502 unique profile population is required before fitting.
+PASS  V52 effect-support fold signature is exact-replay gated before V53 attribution.
+PASS  Paired outcome SHA remains independently locked to d592baa3...39d43.
+PASS  No rerank, second-best, fallback, safety weighting, threshold sweep, or new offline future observable.
+
+Not locally executable
+----------------------
+The current environment does not contain the user's nuPlan raw DB/checkpoint/server
+output roots, so the real 502-scene state-only profile collection and V53 nested fit
+were not run locally. The launcher performs those fail-closed on the server.

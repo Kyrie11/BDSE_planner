@@ -15,6 +15,7 @@ from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, full
 from bdse.planner.operator_conditioned_risk_retention import operator_state as _ocrr_operator_state, runtime_certificate as _ocrr_runtime_certificate
 from bdse.planner.paired_operator_contrast_retention import operator_state as _pocr_operator_state, runtime_certificate as _pocr_runtime_certificate
 from bdse.planner.paired_outcome_dominance_retention import operator_state as _hodr_operator_state, runtime_certificate as _hodr_runtime_certificate
+from bdse.planner.paired_operator_trajectory_retention import runtime_states as _potr_runtime_states, runtime_certificate as _potr_runtime_certificate
 from bdse.utils import softmin_np
 
 
@@ -2607,7 +2608,7 @@ def _icer_post_selection_value(
     if bool(scir_cfg.get("scene_reservation_enabled", False)):
         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}
+    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}
     if mode not in allowed:
         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
     b = int(proposal_action)
@@ -2632,7 +2633,7 @@ def _icer_post_selection_value(
     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
 
-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
+    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}:
         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
@@ -2667,7 +2668,7 @@ def _icer_post_selection_value(
         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
         value_feature = phi
         value_names = [f"post_value::{n}" for n in runtime_value_names]
-        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
+        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}:
             if value_observable_matrix is None or value_observable_names is None:
                 raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
             om = np.asarray(value_observable_matrix, dtype=np.float64)
@@ -2722,12 +2723,12 @@ def _icer_post_selection_value(
                                + [f"observable_improvement::{n}" for n in qnames]
                                + [f"ocrr_state::{n}" for n in rcfg.get("feature_names", [])]
                                + ["ocrr_risk"])
-            elif mode in {"endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
+            elif mode in {"endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention", "endpoint_potential_quality_paired_operator_trajectory_retention"}:
                 if candidate_trajectories is None:
-                    raise ValueError("EAF-ICER V51 POCR requires candidate trajectories for treatment/control contrast")
+                    raise ValueError("EAF-ICER paired operator-relative retention requires candidate trajectories for treatment/control contrast")
                 ct = np.asarray(candidate_trajectories, dtype=np.float64)
                 if ct.ndim != 3 or not (0 <= legacy < ct.shape[0]) or not (0 <= b < ct.shape[0]):
-                    raise ValueError("EAF-ICER V51 POCR candidate trajectory matrix is invalid")
+                    raise ValueError("EAF-ICER paired operator-relative retention candidate trajectory matrix is invalid")
                 pnames = [str(x) for x in scir_cfg.get("selected_policy_risk_plan_response_names", [])]
                 pscale = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_scales", []), dtype=np.float64).reshape(-1)
                 pw = np.asarray(scir_cfg.get("selected_policy_risk_plan_response_weights", []), dtype=np.float64).reshape(-1)
@@ -2756,7 +2757,7 @@ def _icer_post_selection_value(
                                    + [f"observable_improvement::{n}" for n in qnames]
                                    + [f"pocr_state::{n}" for n in pcfg.get("feature_names", [])]
                                    + ["pocr_risk"])
-                else:
+                elif mode == "endpoint_potential_quality_paired_outcome_dominance_retention":
                     hcfg = scir_cfg.get("paired_outcome_dominance_retention", {})
                     zhodr = _hodr_operator_state(quality_value, plan_value, ego_value, ct[b], ct[legacy])
                     cert, rrisk, rparts = _hodr_runtime_certificate(zhodr, hcfg)
@@ -2766,6 +2767,20 @@ def _icer_post_selection_value(
                                    + [f"observable_improvement::{n}" for n in qnames]
                                    + [f"hodr_state::{n}" for n in hcfg.get("feature_names", [])]
                                    + ["hodr_risk"])
+                else:
+                    pcfg = scir_cfg.get("paired_operator_trajectory_retention", {})
+                    support_z, outcome_z, _profile = _potr_runtime_states(
+                        quality_value, plan_value, ego_value, ct[b], ct[legacy],
+                        state_family=str(pcfg.get("state_family", "")),
+                    )
+                    cert, rrisk, rparts = _potr_runtime_certificate(support_z, outcome_z, pcfg)
+                    value = float(np.clip(cert, -40.0, 40.0))
+                    value_feature = np.concatenate([phi, qobs, support_z, outcome_z, np.asarray([rrisk], dtype=np.float64)])
+                    value_names = ([f"post_value::{n}" for n in runtime_value_names]
+                                   + [f"observable_improvement::{n}" for n in qnames]
+                                   + [f"potr_support_state::{n}" for n in pcfg.get("components", {}).get("effect_support_risk", {}).get("feature_names", [])]
+                                   + [f"potr_outcome_state::{n}" for n in pcfg.get("components", {}).get("conditional_outcome_risk", {}).get("feature_names", [])]
+                                   + ["potr_risk"])
             elif mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
                 rnames = [str(x) for x in scir_cfg.get("post_selection_future_response_observable_names", [])]
                 if not rnames or any(n not in on for n in rnames):

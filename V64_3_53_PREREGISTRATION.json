@@ -1,0 +1,62 @@
+{
+  "algorithm_version": "V64.3.53-EAF-ICER-POTR",
+  "name": "Paired Operator-Trajectory Retention",
+  "scientific_trigger": "V52 effect-support hurdle identified (AUC 0.6516244589283049, 5/5 folds > 0.5) while both conditional sign and Pareto order failed identification; execute the preregistered branch that acquires richer paired/on-policy treatment-control state rather than tuning the functional.",
+  "dominant_bottleneck": "effectful selected-outcome state sufficiency: scalar operator dose identifies whether the frozen proposal changes closed-loop outcome, but not the direction/order of that change",
+  "frozen_contract": {
+    "RSMR_selector": "unchanged full-set frozen winner",
+    "effect_support": "exact V52 QPE+D zero-bias pairwise support hurdle, fixed lambda=1",
+    "paired_outcome_labels": "exact V50.5 metric-safe 502/502 one-shot treatment-control outcomes",
+    "QPE_coordinates": "unchanged",
+    "retention_alpha": 0.07791855203619909,
+    "calibration": "single split-conformal threshold on beneficial calibration events",
+    "runtime_operator": "same frozen RSMR winner or incumbent only; no rerank, no second best, no fallback"
+  },
+  "state_acquisition": {
+    "role": "TRAIN-only label-free state replay; paired outcome labels are not recollected or redefined",
+    "arm": "treatment only",
+    "event": "exact V50 metric-safe frozen full-set RSMR intervention anchor before action execution",
+    "objects": "cached frozen proposal trajectory versus actual runtime incumbent trajectory",
+    "engineering_identity_gate": "502/502 unique tokens and profile scalar L_inf must replay V51/V52 D token-by-token",
+    "deployment_availability": "same candidate proposal and incumbent trajectories already exist at runtime"
+  },
+  "arms": [
+    {
+      "name": "ENDPOINT",
+      "conditional_outcome_state": ["Q", "P-Q", "E-P", "D", "signed terminal dx", "signed terminal dy", "wrapped terminal dyaw", "signed terminal dv"],
+      "question": "Is directional terminal treatment-control geometry sufficient once effect support is frozen?"
+    },
+    {
+      "name": "TEMPORAL",
+      "conditional_outcome_state": "ENDPOINT plus fixed orthonormal DCT-II k=1,2 coefficients of signed dx(t),dy(t),dyaw(t),dv(t)",
+      "question": "If endpoint direction is insufficient, is minimal temporal treatment shape necessary?",
+      "no_sweep": true
+    }
+  ],
+  "identification_gates": {
+    "effect_support_replay": "exact V52 support AUC/fold signature must replay or ENGINEERING STOP",
+    "endpoint": "aggregate conditional bad-outcome AUC > 0.5, > exact V52 scalar-hurdle conditional AUC, > exact V51 scalar conditional AUC; each comparison and >0.5 must hold in >=4/5 folds",
+    "temporal": "same gates as ENDPOINT, plus aggregate AUC > ENDPOINT and TEMPORAL > ENDPOINT in >=4/5 folds to claim temporal necessity"
+  },
+  "deployment_gate": "exact unchanged V50/V51/V52 paired causal retention gate after identification",
+  "promotion_order": ["ENDPOINT", "TEMPORAL"],
+  "branches": {
+    "endpoint_pass": "promote minimal signed terminal operator contrast; freeze immediately and use untouched paired validation",
+    "only_temporal_pass": "promote temporal operator-contrast state; claim temporal treatment shape is necessary beyond terminal direction",
+    "state_identified_but_deployment_fail": "state is sufficient for identification but low-capacity sign functional is deployment-insufficient; next algorithm may change structured paired functional but not add state",
+    "both_fail_identification": "close pre-execution operator-trajectory geometry as deployment-sufficient state; next evidence/state must be post-intervention paired dynamic response process"
+  },
+  "prohibited": [
+    "D transform or D*QPE interaction sweep",
+    "trajectory horizon, cosine-mode count, basis, peak, early or threshold sweep",
+    "attention or larger MLP",
+    "V46 handcrafted agent-occupancy temporal profile resurrection",
+    "loss/lambda/class/focal/catastrophe weighting",
+    "safety scalarization or standalone catastrophe veto",
+    "new offline future observable",
+    "K/logK/SIIR/CVaR/selected translation",
+    "RSMR/B/M/top-K/candidate-count changes",
+    "rerank/second-best/fallback",
+    "untouched validation pooling"
+  ]
+}

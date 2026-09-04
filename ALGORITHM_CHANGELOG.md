@@ -12975,3 +12975,197 @@ This is not a standalone catastrophe veto and introduces no safety weight. Runti
 ## No-repeat constraints after V51
 
 All historical closures remain active: no QPE-only/V51 sign-only rescue; no state expansion during the V52 functional test; no loss/lambda/class/focal/catastrophe weighting; no threshold/calibration sweep or alpha split; no bigger MLP/attention; no standalone binary catastrophe veto; no learned safety scalarization; no K/logK; no new offline future observable; no V46 variance/handcrafted temporal-profile resurrection; no V47 AGENT-2D; no V49 SIIR/random-prefix; no CVaR; no selected translation; no RSMR/B/M/top-K/candidate-count changes; no rerank/second-best/fallback; no validation pooling.
+
+---
+
+# V64.3.52 scientific result — effect support identified, conditional outcome order not identified
+
+## Reliability
+
+V52 is valid for TRAIN-level attribution.
+
+- uploaded V52 code ZIP SHA256: `c75ffd833a62c57d2ea3132aeec90950e4307c2142129285e62d9222bb45f9e2`, exact V52 delivery identity;
+- curated result-defining science manifest: **10/10 PASS**;
+- parent V51 fit lock: exact SHA `54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049`;
+- paired evidence: exact **502/502** metric-safe population, SHA `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`;
+- server targeted regression: **57/57 PASS**; independent uploaded-code replay: **57/57 PASS**;
+- termination: preregistered TRAIN scientific STOP; untouched validation unconsumed.
+
+Therefore no engineering repair is needed before attribution.
+
+## Preregistered V52 verdict
+
+### Shared effect-support hurdle — identified and retained
+
+The scalar QPE+D state robustly identifies structural null/effect support:
+
+- aggregate effect-support AUC: **`0.6516244589`**;
+- folds above random: **5/5**.
+
+This is a genuine supporting mechanism.  It refines the V51 observation that scalar operator dose D predicts whether an intervention has any effect.  V52 shows the signal survives honest nested fitting after the structural-null hurdle is made explicit.
+
+### HURDLE-SIGN — identification FAIL / deployment FAIL
+
+Conditional on an actual closed-loop effect:
+
+- conditional sign AUC: **`0.4802924348`**;
+- exact V51 conditional-sign control AUC: `0.4964580874`;
+- HURDLE-SIGN > V51: **2/5 folds**.
+
+So the conditional outcome functional is not identified.
+
+Its OOF deployment aggregate is diagnostically useful but cannot be promoted:
+
+- selected: `446`;
+- beneficial retained: `110/121 = 90.91%` — **beneficial-retention FAIL** under frozen alpha;
+- nonbeneficial: `381 -> 336` — reduction PASS;
+- hard harm: `25 -> 22` — tail improves;
+- score-delta sum: `-4.2409 -> -3.2021` — aggregate utility improves;
+- negative RMS: `0.15486 -> 0.14609` — improves;
+- all-fold nonharm: **FAIL**.
+
+The mechanism therefore contains useful effect-support filtering but does not stably order effectful good/bad interventions.  The aggregate improvements are not promotion evidence because the preregistered identification and beneficial-retention gates fail.
+
+### HURDLE-PARETO — identification FAIL / deployment FAIL
+
+- Pareto concordance: **`0.4977285319`**;
+- exact V51 Pareto-control concordance: `0.4879778393`;
+- PARETO > control: **3/5 folds**, below the preregistered 4/5 requirement;
+- beneficial retained: `111/121 = 91.74%` — FAIL;
+- hard harm: `24` — hard-tail FAIL;
+- score-delta sum: **`-5.3254`** — utility FAIL;
+- all-fold nonharm: FAIL.
+
+Thus unweighted static Pareto ordering does not rescue the same scalar QPE+D state.  Do not tune safety weights or scalarize the safety coordinates after seeing this result.
+
+## Mechanism interpretation
+
+V52 cleanly separates two selected-outcome questions that V51 mixed together:
+
+1. **Effect support:** will executing the frozen proposal rather than the incumbent change the paired closed-loop outcome at all?  QPE+D can answer this with stable OOF signal.
+2. **Conditional effect direction/order:** once an intervention is known to have an effect, is that effect beneficial, harmful, or safety-dominated?  The same static scalar state cannot answer this stably.
+
+Therefore the V51 statement "operator-relative state is identified" must be refined: the identified part is first-order **effect-support sufficiency**, not full effectful-outcome-order sufficiency.
+
+Evidence-chain extension:
+
+`selected-outcome state sufficiency != effect-support sufficiency != conditional-outcome-order sufficiency`.
+
+## Dominant bottleneck after V52
+
+**Effectful selected-outcome state sufficiency / directional-temporal operator-contrast sufficiency.**
+
+The bottleneck moves from the generic "structured functional" diagnosis of V51 to a more precise state problem: scalar dose D tells how much the selected operator differs from incumbent in magnitude, but discards the signed channel and temporal shape of the treatment.  Once structural nulls are removed, that missing relational geometry becomes first-order.
+
+The paper headline remains stable:
+
+**Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface.**
+
+Outcome Sufficiency is now refined by the claim that selected outcomes are both intervention-relative and hierarchy-structured: effect support and conditional outcome order require different sufficient statistics.
+
+## Newly retained mechanism
+
+Retain **structural-null / effect-support factorization** as a supporting mechanism and freeze the QPE+D effect-support head for the next experiment.
+
+Do **not** promote either complete V52 retention arm.
+
+## Newly closed optimization directions
+
+Close as deployment-sufficient solutions:
+
+- static conditional sign ranking over QPE+D after the effect hurdle;
+- static unweighted Pareto ordering over QPE+D after the effect hurdle.
+
+Do not generalize this closure to all Pareto/structured-outcome methods: V52 simultaneously shows the conditional state is insufficient, so changing the order functional on the same state is confounded by missing state.
+
+Continue to prohibit all historical no-repeat directions: threshold/calibration/lambda/loss/class/focal/catastrophe-weight rescue; safety scalarization; larger MLP/attention; K/logK; SIIR/random-prefix; CVaR; selected translation; V46 variance/handcrafted agent-occupancy temporal profile; V47 AGENT-2D; new offline future observables; RSMR/B/M/top-K/candidate-count changes; rerank/second-best/fallback; validation pooling.
+
+---
+
+# V64.3.53 EAF-ICER-POTR — Paired Operator-Trajectory Retention
+
+## Scientific role
+
+V53 executes the exact V52 preregistered branch:
+
+`effect support identified + conditional order not identified -> acquire richer paired/on-policy treatment-control state`.
+
+It freezes the successful V52 effect-support hurdle and changes **only** the conditional-outcome state.
+
+## State acquisition without outcome leakage
+
+The historical V50.5 planner/collector remains byte-identical.  V53 uses a dedicated process-local nuPlan entrypoint to record a sidecar at the exact treatment intervention event **before the action is executed**:
+
+- frozen cached full-set RSMR proposal trajectory;
+- actual runtime incumbent trajectory;
+- no closed-loop score/safety label is used to construct the state.
+
+Only the treatment side is replayed because both treatment and control trajectory objects are already present at that anchor.  The metric-safe V50.5 502x2 paired outcomes remain the frozen supervision source and are not recollected or redefined.
+
+Hard engineering identity gate:
+
+- exactly 502 unique TRAIN tokens;
+- profile schema fixed;
+- profile L-infinity contrast must replay the historical V51/V52 scalar D token-by-token;
+- physical-equality proposals must have zero profile;
+- historical `nuplan_planner.py` remains byte-identical to its V50.5 science-lock SHA.
+
+## Frozen effect-support component
+
+For every outer fold, V53 refits the **exact V52 QPE+D effect-support model** with the identical split, state, pairwise loss and `lambda=1`, then requires its V52 fold AUC signature to replay exactly.  Any drift is ENGINEERING STOP.
+
+## Arm A — ENDPOINT
+
+Conditional-outcome state:
+
+`[Q, P-Q, E-P, D, dx_T, dy_T, wrap(dyaw_T), dv_T]`.
+
+This is the minimum directional treatment-control state.  It asks whether scalar intervention magnitude failed only because it erased the direction/channel of the frozen proposal relative to incumbent.
+
+## Arm B — TEMPORAL
+
+Only if the endpoint family does not yield the complete promotion result, extend ENDPOINT with a fixed orthonormal DCT-II basis:
+
+- cosine modes `k=1,2` of signed `dx(t), dy(t), dyaw(t), dv(t)`;
+- 8 fixed additional coordinates;
+- no learned attention;
+- no peak/early statistic;
+- no horizon, mode-count, basis, or bandwidth sweep.
+
+This tests whether temporal treatment shape is necessary beyond terminal direction.
+
+This does **not** resurrect V46's closed handcrafted temporal-profile family.  V46 compressed predicted agent-interaction/occupancy consequences into hand statistics; V53 represents the **pre-execution proposal-vs-incumbent operator treatment itself** under paired selected-outcome supervision.
+
+## Conditional functional and runtime operator
+
+Both arms keep the simplest conditional functional on purpose:
+
+- zero-bias pairwise effectful beneficial/nonbeneficial ranker;
+- fixed `lambda=1`;
+- exact frozen V52 support risk;
+- fixed `max(support_risk, conditional_outcome_risk)`;
+- one unchanged beneficial split-conformal threshold;
+- same frozen RSMR winner or incumbent only;
+- no rerank, second-best, fallback or standalone safety veto.
+
+This gives an orthogonal test of state sufficiency before revisiting functional capacity.
+
+## Preregistered identification gate
+
+ENDPOINT must:
+
+- conditional bad-outcome AUC > 0.5 in aggregate and >=4/5 folds;
+- beat exact V52 scalar HURDLE-SIGN conditional AUC in aggregate and >=4/5 folds;
+- beat exact V51 scalar conditional-sign control in aggregate and >=4/5 folds;
+- then pass the unchanged paired deployment gate.
+
+TEMPORAL must satisfy the same conditions and, to support a temporal-necessity claim, additionally beat ENDPOINT in aggregate and >=4/5 folds.
+
+## Promotion order and fail-closed branches
+
+1. ENDPOINT identification + deployment PASS -> promote the simplest signed terminal state and freeze.
+2. Else TEMPORAL identification + temporal-necessity + deployment PASS -> promote temporal treatment shape and freeze.
+3. If a state identifies the effectful outcome but deployment still fails -> state is solved; the bottleneck returns to a richer paired deployment functional, with no further state expansion.
+4. If both pre-execution state families fail identification -> close pre-execution operator-trajectory geometry as sufficient; next evidence/state must come from **post-intervention paired dynamic response/outcome process**, still on-policy/paired rather than offline feature expansion.
+
+Untouched validation remains unconsumed until a TRAIN arm passes all gates.
