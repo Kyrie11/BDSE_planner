@@ -12754,3 +12754,166 @@ bash RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh
 ```
 
 Only after this repaired nested TRAIN gate completes may V50 receive a scientific GO/STOP judgment. If it fails, follow the original V50 preregistered branch indicated by identification-vs-retention failure; if it passes, freeze PIOR and move to untouched paired closed-loop validation without TRAIN tuning.
+
+---
+
+# V64.3.50.7 scientific result — provenance-closed V50 PIOR failure
+
+## Reliability
+
+V50.7 closes the V50.6 result-defining source-identity gap without changing the scientific mechanism or rerunning paired closed loop.
+
+- V50.6 result-defining runner/test/fit SHA256: **exact uploaded-source match, 3/3**.
+- V50.6 and V50.7 fit reports: **byte-identical**, SHA256 `acfb495e729df6ebc01da1ab886eafb2c6fb5fc5d3ecb4dc572e875f0975005d`.
+- reused V50.5 paired evidence: **502/502**, SHA256 `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`.
+- metric-safety: control/treatment **502/502 PASS**, zero failed scenarios.
+- V50.7 targeted regression: **45/45 PASS**.
+- termination: preregistered TRAIN scientific STOP; untouched validation unconsumed.
+
+Therefore the V50.6/50.7 result is valid for TRAIN-level algorithm attribution.
+
+## Preregistered V50 verdict
+
+Risk identification on real paired selected outcomes:
+
+- EGO-REF AUC: `0.4746100952`;
+- offline OBS AUC: `0.4994251752`;
+- PIOR QPE AUC: `0.5087091386`;
+- PIOR > EGO: **3/5 folds**;
+- PIOR > OBS: **3/5 folds**.
+
+The V50 identification requirement was aggregate superiority plus at least **4/5** folds against both baselines. Therefore identification FAILS.
+
+The paired deployment gate also fails:
+
+- selected: `502 -> 460`;
+- beneficial retained: `121 -> 115`, recall `0.9504` (retention subgate PASS);
+- nonbeneficial: `381 -> 345` (reduction subgate PASS);
+- hard harm: `25 -> 24` but negative RMS `0.15486 -> 0.15627` (hard-tail FAIL);
+- closed-loop score-delta sum: `-4.2409 -> -5.4262` (utility-nonharm FAIL);
+- all-fold nonharm: FAIL.
+
+Formal verdict:
+
+`V50 PIOR QPE-only = scientific STOP / promotion failure`.
+
+## Newly closed family
+
+**Close QPE-only paired selected-outcome state as a deployment-sufficient solution.**
+
+This closure includes attempts to rescue the same QPE-only state by changing threshold/calibration, lambda, pairwise loss, class/focal/catastrophe weighting, or by replacing the low-capacity ranker with a bigger MLP. The failure is identification/state-level, not a threshold placement failure.
+
+Do **not** close Q/P/E as supporting consequence coordinates. Do **not** close paired deployment-aligned outcome supervision. The preregistered V50 branch says the next question is an on-policy structured selected-outcome state.
+
+## Retained/promoted research mechanism
+
+Retain **paired one-shot closed-loop selected-outcome supervision** as the clean evidence source. V50 shows that outcome-source alignment alone is not sufficient, but it is now the correct supervision substrate for subsequent selected-outcome state/functional experiments.
+
+## Evidence-chain update
+
+V50 adds a new separation:
+
+`deployment-aligned outcome evidence != selected-outcome state sufficiency`.
+
+The cumulative chain is now:
+
+`selection sufficiency != prediction sufficiency != representation identifiability != observational post-selection sufficiency != outcome-source sufficiency != selected-outcome state sufficiency`.
+
+## New dominant bottleneck
+
+**Operator-relative selected-outcome state sufficiency.**
+
+The frozen extremal proposal's realized outcome is relational: the learner must know what is actually changed relative to the incumbent, not only compressed proposal consequence coordinates.
+
+A consumed-TRAIN design diagnostic (not promotion evidence) shows the already-audited physical proposal/incumbent contrast
+
+`D = ||xi_proposal - xi_incumbent||_infinity`
+
+has AUC `0.69755` for any closed-loop effect and `0.73618` for hard harm, each with 5/5 folds above random. All 38 physical-equality pairs are null effects. Larger D raises both beneficial and harmful outcomes, so D is an intervention-dose conditioning variable, not a monotone risk score.
+
+---
+
+# V64.3.51 EAF-ICER-POCR — Paired Operator-Contrast Retention
+
+## Scientific role
+
+V51 executes the exact preregistered V50 identification-failure branch. It changes only the **on-policy selected-outcome state** while freezing the evidence source and decision functional.
+
+Frozen from V50:
+
+- full-set RSMR selector and proposal identity;
+- Q/P/E consequence coordinates;
+- metric-safe paired one-shot closed-loop outcome labels;
+- zero-bias pairwise sign-risk family;
+- `lambda=1`;
+- retention alpha and finite-rank split-conformal rule;
+- same-winner-or-incumbent veto-only runtime operator;
+- no rerank, second-best or fallback.
+
+## New state coordinate
+
+At runtime, before execution:
+
+`D(b,i) = ||trajectory_b - trajectory_i||_infinity`,
+
+using the exact bounded candidate-trajectory tensor of the frozen RSMR proposal and incumbent. This is the same physical contrast already audited by the V50 paired probe; it is not logged future, teacher information, K/multiplicity, or another offline future observable.
+
+## Preregistered causal arms
+
+### Arm A — QPE+DOSE
+
+`[Q, P-Q, E-P, D]`.
+
+Tests whether explicit treatment/control magnitude is the missing selected-outcome state.
+
+### Arm B — QPE+DOSE-X
+
+`[Q, P-Q, E-P, D, D*Q, D*(P-Q), D*(E-P)]`.
+
+Tests whether intervention dose must modulate consequence slopes because larger physical interventions can be either beneficial or harmful.
+
+No hidden layer, attention, tuned transform, learned threshold or new loss is introduced.
+
+## Hard causal control
+
+Before V51 attribution, the code exactly reruns V50.6 QPE nested cross-fit and requires the V50.7 aggregate/fold AUC signatures to replay within `1e-12`. Any drift is ENGINEERING STOP.
+
+## Identification gate
+
+For an arm to identify the paired selected-outcome law, it must:
+
+1. beat QPE-control, EGO and OBS AUC in aggregate;
+2. beat QPE-control in >=4/5 outer folds;
+3. beat EGO in >=4/5 folds;
+4. beat OBS in >=4/5 folds.
+
+The original V50 paired deployment gate is then applied unchanged.
+
+## Promotion order
+
+Fixed before execution:
+
+1. if QPE+DOSE passes identification + deployment, promote the simpler additive arm;
+2. else if QPE+DOSE-X passes both, promote the interaction arm;
+3. if either state is identified but deployment fails, next branch is a **structured paired closed-loop outcome functional** (V52); do not add offline features;
+4. if scalar D identifies effect support but neither arm identifies benefit/harm, close scalar dose as a sufficient sign-state and test a richer **temporal treatment/control contrast profile** under paired evidence;
+5. if D does not identify effect support, close the scalar operator-contrast family and reassess selected-outcome state acquisition/measurement.
+
+## No-repeat constraints
+
+All prior closures remain active. In particular V51 must not resurrect:
+
+- V46 response second moment / handcrafted temporal-profile weighting;
+- V47 constant-drift AGENT-2D;
+- V48 K/logK/K interaction;
+- V49 random-prefix SIIR or offline selected-risk learning;
+- QPE-only PIOR rescue by loss/threshold/lambda/MLP;
+- CVaR, selected translation, binary catastrophe veto;
+- RSMR/B/M/top-K/candidate-count changes;
+- reranking, second-best, fallback or validation pooling.
+
+## Experiment cost
+
+V51 TRAIN is fit-only over the already metric-safe 502x2 V50.5 paired evidence and existing treatment probe contrast. It does not rerun the ~22-hour paired closed loop and does not consume untouched validation.
+
+If TRAIN passes, freeze the preferred arm immediately and run a new untouched paired validation set with no TRAIN tuning.

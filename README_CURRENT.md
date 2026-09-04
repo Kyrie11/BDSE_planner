@@ -1,3 +1,11 @@
+# Current branch: V64.3.51 EAF-ICER-POCR
+
+V50.7 is now provenance-closed and scientifically attributable. V50 PIOR QPE-only fails the preregistered selected-outcome identification gate (PIOR AUC 0.5087 but only 3/5-fold superiority versus both frozen baselines) and also fails the paired causal deployment gate.
+
+V51 follows the preregistered identification-failure branch: preserve paired on-policy outcome evidence, Q/P/E, RSMR and the low-capacity sign-risk control, and add only the runtime treatment/control execution contrast `D=||xi_proposal-xi_incumbent||_inf`. Two fixed arms test additive dose conditioning and dose-by-QPE interaction.
+
+Run `RUN_V64_3_51_EAF_ICER_POCR_TRAIN.sh`. The launcher reuses the existing metric-safe 502x2 TRAIN evidence and does not consume untouched validation.
+
 # BDSE current runnable package
 
 This package intentionally keeps only the current V64.3.50 PIOR entrypoint (V50.2 engineering revision), the two external-baseline entrypoints used by the current workflow, the BDSE source/config/test tree, the algorithm changelog, and the small legacy launcher/science-lock fixtures required by the V50 startup regression suite.

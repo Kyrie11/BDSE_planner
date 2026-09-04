@@ -1,0 +1,87 @@
+{
+  "algorithm_version": "V64.3.51-EAF-ICER-POCR",
+  "arms": [
+    {
+      "D": "linf(frozen_RSMR_proposal_trajectory-runtime_incumbent_trajectory)",
+      "name": "QPE+DOSE",
+      "order": 1,
+      "state": [
+        "Q",
+        "P-Q",
+        "E-P",
+        "D"
+      ]
+    },
+    {
+      "name": "QPE+DOSE-X",
+      "order": 2,
+      "state": [
+        "Q",
+        "P-Q",
+        "E-P",
+        "D",
+        "D*Q",
+        "D*(P-Q)",
+        "D*(E-P)"
+      ]
+    }
+  ],
+  "branches": {
+    "D effect-support identified but sign identification fail": "close scalar D as sufficient sign-state; next = richer temporal treatment/control contrast profile under paired evidence",
+    "D effect-support not identified": "close scalar operator-contrast family; reassess paired outcome state acquisition/measurement",
+    "QPE+DOSE pass": "promote additive state, freeze, untouched paired validation",
+    "identified but deployment fail": "next = structured paired closed-loop outcome functional; no new offline features",
+    "only QPE+DOSE-X pass": "promote interaction state, freeze, untouched paired validation"
+  },
+  "control": {
+    "must_exactly_replay_v50_7": true,
+    "name": "V50-QPE",
+    "state": [
+      "Q",
+      "P-Q",
+      "E-P"
+    ]
+  },
+  "deployment_gate": "exact V50 paired causal deployment gate unchanged",
+  "evidence_source": "metric-safe paired one-shot closed-loop treatment/control outcomes; no new TRAIN label collection",
+  "fresh_policy": "untouched validation remains unconsumed unless TRAIN preferred arm passes; after PASS no TRAIN tuning permitted",
+  "frozen": {
+    "calibration": "same finite-rank split-conformal rule as repaired V50",
+    "lambda": 1.0,
+    "outcome_label": "same V50 paired beneficial/hard-safety definition",
+    "retention_alpha": 0.07791855203619909,
+    "risk_family": "zero-bias pairwise selected sign risk",
+    "runtime_operator": "same winner or incumbent; no rerank/second-best/fallback",
+    "selector": "full-set RSMR"
+  },
+  "hypothesis": "Real paired selected-outcome law requires operator-relative treatment/control execution contrast in addition to frozen Q/P/E consequence coordinates.",
+  "identification_gate": {
+    "aggregate": "arm AUC > max(V50-QPE, EGO-REF, offline OBS)",
+    "folds": [
+      "arm > V50-QPE in >=4/5",
+      "arm > EGO-REF in >=4/5",
+      "arm > offline OBS in >=4/5"
+    ]
+  },
+  "population": "exact provenance-locked V50.5 TRAIN paired population, 502 full-set frozen RSMR proposals",
+  "prohibited": [
+    "QPE-only rescue",
+    "loss/lambda/class/focal/catastrophe weighting",
+    "threshold/calibration sweep",
+    "bigger MLP",
+    "K/logK/multiplicity",
+    "new offline future observable",
+    "V46 variance/temporal resurrection",
+    "V47 AGENT-2D resurrection",
+    "CVaR",
+    "selected translation",
+    "binary catastrophe veto",
+    "RSMR/B/M/topK/candidate-count changes",
+    "rerank/second-best/fallback",
+    "validation pooling"
+  ],
+  "promotion_order": [
+    "QPE+DOSE",
+    "QPE+DOSE-X"
+  ]
+}

@@ -1,0 +1,22 @@
+# V64.3.51 EAF-ICER-POCR TRAIN-only experiment
+# Reuses the provenance-locked V50.5 502x2 paired TRAIN evidence.
+# Does NOT rerun paired closed loop and does NOT consume untouched validation.
+
+cd bdse_v64_3_51_eaf_icer_pocr
+
+# Default historical output layout:
+bash RUN_V64_3_51_EAF_ICER_POCR_TRAIN.sh
+
+# Explicit server roots if needed:
+V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V50_7_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_7_eaf_icer_pior_provenance_repair_v1 \
+bash RUN_V64_3_51_EAF_ICER_POCR_TRAIN.sh
+
+# Decision rule after run:
+# 1) QPE+DOSE identification+deployment PASS -> freeze additive arm; untouched paired validation next.
+# 2) additive fails, QPE+DOSE-X PASS -> freeze interaction arm; untouched paired validation next.
+# 3) state identified but deployment FAIL -> next branch is structured paired closed-loop outcome functional.
+# 4) D identifies effect support but neither state identifies sign -> close scalar D as sufficient sign-state; richer temporal treatment/control contrast next.
+# 5) D itself not identifiable -> close scalar contrast family and reassess paired outcome state acquisition.
+# Never tune TRAIN after PASS and never consume untouched validation after a TRAIN STOP.

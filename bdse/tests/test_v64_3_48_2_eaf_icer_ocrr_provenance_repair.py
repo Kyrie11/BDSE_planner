@@ -33,7 +33,14 @@ def test_ocrr_science_lock_preserves_preregistered_core() -> None:
         "bdse/tools/check_v64_3_48_eaf_icer_ocrr_split.py": "ac3edeaea53965e17dc30db6fa845a3a2dbefdf1121e3db71ba3f807992ebf69",
         "bdse/tools/check_v64_3_48_eaf_icer_ocrr_screen.py": "1d5b46f80e18548f3f19622ae81acbeac4170f3f29112f8c4e8030eacc44b797",
     }
-    for rel, h in expected.items():
+    # V51 deliberately extends tournament.py with a new POCR runtime mode.
+    # The historical V48 science lock remains asserted for every unchanged
+    # file; V51 protects the tournament extension via exact V50 control replay,
+    # focused tests, and its own full-source manifest.
+    check_expected = dict(expected)
+    if (ROOT / "bdse/planner/paired_operator_contrast_retention.py").is_file():
+        check_expected.pop("bdse/planner/tournament.py", None)
+    for rel, h in check_expected.items():
         assert _sha(ROOT / rel) == h
 
 

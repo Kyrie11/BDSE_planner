@@ -1,0 +1,32 @@
+V64.3.51 EAF-ICER-POCR engineering validation
+
+Scientific change scope:
+- NEW: operator-relative execution contrast state D = ||trajectory_proposal - trajectory_incumbent||_inf.
+- NEW causal arms: QPE+DOSE and QPE+DOSE-X.
+- UNCHANGED: frozen full-set RSMR proposal, Q/P/E consequence views, paired outcome labels, zero-bias pairwise sign-risk family, lambda=1, retention alpha/rank rule, same-winner-or-incumbent containment, no rerank/second-best/fallback.
+
+Focused validation:
+- V51 + V50.6 + V50 + V50.5 + V48 focused suite: 54/54 PASS before full sharding.
+- Python compileall: PASS.
+- V51 launcher bash -n: PASS.
+
+Full repository regression:
+- collected tests: 623.
+- four mutually exclusive/exhaustive node-id shards:
+  shard0: 156/156 PASS, 12 historical warnings
+  shard1: 156/156 PASS, 12 historical warnings
+  shard2: 156/156 PASS, 9 historical warnings
+  shard3: 155/155 PASS, 7 historical warnings
+- total: 623/623 PASS.
+
+Provenance discipline:
+- V51 source manifest is generated after finalizing the package and verified with sha256sum -c.
+- launcher hard-checks V51 source manifest before scientific fit.
+- launcher hard-checks V50.7 provenance/source-identity state and exact V50 fit-report SHA256.
+- launcher hard-checks the reused paired evidence SHA256 and metric-safe 502/502 control/treatment populations.
+- exact V50 QPE nested result is replayed inside V51 fit before any V51 attribution; aggregate/fold AUC drift is ENGINEERING STOP.
+
+Runtime information contract:
+- operator contrast uses only the already-generated frozen proposal and incumbent candidate trajectory tensors available before execution.
+- no teacher, logged future, future metric, candidate multiplicity, label-dependent agent selection or validation information enters runtime.
+- untouched validation is not consumed by the TRAIN launcher.

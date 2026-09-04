@@ -90,6 +90,12 @@ def test_science_critical_v50_files_remain_byte_identical() -> None:
         "bdse/tools/build_v64_3_50_pior_train_manifest.py": "02b027447bd5dbfbe44e8d58ca39380df44c709a48a8e1523057826b354e5225",
         "bdse/tools/make_v64_3_50_pior_probe_configs.py": "6d8cd2f869cde7856d07cb09a9260c08907e2f11042d49ea8603668c838b9fad",
     }
+    # V51 intentionally extends tournament.py with a new post-selection mode.
+    # Historical V48/V50 locks still apply to every unchanged parent file;
+    # tournament behavior is protected by exact V50 control replay plus V51
+    # focused tests and the V51 full-source manifest.
+    if (root / "bdse/planner/paired_operator_contrast_retention.py").is_file():
+        expected.pop("bdse/planner/tournament.py", None)
     for rel, want in expected.items():
         got = hashlib.sha256((root / rel).read_bytes()).hexdigest()
         assert got == want, (rel, got, want)
