@@ -1,0 +1,68 @@
+V64.3.50.6 EAF-ICER-PIOR FIT-ONLY REPAIR — ENGINEERING VALIDATION
+===================================================================
+
+Scientific status
+-----------------
+V50.5 uploaded result verdict: ENGINEERING / ANALYSIS-PIPELINE STOP.
+V50 scientific GO/STOP: NOT EVALUATED.
+V50.6 is an engineering repair, not V51, and makes no scientific-mechanism change.
+
+Input evidence audit
+--------------------
+V50.5 paired outcome count: 502/502 unique tokens
+control: 502/502 successful, 0 failed
+ treatment: 502/502 successful, 0 failed
+V50.5 metric-safety full audit: PASS for both arms
+paired beneficial: 121
+paired nonbeneficial: 381
+paired hard-harm: 25
+beneficial by frozen outer fold: 29 / 22 / 15 / 28 / 27
+
+Blocking defects fixed
+----------------------
+1) inherited V48 fixed n>=16 calibration guard
+   - frozen alpha: ~0.077918552
+   - n=15 fold requests exact rank 15 and is finite
+   - exact finite-rank minimum at frozen alpha: 12
+   - V50.6 keeps alpha/score/folds/rank rule and changes only support validation
+
+2) nested OOF keep-mask positional misalignment
+   - original rows: scenario-token sorted
+   - original aggregate keep: fold-concatenated
+   - positional token matches on uploaded fold assignment: 3/502
+   - V50.6 aligns keep decisions by scenario_token before aggregate metrics
+
+Science-lock validation
+-----------------------
+V64_3_50_SOURCE_MANIFEST.sha256: PASS
+V64_3_50_5_ENGINEERING_MANIFEST.sha256: PASS
+Original fit_v64_3_50_eaf_icer_pior.py SHA256 unchanged:
+  c1c1d297766d8a2e43430739d639ff1ed73f866ec193b47a5dc9e7cb997727aa
+Original tournament.py SHA256 unchanged:
+  291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044
+Original nuplan_planner.py SHA256 unchanged:
+  c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef
+
+Code validation
+---------------
+Python compileall: PASS
+RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh bash -n: PASS
+Focused regression (V48/V50/V50.5/V50.6): 45/45 PASS
+Two broader deterministic shards: 185 + 147 = 332 PASS, no failures
+Whole repository run: reached ~93% without a reported failure before the tool execution window timed out.
+IMPORTANT: the incomplete whole-repository run is NOT claimed as a full-repository PASS.
+
+Safe acceleration
+-----------------
+Uploaded V50.5 stage timing:
+paired one-shot closed-loop collection: 79,541 s (~22.1 h)
+nested fit before exception: 2 s
+
+V50.6 therefore reuses ONLY the exact already-collected V50.5 502x2 metric-safe TRAIN evidence and reruns the repaired fit. No closed-loop recollection, scene-count reduction, worker/replan change, candidate change, metric change, or untouched validation is performed.
+
+Next command
+------------
+cd bdse_v64_3_50_6_eaf_icer_pior_fitrepair
+V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+bash RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh

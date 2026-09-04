@@ -12663,3 +12663,94 @@ Do not design V51 until V50.5 obtains exact 502/502 paired data and executes the
 cd bdse_v64_3_50_5_eaf_icer_pior_metricsafe
 bash RUN_V64_3_50_5_EAF_ICER_PIOR_TRAIN_2GPU.sh
 ```
+
+---
+
+# V64.3.50.6 engineering-only fit repair — finite-rank calibration + token-aligned OOF aggregation
+
+## V50.5 uploaded-result reliability verdict
+
+**ENGINEERING / ANALYSIS-PIPELINE STOP; V50 PIOR scientific GO/STOP is NOT EVALUATED.**
+
+Unlike V50.4, the V50.5 metric-safe paired collection itself is complete and reusable:
+
+- exact frozen TRAIN population: **502/502** unique scenario tokens;
+- control: **502/502 successful**, zero failed batches/scenarios;
+- treatment: **502/502 successful**, zero failed batches/scenarios;
+- V50.5 full metric-safety audit: **PASS** for both arms, 9 valid certificates/arm, 502 certified scenarios/arm, no metric-engine failure logs and no missing metric-safe markers;
+- paired outcome table: **502/502**, with **121 beneficial**, **381 nonbeneficial**, and **25 hard-harm** outcomes;
+- beneficial counts across frozen outer folds: **29 / 22 / 15 / 28 / 27**.
+
+The run nevertheless cannot support algorithm attribution because the preregistered nested PIOR analysis never completed and the original V50 fit implementation contains two analysis-pipeline defects.
+
+## Defect A — inherited V48 fixed `n >= 16` support guard
+
+V50 imported V48's `_conformal_threshold()` unchanged. That helper raises whenever the positive calibration count is below 16. In V50.5, one frozen calibration fold contains exactly **15** paired beneficial outcomes, which causes the observed exception before the nested gate can finish.
+
+The frozen V50 retention alpha remains approximately `0.077918552`. V48/V50 use rank
+
+`ceil((n + 1) * (1 - alpha))`.
+
+For `n=15`, the requested rank is exactly **15**, so a finite empirical threshold exists. More generally the finite-rank condition is
+
+`ceil((n + 1) * (1 - alpha)) <= n`,
+
+which at the frozen alpha requires at least **12** positive calibration examples. Therefore the fixed V48 `n>=16` guard is not part of the V50 scientific preregistration and is stricter than the rank rule actually used.
+
+V50.6 replaces only that inherited guard with the exact finite-rank condition. Alpha, calibration fold, risk score and quantile/rank rule are unchanged. If the exact finite-rank condition fails, V50.6 still fails closed.
+
+## Defect B — OOF keep-mask order mismatch in aggregate deployment gate
+
+The original V50 `_join()` sorts the 502 rows by `scenario_token`. `_nested()` then builds each fold's keep decisions correctly but concatenates them in fold order (`fold0, fold1, ... fold4`) and passes that list positionally to `_delta_metrics(rows, all_keep)` where `rows` remain token-sorted.
+
+On the uploaded frozen fold assignment, token-sorted order and fold-concatenated order coincide at only **3/502** positions. Consequently, even if Defect A were bypassed, aggregate retained-count / beneficial-recall / hard-harm / negative-RMS / score-sum metrics could be assigned to the wrong scenarios. Per-fold metrics and fold-consistent AUC arrays are not affected by this specific ordering bug, but the aggregate deployment gate is scientifically invalid.
+
+V50.6 keys each OOF keep decision by `scenario_token`, verifies exact one-to-one token identity, and reorders the mask to the token-sorted row order before aggregate metrics.
+
+## Scientific mechanism unchanged
+
+V50.6 is **not V51** and introduces no new algorithm family. It does not alter:
+
+- frozen full-set RSMR selection;
+- Q/P/E runtime state `[Q, P-Q, E-P]`;
+- zero-bias pairwise sign-risk family;
+- `lambda=1`;
+- paired closed-loop outcome labels;
+- hard-safety definition;
+- frozen retention alpha / capture budget;
+- split-conformal rank rule;
+- veto-only same-winner-or-incumbent runtime contract;
+- rerank / second-best / fallback prohibition;
+- any previously closed algorithm family.
+
+No new mechanism is promoted or closed from V50.5 because no valid V50 nested scientific result exists yet.
+
+## Safe acceleration decision
+
+The expensive V50.5 paired collection consumed about **79,541 s (~22.1 h)**, whereas the failing nested fit took about **2 s**. Because the 502x2 V50.5 paired evidence and metric-safety audit are complete, homogeneous and provenance-audited, rerunning closed-loop simulation would add no scientific information and would only duplicate the same TRAIN evidence.
+
+V50.6 therefore uses a **fit-only repair launcher** that rechecks the original V50 science manifest, V50.5 engineering manifest, exact 502-token identity and metric-safety audit, then reuses the existing paired outcome file and reruns only the repaired nested fit. This is the largest safe speedup and changes neither experiment size nor causal estimand.
+
+Do not reduce the 502 TRAIN population, change replan cadence, candidate count, worker count, simulator challenge, metrics, or paired arms in response to this failed analysis run. Those changes are unnecessary for the repair and would confound the preregistered test.
+
+## Validation status
+
+- Python compileall: **PASS**.
+- V48/V50/V50.5/V50.6 focused regression: **45/45 PASS**.
+- Original V50 science-critical file SHA checks in the new unit tests: **PASS**.
+- V50.6 launcher `bash -n`: **PASS**.
+- Two broader deterministic shards completed: **185 + 147 = 332 tests PASS**, no failures.
+- A whole-repository run reached ~93% without a reported failure before the execution environment timed out; this is **not claimed as a complete full-repository PASS**.
+
+## Next step
+
+Run only the V50.6 fit repair against the existing V50.5 result root:
+
+```bash
+cd bdse_v64_3_50_6_eaf_icer_pior_fitrepair
+V50_5_ROOT=/path/to/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+bash RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh
+```
+
+Only after this repaired nested TRAIN gate completes may V50 receive a scientific GO/STOP judgment. If it fails, follow the original V50 preregistered branch indicated by identification-vs-retention failure; if it passes, freeze PIOR and move to untouched paired closed-loop validation without TRAIN tuning.

@@ -1,0 +1,75 @@
+{
+  "algorithm_changes_permitted": false,
+  "audit": "v64_3_50_5_uploaded_result_reliability_audit_for_v64_3_50_6",
+  "blocking_defects": [
+    {
+      "beneficial_by_outer_fold": [
+        29,
+        22,
+        15,
+        28,
+        27
+      ],
+      "cause": "V50 imports V48 _conformal_threshold with fixed n<16 ValueError; one V50 paired calibration fold has 15 beneficial outcomes.",
+      "finite_rank_minimum_positive_count": 12,
+      "frozen_alpha": 0.077918552,
+      "id": "V50_FIT_CALIBRATION_SUPPORT_GUARD",
+      "rank_at_n15": 15,
+      "repair": "same alpha/score/folds/rank rule; replace unrelated fixed n16 guard by fail-closed finite-rank condition ceil((n+1)(1-alpha))<=n",
+      "severity": "blocking_exception",
+      "trigger_count": 15
+    },
+    {
+      "cause": "OOF keep is concatenated by fold but applied positionally to scenario-token-sorted rows.",
+      "id": "V50_NESTED_OOF_KEEP_POSITIONAL_MISALIGNMENT",
+      "matching_positions_token_sorted_vs_fold_concatenated": 3,
+      "repair": "key each OOF keep by scenario_token and exact-align before aggregate _delta_metrics",
+      "severity": "silent_scientific_corruption_if_fit_reaches_aggregate_gate",
+      "total_positions": 502
+    }
+  ],
+  "input_sha256": {
+    "bdse_zip": "ad55a789bc5385c24dd6ba6b0d5d487a9db9d8ac99afef7f708eac1286f31919",
+    "large_model_suggestions_md": "3149245a726239624a4cbc26f60791218725bce43ae1cfc0d382b5b96e419865",
+    "outputs_zip": "2d2bc503fc4a2d4b48dadbcdf7e377b384d2cc5b33fd0fd144f6fe94a41128f4",
+    "tex": "ede63e7e6c0e7e027510eb5a40279a55f16fe7d28bfc7e2c5dab1560296263c3"
+  },
+  "new_algorithm_family_closed": false,
+  "new_algorithm_family_promoted": false,
+  "next_step": "run V64.3.50.6 fit-only repair on the same complete V50.5 paired evidence; do not consume untouched validation until repaired TRAIN gate completes",
+  "paired_evidence": {
+    "beneficial_by_outer_fold": [
+      29,
+      22,
+      15,
+      28,
+      27
+    ],
+    "beneficial_count": 121,
+    "control_batches": 9,
+    "control_failures": 0,
+    "control_scenarios": 502,
+    "hard_harm_count": 25,
+    "metric_safety_full_audit_pass": true,
+    "nonbeneficial_count": 381,
+    "pair_report_pass": true,
+    "paired_outcomes_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
+    "scenario_count": 502,
+    "score_delta_negative": 171,
+    "score_delta_positive": 122,
+    "score_delta_zero": 209,
+    "treatment_batches": 9,
+    "treatment_failures": 0,
+    "treatment_scenarios": 502,
+    "unique_tokens": 502
+  },
+  "safe_acceleration": {
+    "decision": "reuse exact V50.5 paired evidence and rerun fit only; do not reduce 502 population or alter simulator/planner settings",
+    "failed_nested_fit_seconds": 2,
+    "paired_collection_hours": 22.094722222222224,
+    "paired_collection_seconds": 79541
+  },
+  "scientific_attribution_allowed": false,
+  "v50_scientific_status": "NOT_EVALUATED",
+  "verdict": "ENGINEERING_ANALYSIS_PIPELINE_STOP"
+}

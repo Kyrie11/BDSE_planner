@@ -1,0 +1,582 @@
+--- /mnt/data/work_bdse/ALGORITHM_CHANGELOG.md	2026-09-04 03:08:38.424982291 +0000
++++ ALGORITHM_CHANGELOG.md	2026-09-04 03:19:16.248693802 +0000
+@@ -12663,3 +12663,94 @@
+ cd bdse_v64_3_50_5_eaf_icer_pior_metricsafe
+ bash RUN_V64_3_50_5_EAF_ICER_PIOR_TRAIN_2GPU.sh
+ ```
++
++---
++
++# V64.3.50.6 engineering-only fit repair — finite-rank calibration + token-aligned OOF aggregation
++
++## V50.5 uploaded-result reliability verdict
++
++**ENGINEERING / ANALYSIS-PIPELINE STOP; V50 PIOR scientific GO/STOP is NOT EVALUATED.**
++
++Unlike V50.4, the V50.5 metric-safe paired collection itself is complete and reusable:
++
++- exact frozen TRAIN population: **502/502** unique scenario tokens;
++- control: **502/502 successful**, zero failed batches/scenarios;
++- treatment: **502/502 successful**, zero failed batches/scenarios;
++- V50.5 full metric-safety audit: **PASS** for both arms, 9 valid certificates/arm, 502 certified scenarios/arm, no metric-engine failure logs and no missing metric-safe markers;
++- paired outcome table: **502/502**, with **121 beneficial**, **381 nonbeneficial**, and **25 hard-harm** outcomes;
++- beneficial counts across frozen outer folds: **29 / 22 / 15 / 28 / 27**.
++
++The run nevertheless cannot support algorithm attribution because the preregistered nested PIOR analysis never completed and the original V50 fit implementation contains two analysis-pipeline defects.
++
++## Defect A — inherited V48 fixed `n >= 16` support guard
++
++V50 imported V48's `_conformal_threshold()` unchanged. That helper raises whenever the positive calibration count is below 16. In V50.5, one frozen calibration fold contains exactly **15** paired beneficial outcomes, which causes the observed exception before the nested gate can finish.
++
++The frozen V50 retention alpha remains approximately `0.077918552`. V48/V50 use rank
++
++`ceil((n + 1) * (1 - alpha))`.
++
++For `n=15`, the requested rank is exactly **15**, so a finite empirical threshold exists. More generally the finite-rank condition is
++
++`ceil((n + 1) * (1 - alpha)) <= n`,
++
++which at the frozen alpha requires at least **12** positive calibration examples. Therefore the fixed V48 `n>=16` guard is not part of the V50 scientific preregistration and is stricter than the rank rule actually used.
++
++V50.6 replaces only that inherited guard with the exact finite-rank condition. Alpha, calibration fold, risk score and quantile/rank rule are unchanged. If the exact finite-rank condition fails, V50.6 still fails closed.
++
++## Defect B — OOF keep-mask order mismatch in aggregate deployment gate
++
++The original V50 `_join()` sorts the 502 rows by `scenario_token`. `_nested()` then builds each fold's keep decisions correctly but concatenates them in fold order (`fold0, fold1, ... fold4`) and passes that list positionally to `_delta_metrics(rows, all_keep)` where `rows` remain token-sorted.
++
++On the uploaded frozen fold assignment, token-sorted order and fold-concatenated order coincide at only **3/502** positions. Consequently, even if Defect A were bypassed, aggregate retained-count / beneficial-recall / hard-harm / negative-RMS / score-sum metrics could be assigned to the wrong scenarios. Per-fold metrics and fold-consistent AUC arrays are not affected by this specific ordering bug, but the aggregate deployment gate is scientifically invalid.
++
++V50.6 keys each OOF keep decision by `scenario_token`, verifies exact one-to-one token identity, and reorders the mask to the token-sorted row order before aggregate metrics.
++
++## Scientific mechanism unchanged
++
++V50.6 is **not V51** and introduces no new algorithm family. It does not alter:
++
++- frozen full-set RSMR selection;
++- Q/P/E runtime state `[Q, P-Q, E-P]`;
++- zero-bias pairwise sign-risk family;
++- `lambda=1`;
++- paired closed-loop outcome labels;
++- hard-safety definition;
++- frozen retention alpha / capture budget;
++- split-conformal rank rule;
++- veto-only same-winner-or-incumbent runtime contract;
++- rerank / second-best / fallback prohibition;
++- any previously closed algorithm family.
++
++No new mechanism is promoted or closed from V50.5 because no valid V50 nested scientific result exists yet.
++
++## Safe acceleration decision
++
++The expensive V50.5 paired collection consumed about **79,541 s (~22.1 h)**, whereas the failing nested fit took about **2 s**. Because the 502x2 V50.5 paired evidence and metric-safety audit are complete, homogeneous and provenance-audited, rerunning closed-loop simulation would add no scientific information and would only duplicate the same TRAIN evidence.
++
++V50.6 therefore uses a **fit-only repair launcher** that rechecks the original V50 science manifest, V50.5 engineering manifest, exact 502-token identity and metric-safety audit, then reuses the existing paired outcome file and reruns only the repaired nested fit. This is the largest safe speedup and changes neither experiment size nor causal estimand.
++
++Do not reduce the 502 TRAIN population, change replan cadence, candidate count, worker count, simulator challenge, metrics, or paired arms in response to this failed analysis run. Those changes are unnecessary for the repair and would confound the preregistered test.
++
++## Validation status
++
++- Python compileall: **PASS**.
++- V48/V50/V50.5/V50.6 focused regression: **45/45 PASS**.
++- Original V50 science-critical file SHA checks in the new unit tests: **PASS**.
++- V50.6 launcher `bash -n`: **PASS**.
++- Two broader deterministic shards completed: **185 + 147 = 332 tests PASS**, no failures.
++- A whole-repository run reached ~93% without a reported failure before the execution environment timed out; this is **not claimed as a complete full-repository PASS**.
++
++## Next step
++
++Run only the V50.6 fit repair against the existing V50.5 result root:
++
++```bash
++cd bdse_v64_3_50_6_eaf_icer_pior_fitrepair
++V50_5_ROOT=/path/to/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
++V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
++bash RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh
++```
++
++Only after this repaired nested TRAIN gate completes may V50 receive a scientific GO/STOP judgment. If it fails, follow the original V50 preregistered branch indicated by identification-vs-retention failure; if it passes, freeze PIOR and move to untouched paired closed-loop validation without TRAIN tuning.
+--- /dev/null	2026-09-04 03:08:23.524368318 +0000
++++ bdse/tools/fit_v64_3_50_6_eaf_icer_pior.py	2026-09-04 03:13:42.102391245 +0000
+@@ -0,0 +1,295 @@
++from __future__ import annotations
++
++"""V64.3.50.6 engineering repair for the preregistered V50 PIOR fit.
++
++Scientific mechanism is unchanged from V64.3.50 PIOR.  This module fixes two
++analysis-pipeline defects that prevented/corrupted evaluation of the already
++collected paired closed-loop outcomes:
++
++1. V50 imported V48's historical fixed ``n >= 16`` calibration guard.  The
++   actual V50 paired-outcome calibration fold has 15 beneficial examples, even
++   though 15 is sufficient for the frozen alpha under the exact finite-sample
++   split-conformal rank.  We therefore use the mathematically required finite
++   rank condition ``ceil((n+1)(1-alpha)) <= n`` rather than V48's unrelated
++   fixed support guard.  Alpha, calibration fold, score, and quantile rule are
++   unchanged.
++2. V50 concatenated per-fold OOF keep decisions in fold order and then applied
++   them positionally to token-sorted rows for the aggregate deployment gate.
++   We align OOF decisions by scenario_token before aggregate metrics.
++
++No feature, label, loss, lambda, selector, threshold budget, safety definition,
++or runtime policy is changed.
++"""
++
++import argparse
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from bdse.tools import fit_v64_3_50_eaf_icer_pior as v50
++from bdse.tools.fit_v64_3_48_eaf_icer_ocrr import _fit_sign_ranker, _risk
++from bdse.tools.fit_v64_3_49_eaf_icer_siir import _auc
++
++EPS = v50.EPS
++FOLDS = v50.FOLDS
++
++
++def _pior_conformal_threshold(
++    cal: list[dict[str, Any]], model: dict[str, Any], alpha: float
++) -> tuple[float, dict[str, Any]]:
++    """Frozen-alpha split-conformal threshold with the exact finite-sample rank.
++
++    A finite empirical threshold exists iff
++        ceil((n + 1) * (1 - alpha)) <= n.
++    This is the only sample-size condition needed by the rank rule used in V48
++    and preregistered for V50.  We fail closed rather than clipping the rank when
++    the condition is not met.
++    """
++    if not (0.0 < float(alpha) < 1.0):
++        raise ValueError(f"V50.6 invalid retention alpha: {alpha}")
++    vals = sorted(
++        _risk(r, model)
++        for r in cal
++        if int(r["rsm_selected_action"]) >= 0
++        and float(r["rsm_selected_teacher_improvement"]) > 0.0
++    )
++    n = len(vals)
++    rank = int(math.ceil((n + 1) * (1.0 - float(alpha)))) if n else 1
++    min_n_for_finite_rank = int(math.ceil((1.0 - float(alpha)) / float(alpha)))
++    if n == 0 or rank > n:
++        raise ValueError(
++            "V50.6 calibration has insufficient paired beneficial outcomes for "
++            f"a finite frozen-alpha split-conformal threshold: n={n}, "
++            f"required_at_least={min_n_for_finite_rank}, alpha={alpha:.12g}, "
++            f"requested_rank={rank}"
++        )
++    tau = float(vals[rank - 1])
++    return tau, {
++        "positive_calibration_count": n,
++        "conformal_rank": rank,
++        "alpha": float(alpha),
++        "threshold": tau,
++        "finite_sample_condition": "ceil((n+1)*(1-alpha))<=n",
++        "minimum_positive_count_for_finite_rank": min_n_for_finite_rank,
++        "engineering_repair": "V50.6_removed_unrelated_V48_fixed_n16_guard_without_changing_rank_rule",
++    }
++
++
++def _align_oof_keep_by_token(
++    rows: list[dict[str, Any]], keep_by_token: dict[str, bool]
++) -> list[bool]:
++    tokens = [str(r["scenario_token"]) for r in rows]
++    if len(tokens) != len(set(tokens)):
++        raise RuntimeError("V50.6 ENGINEERING STOP: duplicate scenario_token in PIOR rows")
++    if set(tokens) != set(keep_by_token):
++        missing = sorted(set(tokens) - set(keep_by_token))
++        extra = sorted(set(keep_by_token) - set(tokens))
++        raise RuntimeError(
++            "V50.6 ENGINEERING STOP: OOF keep/token identity mismatch "
++            f"missing={missing[:10]} extra={extra[:10]}"
++        )
++    return [bool(keep_by_token[t]) for t in tokens]
++
++
++def _nested(rows: list[dict[str, Any]], alpha: float) -> dict[str, Any]:
++    folds: list[dict[str, Any]] = []
++    all_target: list[bool] = []
++    all_ego: list[float] = []
++    all_obs: list[float] = []
++    all_pior: list[float] = []
++    keep_by_token: dict[str, bool] = {}
++    p_better_obs = p_better_ego = 0
++
++    for k in range(FOLDS):
++        cf = (k + 1) % FOLDS
++        fit = [r for r in rows if int(r["outer_test_fold"]) not in {k, cf}]
++        cal = [r for r in rows if int(r["outer_test_fold"]) == cf]
++        test = [r for r in rows if int(r["outer_test_fold"]) == k]
++        model = _fit_sign_ranker(fit, False)
++        tau, cal_info = _pior_conformal_threshold(cal, model, alpha)
++
++        target = np.asarray([not bool(r["closed_loop_beneficial"]) for r in test], dtype=bool)
++        ego = np.asarray([-float(r["ego_ref_value"]) for r in test], dtype=np.float64)
++        obs = np.asarray([float(r["v49_obs_sign_risk"]) for r in test], dtype=np.float64)
++        pior = np.asarray([_risk(r, model) for r in test], dtype=np.float64)
++        keep = [bool(x <= tau) for x in pior]
++        for r, kkeep in zip(test, keep):
++            tok = str(r["scenario_token"])
++            if tok in keep_by_token:
++                raise RuntimeError(f"V50.6 ENGINEERING STOP: duplicate OOF keep for {tok}")
++            keep_by_token[tok] = bool(kkeep)
++
++        ae = _auc(target, ego)
++        ao = _auc(target, obs)
++        ap = _auc(target, pior)
++        p_better_ego += int(math.isfinite(ap) and math.isfinite(ae) and ap > ae + EPS)
++        p_better_obs += int(math.isfinite(ap) and math.isfinite(ao) and ap > ao + EPS)
++        base_m = v50._delta_metrics(test, [True] * len(test))
++        pior_m = v50._delta_metrics(test, keep)
++        folds.append(
++            {
++                "fold": k,
++                "fit_events": len(fit),
++                "calibration_events": len(cal),
++                "test_events": len(test),
++                "rsmr": base_m,
++                "pior": pior_m,
++                "risk_identification": {
++                    "ego_ref_auc": ae,
++                    "offline_obs_auc": ao,
++                    "pior_auc": ap,
++                    "pior_better_ego": ap > ae + EPS,
++                    "pior_better_obs": ap > ao + EPS,
++                },
++                "calibration": cal_info,
++            }
++        )
++        all_target.extend(target.tolist())
++        all_ego.extend(ego.tolist())
++        all_obs.extend(obs.tolist())
++        all_pior.extend(pior.tolist())
++
++    target = np.asarray(all_target, dtype=bool)
++    ego = np.asarray(all_ego)
++    obs = np.asarray(all_obs)
++    pior = np.asarray(all_pior)
++    ae = _auc(target, ego)
++    ao = _auc(target, obs)
++    ap = _auc(target, pior)
++    identified = bool(ap > max(ae, ao) + EPS and p_better_ego >= 4 and p_better_obs >= 4)
++
++    aligned_keep = _align_oof_keep_by_token(rows, keep_by_token)
++    base = v50._delta_metrics(rows, [True] * len(rows))
++    kept = v50._delta_metrics(rows, aligned_keep)
++    gate = v50._gate(base, kept, alpha, folds)
++    return {
++        "folds": folds,
++        "retention_alpha": alpha,
++        "rsmr_interventional_outcome_aggregate": base,
++        "pior_aggregate": kept,
++        "risk_identification": {
++            "aggregate_ego_ref_auc_on_closed_loop_outcome": ae,
++            "aggregate_offline_obs_auc_on_closed_loop_outcome": ao,
++            "aggregate_pior_auc_on_closed_loop_outcome": ap,
++            "pior_better_ego_fold_count": p_better_ego,
++            "pior_better_offline_obs_fold_count": p_better_obs,
++            "identified": identified,
++        },
++        "deployment_gate": gate,
++        "train_gate_pass": bool(identified and gate["pass"]),
++        "failure_diagnosis": (
++            "paired_interventional_outcome_identification_and_retention_pass"
++            if identified and gate["pass"]
++            else "closed_loop_outcome_identifiable_but_retention_functional_insufficient"
++            if identified
++            else "paired_closed_loop_outcome_source_does_not_identify_transportable_QPE_retention_risk"
++        ),
++        "engineering_repair": {
++            "oof_keep_alignment": "scenario_token_keyed_before_aggregate_metrics",
++            "calibration": "exact_finite_sample_rank_same_frozen_alpha_no_threshold_sweep",
++        },
++    }
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(
++        description="V64.3.50.6 fit-only engineering repair for V50 PIOR on already collected paired outcomes."
++    )
++    ap.add_argument("--v49-fit-report", type=Path, required=True)
++    ap.add_argument("--v49-candidate-audit", type=Path, required=True)
++    ap.add_argument("--v49-scene-audit", type=Path, required=True)
++    ap.add_argument("--v49-siir-config", type=Path, required=True)
++    ap.add_argument("--paired-outcomes", type=Path, required=True)
++    ap.add_argument("--output-config", type=Path, required=True)
++    ap.add_argument("--output-report", type=Path, required=True)
++    a = ap.parse_args()
++
++    v49 = v50._check_v49(a.v49_fit_report)
++    alpha = float(v49["nested_crossfit"]["retention_alpha"])
++    states = v50._candidate_states(a.v49_candidate_audit)
++    obs = v50._obs_risk(a.v49_scene_audit)
++    rows = v50._join(states, a.paired_outcomes, obs)
++    nested = _nested(rows, alpha)
++
++    fit = [r for r in rows if int(r["outer_test_fold"]) != 0]
++    cal = [r for r in rows if int(r["outer_test_fold"]) == 0]
++    model = _fit_sign_ranker(fit, False)
++    tau, cal_info = _pior_conformal_threshold(cal, model, alpha)
++
++    report = {
++        "audit": "v64_3_50_6_eaf_icer_pior_fit_repair",
++        "algorithm_version": "V64.3.50-EAF-ICER-PIOR",
++        "engineering_revision": "V64.3.50.6",
++        "scientific_mechanism_unchanged": True,
++        "repair_scope": [
++            "replace_inherited_V48_fixed_n16_calibration_guard_with_exact_finite_sample_rank_condition",
++            "align_nested_OOF_keep_decisions_to_rows_by_scenario_token_before_aggregate_gate",
++        ],
++        "frozen_contract": {
++            "RSMR_selector_unchanged": True,
++            "Q_P_E_runtime_state_unchanged": True,
++            "zero_bias_pairwise_sign_risk_unchanged": True,
++            "lambda": 1.0,
++            "retention_alpha_unchanged": True,
++            "split_conformal_rank_rule_unchanged": True,
++            "paired_outcome_labels_unchanged": True,
++            "hard_safety_definition_unchanged": True,
++            "same_winner_or_incumbent_only": True,
++            "no_rerank_second_best_fallback": True,
++        },
++        "nested_crossfit": nested,
++        "final_runtime_fit": {"model": model, "calibration": cal_info},
++        "train_gate_pass": bool(nested["train_gate_pass"]),
++        "preregistered_next_branch": {
++            "if_train_pass": "freeze_PIOR_and_run_untouched_paired_closed_loop_validation; no TRAIN tuning",
++            "if_train_fail_identification": "QPE state is insufficient for paired selected-outcome discrimination; move to on-policy structured outcome state/evidence, not offline sweeps",
++            "if_train_fail_retention": "low-capacity sign-risk functional is insufficient despite identifiable paired outcome; next branch is structured closed-loop outcome functional under on-policy evidence",
++        },
++    }
++    a.output_report.parent.mkdir(parents=True, exist_ok=True)
++    a.output_report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++    if not nested["train_gate_pass"]:
++        try:
++            if a.output_config.exists():
++                a.output_config.unlink()
++        except OSError:
++            pass
++        print(
++            json.dumps(
++                {
++                    "pass": False,
++                    "failure_diagnosis": nested["failure_diagnosis"],
++                    "output_config_emitted": False,
++                    "engineering_revision": "V64.3.50.6",
++                },
++                sort_keys=True,
++            )
++        )
++        raise SystemExit(
++            f"V64.3.50.6 PIOR nested TRAIN gate failed ({nested['failure_diagnosis']}); "
++            "scientific STOP before untouched closed-loop validation"
++        )
++
++    # Runtime mechanism is still exactly V50 PIOR; decorate with the frozen V50
++    # runtime schema after the repaired scientific gate passes.
++    v50._decorate(a.v49_siir_config, model, tau, a.output_config)
++    print(
++        json.dumps(
++            {
++                "pass": True,
++                "failure_diagnosis": nested["failure_diagnosis"],
++                "output_config": str(a.output_config),
++                "output_config_emitted": True,
++                "engineering_revision": "V64.3.50.6",
++            },
++            sort_keys=True,
++        )
++    )
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null	2026-09-04 03:08:23.524368318 +0000
++++ bdse/tests/test_v64_3_50_6_pior_fit_repair.py	2026-09-04 03:13:42.103216190 +0000
+@@ -0,0 +1,77 @@
++from __future__ import annotations
++
++import math
++from pathlib import Path
++
++import pytest
++
++from bdse.tools import fit_v64_3_50_6_eaf_icer_pior as repair
++
++
++def _model() -> dict:
++    return {
++        "use_extremal_multiplicity": False,
++        "feature_mean": [0.0, 0.0, 0.0, 0.0],
++        "feature_std": [1.0, 1.0, 1.0, 1.0],
++        "weights": [1.0, 0.0, 0.0, 0.0],
++        "fit_positive_score_mean": 0.0,
++        "fit_positive_score_std": 1.0,
++    }
++
++
++def _row(i: int, positive: bool = True) -> dict:
++    return {
++        "scenario_token": f"tok{i:03d}",
++        "rsm_selected_action": 0,
++        "rsm_selected_teacher_improvement": 1.0 if positive else -1.0,
++        "quality_value": float(i),
++        "plan_control_value": float(i),
++        "ego_ref_value": float(i),
++        "candidate_count": 1,
++    }
++
++
++def test_v50_6_frozen_alpha_accepts_15_positive_calibration_examples() -> None:
++    alpha = 0.0779185520
++    cal = [_row(i) for i in range(15)]
++    tau, info = repair._pior_conformal_threshold(cal, _model(), alpha)
++    assert info["positive_calibration_count"] == 15
++    assert info["minimum_positive_count_for_finite_rank"] == 12
++    assert info["conformal_rank"] == math.ceil(16 * (1.0 - alpha)) == 15
++    assert math.isfinite(tau)
++
++
++def test_v50_6_fails_closed_if_frozen_alpha_has_no_finite_empirical_rank() -> None:
++    alpha = 0.0779185520
++    cal = [_row(i) for i in range(11)]
++    with pytest.raises(ValueError, match="insufficient paired beneficial outcomes"):
++        repair._pior_conformal_threshold(cal, _model(), alpha)
++
++
++def test_v50_6_oof_keep_is_aligned_by_token_not_fold_concatenation_order() -> None:
++    rows = [
++        {"scenario_token": "c"},
++        {"scenario_token": "a"},
++        {"scenario_token": "b"},
++    ]
++    keep_by_token = {"a": True, "b": False, "c": True}
++    assert repair._align_oof_keep_by_token(rows, keep_by_token) == [True, True, False]
++
++
++def test_v50_6_oof_keep_refuses_missing_or_extra_tokens() -> None:
++    rows = [{"scenario_token": "a"}, {"scenario_token": "b"}]
++    with pytest.raises(RuntimeError, match="identity mismatch"):
++        repair._align_oof_keep_by_token(rows, {"a": True, "c": False})
++
++
++def test_v50_6_keeps_v50_5_science_critical_files_unchanged() -> None:
++    import hashlib
++    root = Path(__file__).resolve().parents[2]
++    expected = {
++        "bdse/tools/run_v64_3_50_pior_paired_closed_loop.py": "7c5472442e5a76ee6cbb6ef3189e086e4e800e8337deb14cacb26488b9050d53",
++        "bdse/planner/nuplan_planner.py": "c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef",
++        "bdse/planner/tournament.py": "291b3b77202974b74fe42431ee7954de8c401d927591c19a12a5837f18374044",
++        "bdse/tools/fit_v64_3_50_eaf_icer_pior.py": "c1c1d297766d8a2e43430739d639ff1ed73f866ec193b47a5dc9e7cb997727aa",
++    }
++    for rel, want in expected.items():
++        assert hashlib.sha256((root / rel).read_bytes()).hexdigest() == want
+--- /dev/null	2026-09-04 03:08:23.524368318 +0000
++++ RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh	2026-09-04 03:13:42.104061309 +0000
+@@ -0,0 +1,104 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# V64.3.50.6: fit-only engineering repair.
++# Reuse ONLY a complete V50.5 metric-safe 502x2 paired collection. Do not rerun
++# closed loop and do not consume untouched validation here.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
++cd "$BDSE_ROOT"
++export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
++export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
++
++V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
++V50_5_ROOT="${V50_5_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1}"
++OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_6_eaf_icer_pior_fitrepair_v1}"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++
++V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
++V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
++V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
++V49_CONFIG="$V49_ROOT/provenance/v64_3_49_siir.yaml"
++PAIRED="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
++PAIR_REPORT="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
++TRAIN_MANIFEST="$V50_5_ROOT/provenance/v64_3_50_pior_train_manifest.json"
++METRIC_AUDIT="$V50_5_ROOT/provenance/v64_3_50_5_metric_safety_full_audit.json"
++
++for f in "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CONFIG" "$PAIRED" "$PAIR_REPORT" "$TRAIN_MANIFEST" "$METRIC_AUDIT"; do
++  [[ -s "$f" ]] || { echo "STOP V50.6 missing prerequisite $f" >&2; exit 2; }
++done
++
++# Preserve the original V50.5 science/engineering locks. New V50.6 files are
++# additive and the old science-critical source files must remain byte-identical.
++sha256sum -c V64_3_50_SOURCE_MANIFEST.sha256 > "$OUT_ROOT/logs/v64_3_50_source_manifest_recheck.out"
++sha256sum -c V64_3_50_5_ENGINEERING_MANIFEST.sha256 > "$OUT_ROOT/logs/v64_3_50_5_engineering_manifest_recheck.out"
++
++python - "$PAIR_REPORT" "$TRAIN_MANIFEST" "$PAIRED" "$METRIC_AUDIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_50_6_paired_reuse_audit.out"
++import json,sys,hashlib
++from pathlib import Path
++pair_p,man_p,out_p,metric_p=map(Path,sys.argv[1:])
++pair=json.load(open(pair_p)); man=json.load(open(man_p)); metric=json.load(open(metric_p))
++if pair.get('pass') is not True or int(pair.get('scenario_count',-1)) != 502:
++    raise SystemExit('STOP V50.6: V50.5 paired report is not complete 502/502 PASS')
++for arm in ('control','treatment'):
++    a=pair.get(arm,{})
++    if int(a.get('scenario_count',-1)) != 502:
++        raise SystemExit(f'STOP V50.6: {arm} scenario_count != 502')
++    if any(not bool(b.get('complete')) or int(b.get('failed',-1)) != 0 or int(b.get('successful',-1)) != int(b.get('scenario_count',-2)) or int(b.get('probe_fired_count',-1)) != int(b.get('scenario_count',-2)) for b in a.get('batches',[])):
++        raise SystemExit(f'STOP V50.6: {arm} has an incomplete/failed/non-probed batch')
++if metric.get('pass') is not True or int(metric.get('expected_scenarios_per_arm',-1)) != 502:
++    raise SystemExit('STOP V50.6: V50.5 metric-safety full audit is not PASS')
++rows=[json.loads(x) for x in open(out_p,encoding='utf-8') if x.strip()]
++mtoks=[str(r['scenario_token']) for r in man.get('rows',[])]
++otoks=[str(r['scenario_token']) for r in rows]
++if len(rows)!=502 or len(set(otoks))!=502 or set(otoks)!=set(mtoks):
++    raise SystemExit('STOP V50.6: paired outcome/token identity is not exact 502/502')
++fold={str(r['scenario_token']):int(r['outer_test_fold']) for r in man['rows']}
++benef=[sum(bool(r['closed_loop_beneficial']) and fold[str(r['scenario_token'])]==k for r in rows) for k in range(5)]
++print(json.dumps({
++    'pass':True,
++    'paired_count':len(rows),
++    'paired_sha256':hashlib.sha256(out_p.read_bytes()).hexdigest(),
++    'beneficial_count':sum(bool(r['closed_loop_beneficial']) for r in rows),
++    'beneficial_by_outer_fold':benef,
++    'hard_harm_count':sum(bool(r['closed_loop_hard_harm']) for r in rows),
++    'reuse_role':'same already-collected TRAIN evidence; engineering fit repair only',
++},sort_keys=True))
++PY
++
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_48_eaf_icer_ocrr.py \
++  bdse/tests/test_v64_3_50_eaf_icer_pior.py \
++  bdse/tests/test_v64_3_50_5_pior_metric_safety.py \
++  bdse/tests/test_v64_3_50_6_pior_fit_repair.py \
++  | tee "$OUT_ROOT/logs/v64_3_50_6_targeted_regression.out"
++
++# Re-run the V50.5 metric-safety audit against the exact reused collection.
++python -m bdse.tools.audit_v64_3_50_5_pior_metric_safety \
++  --closed-loop-root "$V50_5_ROOT/closed_loop_train" --expected-scenarios 502 \
++  --output-report "$OUT_ROOT/provenance/v64_3_50_6_reused_metric_safety_audit.json" \
++  | tee "$OUT_ROOT/logs/v64_3_50_6_reused_metric_safety_audit.out"
++
++PIOR_CONFIG="$OUT_ROOT/provenance/v64_3_50_pior.yaml"
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_50_6_pior_fit.json"
++set +e
++python -m bdse.tools.fit_v64_3_50_6_eaf_icer_pior \
++  --v49-fit-report "$V49_FIT" --v49-candidate-audit "$V49_CAND" --v49-scene-audit "$V49_SCENE" \
++  --v49-siir-config "$V49_CONFIG" --paired-outcomes "$PAIRED" \
++  --output-config "$PIOR_CONFIG" --output-report "$FIT_REPORT" \
++  2>&1 | tee "$OUT_ROOT/logs/v64_3_50_6_pior_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}
++set -e
++
++cp "$PAIR_REPORT" "$OUT_ROOT/provenance/v64_3_50_5_paired_closed_loop_report_reused.json"
++cp "$METRIC_AUDIT" "$OUT_ROOT/provenance/v64_3_50_5_metric_safety_full_audit_reused.json"
++sha256sum "$PAIRED" "$PAIR_REPORT" "$TRAIN_MANIFEST" "$METRIC_AUDIT" > "$OUT_ROOT/provenance/V64_3_50_6_REUSED_EVIDENCE_SHA256SUMS.txt"
++
++if [[ $FIT_STATUS -ne 0 ]]; then
++  echo "V64.3.50.6 PIOR scientific STOP after repaired nested TRAIN evaluation. Do not consume untouched validation." >&2
++  exit "$FIT_STATUS"
++fi
++
++echo "V64.3.50.6 PIOR TRAIN PASS after engineering repair. Freeze artifact; next step is untouched paired closed-loop validation."

@@ -1,0 +1,15 @@
+# V64.3.50.6 is FIT-ONLY. Do not rerun the completed V50.5 502x2 paired collection.
+cd bdse_v64_3_50_6_eaf_icer_pior_fitrepair
+
+# If the output roots use the default names under ./outputs:
+bash RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh
+
+# Otherwise:
+V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+bash RUN_V64_3_50_6_EAF_ICER_PIOR_FIT_REPAIR.sh
+
+# Scientific discipline:
+# - fit fails identification -> scientific STOP per original V50 branch; do not tune TRAIN.
+# - identification passes but retention fails -> scientific STOP per original V50 branch; do not tune TRAIN.
+# - TRAIN passes -> freeze PIOR and only then design/run untouched paired closed-loop validation.
