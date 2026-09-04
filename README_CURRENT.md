@@ -1,10 +1,10 @@
-# Current branch: V64.3.51 EAF-ICER-POCR
+# Current branch: V64.3.52 EAF-ICER-HODR
 
-V50.7 is now provenance-closed and scientifically attributable. V50 PIOR QPE-only fails the preregistered selected-outcome identification gate (PIOR AUC 0.5087 but only 3/5-fold superiority versus both frozen baselines) and also fails the paired causal deployment gate.
+V51 POCR is scientifically attributable: the minimal operator-relative QPE+D state is identified, but both sign-only retention arms fail the unchanged paired deployment gate. V52 follows the preregistered `state identified but deployment fail` branch and changes only the paired selected-outcome functional.
 
-V51 follows the preregistered identification-failure branch: preserve paired on-policy outcome evidence, Q/P/E, RSMR and the low-capacity sign-risk control, and add only the runtime treatment/control execution contrast `D=||xi_proposal-xi_incumbent||_inf`. Two fixed arms test additive dose conditioning and dose-by-QPE interaction.
+HODR factorizes structural null/effect support from the conditional outcome order. The first arm keeps conditional sign ranking; the second replaces sign compression with an unweighted Pareto order over paired official-score and hard-safety deltas. Runtime state remains `[Q,P-Q,E-P,D]`, RSMR remains frozen, and the operator is still same-winner-or-incumbent with no rerank/fallback.
 
-Run `RUN_V64_3_51_EAF_ICER_POCR_TRAIN.sh`. The launcher reuses the existing metric-safe 502x2 TRAIN evidence and does not consume untouched validation.
+Run `RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh`. It reuses V50.5 paired evidence and V51 fit result; no 502x2 closed-loop rerun is required.
 
 # BDSE current runnable package
 

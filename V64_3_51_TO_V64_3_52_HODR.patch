@@ -1,0 +1,1692 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/ALGORITHM_CHANGELOG.md /mnt/data/work_v52/src/ALGORITHM_CHANGELOG.md
+--- /mnt/data/work_v51/src/ALGORITHM_CHANGELOG.md	2026-09-04 13:59:38.000000000 +0000
++++ /mnt/data/work_v52/src/ALGORITHM_CHANGELOG.md	2026-09-04 11:24:55.967504654 +0000
+@@ -12917,3 +12917,61 @@
+ V51 TRAIN is fit-only over the already metric-safe 502x2 V50.5 paired evidence and existing treatment probe contrast. It does not rerun the ~22-hour paired closed loop and does not consume untouched validation.
+ 
+ If TRAIN passes, freeze the preferred arm immediately and run a new untouched paired validation set with no TRAIN tuning.
++
++
++---
++
++# V64.3.51 scientific result — operator-relative state identified, sign-only functional insufficient
++
++## Reliability
++
++V51 is valid for TRAIN-level attribution. The first full-tree SHA check failed only on two non-executable archival files (`V64_3_50_7_TO_V64_3_51_POCR.patch`, `V64_3_50_PAIRED_OPERATOR_CONTRAST_DIAGNOSTIC.csv`). The successful run disabled the brittle full-tree check, but the actual paired evidence hash still exactly replays `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`; all result-defining V51 fit/test sources are unchanged. V52 replaces the full-tree source manifest with a curated result-defining science manifest so non-runtime docs/patches cannot force SHA bypass.
++
++## Preregistered V51 verdict
++
++- QPE+DOSE identification: **PASS**, AUC `0.5767120019`, 5/5 > QPE, 4/5 > EGO, 4/5 > OBS.
++- QPE+DOSE deployment: **FAIL** (hard-tail, utility-nonharm, all-fold nonharm).
++- QPE+DOSE-X identification: **PASS**, AUC `0.5484913559`, 4/5 > QPE, 5/5 > EGO, 4/5 > OBS.
++- QPE+DOSE-X deployment: **FAIL** (hard-tail, all-fold nonharm).
++- scalar operator contrast effect support: **PASS**, AUC `0.6975471416`, 5/5 > random; physical equality => null effect for 38/38.
++
++Formal V51 result: `operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient`. No V51 runtime arm is promoted.
++
++## Newly retained state evidence
++
++Retain the minimal additive operator-relative selected-outcome state `[Q, P-Q, E-P, D]` as an **identified supporting state** for the next functional experiment. Do not carry the more complex `D*QPE` interaction state forward because it has lower aggregate identification AUC and does not close deployment.
++
++## Newly closed deployment solution
++
++Close **single sign-only paired retention over QPE+D (including the V51 additive/interaction variants) as deployment-sufficient**. This closure does not close D, Q/P/E or paired one-shot outcome supervision.
++
++## Dominant bottleneck after V51
++
++**Structured paired selected-outcome functional sufficiency**: the deployment law contains a structural-null/effect-support layer and a multi-coordinate safety/utility order that binary beneficial/nonbeneficial sign ranking does not preserve.
++
++# V64.3.52 EAF-ICER-HODR — Hurdle Outcome-Dominance Retention
++
++## Scientific role
++
++V52 executes the exact preregistered V51 branch `state identified but deployment fail -> structured paired closed-loop outcome functional`. It adds no new runtime/offline observable and freezes the minimal V51 additive state `[Q,P-Q,E-P,D]`.
++
++## Arm A — HURDLE-SIGN
++
++Factor structural null/effect support from conditional beneficial/nonbeneficial ordering. Fit two zero-bias pairwise rankers with fixed lambda=1; combine by fixed `max(effect_support_risk, conditional_outcome_risk)` and calibrate one unchanged finite-rank conformal threshold on beneficial calibration events. No alpha split.
++
++## Arm B — HURDLE-PARETO
++
++Keep the identical support hurdle, but train the conditional outcome ranker only from unambiguous Pareto-dominance pairs over `[closed_loop_score_delta, safety_delta_1, ...]`. Higher is better for every coordinate. A bad event is paired against a good one only when it is <= on every coordinate and < on at least one. Ambiguous safety/utility trade-offs are omitted, never scalarized.
++
++This is not a standalone catastrophe veto and introduces no safety weight. Runtime remains one continuous retention certificate and one frozen conformal threshold.
++
++## V52 preregistered branch order
++
++1. HURDLE-SIGN identification + unchanged deployment gate.
++2. Only if it fails, HURDLE-PARETO identification + unchanged deployment gate.
++3. If either passes: freeze immediately, untouched paired validation, no TRAIN tuning.
++4. If structured functional is identifiable but deployment fails: static state+functional family is exhausted; next evidence/state must come from paired temporal closed-loop outcome process, not offline feature expansion.
++
++## No-repeat constraints after V51
++
++All historical closures remain active: no QPE-only/V51 sign-only rescue; no state expansion during the V52 functional test; no loss/lambda/class/focal/catastrophe weighting; no threshold/calibration sweep or alpha split; no bigger MLP/attention; no standalone binary catastrophe veto; no learned safety scalarization; no K/logK; no new offline future observable; no V46 variance/handcrafted temporal-profile resurrection; no V47 AGENT-2D; no V49 SIIR/random-prefix; no CVaR; no selected translation; no RSMR/B/M/top-K/candidate-count changes; no rerank/second-best/fallback; no validation pooling.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt /mnt/data/work_v52/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt
+--- /mnt/data/work_v51/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt	2026-09-04 11:23:37.892109035 +0000
+@@ -0,0 +1,12 @@
++# V64.3.52 EAF-ICER-HODR
++# Reuses V50.5 paired TRAIN evidence and V51 fit-only result. No 502x2 closed-loop rerun.
++
++cd bdse_v64_3_52_eaf_icer_hodr
++
++V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
++V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
++V51_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_51_eaf_icer_pocr_train_v1 \
++bash RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh
++
++# Do NOT run untouched paired validation unless TRAIN PASS.
++# Do NOT tune thresholds/lambda/weights after seeing TRAIN.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/README_CURRENT.md /mnt/data/work_v52/src/README_CURRENT.md
+--- /mnt/data/work_v51/src/README_CURRENT.md	2026-09-04 13:59:38.000000000 +0000
++++ /mnt/data/work_v52/src/README_CURRENT.md	2026-09-04 11:25:13.012773526 +0000
+@@ -1,10 +1,10 @@
+-# Current branch: V64.3.51 EAF-ICER-POCR
++# Current branch: V64.3.52 EAF-ICER-HODR
+ 
+-V50.7 is now provenance-closed and scientifically attributable. V50 PIOR QPE-only fails the preregistered selected-outcome identification gate (PIOR AUC 0.5087 but only 3/5-fold superiority versus both frozen baselines) and also fails the paired causal deployment gate.
++V51 POCR is scientifically attributable: the minimal operator-relative QPE+D state is identified, but both sign-only retention arms fail the unchanged paired deployment gate. V52 follows the preregistered `state identified but deployment fail` branch and changes only the paired selected-outcome functional.
+ 
+-V51 follows the preregistered identification-failure branch: preserve paired on-policy outcome evidence, Q/P/E, RSMR and the low-capacity sign-risk control, and add only the runtime treatment/control execution contrast `D=||xi_proposal-xi_incumbent||_inf`. Two fixed arms test additive dose conditioning and dose-by-QPE interaction.
++HODR factorizes structural null/effect support from the conditional outcome order. The first arm keeps conditional sign ranking; the second replaces sign compression with an unweighted Pareto order over paired official-score and hard-safety deltas. Runtime state remains `[Q,P-Q,E-P,D]`, RSMR remains frozen, and the operator is still same-winner-or-incumbent with no rerank/fallback.
+ 
+-Run `RUN_V64_3_51_EAF_ICER_POCR_TRAIN.sh`. The launcher reuses the existing metric-safe 502x2 TRAIN evidence and does not consume untouched validation.
++Run `RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh`. It reuses V50.5 paired evidence and V51 fit result; no 502x2 closed-loop rerun is required.
+ 
+ # BDSE current runnable package
+ 
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh /mnt/data/work_v52/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh
+--- /mnt/data/work_v51/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh	2026-09-04 11:23:37.872109052 +0000
+@@ -0,0 +1,110 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# V64.3.52 HODR TRAIN-only structured paired-outcome functional test.
++# Reuses the exact V50.5 metric-safe 502x2 paired evidence and the V51
++# operator-relative QPE+D state. No closed-loop rerun and no untouched
++# validation are consumed unless TRAIN passes.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
++cd "$BDSE_ROOT"
++export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
++export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
++
++V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
++V50_5_ROOT="${V50_5_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1}"
++V51_ROOT="${V51_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_51_eaf_icer_pocr_train_v1}"
++OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_52_eaf_icer_hodr_train_v1}"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
++
++V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
++V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
++V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
++V49_CONFIG="$V49_ROOT/provenance/v64_3_49_siir.yaml"
++PAIRED="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
++PAIR_REPORT="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
++METRIC_AUDIT="$V50_5_ROOT/provenance/v64_3_50_5_metric_safety_full_audit.json"
++V51_FIT="$V51_ROOT/provenance/v64_3_51_pocr_fit.json"
++
++for f in "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CONFIG" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" "$V51_FIT"; do
++  [[ -s "$f" ]] || { echo "V52 ENGINEERING STOP missing prerequisite $f" >&2; exit 2; }
++done
++
++# Robust provenance policy: lock only result-defining science files. Archival
++# patches, diagnostics, README and changelog are deliberately excluded so a
++# stale non-executable artifact can never force users to disable science SHA.
++sha256sum -c V64_3_52_SCIENCE_MANIFEST.sha256 > "$OUT_ROOT/logs/v64_3_52_science_manifest.out"
++
++python - "$V51_FIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_52_parent_v51_lock.out"
++import hashlib, json, sys
++from pathlib import Path
++p=Path(sys.argv[1]); d=json.load(open(p))
++want='54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049'
++got=hashlib.sha256(p.read_bytes()).hexdigest()
++n=d.get('nested_crossfit',{})
++if got!=want:
++    raise SystemExit(f'V52 ENGINEERING STOP: V51 fit hash drift {got}')
++if d.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient':
++    raise SystemExit('V52 ENGINEERING STOP: wrong V51 preregistered branch')
++for a in ('qpe_dose','qpe_dose_interaction'):
++    if n.get('arms',{}).get(a,{}).get('risk_identification',{}).get('identified') is not True:
++        raise SystemExit(f'V52 ENGINEERING STOP: V51 {a} identification drift')
++    if n.get('arms',{}).get(a,{}).get('deployment_gate',{}).get('pass') is not False:
++        raise SystemExit(f'V52 ENGINEERING STOP: V51 {a} deployment signature drift')
++if n.get('operator_contrast_diagnostic',{}).get('effect_support_identified') is not True:
++    raise SystemExit('V52 ENGINEERING STOP: V51 effect-support signature drift')
++print(json.dumps({'pass':True,'v51_fit_sha256':got,'preferred_arm':n.get('preferred_promotion_arm'),'train_gate_pass':False},sort_keys=True))
++PY
++
++python - "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_52_reused_evidence_audit.out"
++import hashlib, json, sys
++from pathlib import Path
++paired,report,metric=map(Path,sys.argv[1:])
++rows=[json.loads(x) for x in open(paired,encoding='utf-8') if x.strip()]
++r=json.load(open(report)); m=json.load(open(metric))
++if len(rows)!=502 or len({str(x['scenario_token']) for x in rows})!=502:
++    raise SystemExit('V52 ENGINEERING STOP: paired outcomes are not 502/502 unique')
++if r.get('pass') is not True or int(r.get('scenario_count',-1))!=502 or m.get('pass') is not True:
++    raise SystemExit('V52 ENGINEERING STOP: paired report / metric-safety audit not PASS')
++for arm in ('control','treatment'):
++    if m['arms'][arm].get('pass') is not True or int(m['arms'][arm].get('certified_scenarios',-1))!=502:
++        raise SystemExit(f'V52 ENGINEERING STOP: {arm} metric-safe population drift')
++sha=hashlib.sha256(paired.read_bytes()).hexdigest()
++want='d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43'
++if sha!=want:
++    raise SystemExit(f'V52 ENGINEERING STOP: paired evidence hash drift {sha}')
++print(json.dumps({'pass':True,'paired_count':502,'paired_sha256':sha,'beneficial':sum(bool(x['closed_loop_beneficial']) for x in rows),'hard_harm':sum(bool(x['closed_loop_hard_harm']) for x in rows)},sort_keys=True))
++PY
++
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_52_eaf_icer_hodr.py \
++  bdse/tests/test_v64_3_51_eaf_icer_pocr.py \
++  bdse/tests/test_v64_3_50_6_pior_fit_repair.py \
++  bdse/tests/test_v64_3_50_eaf_icer_pior.py \
++  bdse/tests/test_v64_3_50_5_pior_metric_safety.py \
++  bdse/tests/test_v64_3_48_eaf_icer_ocrr.py \
++  | tee "$OUT_ROOT/logs/v64_3_52_targeted_regression.out"
++
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_52_hodr_fit.json"
++HODR_CONFIG="$OUT_ROOT/provenance/v64_3_52_hodr.yaml"
++set +e
++python -m bdse.tools.fit_v64_3_52_eaf_icer_hodr \
++  --v49-fit-report "$V49_FIT" --v49-candidate-audit "$V49_CAND" --v49-scene-audit "$V49_SCENE" --v49-siir-config "$V49_CONFIG" \
++  --paired-outcomes "$PAIRED" --v50-5-root "$V50_5_ROOT" --v51-fit-report "$V51_FIT" \
++  --output-config "$HODR_CONFIG" --output-report "$FIT_REPORT" \
++  2>&1 | tee "$OUT_ROOT/logs/v64_3_52_hodr_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}
++set -e
++
++cp "$V51_FIT" "$OUT_ROOT/provenance/v64_3_51_pocr_fit_reused.json"
++cp "$METRIC_AUDIT" "$OUT_ROOT/provenance/v64_3_50_5_metric_safety_full_audit_reused.json"
++sha256sum "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" "$V51_FIT" > "$OUT_ROOT/provenance/V64_3_52_REUSED_EVIDENCE_SHA256SUMS.txt"
++
++if [[ $FIT_STATUS -ne 0 ]]; then
++  echo "V64.3.52 HODR scientific STOP. Do not consume untouched validation; follow v64_3_52_hodr_fit.json." >&2
++  exit "$FIT_STATUS"
++fi
++
++echo "V64.3.52 HODR TRAIN PASS. Freeze the preferred arm immediately; next step is new untouched paired validation with no TRAIN tuning."
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md /mnt/data/work_v52/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md
+--- /mnt/data/work_v51/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md	2026-09-04 11:24:55.951531217 +0000
+@@ -0,0 +1,129 @@
++# V64.3.51 POCR result postmortem and V64.3.52 HODR design
++
++## 1. Reliability verdict
++
++**PASS for TRAIN-level scientific attribution.**
++
++The first V51 run failed the full-package SHA check only on two archival, non-runtime files: `V64_3_50_7_TO_V64_3_51_POCR.patch` and `V64_3_50_PAIRED_OPERATOR_CONTRAST_DIAGNOSTIC.csv`. The first-attempt manifest log reports the V51 fit source, tests, launcher and all other executable science sources as `OK`. The subsequently uploaded launcher differs from the preregistered launcher only by disabling the full-tree manifest fail-fast and the paired-evidence hash assert (plus one comment-only duplicate line). The actual reused paired evidence SHA reported by the successful run is still the exact preregistered value `d592baa3...39d43`, and the V50.7 parent fit hash is exact.
++
++Therefore the SHA incident is a **provenance-hygiene defect, not a result-defining science-source ambiguity**. V52 repairs it by replacing the fragile full-tree manifest with a curated result-defining science manifest. Documentation, patches, diagnostics and changelog are excluded from the hard source gate by design.
++
++Uploaded V51 fit report SHA256: `54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049`.
++
++## 2. Preregistered branch verdicts
++
++| Branch | Identification | Deployment | Overall |
++|---|---:|---:|---:|
++| V50 QPE control | FAIL (0.508709; 3/5 vs EGO, 3/5 vs OBS) | FAIL | STOP |
++| **QPE+DOSE** | **GO** (AUC 0.576712; 5/5 > QPE, 4/5 > EGO, 4/5 > OBS) | **STOP** | **STOP / no promotion** |
++| **QPE+DOSE-X** | **GO** (AUC 0.548491; 4/5 > QPE, 5/5 > EGO, 4/5 > OBS) | **STOP** | **STOP / no promotion** |
++| scalar D effect support | **GO** (AUC 0.697547, 5/5 > random) | diagnostic only | retain as identified state evidence |
++| preregistered `state identified but deployment fail` branch | **GO** | n/a | **V52 structured paired outcome functional** |
++
++The V51 termination string is exactly `operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient`.
++
++## 3. Aggregate paired-outcome metrics
++
++| Policy | selected | beneficial | nonbeneficial | hard harm | score-sum | NegRMS |
++|---|---:|---:|---:|---:|---:|---:|
++| Frozen RSMR | 502 | 121 | 381 | 25 | -4.240928 | 0.154855 |
++| V50 QPE | 460 | 115 | 345 | 24 | -5.426207 | 0.156268 |
++| **QPE+DOSE** | 465 | 115 | 350 | 24 | -4.729640 | 0.155829 |
++| **QPE+DOSE-X** | 436 | 113 | 323 | 23 | -4.143927 | 0.157927 |
++
++`QPE+DOSE` passes beneficial retention, nonbeneficial reduction and population, but fails hard-tail, utility-nonharm and all-fold nonharm. `QPE+DOSE-X` passes beneficial retention, nonbeneficial reduction, population and aggregate utility-nonharm, but still fails hard-tail and all-fold nonharm.
++
++This is the critical causal pattern: **the state is now identifiable, yet the binary sign functional is not aligned with the deployment tail/utility constraints.**
++
++## 4. Why V51 is not a state failure
++
++`QPE+DOSE` improves selected-outcome AUC from the V50 QPE control `0.508709` to `0.576712` and beats the QPE control in all five outer folds. This is strong evidence that explicit proposal-vs-incumbent execution contrast carries real selected-outcome information.
++
++The interaction arm is not required as the next state: it is more complex, has lower aggregate identification AUC than the additive state, and still fails deployment. V52 therefore freezes the **minimal identified state** `[Q, P-Q, E-P, D]` and does not carry `D*QPE` interactions forward.
++
++## 5. Why V51 is a functional failure
++
++The sign-only target compresses all paired outcomes into `beneficial` versus `nonbeneficial`. That discards at least two structures already visible in the paired evidence:
++
++1. **Structural null / effect support.** The scalar execution contrast D has effect-support AUC `0.697547` and all 38 physically equal proposal/incumbent pairs are null-effect.
++2. **Deployment partial order.** The deployment gate separately constrains official score, hard safety and negative tail. V51's binary sign loss cannot distinguish a harmless zero-effect event, a mild negative event and a hard-safety-degrading event once all are labeled nonbeneficial.
++
++The strongest empirical symptom is QPE+DOSE-X: aggregate score-sum improves slightly over frozen RSMR (`-4.143927` vs `-4.240928`) and hard-harm count drops from 25 to 23, yet NegRMS worsens (`0.154855` -> `0.157927`) and fold nonharm fails. Better binary ranking is not enough to control the severity/order of retained negatives.
++
++## 6. Updated dominant bottleneck
++
++After V50 the bottleneck was operator-relative selected-outcome state sufficiency. V51 resolves that layer enough to move on.
++
++The new bottleneck is:
++
++**structured paired selected-outcome functional sufficiency**, specifically the need to represent (a) whether the intervention has any causal/effect support and (b) the safety/utility partial order among effectful outcomes without collapsing them to a single sign.
++
++This is a genuine bottleneck migration, not another feature refinement.
++
++## 7. Mechanisms promoted / retained / closed
++
++### Retain as paper/backbone evidence
++- frozen full-set RSMR extremal selection and no-fallback containment;
++- V44 ungated prospective interaction support;
++- V45 agent-local longitudinal response;
++- V47 EGO-REF supporting consequence coordinate;
++- V50 metric-safe paired one-shot selected-outcome supervision;
++- **V51 minimal additive operator-relative state `[Q,P-Q,E-P,D]` as an identified supporting state.**
++
++### Do not promote as deployment mechanism
++- QPE+DOSE retention policy;
++- QPE+DOSE-X retention policy.
++
++### Newly close as deployment-sufficient solutions
++- **single sign-only paired retention over the V51 operator-relative state**;
++- `D*QPE` interaction state as a necessary next-step mechanism (it is not needed for the next causal test).
++
++This does **not** close D itself or paired outcome supervision.
++
++## 8. V52 algorithm: HODR
++
++V64.3.52 is **Hurdle Outcome-Dominance Retention (HODR)**.
++
++It freezes the state to `[Q,P-Q,E-P,D]` and changes only the deployment functional.
++
++### Arm A — HURDLE-SIGN
++
++Factor the selected outcome into:
++
++`effect support` -> `conditional beneficial/nonbeneficial sign`.
++
++Two zero-bias pairwise rankers (fixed lambda=1) share the same state. Runtime risk is the fixed maximum of the two normalized risks. There is still exactly one split-conformal threshold calibrated on beneficial outcomes with the same alpha; there is no alpha split and no threshold sweep.
++
++This tests whether the large structural-null population was corrupting the old global sign ranker.
++
++### Arm B — HURDLE-PARETO
++
++Keep the identical effect-support hurdle. Replace the conditional sign pair construction with a **Pareto deployment order** over the paired official-score delta and every hard-safety delta.
++
++A bad event is paired against a good event only when it is no better on every deployment coordinate and strictly worse on at least one. Ambiguous utility/safety trade-offs are omitted rather than scalarized.
++
++Therefore V52 adds:
++- no safety weights;
++- no catastrophe class weight;
++- no standalone binary safety veto;
++- no new runtime feature;
++- no MLP/attention;
++- no second threshold.
++
++The scientific test is whether **constraint-aligned outcome ordering**, rather than another state block, is what the frozen extremal operator actually needs.
++
++## 9. Preregistered promotion / STOP logic
++
++1. HURDLE-SIGN must identify effect support and improve conditional effectful sign ranking over exact V51 control, then pass the unchanged V50/V51 deployment gate.
++2. Only if it fails is HURDLE-PARETO considered.
++3. HURDLE-PARETO must improve held-out Pareto-pair concordance over the exact V51 sign-risk control and pass the same deployment gate.
++4. If either passes, freeze immediately and move to untouched paired validation; no TRAIN tuning.
++5. If the structured functional is identifiable but deployment still fails, the static state+functional family is exhausted and the next evidence must be a paired **temporal closed-loop outcome process**, not an offline feature block.
++
++## 10. CCF-A paper line
++
++The paper-level claim should remain centered on **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface**, with the new refinement:
++
++> outcome sufficiency is both **intervention-relative** and **operator-functional**: even when the paired outcome source and operator-relative state are identifiable, collapsing a zero-inflated, multi-constraint potential outcome into one binary sign can remain deployment-insufficient.
++
++V52 is designed as a falsifiable causal experiment for that statement, not as a hyperparameter search.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_51_TO_V64_3_52_HODR.patch /mnt/data/work_v52/src/V64_3_51_TO_V64_3_52_HODR.patch
+--- /mnt/data/work_v51/src/V64_3_51_TO_V64_3_52_HODR.patch	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/V64_3_51_TO_V64_3_52_HODR.patch	2026-09-04 11:26:11.491983721 +0000
+@@ -0,0 +1,346 @@
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/ALGORITHM_CHANGELOG.md /mnt/data/work_v52/src/ALGORITHM_CHANGELOG.md
++--- /mnt/data/work_v51/src/ALGORITHM_CHANGELOG.md	2026-09-04 13:59:38.000000000 +0000
+++++ /mnt/data/work_v52/src/ALGORITHM_CHANGELOG.md	2026-09-04 11:24:55.967504654 +0000
++@@ -12917,3 +12917,61 @@
++ V51 TRAIN is fit-only over the already metric-safe 502x2 V50.5 paired evidence and existing treatment probe contrast. It does not rerun the ~22-hour paired closed loop and does not consume untouched validation.
++ 
++ If TRAIN passes, freeze the preferred arm immediately and run a new untouched paired validation set with no TRAIN tuning.
+++
+++
+++---
+++
+++# V64.3.51 scientific result — operator-relative state identified, sign-only functional insufficient
+++
+++## Reliability
+++
+++V51 is valid for TRAIN-level attribution. The first full-tree SHA check failed only on two non-executable archival files (`V64_3_50_7_TO_V64_3_51_POCR.patch`, `V64_3_50_PAIRED_OPERATOR_CONTRAST_DIAGNOSTIC.csv`). The successful run disabled the brittle full-tree check, but the actual paired evidence hash still exactly replays `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`; all result-defining V51 fit/test sources are unchanged. V52 replaces the full-tree source manifest with a curated result-defining science manifest so non-runtime docs/patches cannot force SHA bypass.
+++
+++## Preregistered V51 verdict
+++
+++- QPE+DOSE identification: **PASS**, AUC `0.5767120019`, 5/5 > QPE, 4/5 > EGO, 4/5 > OBS.
+++- QPE+DOSE deployment: **FAIL** (hard-tail, utility-nonharm, all-fold nonharm).
+++- QPE+DOSE-X identification: **PASS**, AUC `0.5484913559`, 4/5 > QPE, 5/5 > EGO, 4/5 > OBS.
+++- QPE+DOSE-X deployment: **FAIL** (hard-tail, all-fold nonharm).
+++- scalar operator contrast effect support: **PASS**, AUC `0.6975471416`, 5/5 > random; physical equality => null effect for 38/38.
+++
+++Formal V51 result: `operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient`. No V51 runtime arm is promoted.
+++
+++## Newly retained state evidence
+++
+++Retain the minimal additive operator-relative selected-outcome state `[Q, P-Q, E-P, D]` as an **identified supporting state** for the next functional experiment. Do not carry the more complex `D*QPE` interaction state forward because it has lower aggregate identification AUC and does not close deployment.
+++
+++## Newly closed deployment solution
+++
+++Close **single sign-only paired retention over QPE+D (including the V51 additive/interaction variants) as deployment-sufficient**. This closure does not close D, Q/P/E or paired one-shot outcome supervision.
+++
+++## Dominant bottleneck after V51
+++
+++**Structured paired selected-outcome functional sufficiency**: the deployment law contains a structural-null/effect-support layer and a multi-coordinate safety/utility order that binary beneficial/nonbeneficial sign ranking does not preserve.
+++
+++# V64.3.52 EAF-ICER-HODR — Hurdle Outcome-Dominance Retention
+++
+++## Scientific role
+++
+++V52 executes the exact preregistered V51 branch `state identified but deployment fail -> structured paired closed-loop outcome functional`. It adds no new runtime/offline observable and freezes the minimal V51 additive state `[Q,P-Q,E-P,D]`.
+++
+++## Arm A — HURDLE-SIGN
+++
+++Factor structural null/effect support from conditional beneficial/nonbeneficial ordering. Fit two zero-bias pairwise rankers with fixed lambda=1; combine by fixed `max(effect_support_risk, conditional_outcome_risk)` and calibrate one unchanged finite-rank conformal threshold on beneficial calibration events. No alpha split.
+++
+++## Arm B — HURDLE-PARETO
+++
+++Keep the identical support hurdle, but train the conditional outcome ranker only from unambiguous Pareto-dominance pairs over `[closed_loop_score_delta, safety_delta_1, ...]`. Higher is better for every coordinate. A bad event is paired against a good one only when it is <= on every coordinate and < on at least one. Ambiguous safety/utility trade-offs are omitted, never scalarized.
+++
+++This is not a standalone catastrophe veto and introduces no safety weight. Runtime remains one continuous retention certificate and one frozen conformal threshold.
+++
+++## V52 preregistered branch order
+++
+++1. HURDLE-SIGN identification + unchanged deployment gate.
+++2. Only if it fails, HURDLE-PARETO identification + unchanged deployment gate.
+++3. If either passes: freeze immediately, untouched paired validation, no TRAIN tuning.
+++4. If structured functional is identifiable but deployment fails: static state+functional family is exhausted; next evidence/state must come from paired temporal closed-loop outcome process, not offline feature expansion.
+++
+++## No-repeat constraints after V51
+++
+++All historical closures remain active: no QPE-only/V51 sign-only rescue; no state expansion during the V52 functional test; no loss/lambda/class/focal/catastrophe weighting; no threshold/calibration sweep or alpha split; no bigger MLP/attention; no standalone binary catastrophe veto; no learned safety scalarization; no K/logK; no new offline future observable; no V46 variance/handcrafted temporal-profile resurrection; no V47 AGENT-2D; no V49 SIIR/random-prefix; no CVaR; no selected translation; no RSMR/B/M/top-K/candidate-count changes; no rerank/second-best/fallback; no validation pooling.
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt /mnt/data/work_v52/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt
++--- /mnt/data/work_v51/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt	1970-01-01 00:00:00.000000000 +0000
+++++ /mnt/data/work_v52/src/NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt	2026-09-04 11:23:37.892109035 +0000
++@@ -0,0 +1,12 @@
+++# V64.3.52 EAF-ICER-HODR
+++# Reuses V50.5 paired TRAIN evidence and V51 fit-only result. No 502x2 closed-loop rerun.
+++
+++cd bdse_v64_3_52_eaf_icer_hodr
+++
+++V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+++V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+++V51_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_51_eaf_icer_pocr_train_v1 \
+++bash RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh
+++
+++# Do NOT run untouched paired validation unless TRAIN PASS.
+++# Do NOT tune thresholds/lambda/weights after seeing TRAIN.
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/README_CURRENT.md /mnt/data/work_v52/src/README_CURRENT.md
++--- /mnt/data/work_v51/src/README_CURRENT.md	2026-09-04 13:59:38.000000000 +0000
+++++ /mnt/data/work_v52/src/README_CURRENT.md	2026-09-04 11:25:13.012773526 +0000
++@@ -1,10 +1,10 @@
++-# Current branch: V64.3.51 EAF-ICER-POCR
+++# Current branch: V64.3.52 EAF-ICER-HODR
++ 
++-V50.7 is now provenance-closed and scientifically attributable. V50 PIOR QPE-only fails the preregistered selected-outcome identification gate (PIOR AUC 0.5087 but only 3/5-fold superiority versus both frozen baselines) and also fails the paired causal deployment gate.
+++V51 POCR is scientifically attributable: the minimal operator-relative QPE+D state is identified, but both sign-only retention arms fail the unchanged paired deployment gate. V52 follows the preregistered `state identified but deployment fail` branch and changes only the paired selected-outcome functional.
++ 
++-V51 follows the preregistered identification-failure branch: preserve paired on-policy outcome evidence, Q/P/E, RSMR and the low-capacity sign-risk control, and add only the runtime treatment/control execution contrast `D=||xi_proposal-xi_incumbent||_inf`. Two fixed arms test additive dose conditioning and dose-by-QPE interaction.
+++HODR factorizes structural null/effect support from the conditional outcome order. The first arm keeps conditional sign ranking; the second replaces sign compression with an unweighted Pareto order over paired official-score and hard-safety deltas. Runtime state remains `[Q,P-Q,E-P,D]`, RSMR remains frozen, and the operator is still same-winner-or-incumbent with no rerank/fallback.
++ 
++-Run `RUN_V64_3_51_EAF_ICER_POCR_TRAIN.sh`. The launcher reuses the existing metric-safe 502x2 TRAIN evidence and does not consume untouched validation.
+++Run `RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh`. It reuses V50.5 paired evidence and V51 fit result; no 502x2 closed-loop rerun is required.
++ 
++ # BDSE current runnable package
++ 
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh /mnt/data/work_v52/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh
++--- /mnt/data/work_v51/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh	1970-01-01 00:00:00.000000000 +0000
+++++ /mnt/data/work_v52/src/RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh	2026-09-04 11:23:37.872109052 +0000
++@@ -0,0 +1,110 @@
+++#!/usr/bin/env bash
+++set -euo pipefail
+++
+++# V64.3.52 HODR TRAIN-only structured paired-outcome functional test.
+++# Reuses the exact V50.5 metric-safe 502x2 paired evidence and the V51
+++# operator-relative QPE+D state. No closed-loop rerun and no untouched
+++# validation are consumed unless TRAIN passes.
+++
+++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+++export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
+++cd "$BDSE_ROOT"
+++export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+++export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
+++
+++V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
+++V50_5_ROOT="${V50_5_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1}"
+++V51_ROOT="${V51_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_51_eaf_icer_pocr_train_v1}"
+++OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_52_eaf_icer_hodr_train_v1}"
+++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs"
+++
+++V49_FIT="$V49_ROOT/provenance/v64_3_49_siir_fit.json"
+++V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
+++V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
+++V49_CONFIG="$V49_ROOT/provenance/v64_3_49_siir.yaml"
+++PAIRED="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
+++PAIR_REPORT="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
+++METRIC_AUDIT="$V50_5_ROOT/provenance/v64_3_50_5_metric_safety_full_audit.json"
+++V51_FIT="$V51_ROOT/provenance/v64_3_51_pocr_fit.json"
+++
+++for f in "$V49_FIT" "$V49_SCENE" "$V49_CAND" "$V49_CONFIG" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" "$V51_FIT"; do
+++  [[ -s "$f" ]] || { echo "V52 ENGINEERING STOP missing prerequisite $f" >&2; exit 2; }
+++done
+++
+++# Robust provenance policy: lock only result-defining science files. Archival
+++# patches, diagnostics, README and changelog are deliberately excluded so a
+++# stale non-executable artifact can never force users to disable science SHA.
+++sha256sum -c V64_3_52_SCIENCE_MANIFEST.sha256 > "$OUT_ROOT/logs/v64_3_52_science_manifest.out"
+++
+++python - "$V51_FIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_52_parent_v51_lock.out"
+++import hashlib, json, sys
+++from pathlib import Path
+++p=Path(sys.argv[1]); d=json.load(open(p))
+++want='54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049'
+++got=hashlib.sha256(p.read_bytes()).hexdigest()
+++n=d.get('nested_crossfit',{})
+++if got!=want:
+++    raise SystemExit(f'V52 ENGINEERING STOP: V51 fit hash drift {got}')
+++if d.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient':
+++    raise SystemExit('V52 ENGINEERING STOP: wrong V51 preregistered branch')
+++for a in ('qpe_dose','qpe_dose_interaction'):
+++    if n.get('arms',{}).get(a,{}).get('risk_identification',{}).get('identified') is not True:
+++        raise SystemExit(f'V52 ENGINEERING STOP: V51 {a} identification drift')
+++    if n.get('arms',{}).get(a,{}).get('deployment_gate',{}).get('pass') is not False:
+++        raise SystemExit(f'V52 ENGINEERING STOP: V51 {a} deployment signature drift')
+++if n.get('operator_contrast_diagnostic',{}).get('effect_support_identified') is not True:
+++    raise SystemExit('V52 ENGINEERING STOP: V51 effect-support signature drift')
+++print(json.dumps({'pass':True,'v51_fit_sha256':got,'preferred_arm':n.get('preferred_promotion_arm'),'train_gate_pass':False},sort_keys=True))
+++PY
+++
+++python - "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_52_reused_evidence_audit.out"
+++import hashlib, json, sys
+++from pathlib import Path
+++paired,report,metric=map(Path,sys.argv[1:])
+++rows=[json.loads(x) for x in open(paired,encoding='utf-8') if x.strip()]
+++r=json.load(open(report)); m=json.load(open(metric))
+++if len(rows)!=502 or len({str(x['scenario_token']) for x in rows})!=502:
+++    raise SystemExit('V52 ENGINEERING STOP: paired outcomes are not 502/502 unique')
+++if r.get('pass') is not True or int(r.get('scenario_count',-1))!=502 or m.get('pass') is not True:
+++    raise SystemExit('V52 ENGINEERING STOP: paired report / metric-safety audit not PASS')
+++for arm in ('control','treatment'):
+++    if m['arms'][arm].get('pass') is not True or int(m['arms'][arm].get('certified_scenarios',-1))!=502:
+++        raise SystemExit(f'V52 ENGINEERING STOP: {arm} metric-safe population drift')
+++sha=hashlib.sha256(paired.read_bytes()).hexdigest()
+++want='d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43'
+++if sha!=want:
+++    raise SystemExit(f'V52 ENGINEERING STOP: paired evidence hash drift {sha}')
+++print(json.dumps({'pass':True,'paired_count':502,'paired_sha256':sha,'beneficial':sum(bool(x['closed_loop_beneficial']) for x in rows),'hard_harm':sum(bool(x['closed_loop_hard_harm']) for x in rows)},sort_keys=True))
+++PY
+++
+++python -m compileall -q bdse
+++pytest -q \
+++  bdse/tests/test_v64_3_52_eaf_icer_hodr.py \
+++  bdse/tests/test_v64_3_51_eaf_icer_pocr.py \
+++  bdse/tests/test_v64_3_50_6_pior_fit_repair.py \
+++  bdse/tests/test_v64_3_50_eaf_icer_pior.py \
+++  bdse/tests/test_v64_3_50_5_pior_metric_safety.py \
+++  bdse/tests/test_v64_3_48_eaf_icer_ocrr.py \
+++  | tee "$OUT_ROOT/logs/v64_3_52_targeted_regression.out"
+++
+++FIT_REPORT="$OUT_ROOT/provenance/v64_3_52_hodr_fit.json"
+++HODR_CONFIG="$OUT_ROOT/provenance/v64_3_52_hodr.yaml"
+++set +e
+++python -m bdse.tools.fit_v64_3_52_eaf_icer_hodr \
+++  --v49-fit-report "$V49_FIT" --v49-candidate-audit "$V49_CAND" --v49-scene-audit "$V49_SCENE" --v49-siir-config "$V49_CONFIG" \
+++  --paired-outcomes "$PAIRED" --v50-5-root "$V50_5_ROOT" --v51-fit-report "$V51_FIT" \
+++  --output-config "$HODR_CONFIG" --output-report "$FIT_REPORT" \
+++  2>&1 | tee "$OUT_ROOT/logs/v64_3_52_hodr_fit.out"
+++FIT_STATUS=${PIPESTATUS[0]}
+++set -e
+++
+++cp "$V51_FIT" "$OUT_ROOT/provenance/v64_3_51_pocr_fit_reused.json"
+++cp "$METRIC_AUDIT" "$OUT_ROOT/provenance/v64_3_50_5_metric_safety_full_audit_reused.json"
+++sha256sum "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" "$V51_FIT" > "$OUT_ROOT/provenance/V64_3_52_REUSED_EVIDENCE_SHA256SUMS.txt"
+++
+++if [[ $FIT_STATUS -ne 0 ]]; then
+++  echo "V64.3.52 HODR scientific STOP. Do not consume untouched validation; follow v64_3_52_hodr_fit.json." >&2
+++  exit "$FIT_STATUS"
+++fi
+++
+++echo "V64.3.52 HODR TRAIN PASS. Freeze the preferred arm immediately; next step is new untouched paired validation with no TRAIN tuning."
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md /mnt/data/work_v52/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md
++--- /mnt/data/work_v51/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md	1970-01-01 00:00:00.000000000 +0000
+++++ /mnt/data/work_v52/src/V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md	2026-09-04 11:24:55.951531217 +0000
++@@ -0,0 +1,129 @@
+++# V64.3.51 POCR result postmortem and V64.3.52 HODR design
+++
+++## 1. Reliability verdict
+++
+++**PASS for TRAIN-level scientific attribution.**
+++
+++The first V51 run failed the full-package SHA check only on two archival, non-runtime files: `V64_3_50_7_TO_V64_3_51_POCR.patch` and `V64_3_50_PAIRED_OPERATOR_CONTRAST_DIAGNOSTIC.csv`. The first-attempt manifest log reports the V51 fit source, tests, launcher and all other executable science sources as `OK`. The subsequently uploaded launcher differs from the preregistered launcher only by disabling the full-tree manifest fail-fast and the paired-evidence hash assert (plus one comment-only duplicate line). The actual reused paired evidence SHA reported by the successful run is still the exact preregistered value `d592baa3...39d43`, and the V50.7 parent fit hash is exact.
+++
+++Therefore the SHA incident is a **provenance-hygiene defect, not a result-defining science-source ambiguity**. V52 repairs it by replacing the fragile full-tree manifest with a curated result-defining science manifest. Documentation, patches, diagnostics and changelog are excluded from the hard source gate by design.
+++
+++Uploaded V51 fit report SHA256: `54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049`.
+++
+++## 2. Preregistered branch verdicts
+++
+++| Branch | Identification | Deployment | Overall |
+++|---|---:|---:|---:|
+++| V50 QPE control | FAIL (0.508709; 3/5 vs EGO, 3/5 vs OBS) | FAIL | STOP |
+++| **QPE+DOSE** | **GO** (AUC 0.576712; 5/5 > QPE, 4/5 > EGO, 4/5 > OBS) | **STOP** | **STOP / no promotion** |
+++| **QPE+DOSE-X** | **GO** (AUC 0.548491; 4/5 > QPE, 5/5 > EGO, 4/5 > OBS) | **STOP** | **STOP / no promotion** |
+++| scalar D effect support | **GO** (AUC 0.697547, 5/5 > random) | diagnostic only | retain as identified state evidence |
+++| preregistered `state identified but deployment fail` branch | **GO** | n/a | **V52 structured paired outcome functional** |
+++
+++The V51 termination string is exactly `operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient`.
+++
+++## 3. Aggregate paired-outcome metrics
+++
+++| Policy | selected | beneficial | nonbeneficial | hard harm | score-sum | NegRMS |
+++|---|---:|---:|---:|---:|---:|---:|
+++| Frozen RSMR | 502 | 121 | 381 | 25 | -4.240928 | 0.154855 |
+++| V50 QPE | 460 | 115 | 345 | 24 | -5.426207 | 0.156268 |
+++| **QPE+DOSE** | 465 | 115 | 350 | 24 | -4.729640 | 0.155829 |
+++| **QPE+DOSE-X** | 436 | 113 | 323 | 23 | -4.143927 | 0.157927 |
+++
+++`QPE+DOSE` passes beneficial retention, nonbeneficial reduction and population, but fails hard-tail, utility-nonharm and all-fold nonharm. `QPE+DOSE-X` passes beneficial retention, nonbeneficial reduction, population and aggregate utility-nonharm, but still fails hard-tail and all-fold nonharm.
+++
+++This is the critical causal pattern: **the state is now identifiable, yet the binary sign functional is not aligned with the deployment tail/utility constraints.**
+++
+++## 4. Why V51 is not a state failure
+++
+++`QPE+DOSE` improves selected-outcome AUC from the V50 QPE control `0.508709` to `0.576712` and beats the QPE control in all five outer folds. This is strong evidence that explicit proposal-vs-incumbent execution contrast carries real selected-outcome information.
+++
+++The interaction arm is not required as the next state: it is more complex, has lower aggregate identification AUC than the additive state, and still fails deployment. V52 therefore freezes the **minimal identified state** `[Q, P-Q, E-P, D]` and does not carry `D*QPE` interactions forward.
+++
+++## 5. Why V51 is a functional failure
+++
+++The sign-only target compresses all paired outcomes into `beneficial` versus `nonbeneficial`. That discards at least two structures already visible in the paired evidence:
+++
+++1. **Structural null / effect support.** The scalar execution contrast D has effect-support AUC `0.697547` and all 38 physically equal proposal/incumbent pairs are null-effect.
+++2. **Deployment partial order.** The deployment gate separately constrains official score, hard safety and negative tail. V51's binary sign loss cannot distinguish a harmless zero-effect event, a mild negative event and a hard-safety-degrading event once all are labeled nonbeneficial.
+++
+++The strongest empirical symptom is QPE+DOSE-X: aggregate score-sum improves slightly over frozen RSMR (`-4.143927` vs `-4.240928`) and hard-harm count drops from 25 to 23, yet NegRMS worsens (`0.154855` -> `0.157927`) and fold nonharm fails. Better binary ranking is not enough to control the severity/order of retained negatives.
+++
+++## 6. Updated dominant bottleneck
+++
+++After V50 the bottleneck was operator-relative selected-outcome state sufficiency. V51 resolves that layer enough to move on.
+++
+++The new bottleneck is:
+++
+++**structured paired selected-outcome functional sufficiency**, specifically the need to represent (a) whether the intervention has any causal/effect support and (b) the safety/utility partial order among effectful outcomes without collapsing them to a single sign.
+++
+++This is a genuine bottleneck migration, not another feature refinement.
+++
+++## 7. Mechanisms promoted / retained / closed
+++
+++### Retain as paper/backbone evidence
+++- frozen full-set RSMR extremal selection and no-fallback containment;
+++- V44 ungated prospective interaction support;
+++- V45 agent-local longitudinal response;
+++- V47 EGO-REF supporting consequence coordinate;
+++- V50 metric-safe paired one-shot selected-outcome supervision;
+++- **V51 minimal additive operator-relative state `[Q,P-Q,E-P,D]` as an identified supporting state.**
+++
+++### Do not promote as deployment mechanism
+++- QPE+DOSE retention policy;
+++- QPE+DOSE-X retention policy.
+++
+++### Newly close as deployment-sufficient solutions
+++- **single sign-only paired retention over the V51 operator-relative state**;
+++- `D*QPE` interaction state as a necessary next-step mechanism (it is not needed for the next causal test).
+++
+++This does **not** close D itself or paired outcome supervision.
+++
+++## 8. V52 algorithm: HODR
+++
+++V64.3.52 is **Hurdle Outcome-Dominance Retention (HODR)**.
+++
+++It freezes the state to `[Q,P-Q,E-P,D]` and changes only the deployment functional.
+++
+++### Arm A — HURDLE-SIGN
+++
+++Factor the selected outcome into:
+++
+++`effect support` -> `conditional beneficial/nonbeneficial sign`.
+++
+++Two zero-bias pairwise rankers (fixed lambda=1) share the same state. Runtime risk is the fixed maximum of the two normalized risks. There is still exactly one split-conformal threshold calibrated on beneficial outcomes with the same alpha; there is no alpha split and no threshold sweep.
+++
+++This tests whether the large structural-null population was corrupting the old global sign ranker.
+++
+++### Arm B — HURDLE-PARETO
+++
+++Keep the identical effect-support hurdle. Replace the conditional sign pair construction with a **Pareto deployment order** over the paired official-score delta and every hard-safety delta.
+++
+++A bad event is paired against a good event only when it is no better on every deployment coordinate and strictly worse on at least one. Ambiguous utility/safety trade-offs are omitted rather than scalarized.
+++
+++Therefore V52 adds:
+++- no safety weights;
+++- no catastrophe class weight;
+++- no standalone binary safety veto;
+++- no new runtime feature;
+++- no MLP/attention;
+++- no second threshold.
+++
+++The scientific test is whether **constraint-aligned outcome ordering**, rather than another state block, is what the frozen extremal operator actually needs.
+++
+++## 9. Preregistered promotion / STOP logic
+++
+++1. HURDLE-SIGN must identify effect support and improve conditional effectful sign ranking over exact V51 control, then pass the unchanged V50/V51 deployment gate.
+++2. Only if it fails is HURDLE-PARETO considered.
+++3. HURDLE-PARETO must improve held-out Pareto-pair concordance over the exact V51 sign-risk control and pass the same deployment gate.
+++4. If either passes, freeze immediately and move to untouched paired validation; no TRAIN tuning.
+++5. If the structured functional is identifiable but deployment still fails, the static state+functional family is exhausted and the next evidence must be a paired **temporal closed-loop outcome process**, not an offline feature block.
+++
+++## 10. CCF-A paper line
+++
+++The paper-level claim should remain centered on **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface**, with the new refinement:
+++
+++> outcome sufficiency is both **intervention-relative** and **operator-functional**: even when the paired outcome source and operator-relative state are identifiable, collapsing a zero-inflated, multi-constraint potential outcome into one binary sign can remain deployment-insufficient.
+++
+++V52 is designed as a falsifiable causal experiment for that statement, not as a hyperparameter search.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_51_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_52.json /mnt/data/work_v52/src/V64_3_51_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_52.json
+--- /mnt/data/work_v51/src/V64_3_51_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_52.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/V64_3_51_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_52.json	2026-09-04 11:24:55.950434138 +0000
+@@ -0,0 +1,35 @@
++{
++  "audit": "v64_3_51_uploaded_result_reliability_and_scientific_audit_for_v64_3_52",
++  "beneficial_count": 121,
++  "hard_harm_count": 25,
++  "paired_count": 502,
++  "paired_evidence_reported_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
++  "reason": "Initial mismatches were non-executable archival artifacts. The only later launcher edits disabled hash checks; actual paired hash and parent lock still match preregistered values, and the scientific fit/test sources are unchanged.",
++  "recovered_checks": {
++    "V50_7_parent_fit_hash_matches_expected": true,
++    "V50_7_untouched_validation_unconsumed": true,
++    "all_science_sources_except_launcher_match_original_manifest_in_uploaded_bdse": true,
++    "current_launcher_scientific_fit_invocation_unchanged": true,
++    "paired_hash_matches_expected": true
++  },
++  "result_zip_sha256": "794b4ca43e17eb547ba1ae806168268ca0e8cf8a225e64cef4fbb41a1cb1e2bc",
++  "source_manifest_first_attempt": {
++    "failed_files": [
++      "V64_3_50_7_TO_V64_3_51_POCR.patch",
++      "V64_3_50_PAIRED_OPERATOR_CONTRAST_DIAGNOSTIC.csv"
++    ],
++    "failed_files_runtime_referenced": false,
++    "launcher": "OK in first-attempt manifest log",
++    "result_defining_fit_source": "OK in first-attempt manifest log",
++    "v51_test_source": "OK in first-attempt manifest log"
++  },
++  "targeted_regression": "51/51 PASS",
++  "uploaded_bdse_zip_sha256": "93c87db1bf67ac0816f6b8cfb603ca1d1785b28d044bd05d8d0fb9e7c3f90567",
++  "uploaded_launcher_diff_from_preregistered": [
++    "disabled full-tree V64_3_51_SOURCE_MANIFEST.sha256 fail-fast",
++    "comment-only duplicate actual= line (no semantic effect)",
++    "disabled paired-evidence hash assert"
++  ],
++  "v51_fit_sha256": "54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049",
++  "verdict": "PASS_for_TRAIN_level_algorithm_attribution_with_provenance_hygiene_repair_required"
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_52_CHANGED_FILES.txt /mnt/data/work_v52/src/V64_3_52_CHANGED_FILES.txt
+--- /mnt/data/work_v51/src/V64_3_52_CHANGED_FILES.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/V64_3_52_CHANGED_FILES.txt	2026-09-04 11:26:11.328265588 +0000
+@@ -0,0 +1,13 @@
++MODIFIED ALGORITHM_CHANGELOG.md
++ADDED    NEXT_COMMANDS_V64_3_52_EAF_ICER_HODR.txt
++MODIFIED README_CURRENT.md
++ADDED    RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh
++ADDED    V64_3_51_RESULT_POSTMORTEM_AND_V64_3_52_HODR_DESIGN.md
++ADDED    V64_3_51_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_52.json
++ADDED    V64_3_52_ENGINEERING_VALIDATION.txt
++ADDED    V64_3_52_PREREGISTRATION.json
++ADDED    V64_3_52_SCIENCE_MANIFEST.sha256
++ADDED    bdse/planner/paired_outcome_dominance_retention.py
++MODIFIED bdse/planner/tournament.py
++ADDED    bdse/tests/test_v64_3_52_eaf_icer_hodr.py
++ADDED    bdse/tools/fit_v64_3_52_eaf_icer_hodr.py
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_52_ENGINEERING_VALIDATION.txt /mnt/data/work_v52/src/V64_3_52_ENGINEERING_VALIDATION.txt
+--- /mnt/data/work_v51/src/V64_3_52_ENGINEERING_VALIDATION.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/V64_3_52_ENGINEERING_VALIDATION.txt	2026-09-04 11:25:49.644001264 +0000
+@@ -0,0 +1,17 @@
++V64.3.52 EAF-ICER-HODR engineering validation
++
++Python compileall: PASS
++launcher bash -n: PASS
++result-defining science manifest: PASS (10 files)
++focused/current historical regression: 57 passed in 2.51s
++V51 uploaded-result independent focused replay: 51/51 PASS (performed before V52 modification)
++V52 new focused tests: 6/6 PASS
++
++Science-lock policy change:
++- V51 full-tree manifest was brittle because it included archival patch/diagnostic files.
++- V52 hard-locks only result-defining executable/protocol files.
++- README/changelog/patch/diagnostic artifacts are intentionally excluded from the hard gate.
++- paired evidence and parent V51 fit hashes remain separately fail-closed in the launcher.
++
++Full-repository note:
++A full pytest run on the uploaded V51 tree exceeded the local single-command execution window after progressing without failures. V52 validation therefore reports only completed test runs and does not claim an uncompleted full-suite PASS.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_52_PREREGISTRATION.json /mnt/data/work_v52/src/V64_3_52_PREREGISTRATION.json
+--- /mnt/data/work_v51/src/V64_3_52_PREREGISTRATION.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/V64_3_52_PREREGISTRATION.json	2026-09-04 11:23:37.884109042 +0000
+@@ -0,0 +1,68 @@
++{
++  "algorithm_version": "V64.3.52-EAF-ICER-HODR",
++  "hypothesis": "V51 identifies the minimal operator-relative QPE+D state, but sign-only retention discards structural-null support and deployment partial-order information. A hurdle factorization over effect support plus conditional outcome ordering is required for selected-outcome deployment sufficiency.",
++  "population": "exact provenance-locked V50.5 TRAIN paired population: 502 full-set frozen RSMR proposals",
++  "evidence_source": "same metric-safe paired one-shot closed-loop treatment/control outcomes; no new label collection",
++  "state": ["Q", "P-Q", "E-P", "D"],
++  "state_policy": "exact V51 QPE+DOSE additive state; DOSE-X interactions are not carried forward",
++  "arms": [
++    {
++      "name": "HURDLE-SIGN",
++      "order": 1,
++      "functional": "effect-support pairwise hurdle + conditional beneficial/nonbeneficial sign pairwise risk",
++      "aggregation": "max(effect_support_risk, conditional_outcome_risk)",
++      "question": "Is structural-null/effect factorization alone sufficient once the V51 state is fixed?"
++    },
++    {
++      "name": "HURDLE-PARETO",
++      "order": 2,
++      "functional": "same effect-support hurdle + Pareto pairwise outcome risk over official-score delta and all hard-safety deltas",
++      "aggregation": "max(effect_support_risk, conditional_outcome_risk)",
++      "question": "If sign compression is still insufficient, is an unweighted deployment partial order over utility and safety required?"
++    }
++  ],
++  "pareto_order": "bad is paired against good only when bad has <= official-score delta and <= every hard-safety delta, with at least one strict inequality; ambiguous safety/utility trade-offs are omitted, never scalarized",
++  "identification_gate": {
++    "effect_support": "OOF support-risk AUC > 0.5 aggregate and >=4/5 folds",
++    "HURDLE-SIGN": "conditional nonbeneficial AUC on effectful events > exact V51 sign-risk control aggregate and >=4/5 folds",
++    "HURDLE-PARETO": "OOF Pareto-pair concordance > exact V51 sign-risk control aggregate concordance and >=4/5 folds"
++  },
++  "deployment_gate": "exact V50/V51 paired causal deployment gate unchanged",
++  "frozen": {
++    "selector": "full-set RSMR",
++    "operator_state": "QPE+D additive",
++    "lambda": 1.0,
++    "retention_alpha": 0.07791855203619909,
++    "calibration": "single finite-rank split-conformal threshold on beneficial calibration events; no alpha split",
++    "runtime_operator": "same frozen winner or incumbent; veto-only; no rerank/second-best/fallback",
++    "outcome_evidence": "V50.5 metric-safe paired one-shot closed-loop outcomes"
++  },
++  "promotion_order": ["HURDLE-SIGN", "HURDLE-PARETO"],
++  "branches": {
++    "HURDLE-SIGN pass": "promote minimal hurdle functional, freeze immediately, untouched paired validation",
++    "only HURDLE-PARETO pass": "promote Pareto-ordered functional, freeze immediately, untouched paired validation",
++    "functional identified but deployment fail": "static operator-relative state+functional exhausted; next evidence/state must be paired temporal closed-loop outcome process, not offline feature expansion",
++    "support identified but conditional order fail": "current scalar operator-relative state is insufficient for structured conditional outcomes; next state acquisition must remain paired/on-policy",
++    "support fail": "ENGINEERING/scientific audit because V51 scalar-D effect-support signature must replay before further algorithm change"
++  },
++  "prohibited": [
++    "QPE-only or V51 sign-only rescue",
++    "QPE+D state expansion during this test",
++    "loss/lambda/class/focal/catastrophe weighting",
++    "threshold/calibration sweep or alpha split",
++    "bigger MLP/attention",
++    "standalone binary catastrophe veto",
++    "safety scalarization weights",
++    "K/logK/multiplicity",
++    "new offline future observable",
++    "V46 response variance or handcrafted temporal-profile resurrection",
++    "V47 AGENT-2D resurrection",
++    "V49 random-prefix/SIIR resurrection",
++    "CVaR",
++    "selected translation",
++    "RSMR/B/M/top-K/candidate-count changes",
++    "rerank/second-best/fallback",
++    "validation pooling"
++  ],
++  "fresh_policy": "untouched validation remains unconsumed unless TRAIN preferred arm passes; after PASS no TRAIN tuning is permitted"
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/V64_3_52_SCIENCE_MANIFEST.sha256 /mnt/data/work_v52/src/V64_3_52_SCIENCE_MANIFEST.sha256
+--- /mnt/data/work_v51/src/V64_3_52_SCIENCE_MANIFEST.sha256	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/V64_3_52_SCIENCE_MANIFEST.sha256	2026-09-04 11:25:13.208031301 +0000
+@@ -0,0 +1,10 @@
++e1c4b65c6f4c740a274d95684e4d32ed5f472c56e3c2ec1832cb5ea90cc1f868  RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh
++ed654755b25aa19e44b916eaf42376b57b755173ca76f8cbb3f51b8a950313c8  V64_3_52_PREREGISTRATION.json
++e45e11fea46b199648bd3f73719c9433e9b9093299d6802b39be8df002be97da  bdse/tools/fit_v64_3_52_eaf_icer_hodr.py
++abf64e7adca5b7a245f22aa6d25d167238377d9106ed1f8c30ce80be05e9d91c  bdse/planner/paired_outcome_dominance_retention.py
++9f41ec949dcecd11cd90ee2325a6e84055777ff8fb52455f7aa42939b6fd7de9  bdse/planner/paired_operator_contrast_retention.py
++a9a0afaffe72219cb56bc0076201bad9df049a9827e856da44b6249d6d885ee8  bdse/planner/tournament.py
++c842ed2ee1a1ecee7f70e48c789e165f9f7090894dc38214c9b7acab13c9bac5  bdse/tools/fit_v64_3_51_eaf_icer_pocr.py
++995662e7a83c35180b3e700755a46bc05edb977da339c80e267c5de8ae7b0d12  bdse/tools/fit_v64_3_50_6_eaf_icer_pior.py
++c1c1d297766d8a2e43430739d639ff1ed73f866ec193b47a5dc9e7cb997727aa  bdse/tools/fit_v64_3_50_eaf_icer_pior.py
++54b9dddb6d402bd8be1ef269b30727ba3bdfc2914b14d687fae00f42a57bee5d  bdse/tools/fit_v64_3_49_eaf_icer_siir.py
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/bdse/planner/paired_outcome_dominance_retention.py /mnt/data/work_v52/src/bdse/planner/paired_outcome_dominance_retention.py
+--- /mnt/data/work_v51/src/bdse/planner/paired_outcome_dominance_retention.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/bdse/planner/paired_outcome_dominance_retention.py	2026-09-04 11:21:33.772208176 +0000
+@@ -0,0 +1,105 @@
++from __future__ import annotations
++
++"""V64.3.52 HODR: Hurdle Outcome-Dominance Retention.
++
++V51 established that the minimal operator-relative state
++    z = [Q, P-Q, E-P, D]
++is identifiable for paired selected outcomes, while the single sign-only
++retention functional is not deployment-sufficient.  HODR therefore freezes
++that state and changes only the selected-outcome functional.
++
++The runtime certificate is the maximum of two low-capacity risk components:
++  1) effect_support_risk: structural-null / no-effect risk;
++  2) conditional_outcome_risk: bad outcome risk conditional on an effect.
++
++The second component is trained either with the old binary sign ordering
++(HURDLE-SIGN causal arm) or with a deployment-aligned Pareto ordering over the
++paired closed-loop official-score delta and hard-safety deltas
++(HURDLE-PARETO causal arm).  There is no learned safety scalarization, no
++second threshold, and no standalone catastrophe veto.
++"""
++
++from typing import Any
++import math
++import numpy as np
++
++from bdse.planner.paired_operator_contrast_retention import (
++    POCR_ADDITIVE_STATE_NAMES,
++    operator_state as _v51_operator_state,
++)
++
++HODR_STATE_NAMES = list(POCR_ADDITIVE_STATE_NAMES)
++HODR_FUNCTIONALS = {"hurdle_sign", "hurdle_pareto"}
++
++
++def operator_state(
++    quality_value: float,
++    plan_control_value: float,
++    ego_reference_value: float,
++    proposal_trajectory: np.ndarray,
++    incumbent_trajectory: np.ndarray,
++) -> np.ndarray:
++    """Exact V51 additive operator-relative state; no new runtime observable."""
++    z = _v51_operator_state(
++        quality_value,
++        plan_control_value,
++        ego_reference_value,
++        proposal_trajectory,
++        incumbent_trajectory,
++        include_dose_interactions=False,
++    )
++    if z.shape != (len(HODR_STATE_NAMES),) or np.any(~np.isfinite(z)):
++        raise ValueError("V52 HODR operator state is invalid")
++    return z
++
++
++def _component_risk(z: np.ndarray, model: dict[str, Any]) -> float:
++    names = [str(x) for x in model.get("feature_names", [])]
++    if names != HODR_STATE_NAMES:
++        raise ValueError(f"V52 HODR feature schema mismatch: {names} != {HODR_STATE_NAMES}")
++    mean = np.asarray(model.get("feature_mean", []), dtype=np.float64).reshape(-1)
++    std = np.asarray(model.get("feature_std", []), dtype=np.float64).reshape(-1)
++    w = np.asarray(model.get("weights", []), dtype=np.float64).reshape(-1)
++    d = len(HODR_STATE_NAMES)
++    if mean.size != d or std.size != d or w.size != d:
++        raise ValueError("V52 HODR component parameter size mismatch")
++    if np.any(~np.isfinite(mean)) or np.any(~np.isfinite(std)) or np.any(std <= 0.0) or np.any(~np.isfinite(w)):
++        raise ValueError("V52 HODR component parameters are invalid")
++    if abs(float(model.get("bias", 0.0))) > 1.0e-12 or abs(float(model.get("lambda", 1.0)) - 1.0) > 1.0e-12:
++        raise ValueError("V52 HODR requires zero bias and fixed lambda=1")
++    raw = float(((np.asarray(z, dtype=np.float64) - mean) / np.maximum(std, 1.0e-6)) @ w)
++    bmean = float(model.get("fit_beneficial_score_mean", float("nan")))
++    bstd = float(model.get("fit_beneficial_score_std", float("nan")))
++    if not math.isfinite(bmean) or not math.isfinite(bstd) or bstd <= 0.0:
++        raise ValueError("V52 HODR beneficial-score normalization is invalid")
++    return float((raw - bmean) / max(bstd, 1.0e-6))
++
++
++def runtime_certificate(z: np.ndarray, cfg: dict[str, Any]) -> tuple[float, float, dict[str, float]]:
++    """One-threshold structured retention certificate.
++
++    `max` is fixed by preregistration: a proposal must look compatible with a
++    beneficial intervention under both the effect-support and conditional
++    outcome factors.  The single split-conformal threshold remains calibrated
++    on paired beneficial outcomes, so no alpha split or threshold sweep exists.
++    """
++    zz = np.asarray(z, dtype=np.float64).reshape(-1)
++    if zz.size != len(HODR_STATE_NAMES) or np.any(~np.isfinite(zz)):
++        raise ValueError("V52 HODR runtime state has wrong shape or non-finite values")
++    functional = str(cfg.get("functional", "")).strip().lower()
++    if functional not in HODR_FUNCTIONALS:
++        raise ValueError(f"V52 HODR unknown functional={functional}")
++    if str(cfg.get("aggregation", "max_support_outcome")).strip().lower() != "max_support_outcome":
++        raise ValueError("V52 HODR aggregation is fixed to max_support_outcome")
++    components = cfg.get("components", {}) if isinstance(cfg, dict) else {}
++    support = _component_risk(zz, dict(components.get("effect_support_risk", {})))
++    outcome = _component_risk(zz, dict(components.get("conditional_outcome_risk", {})))
++    risk = float(max(support, outcome))
++    tau = float(cfg.get("retention_threshold", float("nan")))
++    if not math.isfinite(tau):
++        raise ValueError("V52 HODR retention threshold is invalid")
++    return float(tau - risk), risk, {
++        "effect_support_risk": float(support),
++        "conditional_outcome_risk": float(outcome),
++        "execution_contrast_linf": float(zz[3]),
++    }
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/bdse/planner/tournament.py /mnt/data/work_v52/src/bdse/planner/tournament.py
+--- /mnt/data/work_v51/src/bdse/planner/tournament.py	2026-09-04 13:59:10.000000000 +0000
++++ /mnt/data/work_v52/src/bdse/planner/tournament.py	2026-09-04 11:21:52.324835657 +0000
+@@ -14,6 +14,7 @@
+ from bdse.planner.selector import _finite_cost_for_margin, budgeted_margin, full_interface_margin, margin_normalization_scale
+ from bdse.planner.operator_conditioned_risk_retention import operator_state as _ocrr_operator_state, runtime_certificate as _ocrr_runtime_certificate
+ from bdse.planner.paired_operator_contrast_retention import operator_state as _pocr_operator_state, runtime_certificate as _pocr_runtime_certificate
++from bdse.planner.paired_outcome_dominance_retention import operator_state as _hodr_operator_state, runtime_certificate as _hodr_runtime_certificate
+ from bdse.utils import softmin_np
+ 
+ 
+@@ -2606,7 +2607,7 @@
+     if bool(scir_cfg.get("scene_reservation_enabled", False)):
+         raise ValueError("EAF-ICER post-selection value is mutually exclusive with scene reservation")
+     mode = str(scir_cfg.get("post_selection_value_mode", "")).strip().lower()
+-    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention"}
++    allowed = {"score_affine", "orthogonal_proposal_value", "dense_edge_value", "dense_edge_affine", "dense_edge_shift", "dense_edge_cfsr", "dense_edge_cfsr_shift", "dense_edge_hurdle", "dense_edge_hurdle_sign_shift", "dense_edge_hurdle_selected", "dense_edge_hurdle_selected_shift", "endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}
+     if mode not in allowed:
+         raise ValueError(f"unknown EAF-ICER post_selection_value_mode={mode}")
+     b = int(proposal_action)
+@@ -2631,7 +2632,7 @@
+     if not math.isfinite(u) or abs(u - float(mu[b])) > 1.0e-6 * max(1.0, abs(u), abs(float(mu[b]))):
+         raise ValueError("EAF-ICER frozen RSMR score does not replay from selected-proposal evidence")
+ 
+-    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention"}:
++    if mode in {"endpoint_zero_delta", "endpoint_delta_nonlinear", "endpoint_potential_value", "endpoint_potential_shift", "endpoint_potential_quality_observable", "endpoint_potential_risk_observable", "endpoint_potential_joint_observable", "endpoint_potential_joint_observable_shift", "endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
+         if raw_feat is None or raw_feature_names is None or support_logits is None or legacy_action is None:
+             raise ValueError("EAF-ICER V41 endpoint value requires absolute runtime evidence and incumbent")
+         xx = np.asarray(raw_feat, dtype=np.float64); sup = np.asarray(support_logits, dtype=np.float64).reshape(-1); legacy = int(legacy_action)
+@@ -2666,7 +2667,7 @@
+         value = float(np.clip((phi / np.maximum(scale_ep, 1.0e-6)) @ w_ep, -40.0, 40.0))
+         value_feature = phi
+         value_names = [f"post_value::{n}" for n in runtime_value_names]
+-        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention"}:
++        if mode in {"endpoint_potential_quality_future_response_mean", "endpoint_potential_quality_future_response_robust", "endpoint_potential_quality_future_response_robust_shift", "endpoint_potential_quality_plan_conditioned_response", "endpoint_potential_quality_plan_conditioned_response_shift", "endpoint_potential_quality_interaction_response_field", "endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization", "endpoint_potential_quality_operator_conditioned_risk_retention", "endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
+             if value_observable_matrix is None or value_observable_names is None:
+                 raise ValueError("EAF-ICER V43 CFRV mode requires current + future-response observable matrix")
+             om = np.asarray(value_observable_matrix, dtype=np.float64)
+@@ -2721,7 +2722,7 @@
+                                + [f"observable_improvement::{n}" for n in qnames]
+                                + [f"ocrr_state::{n}" for n in rcfg.get("feature_names", [])]
+                                + ["ocrr_risk"])
+-            elif mode == "endpoint_potential_quality_paired_operator_contrast_retention":
++            elif mode in {"endpoint_potential_quality_paired_operator_contrast_retention", "endpoint_potential_quality_paired_outcome_dominance_retention"}:
+                 if candidate_trajectories is None:
+                     raise ValueError("EAF-ICER V51 POCR requires candidate trajectories for treatment/control contrast")
+                 ct = np.asarray(candidate_trajectories, dtype=np.float64)
+@@ -2742,18 +2743,29 @@
+                 eobs = delta_obs[np.asarray([on.index(n) for n in enames], dtype=np.int64)]
+                 plan_value = float(np.clip(quality_value + (pobs / np.maximum(pscale, 1.0e-6)) @ pw, -40.0, 40.0))
+                 ego_value = float(np.clip(quality_value + (eobs / np.maximum(escale, 1.0e-6)) @ ew, -40.0, 40.0))
+-                pcfg = scir_cfg.get("paired_operator_contrast_retention", {})
+-                zpocr = _pocr_operator_state(
+-                    quality_value, plan_value, ego_value, ct[b], ct[legacy],
+-                    include_dose_interactions=bool(pcfg.get("include_dose_interactions", False)),
+-                )
+-                cert, rrisk, rparts = _pocr_runtime_certificate(zpocr, pcfg)
+-                value = float(np.clip(cert, -40.0, 40.0))
+-                value_feature = np.concatenate([phi, qobs, zpocr, np.asarray([rrisk], dtype=np.float64)])
+-                value_names = ([f"post_value::{n}" for n in runtime_value_names]
+-                               + [f"observable_improvement::{n}" for n in qnames]
+-                               + [f"pocr_state::{n}" for n in pcfg.get("feature_names", [])]
+-                               + ["pocr_risk"])
++                if mode == "endpoint_potential_quality_paired_operator_contrast_retention":
++                    pcfg = scir_cfg.get("paired_operator_contrast_retention", {})
++                    zpocr = _pocr_operator_state(
++                        quality_value, plan_value, ego_value, ct[b], ct[legacy],
++                        include_dose_interactions=bool(pcfg.get("include_dose_interactions", False)),
++                    )
++                    cert, rrisk, rparts = _pocr_runtime_certificate(zpocr, pcfg)
++                    value = float(np.clip(cert, -40.0, 40.0))
++                    value_feature = np.concatenate([phi, qobs, zpocr, np.asarray([rrisk], dtype=np.float64)])
++                    value_names = ([f"post_value::{n}" for n in runtime_value_names]
++                                   + [f"observable_improvement::{n}" for n in qnames]
++                                   + [f"pocr_state::{n}" for n in pcfg.get("feature_names", [])]
++                                   + ["pocr_risk"])
++                else:
++                    hcfg = scir_cfg.get("paired_outcome_dominance_retention", {})
++                    zhodr = _hodr_operator_state(quality_value, plan_value, ego_value, ct[b], ct[legacy])
++                    cert, rrisk, rparts = _hodr_runtime_certificate(zhodr, hcfg)
++                    value = float(np.clip(cert, -40.0, 40.0))
++                    value_feature = np.concatenate([phi, qobs, zhodr, np.asarray([rrisk], dtype=np.float64)])
++                    value_names = ([f"post_value::{n}" for n in runtime_value_names]
++                                   + [f"observable_improvement::{n}" for n in qnames]
++                                   + [f"hodr_state::{n}" for n in hcfg.get("feature_names", [])]
++                                   + ["hodr_risk"])
+             elif mode in {"endpoint_potential_quality_distributional_response_profile", "endpoint_potential_quality_future_state_factorization"}:
+                 rnames = [str(x) for x in scir_cfg.get("post_selection_future_response_observable_names", [])]
+                 if not rnames or any(n not in on for n in rnames):
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/bdse/tests/test_v64_3_52_eaf_icer_hodr.py /mnt/data/work_v52/src/bdse/tests/test_v64_3_52_eaf_icer_hodr.py
+--- /mnt/data/work_v51/src/bdse/tests/test_v64_3_52_eaf_icer_hodr.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/bdse/tests/test_v64_3_52_eaf_icer_hodr.py	2026-09-04 11:22:15.928175562 +0000
+@@ -0,0 +1,147 @@
++from __future__ import annotations
++
++import numpy as np
++import pytest
++
++from bdse.planner.paired_outcome_dominance_retention import (
++    HODR_STATE_NAMES,
++    operator_state,
++    runtime_certificate,
++)
++from bdse.planner.tournament import _ICER_REGRET_RISK_EVIDENCE_BASE_NAMES, _icer_post_selection_value
++from bdse.planner.future_state_factorization import FSFR_OBSERVABLE_NAMES
++from bdse.planner.value_observables import VALUE_OBSERVABLE_NAMES
++from bdse.tools.fit_v64_3_41_eaf_icer_epvr import EPV_NAMES
++from bdse.tools.fit_v64_3_52_eaf_icer_hodr import (
++    _effect_support,
++    _fit_models,
++    _pareto_pairs,
++    _risk,
++    _safety_names,
++    _state,
++)
++
++
++def _row(i: int, *, effect: bool, beneficial: bool, score: float, safety: float, d: float) -> dict:
++    return {
++        "scenario_token": f"t{i}",
++        "quality_value": 0.1 * i,
++        "plan_control_value": 0.1 * i + 0.2,
++        "ego_ref_value": 0.1 * i + 0.1,
++        "operator_execution_contrast_linf": d,
++        "closed_loop_beneficial": beneficial,
++        "closed_loop_hard_harm": safety < 0.0,
++        "closed_loop_score_delta": score if effect else 0.0,
++        "safety_delta": {"collision": safety if effect else 0.0, "ttc": 0.0, "drivable": 0.0},
++        "rsm_selected_teacher_improvement": 1.0 if beneficial else -1.0,
++    }
++
++
++def _component(names, w):
++    return {
++        "model": "unit",
++        "feature_names": list(names),
++        "feature_mean": [0.0] * len(names),
++        "feature_std": [1.0] * len(names),
++        "weights": list(w),
++        "bias": 0.0,
++        "lambda": 1.0,
++        "fit_beneficial_score_mean": 0.0,
++        "fit_beneficial_score_std": 1.0,
++    }
++
++
++def test_v52_state_is_exact_v51_additive_operator_state():
++    p = np.zeros((2, 5)); i = np.zeros((2, 5)); p[1, 1] = 3.0
++    z = operator_state(1.0, 2.5, 2.0, p, i)
++    assert HODR_STATE_NAMES == ["quality_value", "prospective_response_increment", "ego_reference_increment", "operator_execution_contrast_linf"]
++    assert z.tolist() == pytest.approx([1.0, 1.5, -0.5, 3.0])
++
++
++def test_v52_effect_support_is_structural_not_beneficial_sign():
++    null = _row(0, effect=False, beneficial=False, score=0.0, safety=0.0, d=0.0)
++    harmful = _row(1, effect=True, beneficial=False, score=-0.5, safety=-1.0, d=2.0)
++    assert _effect_support(null) is False
++    assert _effect_support(harmful) is True
++
++
++def test_v52_pareto_pairs_use_unweighted_score_and_safety_dominance():
++    rows = [
++        _row(0, effect=True, beneficial=False, score=-1.0, safety=-1.0, d=3.0),
++        _row(1, effect=True, beneficial=True, score=+1.0, safety=0.0, d=2.0),
++        _row(2, effect=True, beneficial=False, score=+2.0, safety=-1.0, d=4.0),  # trade-off: higher score, worse safety
++    ]
++    names = _safety_names(rows)
++    pairs = _pareto_pairs(rows, names)
++    assert (0, 1) in pairs
++    assert (2, 1) not in pairs and (1, 2) not in pairs  # ambiguous trade-off is omitted, not scalarized
++
++
++def test_v52_hurdle_models_can_separate_null_and_conditional_badness():
++    rows = []
++    for i in range(40):
++        rows.append(_row(i, effect=False, beneficial=False, score=0.0, safety=0.0, d=0.05 + 0.001 * i))
++    for i in range(40, 80):
++        rows.append(_row(i, effect=True, beneficial=True, score=1.0, safety=0.0, d=1.0 + 0.01 * i))
++    for i in range(80, 120):
++        rows.append(_row(i, effect=True, beneficial=False, score=-1.0, safety=-1.0, d=3.0 + 0.01 * i))
++    models = _fit_models(rows, "hurdle_sign", _safety_names(rows))
++    assert models["effect_support_risk"]["lambda"] == 1.0
++    assert models["conditional_outcome_risk"]["lambda"] == 1.0
++    null_risk = _risk(rows[0], models)[0]
++    good_risk = _risk(rows[50], models)[0]
++    bad_risk = _risk(rows[-1], models)[0]
++    assert null_risk > good_risk
++    assert bad_risk > good_risk
++
++
++def test_v52_runtime_uses_max_of_two_components_and_one_threshold():
++    cfg = {
++        "functional": "hurdle_pareto",
++        "aggregation": "max_support_outcome",
++        "components": {
++            "effect_support_risk": _component(HODR_STATE_NAMES, [0, 0, 0, 1]),
++            "conditional_outcome_risk": _component(HODR_STATE_NAMES, [1, 0, 0, 0]),
++        },
++        "retention_threshold": 2.5,
++    }
++    z = np.asarray([3.0, 0.0, 0.0, 2.0])
++    cert, risk, parts = runtime_certificate(z, cfg)
++    assert parts["effect_support_risk"] == pytest.approx(2.0)
++    assert parts["conditional_outcome_risk"] == pytest.approx(3.0)
++    assert risk == pytest.approx(3.0)
++    assert cert == pytest.approx(-0.5)
++
++
++def test_v52_tournament_keeps_frozen_winner_and_computes_only_retention_certificate():
++    raw_names = list(_ICER_REGRET_RISK_EVIDENCE_BASE_NAMES)
++    feature_names = [f"delta::{n}" for n in raw_names] + ["delta::support_logit"]
++    obs_names = VALUE_OBSERVABLE_NAMES + FSFR_OBSERVABLE_NAMES
++    pnames = ["fsfr_plan_1d_occupancy_cost"]
++    enames = ["fsfr_plan_1d_occupancy_cost", "fsfr_predicted_demo_cost"]
++    support = _component(HODR_STATE_NAMES, [0.0, 0.0, 0.0, 0.0])
++    outcome = _component(HODR_STATE_NAMES, [0.0, 0.0, 0.0, 1.0])
++    sc = {
++        "feature_names": feature_names, "feature_mean": [0.] * 19, "feature_std": [1.] * 19, "weights": [0.] * 19, "bias": 0.,
++        "base_feature_names": raw_names, "post_selection_value_enabled": True,
++        "post_selection_value_mode": "endpoint_potential_quality_paired_outcome_dominance_retention",
++        "post_selection_endpoint_feature_names": EPV_NAMES, "post_selection_endpoint_feature_scale": [1.] * 38,
++        "post_selection_endpoint_weights": [0.] * 38, "post_selection_endpoint_bias": 0.,
++        "post_selection_observable_names": obs_names,
++        "post_selection_quality_observable_names": ["route_deviation_cost", "progress_deficit_cost", "global_comfort_cost"],
++        "post_selection_quality_observable_scale": [1.] * 3, "post_selection_quality_observable_weights": [0.] * 3,
++        "selected_policy_risk_plan_response_names": pnames, "selected_policy_risk_plan_response_scales": [1.], "selected_policy_risk_plan_response_weights": [0.],
++        "selected_policy_risk_ego_reference_names": enames, "selected_policy_risk_ego_reference_scales": [1., 1.], "selected_policy_risk_ego_reference_weights": [0., 0.],
++        "paired_outcome_dominance_retention": {
++            "feature_names": HODR_STATE_NAMES, "functional": "hurdle_pareto", "aggregation": "max_support_outcome",
++            "components": {"effect_support_risk": support, "conditional_outcome_risk": outcome}, "retention_threshold": 2.0,
++        },
++    }
++    raw = np.zeros((2, len(raw_names))); sup = np.zeros(2); X = np.zeros((2, 19)); mu = np.zeros(2); obs = np.zeros((2, len(obs_names)))
++    traj = np.zeros((2, 2, 5)); traj[1, 1, 0] = 3.0
++    value, _, names = _icer_post_selection_value(
++        1, mu, X, feature_names, sc, raw_feat=raw, raw_feature_names=raw_names, support_logits=sup, legacy_action=0,
++        value_observable_matrix=obs, value_observable_names=obs_names, candidate_trajectories=traj,
++    )
++    assert value == pytest.approx(-1.0)  # risk=3, threshold=2
++    assert "hodr_risk" in names
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' '--exclude=*.pyc' /mnt/data/work_v51/src/bdse/tools/fit_v64_3_52_eaf_icer_hodr.py /mnt/data/work_v52/src/bdse/tools/fit_v64_3_52_eaf_icer_hodr.py
+--- /mnt/data/work_v51/src/bdse/tools/fit_v64_3_52_eaf_icer_hodr.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_v52/src/bdse/tools/fit_v64_3_52_eaf_icer_hodr.py	2026-09-04 11:23:37.730689800 +0000
+@@ -0,0 +1,480 @@
++from __future__ import annotations
++
++"""V64.3.52 EAF-ICER-HODR fit-only TRAIN mechanism test.
++
++V51 identifies the operator-relative QPE+D state but fails the unchanged paired
++causal deployment gate with a single sign-only ranker.  V52 freezes the state,
++paired evidence, RSMR selector, alpha, lambda and veto-only operator, and tests
++only a structured paired-outcome functional.
++
++Preregistered causal arms:
++  A. HURDLE-SIGN   : separate structural-null/effect support, then binary sign
++                     ranking conditional on an effect.
++  B. HURDLE-PARETO : same support hurdle, but replace sign compression by a
++                     Pareto pairwise order over official-score and hard-safety
++                     deltas.  No safety weights or standalone safety veto.
++"""
++
++import argparse
++import json
++import math
++from pathlib import Path
++from typing import Any, Callable
++
++import numpy as np
++import yaml
++
++from bdse.planner.paired_outcome_dominance_retention import HODR_STATE_NAMES
++from bdse.tools import fit_v64_3_50_eaf_icer_pior as v50
++from bdse.tools import fit_v64_3_50_6_eaf_icer_pior as v506
++from bdse.tools import fit_v64_3_51_eaf_icer_pocr as v51
++from bdse.tools.fit_v64_3_49_eaf_icer_siir import _auc
++
++EPS = 1.0e-12
++FOLDS = 5
++RIDGE_LAMBDA = 1.0
++ARMS = ("hurdle_sign", "hurdle_pareto")
++EXPECTED_V51_FAILURE = "operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient"
++EXPECTED_V51_ADDITIVE_AUC = 0.5767120019088523
++EXPECTED_V51_INTERACTION_AUC = 0.5484913559358799
++EXPECTED_V51_FIT_SHA256 = "54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049"
++
++
++def _check_v51(path: Path) -> dict[str, Any]:
++    d = json.loads(path.read_text(encoding="utf-8"))
++    n = d.get("nested_crossfit", {})
++    if d.get("train_gate_pass") is not False or n.get("train_gate_pass") is not False:
++        raise RuntimeError("V52 ENGINEERING STOP: V51 must be the preregistered TRAIN failure")
++    if n.get("failure_diagnosis") != EXPECTED_V51_FAILURE or n.get("preferred_promotion_arm") is not None:
++        raise RuntimeError(f"V52 ENGINEERING STOP: V51 branch drift {n.get('failure_diagnosis')}")
++    a = n.get("arms", {}).get("qpe_dose", {})
++    x = n.get("arms", {}).get("qpe_dose_interaction", {})
++    if not bool(a.get("risk_identification", {}).get("identified", False)) or not bool(x.get("risk_identification", {}).get("identified", False)):
++        raise RuntimeError("V52 ENGINEERING STOP: V51 operator state must be identified in both preregistered arms")
++    if abs(float(a["risk_identification"]["aggregate_auc"]) - EXPECTED_V51_ADDITIVE_AUC) > 1e-12:
++        raise RuntimeError("V52 ENGINEERING STOP: V51 additive AUC signature drift")
++    if abs(float(x["risk_identification"]["aggregate_auc"]) - EXPECTED_V51_INTERACTION_AUC) > 1e-12:
++        raise RuntimeError("V52 ENGINEERING STOP: V51 interaction AUC signature drift")
++    if bool(a.get("deployment_gate", {}).get("pass", False)) or bool(x.get("deployment_gate", {}).get("pass", False)):
++        raise RuntimeError("V52 ENGINEERING STOP: V51 deployment failure signature drift")
++    diag = n.get("operator_contrast_diagnostic", {})
++    if diag.get("effect_support_identified") is not True or diag.get("physical_equal_all_null_effect") is not True:
++        raise RuntimeError("V52 ENGINEERING STOP: V51 effect-support diagnostic drift")
++    return d
++
++
++def _state(r: dict[str, Any]) -> np.ndarray:
++    return v51._arm_state(r, "qpe_dose")
++
++
++def _effect_support(r: dict[str, Any]) -> bool:
++    return v51._effect_support(r)
++
++
++def _outcome_vector(r: dict[str, Any], safety_names: list[str]) -> np.ndarray:
++    vals = [float(r["closed_loop_score_delta"])]
++    sd = dict(r.get("safety_delta", {}))
++    vals.extend(float(sd.get(k, 0.0)) for k in safety_names)
++    x = np.asarray(vals, dtype=np.float64)
++    if np.any(~np.isfinite(x)):
++        raise ValueError(f"V52 non-finite paired outcome vector {r['scenario_token']}")
++    return x
++
++
++def _safety_names(rows: list[dict[str, Any]]) -> list[str]:
++    keys = sorted({str(k) for r in rows for k in dict(r.get("safety_delta", {})).keys()})
++    if not keys:
++        raise ValueError("V52 paired outcomes contain no hard-safety delta coordinates")
++    return keys
++
++
++def _pareto_pairs(rows: list[dict[str, Any]], safety_names: list[str]) -> list[tuple[int, int]]:
++    """Return (bad, good) pairs using only unambiguous deployment dominance.
++
++    Higher official-score delta and higher safety deltas are all better.  A
++    pair is used only when one effectful intervention is no better on every
++    coordinate and strictly worse on at least one.  Ambiguous trade-offs are
++    omitted; no scalar safety weight is introduced.
++    """
++    effect_idx = [i for i, r in enumerate(rows) if _effect_support(r)]
++    vec = {i: _outcome_vector(rows[i], safety_names) for i in effect_idx}
++    pairs: list[tuple[int, int]] = []
++    for ai in range(len(effect_idx)):
++        i = effect_idx[ai]
++        for aj in range(ai + 1, len(effect_idx)):
++            j = effect_idx[aj]
++            vi, vj = vec[i], vec[j]
++            i_worse = bool(np.all(vi <= vj + EPS) and np.any(vi < vj - EPS))
++            j_worse = bool(np.all(vj <= vi + EPS) and np.any(vj < vi - EPS))
++            if i_worse and not j_worse:
++                pairs.append((i, j))
++            elif j_worse and not i_worse:
++                pairs.append((j, i))
++    return pairs
++
++
++def _sign_pairs(rows: list[dict[str, Any]]) -> list[tuple[int, int]]:
++    good = [i for i, r in enumerate(rows) if _effect_support(r) and bool(r["closed_loop_beneficial"])]
++    bad = [i for i, r in enumerate(rows) if _effect_support(r) and not bool(r["closed_loop_beneficial"])]
++    return [(i, j) for i in bad for j in good]
++
++
++def _support_pairs(rows: list[dict[str, Any]]) -> list[tuple[int, int]]:
++    effect = [i for i, r in enumerate(rows) if _effect_support(r)]
++    null = [i for i, r in enumerate(rows) if not _effect_support(r)]
++    return [(i, j) for i in null for j in effect]
++
++
++def _fit_pairwise(rows: list[dict[str, Any]], pairs: list[tuple[int, int]], model_name: str) -> dict[str, Any]:
++    if len(rows) < 64 or len(pairs) < 64:
++        raise ValueError(f"V52 {model_name} has insufficient fit support rows={len(rows)} pairs={len(pairs)}")
++    X = np.stack([_state(r) for r in rows])
++    mean = X.mean(axis=0); std = np.maximum(X.std(axis=0), 1.0e-6)
++    Z = (X - mean[None, :]) / std[None, :]
++    D = np.stack([Z[i] - Z[j] for i, j in pairs])
++    w = np.zeros((Z.shape[1],), dtype=np.float64)
++    before = float(D.shape[0] * math.log(2.0))
++    for _ in range(80):
++        s = D @ w
++        q = 1.0 / (1.0 + np.exp(np.clip(s, -60.0, 60.0)))
++        grad = -(D.T @ q) + RIDGE_LAMBDA * w
++        hw = q * (1.0 - q)
++        H = (D.T * hw) @ D + RIDGE_LAMBDA * np.eye(D.shape[1], dtype=np.float64)
++        step = np.linalg.solve(H, grad)
++        w = w - step
++        if float(np.linalg.norm(step)) < 1.0e-9:
++            break
++    s = D @ w
++    after = float(np.sum(np.logaddexp(0.0, -s)) + 0.5 * RIDGE_LAMBDA * np.dot(w, w))
++    raw = Z @ w
++    ben = raw[np.asarray([bool(r["closed_loop_beneficial"]) for r in rows], dtype=bool)]
++    if ben.size < 24:
++        raise ValueError(f"V52 {model_name} has insufficient beneficial normalization support {ben.size}")
++    return {
++        "model": model_name,
++        "feature_names": list(HODR_STATE_NAMES),
++        "feature_mean": [float(x) for x in mean],
++        "feature_std": [float(x) for x in std],
++        "weights": [float(x) for x in w],
++        "bias": 0.0,
++        "lambda": RIDGE_LAMBDA,
++        "fit_row_count": len(rows),
++        "pair_count": len(pairs),
++        "objective_at_zero": before,
++        "objective_final": after,
++        "fit_beneficial_score_mean": float(ben.mean()),
++        "fit_beneficial_score_std": max(float(ben.std()), 1.0e-6),
++    }
++
++
++def _component_risk(r: dict[str, Any], model: dict[str, Any]) -> float:
++    z = _state(r)
++    mean = np.asarray(model["feature_mean"], dtype=np.float64)
++    std = np.asarray(model["feature_std"], dtype=np.float64)
++    w = np.asarray(model["weights"], dtype=np.float64)
++    raw = float(((z - mean) / np.maximum(std, 1.0e-6)) @ w)
++    return float((raw - float(model["fit_beneficial_score_mean"])) / max(float(model["fit_beneficial_score_std"]), 1.0e-6))
++
++
++def _fit_models(rows: list[dict[str, Any]], arm: str, safety_names: list[str]) -> dict[str, Any]:
++    support = _fit_pairwise(rows, _support_pairs(rows), "zero_bias_pairwise_effect_support_risk")
++    if arm == "hurdle_sign":
++        outcome = _fit_pairwise(rows, _sign_pairs(rows), "zero_bias_pairwise_conditional_sign_risk")
++    elif arm == "hurdle_pareto":
++        outcome = _fit_pairwise(rows, _pareto_pairs(rows, safety_names), "zero_bias_pairwise_pareto_outcome_risk")
++    else:
++        raise ValueError(arm)
++    return {"arm": arm, "effect_support_risk": support, "conditional_outcome_risk": outcome}
++
++
++def _risk(r: dict[str, Any], models: dict[str, Any]) -> tuple[float, float, float]:
++    sr = _component_risk(r, models["effect_support_risk"])
++    orisk = _component_risk(r, models["conditional_outcome_risk"])
++    return float(max(sr, orisk)), float(sr), float(orisk)
++
++
++def _threshold(cal: list[dict[str, Any]], models: dict[str, Any], alpha: float) -> tuple[float, dict[str, Any]]:
++    vals = sorted(_risk(r, models)[0] for r in cal if bool(r["closed_loop_beneficial"]))
++    n = len(vals); rank = int(math.ceil((n + 1) * (1.0 - alpha))) if n else 1
++    min_n = int(math.ceil((1.0 - alpha) / alpha))
++    if n == 0 or rank > n:
++        raise ValueError(f"V52 calibration insufficient for frozen alpha n={n} min={min_n} rank={rank}")
++    return float(vals[rank - 1]), {
++        "positive_calibration_count": n,
++        "conformal_rank": rank,
++        "alpha": float(alpha),
++        "threshold": float(vals[rank - 1]),
++        "finite_sample_condition": "ceil((n+1)*(1-alpha))<=n",
++        "minimum_positive_count_for_finite_rank": min_n,
++        "single_joint_threshold": True,
++        "no_alpha_split": True,
++    }
++
++
++def _concordance(rows: list[dict[str, Any]], risk: np.ndarray, pairs: list[tuple[int, int]]) -> float:
++    if not pairs:
++        return float("nan")
++    vals = []
++    for bad, good in pairs:
++        d = float(risk[bad] - risk[good])
++        vals.append(1.0 if d > EPS else 0.5 if abs(d) <= EPS else 0.0)
++    return float(np.mean(vals))
++
++
++def _nested(rows: list[dict[str, Any]], alpha: float, v51_report: dict[str, Any]) -> dict[str, Any]:
++    safety_names = _safety_names(rows)
++    control = v51_report["nested_crossfit"]["arms"]["qpe_dose"]
++    arms: dict[str, Any] = {}
++    for arm in ARMS:
++        folds = []
++        keep_by_token: dict[str, bool] = {}
++        all_support_y: list[bool] = []; all_support_risk: list[float] = []
++        all_sign_y: list[bool] = []; all_outcome_risk: list[float] = []; all_control_risk: list[float] = []
++        all_full_y: list[bool] = []; all_full_control_risk: list[float] = []
++        all_dom_correct: list[float] = []; all_dom_control_correct: list[float] = []
++        support_good_folds = sign_better_folds = dom_better_folds = 0
++        for k in range(FOLDS):
++            cf = (k + 1) % FOLDS
++            fit = [r for r in rows if int(r["outer_test_fold"]) not in {k, cf}]
++            cal = [r for r in rows if int(r["outer_test_fold"]) == cf]
++            test = [r for r in rows if int(r["outer_test_fold"]) == k]
++            models = _fit_models(fit, arm, safety_names)
++            tau, ci = _threshold(cal, models, alpha)
++            full = [_risk(r, models) for r in test]
++            risk = np.asarray([x[0] for x in full], dtype=np.float64)
++            srisk = np.asarray([x[1] for x in full], dtype=np.float64)
++            orisk = np.asarray([x[2] for x in full], dtype=np.float64)
++            keep = [bool(x <= tau) for x in risk]
++            for r, kk in zip(test, keep):
++                tok = str(r["scenario_token"])
++                if tok in keep_by_token:
++                    raise RuntimeError(f"V52 duplicate OOF keep {tok}")
++                keep_by_token[tok] = kk
++
++            # Exact low-capacity V51 additive sign-risk control on same split.
++            cm = v51._fit_ranker(fit, "qpe_dose")
++            crisk = np.asarray([v51._risk(r, cm) for r in test], dtype=np.float64)
++            full_target = np.asarray([not bool(r["closed_loop_beneficial"]) for r in test], dtype=bool)
++            control_full_auc = _auc(full_target, crisk)
++            expected_control_fold_auc = float(control["folds"][k]["risk_auc"])
++            if not math.isfinite(control_full_auc) or abs(control_full_auc - expected_control_fold_auc) > 1e-12:
++                raise RuntimeError(f"V52 ENGINEERING STOP: V51 additive control fold {k} replay drift {control_full_auc} vs {expected_control_fold_auc}")
++            all_full_y.extend(full_target.tolist()); all_full_control_risk.extend(crisk.tolist())
++
++            null_target = np.asarray([not _effect_support(r) for r in test], dtype=bool)
++            support_auc = _auc(null_target, srisk)
++            support_good = bool(math.isfinite(support_auc) and support_auc > 0.5 + EPS)
++            support_good_folds += int(support_good)
++
++            eff_idx = [i for i, r in enumerate(test) if _effect_support(r)]
++            sign_auc = control_sign_auc = float("nan")
++            sign_better = False
++            if eff_idx:
++                sign_target = np.asarray([not bool(test[i]["closed_loop_beneficial"]) for i in eff_idx], dtype=bool)
++                sign_auc = _auc(sign_target, orisk[np.asarray(eff_idx, dtype=np.int64)])
++                control_sign_auc = _auc(sign_target, crisk[np.asarray(eff_idx, dtype=np.int64)])
++                sign_better = bool(math.isfinite(sign_auc) and math.isfinite(control_sign_auc) and sign_auc > control_sign_auc + EPS)
++                all_sign_y.extend(sign_target.tolist())
++                all_outcome_risk.extend(orisk[np.asarray(eff_idx, dtype=np.int64)].tolist())
++                all_control_risk.extend(crisk[np.asarray(eff_idx, dtype=np.int64)].tolist())
++            sign_better_folds += int(sign_better)
++
++            dpairs = _pareto_pairs(test, safety_names)
++            dom = _concordance(test, orisk, dpairs)
++            cdom = _concordance(test, crisk, dpairs)
++            dom_better = bool(math.isfinite(dom) and math.isfinite(cdom) and dom > cdom + EPS)
++            dom_better_folds += int(dom_better)
++            for bad, good in dpairs:
++                d = float(orisk[bad] - orisk[good]); cd = float(crisk[bad] - crisk[good])
++                all_dom_correct.append(1.0 if d > EPS else 0.5 if abs(d) <= EPS else 0.0)
++                all_dom_control_correct.append(1.0 if cd > EPS else 0.5 if abs(cd) <= EPS else 0.0)
++
++            bm = v50._delta_metrics(test, [True] * len(test)); pm = v50._delta_metrics(test, keep)
++            folds.append({
++                "fold": k, "fit_events": len(fit), "calibration_events": len(cal), "test_events": len(test),
++                "rsmr": bm, "hodr": pm, "calibration": ci,
++                "effect_support_auc": support_auc, "effect_support_identified": support_good,
++                "conditional_sign_auc": sign_auc, "v51_control_conditional_sign_auc": control_sign_auc,
++                "v51_control_full_nonbeneficial_auc": control_full_auc,
++                "conditional_sign_better_v51": sign_better,
++                "pareto_concordance": dom, "v51_control_pareto_concordance": cdom,
++                "pareto_better_v51": dom_better, "pareto_pair_count": len(dpairs),
++            })
++            all_support_y.extend(null_target.tolist()); all_support_risk.extend(srisk.tolist())
++
++        full_control_auc = _auc(np.asarray(all_full_y, dtype=bool), np.asarray(all_full_control_risk, dtype=np.float64))
++        expected_full_control_auc = float(control["risk_identification"]["aggregate_auc"])
++        if not math.isfinite(full_control_auc) or abs(full_control_auc - expected_full_control_auc) > 1e-12:
++            raise RuntimeError(f"V52 ENGINEERING STOP: V51 additive aggregate control replay drift {full_control_auc} vs {expected_full_control_auc}")
++        support_auc = _auc(np.asarray(all_support_y, dtype=bool), np.asarray(all_support_risk, dtype=np.float64))
++        sign_auc = _auc(np.asarray(all_sign_y, dtype=bool), np.asarray(all_outcome_risk, dtype=np.float64))
++        control_sign_auc = _auc(np.asarray(all_sign_y, dtype=bool), np.asarray(all_control_risk, dtype=np.float64))
++        dom = float(np.mean(all_dom_correct)) if all_dom_correct else float("nan")
++        cdom = float(np.mean(all_dom_control_correct)) if all_dom_control_correct else float("nan")
++        support_identified = bool(math.isfinite(support_auc) and support_auc > 0.5 + EPS and support_good_folds >= 4)
++        if arm == "hurdle_sign":
++            outcome_identified = bool(math.isfinite(sign_auc) and math.isfinite(control_sign_auc) and sign_auc > control_sign_auc + EPS and sign_better_folds >= 4)
++        else:
++            outcome_identified = bool(math.isfinite(dom) and math.isfinite(cdom) and dom > cdom + EPS and dom_better_folds >= 4)
++        functional_identified = bool(support_identified and outcome_identified)
++        keep = v506._align_oof_keep_by_token(rows, keep_by_token)
++        base = v50._delta_metrics(rows, [True] * len(rows)); chosen = v50._delta_metrics(rows, keep)
++        dep = v50._gate(base, chosen, alpha, [{"rsmr": f["rsmr"], "pior": f["hodr"]} for f in folds])
++        arms[arm] = {
++            "folds": folds,
++            "identification": {
++                "v51_control_full_nonbeneficial_auc": full_control_auc,
++                "support_auc": support_auc, "support_folds_above_random": support_good_folds,
++                "support_identified": support_identified,
++                "conditional_sign_auc": sign_auc, "v51_control_conditional_sign_auc": control_sign_auc,
++                "v51_control_full_nonbeneficial_auc": control_full_auc,
++                "conditional_sign_better_v51_fold_count": sign_better_folds,
++                "pareto_concordance": dom, "v51_control_pareto_concordance": cdom,
++                "pareto_better_v51_fold_count": dom_better_folds,
++                "functional_identified": functional_identified,
++            },
++            "aggregate": chosen,
++            "deployment_gate": dep,
++            "pass": bool(functional_identified and dep["pass"]),
++        }
++
++    preferred = "hurdle_sign" if arms["hurdle_sign"]["pass"] else "hurdle_pareto" if arms["hurdle_pareto"]["pass"] else None
++    any_identified = any(bool(arms[a]["identification"]["functional_identified"]) for a in ARMS)
++    if preferred == "hurdle_sign":
++        diagnosis = "structural_null_factorization_is_sufficient_with_conditional_sign_functional"
++    elif preferred == "hurdle_pareto":
++        diagnosis = "deployment_pareto_outcome_order_is_required_beyond_binary_sign"
++    elif any_identified:
++        diagnosis = "structured_static_paired_outcome_functional_identified_but_deployment_still_insufficient"
++    elif any(bool(arms[a]["identification"]["support_identified"]) for a in ARMS):
++        diagnosis = "effect_support_identified_but_operator_state_does_not_identify_conditional_outcome_order"
++    else:
++        diagnosis = "structured_effect_support_functional_not_identified"
++    return {
++        "retention_alpha": alpha,
++        "state_control": {
++            "name": "V51-QPE+DOSE",
++            "aggregate_auc": float(control["risk_identification"]["aggregate_auc"]),
++            "identified": bool(control["risk_identification"]["identified"]),
++            "deployment_gate_pass": bool(control["deployment_gate"]["pass"]),
++        },
++        "safety_delta_names": safety_names,
++        "arms": arms,
++        "preferred_promotion_arm": preferred,
++        "train_gate_pass": preferred is not None,
++        "failure_diagnosis": diagnosis,
++    }
++
++
++def _decorate(base_cfg: Path, models: dict[str, Any], tau: float, arm: str, out: Path) -> None:
++    cfg = yaml.safe_load(base_cfg.read_text(encoding="utf-8"))
++    ic = cfg["runtime"]["decisive_frontier_value"]["incumbent_contrastive_extremal_recovery"]
++    sc = ic["selection_conditioned_intervention_recovery"]
++    sc["post_selection_value_mode"] = "endpoint_potential_quality_paired_outcome_dominance_retention"
++    sc["paired_outcome_dominance_retention"] = {
++        "feature_names": list(HODR_STATE_NAMES),
++        "functional": arm,
++        "aggregation": "max_support_outcome",
++        "components": {
++            "effect_support_risk": models["effect_support_risk"],
++            "conditional_outcome_risk": models["conditional_outcome_risk"],
++        },
++        "retention_threshold": float(tau),
++        "operator_contrast": "exact_V51_max_abs_frozen_RSMR_proposal_vs_runtime_incumbent_bounded_trajectory_tensor",
++        "outcome_supervision": "TRAIN_only_metric_safe_paired_one_shot_closed_loop_outcomes",
++        "outcome_functional": "effect_hurdle_then_conditional_sign_or_pareto_order_no_safety_scalarization",
++        "runtime_candidate_set": "full_frozen_deployment_candidate_set",
++    }
++    sc["post_selection_selected_bias"] = 0.0
++    sc["post_selection_value_training"] = "paired_effect_support_plus_conditional_outcome_pairwise_fixed_lambda_1"
++    sc["post_selection_operator"] = "freeze_full_set_RSMR_winner_then_HODR_veto_only_same_winner_or_incumbent_no_rerank_no_fallback"
++    cfg.setdefault("metadata", {})["algorithm_version"] = "V64.3.52-EAF-ICER-HODR"
++    cfg.setdefault("provenance", {})["algorithm_version"] = "V64.3.52-EAF-ICER-HODR"
++    out.parent.mkdir(parents=True, exist_ok=True)
++    out.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
++
++
++def main() -> None:
++    p = argparse.ArgumentParser()
++    p.add_argument("--v49-fit-report", type=Path, required=True)
++    p.add_argument("--v49-candidate-audit", type=Path, required=True)
++    p.add_argument("--v49-scene-audit", type=Path, required=True)
++    p.add_argument("--v49-siir-config", type=Path, required=True)
++    p.add_argument("--paired-outcomes", type=Path, required=True)
++    p.add_argument("--v50-5-root", type=Path, required=True)
++    p.add_argument("--v51-fit-report", type=Path, required=True)
++    p.add_argument("--output-config", type=Path, required=True)
++    p.add_argument("--output-report", type=Path, required=True)
++    a = p.parse_args()
++
++    v51_report = _check_v51(a.v51_fit_report)
++    v50_report = v51_report["nested_crossfit"]["qpe_control"]
++    alpha = float(v50_report["retention_alpha"])
++    states = v50._candidate_states(a.v49_candidate_audit)
++    obs = v50._obs_risk(a.v49_scene_audit)
++    rows = v50._join(states, a.paired_outcomes, obs)
++    contrast = v51._load_treatment_contrast(a.v50_5_root, set(states))
++    for r in rows:
++        r["operator_execution_contrast_linf"] = float(contrast[str(r["scenario_token"])])
++
++    nested = _nested(rows, alpha, v51_report)
++    preferred = nested["preferred_promotion_arm"]
++    final = None
++    if preferred is not None:
++        safety_names = nested["safety_delta_names"]
++        fit = [r for r in rows if int(r["outer_test_fold"]) != 0]
++        cal = [r for r in rows if int(r["outer_test_fold"]) == 0]
++        models = _fit_models(fit, preferred, safety_names)
++        tau, ci = _threshold(cal, models, alpha)
++        final = {"arm": preferred, "models": models, "calibration": ci}
++
++    report = {
++        "audit": "v64_3_52_eaf_icer_hodr_fit",
++        "algorithm_version": "V64.3.52-EAF-ICER-HODR",
++        "scientific_role": "preregistered_V51_state_identified_deployment_failed_branch_structured_paired_outcome_functional",
++        "mechanism_hypothesis": "V51 identifies the minimal operator-relative QPE+D state, but a single binary sign ranker discards two deployment-relevant outcome structures: a large structural-null/effect-support layer and the partial order induced by paired official-score and hard-safety deltas. Factor effect support first, then identify the conditional outcome order without safety scalarization.",
++        "frozen_contract": {
++            "RSMR_selector_unchanged": True,
++            "QPE_plus_scalar_operator_contrast_state_unchanged": True,
++            "paired_outcome_evidence_unchanged": True,
++            "lambda": 1.0,
++            "retention_alpha_and_single_conformal_threshold_unchanged": True,
++            "same_winner_or_incumbent_only": True,
++            "no_rerank_second_best_fallback": True,
++            "no_new_runtime_or_offline_observable": True,
++            "no_safety_weight_scalarization": True,
++            "no_standalone_catastrophe_veto": True,
++        },
++        "nested_crossfit": nested,
++        "final_runtime_fit": final,
++        "train_gate_pass": bool(nested["train_gate_pass"]),
++        "preregistered_branch_order": ["hurdle_sign", "hurdle_pareto"],
++        "preregistered_next_branch": {
++            "if_hurdle_sign_pass": "promote minimal structural-null factorization; freeze and run untouched paired validation",
++            "if_only_hurdle_pareto_pass": "promote Pareto-ordered paired outcome functional; freeze and run untouched paired validation",
++            "if_functional_identified_but_deployment_fail": "static operator-relative state+functional exhausted; next collect/model paired temporal closed-loop outcome process, not offline features",
++            "if_support_identified_but_conditional_order_fail": "operator-relative scalar state insufficient for structured outcome order; next state acquisition must come from paired/on-policy treatment-control process",
++            "if_support_fail": "ENGINEERING/scientific audit of effect-support definition because V51 scalar-D effect-support signature should replay",
++        },
++        "prohibited_tuning": [
++            "V51 QPE+D state expansion before functional test completes",
++            "QPE-only rescue", "loss/lambda/class/focal/catastrophe weighting", "threshold/calibration sweep", "bigger MLP",
++            "K/logK/K interaction", "new offline future observable", "V46 variance/handcrafted temporal profile resurrection",
++            "V47 AGENT-2D resurrection", "V49 SIIR/random-prefix resurrection", "CVaR", "selected translation",
++            "standalone binary catastrophe veto", "RSMR/B/M/topK/candidate-count change", "rerank/second-best/fallback", "validation pooling",
++        ],
++    }
++    a.output_report.parent.mkdir(parents=True, exist_ok=True)
++    a.output_report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    if not nested["train_gate_pass"]:
++        if a.output_config.exists():
++            a.output_config.unlink()
++        print(json.dumps({"pass": False, "failure_diagnosis": nested["failure_diagnosis"], "output_config_emitted": False}, sort_keys=True))
++        raise SystemExit(f"V64.3.52 HODR TRAIN scientific STOP ({nested['failure_diagnosis']}); do not consume untouched validation")
++    assert final is not None
++    _decorate(a.v49_siir_config, final["models"], float(final["calibration"]["threshold"]), str(final["arm"]), a.output_config)
++    print(json.dumps({"pass": True, "preferred_promotion_arm": preferred, "output_config": str(a.output_config)}, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()

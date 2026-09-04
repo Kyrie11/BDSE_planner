@@ -1,0 +1,17 @@
+V64.3.52 EAF-ICER-HODR engineering validation
+
+Python compileall: PASS
+launcher bash -n: PASS
+result-defining science manifest: PASS (10 files)
+focused/current historical regression: 57 passed in 2.51s
+V51 uploaded-result independent focused replay: 51/51 PASS (performed before V52 modification)
+V52 new focused tests: 6/6 PASS
+
+Science-lock policy change:
+- V51 full-tree manifest was brittle because it included archival patch/diagnostic files.
+- V52 hard-locks only result-defining executable/protocol files.
+- README/changelog/patch/diagnostic artifacts are intentionally excluded from the hard gate.
+- paired evidence and parent V51 fit hashes remain separately fail-closed in the launcher.
+
+Full-repository note:
+A full pytest run on the uploaded V51 tree exceeded the local single-command execution window after progressing without failures. V52 validation therefore reports only completed test runs and does not claim an uncompleted full-suite PASS.

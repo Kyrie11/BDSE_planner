@@ -12917,3 +12917,61 @@ All prior closures remain active. In particular V51 must not resurrect:
 V51 TRAIN is fit-only over the already metric-safe 502x2 V50.5 paired evidence and existing treatment probe contrast. It does not rerun the ~22-hour paired closed loop and does not consume untouched validation.
 
 If TRAIN passes, freeze the preferred arm immediately and run a new untouched paired validation set with no TRAIN tuning.
+
+
+---
+
+# V64.3.51 scientific result — operator-relative state identified, sign-only functional insufficient
+
+## Reliability
+
+V51 is valid for TRAIN-level attribution. The first full-tree SHA check failed only on two non-executable archival files (`V64_3_50_7_TO_V64_3_51_POCR.patch`, `V64_3_50_PAIRED_OPERATOR_CONTRAST_DIAGNOSTIC.csv`). The successful run disabled the brittle full-tree check, but the actual paired evidence hash still exactly replays `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`; all result-defining V51 fit/test sources are unchanged. V52 replaces the full-tree source manifest with a curated result-defining science manifest so non-runtime docs/patches cannot force SHA bypass.
+
+## Preregistered V51 verdict
+
+- QPE+DOSE identification: **PASS**, AUC `0.5767120019`, 5/5 > QPE, 4/5 > EGO, 4/5 > OBS.
+- QPE+DOSE deployment: **FAIL** (hard-tail, utility-nonharm, all-fold nonharm).
+- QPE+DOSE-X identification: **PASS**, AUC `0.5484913559`, 4/5 > QPE, 5/5 > EGO, 4/5 > OBS.
+- QPE+DOSE-X deployment: **FAIL** (hard-tail, all-fold nonharm).
+- scalar operator contrast effect support: **PASS**, AUC `0.6975471416`, 5/5 > random; physical equality => null effect for 38/38.
+
+Formal V51 result: `operator_contrast_state_identified_but_low_capacity_sign_retention_functional_insufficient`. No V51 runtime arm is promoted.
+
+## Newly retained state evidence
+
+Retain the minimal additive operator-relative selected-outcome state `[Q, P-Q, E-P, D]` as an **identified supporting state** for the next functional experiment. Do not carry the more complex `D*QPE` interaction state forward because it has lower aggregate identification AUC and does not close deployment.
+
+## Newly closed deployment solution
+
+Close **single sign-only paired retention over QPE+D (including the V51 additive/interaction variants) as deployment-sufficient**. This closure does not close D, Q/P/E or paired one-shot outcome supervision.
+
+## Dominant bottleneck after V51
+
+**Structured paired selected-outcome functional sufficiency**: the deployment law contains a structural-null/effect-support layer and a multi-coordinate safety/utility order that binary beneficial/nonbeneficial sign ranking does not preserve.
+
+# V64.3.52 EAF-ICER-HODR — Hurdle Outcome-Dominance Retention
+
+## Scientific role
+
+V52 executes the exact preregistered V51 branch `state identified but deployment fail -> structured paired closed-loop outcome functional`. It adds no new runtime/offline observable and freezes the minimal V51 additive state `[Q,P-Q,E-P,D]`.
+
+## Arm A — HURDLE-SIGN
+
+Factor structural null/effect support from conditional beneficial/nonbeneficial ordering. Fit two zero-bias pairwise rankers with fixed lambda=1; combine by fixed `max(effect_support_risk, conditional_outcome_risk)` and calibrate one unchanged finite-rank conformal threshold on beneficial calibration events. No alpha split.
+
+## Arm B — HURDLE-PARETO
+
+Keep the identical support hurdle, but train the conditional outcome ranker only from unambiguous Pareto-dominance pairs over `[closed_loop_score_delta, safety_delta_1, ...]`. Higher is better for every coordinate. A bad event is paired against a good one only when it is <= on every coordinate and < on at least one. Ambiguous safety/utility trade-offs are omitted, never scalarized.
+
+This is not a standalone catastrophe veto and introduces no safety weight. Runtime remains one continuous retention certificate and one frozen conformal threshold.
+
+## V52 preregistered branch order
+
+1. HURDLE-SIGN identification + unchanged deployment gate.
+2. Only if it fails, HURDLE-PARETO identification + unchanged deployment gate.
+3. If either passes: freeze immediately, untouched paired validation, no TRAIN tuning.
+4. If structured functional is identifiable but deployment fails: static state+functional family is exhausted; next evidence/state must come from paired temporal closed-loop outcome process, not offline feature expansion.
+
+## No-repeat constraints after V51
+
+All historical closures remain active: no QPE-only/V51 sign-only rescue; no state expansion during the V52 functional test; no loss/lambda/class/focal/catastrophe weighting; no threshold/calibration sweep or alpha split; no bigger MLP/attention; no standalone binary catastrophe veto; no learned safety scalarization; no K/logK; no new offline future observable; no V46 variance/handcrafted temporal-profile resurrection; no V47 AGENT-2D; no V49 SIIR/random-prefix; no CVaR; no selected translation; no RSMR/B/M/top-K/candidate-count changes; no rerank/second-best/fallback; no validation pooling.

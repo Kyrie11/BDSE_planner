@@ -1,0 +1,35 @@
+{
+  "audit": "v64_3_51_uploaded_result_reliability_and_scientific_audit_for_v64_3_52",
+  "beneficial_count": 121,
+  "hard_harm_count": 25,
+  "paired_count": 502,
+  "paired_evidence_reported_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
+  "reason": "Initial mismatches were non-executable archival artifacts. The only later launcher edits disabled hash checks; actual paired hash and parent lock still match preregistered values, and the scientific fit/test sources are unchanged.",
+  "recovered_checks": {
+    "V50_7_parent_fit_hash_matches_expected": true,
+    "V50_7_untouched_validation_unconsumed": true,
+    "all_science_sources_except_launcher_match_original_manifest_in_uploaded_bdse": true,
+    "current_launcher_scientific_fit_invocation_unchanged": true,
+    "paired_hash_matches_expected": true
+  },
+  "result_zip_sha256": "794b4ca43e17eb547ba1ae806168268ca0e8cf8a225e64cef4fbb41a1cb1e2bc",
+  "source_manifest_first_attempt": {
+    "failed_files": [
+      "V64_3_50_7_TO_V64_3_51_POCR.patch",
+      "V64_3_50_PAIRED_OPERATOR_CONTRAST_DIAGNOSTIC.csv"
+    ],
+    "failed_files_runtime_referenced": false,
+    "launcher": "OK in first-attempt manifest log",
+    "result_defining_fit_source": "OK in first-attempt manifest log",
+    "v51_test_source": "OK in first-attempt manifest log"
+  },
+  "targeted_regression": "51/51 PASS",
+  "uploaded_bdse_zip_sha256": "93c87db1bf67ac0816f6b8cfb603ca1d1785b28d044bd05d8d0fb9e7c3f90567",
+  "uploaded_launcher_diff_from_preregistered": [
+    "disabled full-tree V64_3_51_SOURCE_MANIFEST.sha256 fail-fast",
+    "comment-only duplicate actual= line (no semantic effect)",
+    "disabled paired-evidence hash assert"
+  ],
+  "v51_fit_sha256": "54d3664e378c85ba482485c49ddcb3e10e83a59d5d04cd049ccaf05fdbb23049",
+  "verdict": "PASS_for_TRAIN_level_algorithm_attribution_with_provenance_hygiene_repair_required"
+}

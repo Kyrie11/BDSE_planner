@@ -1,0 +1,12 @@
+# V64.3.52 EAF-ICER-HODR
+# Reuses V50.5 paired TRAIN evidence and V51 fit-only result. No 502x2 closed-loop rerun.
+
+cd bdse_v64_3_52_eaf_icer_hodr
+
+V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V51_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_51_eaf_icer_pocr_train_v1 \
+bash RUN_V64_3_52_EAF_ICER_HODR_TRAIN.sh
+
+# Do NOT run untouched paired validation unless TRAIN PASS.
+# Do NOT tune thresholds/lambda/weights after seeing TRAIN.

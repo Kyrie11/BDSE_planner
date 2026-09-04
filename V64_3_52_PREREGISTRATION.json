@@ -1,0 +1,68 @@
+{
+  "algorithm_version": "V64.3.52-EAF-ICER-HODR",
+  "hypothesis": "V51 identifies the minimal operator-relative QPE+D state, but sign-only retention discards structural-null support and deployment partial-order information. A hurdle factorization over effect support plus conditional outcome ordering is required for selected-outcome deployment sufficiency.",
+  "population": "exact provenance-locked V50.5 TRAIN paired population: 502 full-set frozen RSMR proposals",
+  "evidence_source": "same metric-safe paired one-shot closed-loop treatment/control outcomes; no new label collection",
+  "state": ["Q", "P-Q", "E-P", "D"],
+  "state_policy": "exact V51 QPE+DOSE additive state; DOSE-X interactions are not carried forward",
+  "arms": [
+    {
+      "name": "HURDLE-SIGN",
+      "order": 1,
+      "functional": "effect-support pairwise hurdle + conditional beneficial/nonbeneficial sign pairwise risk",
+      "aggregation": "max(effect_support_risk, conditional_outcome_risk)",
+      "question": "Is structural-null/effect factorization alone sufficient once the V51 state is fixed?"
+    },
+    {
+      "name": "HURDLE-PARETO",
+      "order": 2,
+      "functional": "same effect-support hurdle + Pareto pairwise outcome risk over official-score delta and all hard-safety deltas",
+      "aggregation": "max(effect_support_risk, conditional_outcome_risk)",
+      "question": "If sign compression is still insufficient, is an unweighted deployment partial order over utility and safety required?"
+    }
+  ],
+  "pareto_order": "bad is paired against good only when bad has <= official-score delta and <= every hard-safety delta, with at least one strict inequality; ambiguous safety/utility trade-offs are omitted, never scalarized",
+  "identification_gate": {
+    "effect_support": "OOF support-risk AUC > 0.5 aggregate and >=4/5 folds",
+    "HURDLE-SIGN": "conditional nonbeneficial AUC on effectful events > exact V51 sign-risk control aggregate and >=4/5 folds",
+    "HURDLE-PARETO": "OOF Pareto-pair concordance > exact V51 sign-risk control aggregate concordance and >=4/5 folds"
+  },
+  "deployment_gate": "exact V50/V51 paired causal deployment gate unchanged",
+  "frozen": {
+    "selector": "full-set RSMR",
+    "operator_state": "QPE+D additive",
+    "lambda": 1.0,
+    "retention_alpha": 0.07791855203619909,
+    "calibration": "single finite-rank split-conformal threshold on beneficial calibration events; no alpha split",
+    "runtime_operator": "same frozen winner or incumbent; veto-only; no rerank/second-best/fallback",
+    "outcome_evidence": "V50.5 metric-safe paired one-shot closed-loop outcomes"
+  },
+  "promotion_order": ["HURDLE-SIGN", "HURDLE-PARETO"],
+  "branches": {
+    "HURDLE-SIGN pass": "promote minimal hurdle functional, freeze immediately, untouched paired validation",
+    "only HURDLE-PARETO pass": "promote Pareto-ordered functional, freeze immediately, untouched paired validation",
+    "functional identified but deployment fail": "static operator-relative state+functional exhausted; next evidence/state must be paired temporal closed-loop outcome process, not offline feature expansion",
+    "support identified but conditional order fail": "current scalar operator-relative state is insufficient for structured conditional outcomes; next state acquisition must remain paired/on-policy",
+    "support fail": "ENGINEERING/scientific audit because V51 scalar-D effect-support signature must replay before further algorithm change"
+  },
+  "prohibited": [
+    "QPE-only or V51 sign-only rescue",
+    "QPE+D state expansion during this test",
+    "loss/lambda/class/focal/catastrophe weighting",
+    "threshold/calibration sweep or alpha split",
+    "bigger MLP/attention",
+    "standalone binary catastrophe veto",
+    "safety scalarization weights",
+    "K/logK/multiplicity",
+    "new offline future observable",
+    "V46 response variance or handcrafted temporal-profile resurrection",
+    "V47 AGENT-2D resurrection",
+    "V49 random-prefix/SIIR resurrection",
+    "CVaR",
+    "selected translation",
+    "RSMR/B/M/top-K/candidate-count changes",
+    "rerank/second-best/fallback",
+    "validation pooling"
+  ],
+  "fresh_policy": "untouched validation remains unconsumed unless TRAIN preferred arm passes; after PASS no TRAIN tuning is permitted"
+}
