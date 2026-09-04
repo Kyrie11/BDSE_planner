@@ -1,0 +1,12 @@
+# V64.3.50.7 provenance-only rerun
+cd bdse_v64_3_50_7_eaf_icer_pior_provenance_repair
+
+# Default historical output layout:
+bash RUN_V64_3_50_7_EAF_ICER_PIOR_FIT_PROVENANCE_REPAIR.sh
+
+# Or explicit roots:
+V49_ROOT=/path/to/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+V50_5_ROOT=/path/to/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+bash RUN_V64_3_50_7_EAF_ICER_PIOR_FIT_PROVENANCE_REPAIR.sh
+
+# This does NOT rerun 502x2 closed loop and does NOT consume untouched validation.

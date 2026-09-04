@@ -1,0 +1,13 @@
+V64.3.50.7 provenance-only repair
+
+Scientific changes: NONE
+V50.6 fit source modified: NO
+V50.6 tests modified: NO
+V50.6 runner modified: NO
+Paired 502x2 closed-loop rerun: NO
+Untouched validation: MUST remain unconsumed
+
+Local static checks:
+- wrapper bash -n: PASS
+- V50.6 uploaded engineering manifest internal verification: PASS
+- V50.7 engineering manifest self-check: PASS (generated after finalizing files)
