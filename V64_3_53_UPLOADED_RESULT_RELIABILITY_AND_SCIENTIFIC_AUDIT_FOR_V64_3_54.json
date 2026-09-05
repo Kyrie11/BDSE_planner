@@ -1,0 +1,143 @@
+{
+  "audit": "v64_3_53_uploaded_result_reliability_and_scientific_audit_for_v64_3_54",
+  "next_version": "V64.3.54-EAF-ICER-PDRM",
+  "preregistered_verdict": {
+    "endpoint": {
+      "aggregate": {
+        "beneficial_retention_recall": 0.9421487603305785,
+        "beneficial_selected_count": 114,
+        "beneficial_total_count": 121,
+        "closed_loop_negative_rms": 0.14765890212453933,
+        "closed_loop_score_delta_sum": -2.9866315602412996,
+        "closed_loop_score_delta_worst": -0.9765267961612268,
+        "hard_harm_selected_count": 20,
+        "nonbeneficial_selected_count": 347,
+        "selected_count": 461
+      },
+      "deployment_gate": {
+        "all_folds_nonharm": false,
+        "beneficial_retention": true,
+        "hard_tail": true,
+        "nonbeneficial_reduction": true,
+        "pass": false,
+        "population": true,
+        "utility_nonharm": true
+      },
+      "identification": {
+        "aggregate_auc": 0.5049495958586868,
+        "better_v51_scalar_fold_count": 3,
+        "better_v52_scalar_fold_count": 3,
+        "folds_above_random": 2,
+        "identified": false,
+        "v51_conditional_sign_auc": 0.4964580873671783,
+        "v52_scalar_conditional_sign_auc": 0.48029243483788936
+      },
+      "verdict": "STOP"
+    },
+    "formal_failure_diagnosis": "preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order",
+    "temporal": {
+      "aggregate": {
+        "beneficial_retention_recall": 0.9504132231404959,
+        "beneficial_selected_count": 115,
+        "beneficial_total_count": 121,
+        "closed_loop_negative_rms": 0.15033953205764972,
+        "closed_loop_score_delta_sum": -2.8500081255305845,
+        "closed_loop_score_delta_worst": -0.9765267961612268,
+        "hard_harm_selected_count": 22,
+        "nonbeneficial_selected_count": 339,
+        "selected_count": 454
+      },
+      "deployment_gate": {
+        "all_folds_nonharm": false,
+        "beneficial_retention": true,
+        "hard_tail": true,
+        "nonbeneficial_reduction": true,
+        "pass": false,
+        "population": true,
+        "utility_nonharm": true
+      },
+      "identification": {
+        "aggregate_auc": 0.5743801652892562,
+        "better_endpoint_fold_count": 4,
+        "better_v51_scalar_fold_count": 3,
+        "better_v52_scalar_fold_count": 3,
+        "endpoint_control_auc": 0.5049495958586868,
+        "folds_above_random": 5,
+        "identified": false,
+        "temporal_necessity_identified": false,
+        "v51_conditional_sign_auc": 0.4964580873671783,
+        "v52_scalar_conditional_sign_auc": 0.48029243483788936
+      },
+      "verdict": "STOP"
+    },
+    "v52_effect_support": {
+      "auc": 0.6516244589283049,
+      "folds_above_random": 5,
+      "verdict": "GO_RETAIN"
+    }
+  },
+  "profile_diagnostics": {
+    "D_max": 231.74712085723877,
+    "D_mean": 15.920014800244118,
+    "D_median": 9.111468315124512,
+    "D_p95": 57.597265529632544,
+    "D_zero_fraction": 0.07569721115537849,
+    "count": 502,
+    "endpoint_zero_fraction_by_channel": [
+      0.07569721115537849,
+      0.4760956175298805,
+      0.4800796812749004,
+      0.7768924302788844
+    ],
+    "physical_equal_count": 38,
+    "temporal_zero_fraction_by_coordinate": [
+      0.07569721115537849,
+      0.4760956175298805,
+      0.4820717131474104,
+      0.08167330677290836,
+      0.07569721115537849,
+      0.4760956175298805,
+      0.4940239043824701,
+      0.08167330677290836
+    ],
+    "trajectory_steps": [
+      80
+    ],
+    "unique_tokens": 502
+  },
+  "reliability_evidence": {
+    "independent_uploaded_code_targeted_replay": "64/64 PASS",
+    "launcher_bash_syntax": true,
+    "paired_labels_recollected": false,
+    "paired_outcome_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
+    "profile_count": 502,
+    "profile_probe_pass": true,
+    "profile_unique": 502,
+    "python_compile": true,
+    "scalar_D_exact_replay_all": true,
+    "science_manifest_files": 15,
+    "science_manifest_pass": true,
+    "server_targeted_regression": "64/64 PASS",
+    "termination": "preregistered scientific STOP",
+    "v53_fit_sha256": "9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e"
+  },
+  "reproducibility_caveat": "The V53 output zip hard-locks parent evidence by exact SHA but does not bundle the entire historical V50.5/V49 parent data roots. This is provenance-complete for the executed launcher but less self-contained for third-party re-analysis. V54 adds a compact self-contained analysis population snapshot.",
+  "scientific_conclusion": {
+    "learned": "The frozen QPE+D state stably identifies structural null/effect support; planned temporal treatment shape carries some aggregate conditional-order signal.",
+    "new_closure": "Close pre-execution ego operator-trajectory geometry (scalar magnitude + signed endpoint + fixed low-order planned temporal shape) as a sufficient effectful conditional-outcome state in the current static ranker family. Do not tune additional plan-only horizons/bases/transforms.",
+    "next_bottleneck": "post-intervention paired dynamic response / outcome-process sufficiency; identify realized treatment-response mediation before designing a deployable predictor or richer dynamic functional.",
+    "not_learned": "Neither signed endpoint geometry nor the fixed two-mode pre-execution temporal geometry stably identifies effectful beneficial/harmful ordering across folds, and neither yields fold-wise nonharm."
+  },
+  "uploaded_artifacts": {
+    "code_zip_sha256": "37b0cc3ce184491fd013a8effe2f3c118ae73467e8db0bfa50e5fe1bed38885b",
+    "paper_tex_sha256": "ede63e7e6c0e7e027510eb5a40279a55f16fe7d28bfc7e2c5dab1560296263c3",
+    "prior_analysis_md_sha256": "bd16527a93ea79a34ae5f97b35917ea04b1bf01b56e66aad2dcd94ca7818eb47",
+    "result_zip_sha256": "07505de85158f4ba84de3802eca202c2dd9278ed5fc23529d0c6b1af32ab0b99"
+  },
+  "verdict": {
+    "engineering_provenance_valid": true,
+    "engineering_repair_required": false,
+    "train_level_algorithm_attribution_allowed": true,
+    "untouched_validation_consumed": false
+  }
+}

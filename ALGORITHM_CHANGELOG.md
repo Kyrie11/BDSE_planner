@@ -13169,3 +13169,167 @@ TEMPORAL must satisfy the same conditions and, to support a temporal-necessity c
 4. If both pre-execution state families fail identification -> close pre-execution operator-trajectory geometry as sufficient; next evidence/state must come from **post-intervention paired dynamic response/outcome process**, still on-policy/paired rather than offline feature expansion.
 
 Untouched validation remains unconsumed until a TRAIN arm passes all gates.
+
+---
+
+# V64.3.53 scientific result — pre-execution operator-trajectory geometry is not conditional-outcome sufficient
+
+## Reliability
+
+V53 is valid for TRAIN-level attribution; no V53.x engineering repair is required.
+
+- uploaded code ZIP SHA256: `37b0cc3ce184491fd013a8effe2f3c118ae73467e8db0bfa50e5fe1bed38885b`;
+- uploaded result ZIP SHA256: `07505de85158f4ba84de3802eca202c2dd9278ed5fc23529d0c6b1af32ab0b99`;
+- result-defining science manifest: **15/15 PASS**;
+- server targeted regression: **64/64 PASS**;
+- independent exact uploaded-code replay: **64/64 PASS**;
+- treatment state replay: **502/502 unique**, no paired outcome recollection;
+- frozen scalar D replay: exact token-by-token;
+- V50.5 paired outcome SHA: exact `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`;
+- termination: preregistered TRAIN scientific STOP; untouched validation unconsumed.
+
+## Preregistered V53 verdict
+
+### V52 QPE+D effect-support hurdle — retain
+
+- aggregate AUC: **`0.6516244589`**;
+- 5/5 folds > random.
+
+This remains a supported first-stage mechanism: scalar operator-relative state can identify whether the frozen proposal/incumbent intervention produces any paired closed-loop effect.
+
+### ENDPOINT — STOP
+
+- conditional AUC: **`0.5049495959`**;
+- > random: **2/5** folds;
+- > V52 scalar conditional control: **3/5**;
+- > V51 scalar control: **3/5**;
+- identification: **FAIL**;
+- diagnostic retention: `461 selected / 114 beneficial / 347 nonbeneficial / 20 hard harm / score-sum -2.98663 / NegRMS 0.147659`;
+- deployment: **FAIL** because all-fold nonharm fails.
+
+Close signed terminal proposal-vs-incumbent geometry as a sufficient effectful conditional-outcome state.
+
+### TEMPORAL — STOP, diagnostic signal only
+
+- conditional AUC: **`0.5743801653`**;
+- > random: **5/5**;
+- > ENDPOINT: **4/5**;
+- > V52 scalar: **3/5**;
+- > V51 scalar: **3/5**;
+- identification: **FAIL**;
+- temporal necessity: **FAIL**;
+- diagnostic retention: `454 selected / 115 beneficial / 339 nonbeneficial / 22 hard harm / score-sum -2.85001 / NegRMS 0.150340`;
+- deployment: **FAIL** because all-fold nonharm fails.
+
+The fixed pre-execution temporal shape is informative but not fold-stable enough for promotion. Do not add more modes/horizons/bases after seeing this result.
+
+## Mechanism conclusion after V53
+
+V52 already separated `effect support` from `conditional effect order`. V53 now shows that recovering plan direction and low-order planned temporal shape does not close the conditional-order problem:
+
+**planned operator-trajectory geometry != realized effectful outcome mediation sufficiency.**
+
+The current model knows whether an intervention tends to have an effect, but it still does not stably know whether the realized effect will be beneficial or harmful.
+
+## Dominant bottleneck after V53
+
+**Post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order.**
+
+The next evidence must come from the realized paired transition induced by the already frozen operator, not from more pre-execution plan-only geometry.
+
+## Newly closed directions
+
+Close as sufficient conditional-outcome state families:
+
+- signed endpoint proposal-incumbent geometry;
+- fixed low-order DCT-II pre-execution ego operator shape;
+- any post-hoc rescue of these families by endpoint transform, plan-only horizon/mode/basis sweep, peak/early statistic sweep, larger MLP/attention, threshold/alpha/lambda/loss/class/focal/catastrophe weighting.
+
+Do **not** close Q/P/E, scalar D as effect-support evidence, the V52 effect-support factorization, metric-safe paired outcome supervision, or post-intervention/structured process models.
+
+All older no-repeat constraints remain active.
+
+# V64.3.54 EAF-ICER-PDRM — Paired Dynamic Response Mediation
+
+## Scientific role
+
+V54 executes the exact V53 failure branch:
+
+`ENDPOINT identification FAIL + TEMPORAL identification FAIL -> post-intervention paired dynamic response/outcome process`.
+
+It is a **mediator-identification experiment**, not yet a deployable t=0 retention policy.
+
+## Frozen contracts
+
+V54 freezes:
+
+- bounded EAF interface/support/admissibility;
+- full-set RSMR extremal winner;
+- same-winner-or-incumbent/no-fallback operator;
+- exact V52 QPE+D effect-support hurdle;
+- exact V50.5 metric-safe 502 paired outcome labels;
+- Q/P/E consequence coordinates and scalar planned D;
+- five outer folds;
+- zero-bias pairwise conditional ranker with `lambda=1` for the state-identification comparison.
+
+No new full-horizon outcome label is collected.
+
+## Paired short-horizon dynamic replay
+
+For all 502 frozen proposal events, replay both original V50.5 arms only from the exact one-shot anchor through the **first scheduled replan**. The horizon is the frozen `planner.replan_interval_ticks` (currently 5); it is not a sweep parameter.
+
+Record simulated ego rear-axle `(x,y,yaw,speed)` at each tick. Form treatment-control paired realized channels in the common t0 control frame:
+
+`[realized dx(t), realized dy(t), realized dyaw(t), realized dv(t)]`.
+
+Full nuPlan metrics are disabled because the final V50.5 paired outcome labels are reused unchanged.
+
+## V54 causal arms
+
+### REALIZED-ENDPOINT
+
+`[Q, P-Q, E-P, planned_D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`.
+
+### REALIZED-TEMPORAL
+
+REALIZED-ENDPOINT plus fixed DCT-II `k=1,2` of the four realized paired channels over the same frozen exposure window.
+
+No exposure-horizon, basis, mode-count, peak/early or bandwidth sweep.
+
+## Stricter preregistered identification gate
+
+REALIZED-ENDPOINT must:
+
+- have aggregate AUC > 0.5 and >=4/5 folds > random;
+- beat exact V53 TEMPORAL in aggregate and >=4/5 folds;
+- beat exact V52 scalar conditional control in aggregate and >=4/5 folds;
+- beat exact V51 scalar conditional control in aggregate and >=4/5 folds.
+
+REALIZED-TEMPORAL must satisfy all external comparator gates and additionally beat REALIZED-ENDPOINT in aggregate and >=4/5 folds before temporal necessity can be claimed.
+
+A retrospective retention gate is reported only as a mediator diagnostic. It cannot promote V54 because post-intervention state is unavailable at the initial t0 decision.
+
+## Speed / compute policy
+
+V53 treatment-only state replay used about **19.45 h** of batch wall time while running full scenarios and metrics even though its state was available early. V54 preserves the full 502 scientific population but:
+
+- truncates simulation after the one-shot exposure window;
+- disables metric computation;
+- records the state immediately before the first scheduled replan and bypasses that second expensive BDSE replan;
+- parallelizes treatment/control on two GPUs when available;
+- supports one-GPU sequential fallback;
+- uses an 8-scene first batch as a fail-closed engineering sentinel and resumable batch certificates.
+
+Do not shrink the 502 population: V53 exposed a fold-stability problem, so reducing conditional support would undermine the scientific question. The correct acceleration is shorter state replay, not fewer scenes.
+
+## V54 next branches
+
+1. REALIZED-ENDPOINT identified -> freeze minimal realized transition mediator; next make it deployable via a pre-execution mediator predictor or auditable continuation operator.
+2. Only REALIZED-TEMPORAL identified -> realized response shape is necessary; next make that mediator deployable without basis/horizon tuning.
+3. Mediator identified but retrospective retention gate fails -> dynamic state signal exists, static sign functional remains the bottleneck; move to structured paired dynamic outcome functional before adding more state.
+4. Both fail -> close short-horizon realized ego-response geometry; next paired evidence must represent realized interaction/safety consequence process, not more ego trajectory geometry.
+
+## Runtime claim boundary
+
+Post-intervention state must **never** be inserted into the initial t0 runtime veto as if it were available before execution. V54 emits no deployable runtime retention config and consumes no untouched validation.
+

@@ -1,0 +1,119 @@
+{
+  "algorithm_version": "V64.3.54-EAF-ICER-PDRM",
+  "name": "Paired Dynamic Response Mediation",
+  "scientific_role": "preregistered V53 both-preexecution-state-families-failed branch",
+  "trigger": {
+    "v53_fit_sha256": "9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e",
+    "v53_train_gate_pass": false,
+    "v53_failure_diagnosis": "preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order",
+    "v53_endpoint_identified": false,
+    "v53_temporal_identified": false,
+    "v52_effect_support_auc": 0.6516244589283049,
+    "v52_effect_support_folds_above_random": 5
+  },
+  "dominant_bottleneck": "post-intervention paired dynamic response / outcome-process sufficiency for effectful selected outcome order",
+  "mechanism_hypothesis": "Planned proposal-vs-incumbent geometry is only a proxy for the realized treatment. If effectful outcome order is mediated by the actual closed-loop response induced over the one-shot operator-exposure window, a paired realized treatment-control state transition should identify final paired outcome order more stably than the strongest V53 pre-execution temporal state.",
+  "frozen": {
+    "bounded_interface_and_EAF": true,
+    "full_set_RSMR_winner": true,
+    "same_winner_or_incumbent_no_fallback": true,
+    "V52_QPE_plus_D_effect_support": true,
+    "V50_5_metric_safe_502_paired_outcomes": true,
+    "QPE_consequence_coordinates": true,
+    "planned_scalar_D": true,
+    "pairwise_zero_bias_lambda_1_for_identification": true,
+    "outer_folds": 5
+  },
+  "state_collection": {
+    "arms": [
+      "treatment",
+      "control"
+    ],
+    "population": "exact frozen 502 V50/V51/V52/V53 full-set RSMR proposals",
+    "outcome_labels_recollected": false,
+    "metrics_recomputed": false,
+    "window": "from exact one-shot intervention anchor through the first scheduled planner replan",
+    "window_length_source": "frozen planner.replan_interval_ticks; no time-horizon sweep",
+    "synchronization": "exact simulation iteration index and timestamp across treatment/control",
+    "state": "simulated ego rear-axle x/y/yaw and speed at every tick in the exposure window",
+    "coordinate_frame": "paired treatment-control position delta rotated into shared t0 control ego frame",
+    "short_horizon_termination": true,
+    "terminal_sample_optimization": "At the first scheduled replan index, record the pre-replan state and return the cached trajectory without executing a second expensive BDSE replan; simulation terminates immediately after."
+  },
+  "arms": {
+    "realized_endpoint": {
+      "state": [
+        "Q",
+        "P-Q",
+        "E-P",
+        "planned_D",
+        "realized_dx_end",
+        "realized_dy_end",
+        "realized_dyaw_end",
+        "realized_dv_end"
+      ],
+      "question": "Is the realized one-replan state transition the missing mediator beyond planned operator geometry?",
+      "identification_gate": {
+        "aggregate_auc_gt": 0.5,
+        "folds_auc_gt_random_min": 4,
+        "aggregate_auc_gt_exact_V53_temporal": true,
+        "folds_gt_exact_V53_temporal_min": 4,
+        "aggregate_auc_gt_exact_V52_scalar": true,
+        "folds_gt_exact_V52_scalar_min": 4,
+        "aggregate_auc_gt_exact_V51_scalar": true,
+        "folds_gt_exact_V51_scalar_min": 4
+      }
+    },
+    "realized_temporal": {
+      "state": "realized_endpoint plus fixed DCT-II k=1,2 of paired realized dx/dy/dyaw/dv over the operator-exposure window",
+      "question": "If realized endpoint is insufficient, is realized response shape necessary?",
+      "identification_gate": {
+        "all_realized_endpoint_external_comparator_gates": true,
+        "aggregate_auc_gt_realized_endpoint": true,
+        "folds_gt_realized_endpoint_min": 4
+      }
+    }
+  },
+  "branch_order": [
+    "realized_endpoint",
+    "realized_temporal"
+  ],
+  "retrospective_oracle": {
+    "computed": true,
+    "purpose": "diagnostic only: test whether the post-intervention mediator plus frozen V52 support could satisfy the historical paired gate if it were available",
+    "promotion_evidence": false,
+    "runtime_deployable_at_t0": false
+  },
+  "runtime_claim_boundary": {
+    "post_intervention_state_not_t0_available": true,
+    "no_runtime_retention_config_emitted_in_v54": true,
+    "no_untouched_validation_in_v54": true,
+    "allowed_claim_if_identified": "realized paired response is an outcome mediator",
+    "forbidden_claim": "V54 itself is a deployable pre-action retention mechanism"
+  },
+  "next_branches": {
+    "if_realized_endpoint_identified": "Freeze minimal realized transition mediator. Next version must make it deployable by predicting it from runtime-available pre-execution state or by defining an auditable continuation operator; do not use future state at t0.",
+    "if_only_realized_temporal_identified": "Freeze realized temporal mediator and design a deployable temporal mediator prediction/continuation test without basis/horizon tuning.",
+    "if_identified_but_retrospective_oracle_gate_fails": "Dynamic state carries signal but static sign functional remains insufficient; next solve a structured paired dynamic outcome functional before more state expansion.",
+    "if_both_fail": "Close short-horizon realized ego-response state as sufficient; next paired evidence must represent realized interaction/safety consequence process, not more ego trajectory geometry."
+  },
+  "prohibited": [
+    "using post-intervention state directly as t0 runtime input",
+    "exposure-horizon sweep",
+    "DCT basis or mode-count sweep",
+    "peak/early handcrafted statistic sweep",
+    "larger MLP or attention",
+    "threshold/alpha/lambda/loss/class/focal/catastrophe weighting",
+    "safety scalarization",
+    "new offline future observables",
+    "resurrecting V46 predicted occupancy temporal profile",
+    "resurrecting V47 constant lateral drift",
+    "K/logK or multiplicity",
+    "random-prefix SIIR",
+    "CVaR/selected translation/binary catastrophe veto",
+    "RSMR/B/M/top-K/candidate-count change",
+    "rerank/second-best/fallback",
+    "validation pooling",
+    "untouched validation before a deployable mechanism exists"
+  ]
+}

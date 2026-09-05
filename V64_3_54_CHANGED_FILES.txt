@@ -1,0 +1,23 @@
+Modified from V64.3.53:
+- ALGORITHM_CHANGELOG.md
+- README_CURRENT.md
+
+Added for V64.3.54:
+- RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
+- NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt
+- V64_3_54_PREREGISTRATION.json
+- V64_3_54_SCIENCE_MANIFEST.sha256
+- V64_3_54_ENGINEERING_VALIDATION.txt
+- V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md
+- V64_3_53_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_54.json
+- V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv
+- bdse/planner/paired_dynamic_response_mediation.py
+- bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
+- bdse/tools/run_v64_3_54_dynamic_response_probe.py
+- bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py
+- bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
+
+Historical V53/V52/V51/V50 planner/science files are retained unchanged and are SHA-locked by V64_3_54_SCIENCE_MANIFEST.sha256.
+- V64_3_53_TO_V64_3_54_PDRM.patch
+- V64_3_54_CHANGED_FILES.txt
+- V64_3_54_SHA256SUMS.txt

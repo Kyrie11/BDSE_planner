@@ -1,0 +1,2878 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/ALGORITHM_CHANGELOG.md bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md
+--- v53_code/ALGORITHM_CHANGELOG.md	2026-09-05 05:38:48.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md	2026-09-05 18:45:54.816768347 +0000
+@@ -13169,3 +13169,167 @@
+ 4. If both pre-execution state families fail identification -> close pre-execution operator-trajectory geometry as sufficient; next evidence/state must come from **post-intervention paired dynamic response/outcome process**, still on-policy/paired rather than offline feature expansion.
+ 
+ Untouched validation remains unconsumed until a TRAIN arm passes all gates.
++
++---
++
++# V64.3.53 scientific result — pre-execution operator-trajectory geometry is not conditional-outcome sufficient
++
++## Reliability
++
++V53 is valid for TRAIN-level attribution; no V53.x engineering repair is required.
++
++- uploaded code ZIP SHA256: `37b0cc3ce184491fd013a8effe2f3c118ae73467e8db0bfa50e5fe1bed38885b`;
++- uploaded result ZIP SHA256: `07505de85158f4ba84de3802eca202c2dd9278ed5fc23529d0c6b1af32ab0b99`;
++- result-defining science manifest: **15/15 PASS**;
++- server targeted regression: **64/64 PASS**;
++- independent exact uploaded-code replay: **64/64 PASS**;
++- treatment state replay: **502/502 unique**, no paired outcome recollection;
++- frozen scalar D replay: exact token-by-token;
++- V50.5 paired outcome SHA: exact `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`;
++- termination: preregistered TRAIN scientific STOP; untouched validation unconsumed.
++
++## Preregistered V53 verdict
++
++### V52 QPE+D effect-support hurdle — retain
++
++- aggregate AUC: **`0.6516244589`**;
++- 5/5 folds > random.
++
++This remains a supported first-stage mechanism: scalar operator-relative state can identify whether the frozen proposal/incumbent intervention produces any paired closed-loop effect.
++
++### ENDPOINT — STOP
++
++- conditional AUC: **`0.5049495959`**;
++- > random: **2/5** folds;
++- > V52 scalar conditional control: **3/5**;
++- > V51 scalar control: **3/5**;
++- identification: **FAIL**;
++- diagnostic retention: `461 selected / 114 beneficial / 347 nonbeneficial / 20 hard harm / score-sum -2.98663 / NegRMS 0.147659`;
++- deployment: **FAIL** because all-fold nonharm fails.
++
++Close signed terminal proposal-vs-incumbent geometry as a sufficient effectful conditional-outcome state.
++
++### TEMPORAL — STOP, diagnostic signal only
++
++- conditional AUC: **`0.5743801653`**;
++- > random: **5/5**;
++- > ENDPOINT: **4/5**;
++- > V52 scalar: **3/5**;
++- > V51 scalar: **3/5**;
++- identification: **FAIL**;
++- temporal necessity: **FAIL**;
++- diagnostic retention: `454 selected / 115 beneficial / 339 nonbeneficial / 22 hard harm / score-sum -2.85001 / NegRMS 0.150340`;
++- deployment: **FAIL** because all-fold nonharm fails.
++
++The fixed pre-execution temporal shape is informative but not fold-stable enough for promotion. Do not add more modes/horizons/bases after seeing this result.
++
++## Mechanism conclusion after V53
++
++V52 already separated `effect support` from `conditional effect order`. V53 now shows that recovering plan direction and low-order planned temporal shape does not close the conditional-order problem:
++
++**planned operator-trajectory geometry != realized effectful outcome mediation sufficiency.**
++
++The current model knows whether an intervention tends to have an effect, but it still does not stably know whether the realized effect will be beneficial or harmful.
++
++## Dominant bottleneck after V53
++
++**Post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order.**
++
++The next evidence must come from the realized paired transition induced by the already frozen operator, not from more pre-execution plan-only geometry.
++
++## Newly closed directions
++
++Close as sufficient conditional-outcome state families:
++
++- signed endpoint proposal-incumbent geometry;
++- fixed low-order DCT-II pre-execution ego operator shape;
++- any post-hoc rescue of these families by endpoint transform, plan-only horizon/mode/basis sweep, peak/early statistic sweep, larger MLP/attention, threshold/alpha/lambda/loss/class/focal/catastrophe weighting.
++
++Do **not** close Q/P/E, scalar D as effect-support evidence, the V52 effect-support factorization, metric-safe paired outcome supervision, or post-intervention/structured process models.
++
++All older no-repeat constraints remain active.
++
++# V64.3.54 EAF-ICER-PDRM — Paired Dynamic Response Mediation
++
++## Scientific role
++
++V54 executes the exact V53 failure branch:
++
++`ENDPOINT identification FAIL + TEMPORAL identification FAIL -> post-intervention paired dynamic response/outcome process`.
++
++It is a **mediator-identification experiment**, not yet a deployable t=0 retention policy.
++
++## Frozen contracts
++
++V54 freezes:
++
++- bounded EAF interface/support/admissibility;
++- full-set RSMR extremal winner;
++- same-winner-or-incumbent/no-fallback operator;
++- exact V52 QPE+D effect-support hurdle;
++- exact V50.5 metric-safe 502 paired outcome labels;
++- Q/P/E consequence coordinates and scalar planned D;
++- five outer folds;
++- zero-bias pairwise conditional ranker with `lambda=1` for the state-identification comparison.
++
++No new full-horizon outcome label is collected.
++
++## Paired short-horizon dynamic replay
++
++For all 502 frozen proposal events, replay both original V50.5 arms only from the exact one-shot anchor through the **first scheduled replan**. The horizon is the frozen `planner.replan_interval_ticks` (currently 5); it is not a sweep parameter.
++
++Record simulated ego rear-axle `(x,y,yaw,speed)` at each tick. Form treatment-control paired realized channels in the common t0 control frame:
++
++`[realized dx(t), realized dy(t), realized dyaw(t), realized dv(t)]`.
++
++Full nuPlan metrics are disabled because the final V50.5 paired outcome labels are reused unchanged.
++
++## V54 causal arms
++
++### REALIZED-ENDPOINT
++
++`[Q, P-Q, E-P, planned_D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`.
++
++### REALIZED-TEMPORAL
++
++REALIZED-ENDPOINT plus fixed DCT-II `k=1,2` of the four realized paired channels over the same frozen exposure window.
++
++No exposure-horizon, basis, mode-count, peak/early or bandwidth sweep.
++
++## Stricter preregistered identification gate
++
++REALIZED-ENDPOINT must:
++
++- have aggregate AUC > 0.5 and >=4/5 folds > random;
++- beat exact V53 TEMPORAL in aggregate and >=4/5 folds;
++- beat exact V52 scalar conditional control in aggregate and >=4/5 folds;
++- beat exact V51 scalar conditional control in aggregate and >=4/5 folds.
++
++REALIZED-TEMPORAL must satisfy all external comparator gates and additionally beat REALIZED-ENDPOINT in aggregate and >=4/5 folds before temporal necessity can be claimed.
++
++A retrospective retention gate is reported only as a mediator diagnostic. It cannot promote V54 because post-intervention state is unavailable at the initial t0 decision.
++
++## Speed / compute policy
++
++V53 treatment-only state replay used about **19.45 h** of batch wall time while running full scenarios and metrics even though its state was available early. V54 preserves the full 502 scientific population but:
++
++- truncates simulation after the one-shot exposure window;
++- disables metric computation;
++- records the state immediately before the first scheduled replan and bypasses that second expensive BDSE replan;
++- parallelizes treatment/control on two GPUs when available;
++- supports one-GPU sequential fallback;
++- uses an 8-scene first batch as a fail-closed engineering sentinel and resumable batch certificates.
++
++Do not shrink the 502 population: V53 exposed a fold-stability problem, so reducing conditional support would undermine the scientific question. The correct acceleration is shorter state replay, not fewer scenes.
++
++## V54 next branches
++
++1. REALIZED-ENDPOINT identified -> freeze minimal realized transition mediator; next make it deployable via a pre-execution mediator predictor or auditable continuation operator.
++2. Only REALIZED-TEMPORAL identified -> realized response shape is necessary; next make that mediator deployable without basis/horizon tuning.
++3. Mediator identified but retrospective retention gate fails -> dynamic state signal exists, static sign functional remains the bottleneck; move to structured paired dynamic outcome functional before adding more state.
++4. Both fail -> close short-horizon realized ego-response geometry; next paired evidence must represent realized interaction/safety consequence process, not more ego trajectory geometry.
++
++## Runtime claim boundary
++
++Post-intervention state must **never** be inserted into the initial t0 runtime veto as if it were available before execution. V54 emits no deployable runtime retention config and consumes no untouched validation.
++
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt bdse_v64_3_54_eaf_icer_pdrm/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt
+--- v53_code/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt	2026-09-05 18:45:08.359456252 +0000
+@@ -0,0 +1,22 @@
++# V64.3.54 EAF-ICER-PDRM — next server commands
++
++# Recommended: two GPUs, one arm per GPU. V54 is short-horizon state/mediator replay only.
++cd bdse_v64_3_54_eaf_icer_pdrm
++
++V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
++V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
++V51_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_51_eaf_icer_pocr_train_v1 \
++V52_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_52_eaf_icer_hodr_train_v1 \
++V53_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_53_eaf_icer_potr_train_v1 \
++NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
++GPU_TREAT=0 GPU_CONTROL=1 \
++bash RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
++
++# If only one GPU is available, run both arms sequentially on GPU 0:
++# GPU_TREAT=0 GPU_CONTROL=0 bash RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
++
++# If EAF checkpoint auto-discovery does not match your layout:
++# export EAF_CKPT=/absolute/path/to/checkpoint.pt
++
++# Do NOT run untouched validation in V54. V54 is a post-intervention mediator-identification experiment,
++# not yet a deployable t=0 retention policy.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/README_CURRENT.md bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md
+--- v53_code/README_CURRENT.md	2026-09-05 05:38:48.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md	2026-09-05 18:45:37.124382462 +0000
+@@ -1,53 +1,39 @@
+-# BDSE current algorithm — V64.3.53 EAF-ICER-POTR
++# BDSE current algorithm — V64.3.54 EAF-ICER-PDRM
+ 
+-**Paired Operator-Trajectory Retention**
++**Paired Dynamic Response Mediation**
+ 
+-V53 is the preregistered follow-up to the reliable V52 HODR result.
++V54 is the preregistered follow-up to the reliable V53 POTR scientific STOP.
+ 
+-## Scientific status before V53
++## Scientific status after V53
+ 
+-V52 showed:
++- V52 QPE+D structural-null/effect-support: **retained**, AUC `0.6516244589`, 5/5 folds > random.
++- V53 ENDPOINT conditional state: **identification STOP** (`0.50495`, 2/5 > random).
++- V53 TEMPORAL planned state: aggregate signal exists (`0.57438`, 5/5 > random, 4/5 > endpoint) but fails the preregistered frozen-control consistency requirement (3/5 > V51 and 3/5 > V52); **STOP**.
++- Neither V53 arm passes all-fold nonharm; no runtime arm is promoted.
+ 
+-- QPE+D structural-null/effect-support identification: **PASS**, AUC `0.6516244589`, 5/5 folds > random;
+-- conditional HURDLE-SIGN on the same state: **not identified**;
+-- conditional HURDLE-PARETO on the same state: **not identified**;
+-- no V52 runtime arm is promoted.
++Dominant bottleneck: **post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order**.
+ 
+-The current dominant bottleneck is **effectful selected-outcome state sufficiency**: scalar operator magnitude tells whether the intervention matters, but not the direction/order of its effect.
++## V54 change
+ 
+-## V53 change
++Freeze RSMR, Q/P/E, scalar planned D, V52 effect support, V50.5 502 paired labels, lambda=1 and the no-fallback operator.
+ 
+-Freeze:
++Re-run both paired arms only through the first scheduled replan and collect realized treatment-control ego-state divergence. Full-horizon outcome labels are reused; metrics are disabled.
+ 
+-- full-set RSMR winner;
+-- Q/P/E;
+-- exact V52 QPE+D effect-support hurdle;
+-- exact V50.5 metric-safe 502/502 paired outcome labels;
+-- pairwise lambda=1, alpha/calibration and no-fallback containment.
++### REALIZED-ENDPOINT
+ 
+-Change only the effectful conditional-outcome state.
++`[Q, P-Q, E-P, D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`
+ 
+-### ENDPOINT
++### REALIZED-TEMPORAL
+ 
+-`[Q, P-Q, E-P, D, dx_T, dy_T, wrap(dyaw_T), dv_T]`
++REALIZED-ENDPOINT plus fixed DCT-II `k=1,2` of realized paired dx/dy/dyaw/dv during the frozen one-shot exposure window.
+ 
+-### TEMPORAL
+-
+-ENDPOINT plus two fixed DCT-II modes for signed `dx(t),dy(t),dyaw(t),dv(t)`.
+-
+-No horizon/basis sweep, attention, MLP, safety weight, new offline future observable, rerank, fallback or new threshold.
+-
+-## State acquisition
+-
+-The exact historical V50.5 planner remains byte-identical. V53 uses a dedicated process-local nuPlan wrapper to record a treatment-only pre-execution sidecar containing frozen-proposal vs actual-runtime-incumbent trajectory contrast. The old paired outcome labels are reused; they are not recollected.
++V54 is **mediator identification only**: post-intervention state is not a legal t=0 runtime input, so V54 emits no deployable retention config and must not consume untouched validation.
+ 
+ ## Run
+ 
+ ```bash
+-cd bdse_v64_3_53_eaf_icer_potr
+-bash RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
++cd bdse_v64_3_54_eaf_icer_pdrm
++bash RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
+ ```
+ 
+-Set `V49_ROOT`, `V50_5_ROOT`, `V51_ROOT`, `V52_ROOT`, `NUPLAN_ROOT` or `EAF_CKPT` only if your server layout differs from the defaults.
+-
+-Untouched validation must remain unconsumed unless a preregistered V53 arm passes identification **and** the unchanged deployment gate.
++Default is treatment GPU 0 / control GPU 1. On a 1-GPU server set `GPU_TREAT=0 GPU_CONTROL=0`.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh bdse_v64_3_54_eaf_icer_pdrm/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
+--- v53_code/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh	2026-09-05 18:43:02.084400091 +0000
+@@ -0,0 +1,135 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# V64.3.54 PDRM: exact preregistered V53 branch after both pre-execution
++# trajectory-state families failed identification. Reuse the metric-safe V50.5
++# paired outcomes, collect only short-horizon paired realized ego response, and
++# perform mediator identification. V54 emits no t=0 runtime retention config.
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
++cd "$BDSE_ROOT"
++export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
++export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
++
++GPU_TREAT="${GPU_TREAT:-0}"
++GPU_CONTROL="${GPU_CONTROL:-1}"
++V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
++V50_5_ROOT="${V50_5_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1}"
++V51_ROOT="${V51_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_51_eaf_icer_pocr_train_v1}"
++V52_ROOT="${V52_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_52_eaf_icer_hodr_train_v1}"
++V53_ROOT="${V53_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_53_eaf_icer_potr_train_v1}"
++OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_54_eaf_icer_pdrm_train_v1}"
++NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
++EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/train_log.jsonl}"
++WORKERS="${WORKERS:-4}"
++BATCH_SIZE="${BATCH_SIZE:-64}"
++HEARTBEAT_SECONDS="${HEARTBEAT_SECONDS:-30}"
++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs" "$OUT_ROOT/dynamic_response_probe"
++
++V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
++V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
++TRAIN_MANIFEST="$V50_5_ROOT/provenance/v64_3_50_pior_train_manifest.json"
++TREAT_CFG="$V50_5_ROOT/provenance/v64_3_50_pior_probe_treatment.yaml"
++CONTROL_CFG="$V50_5_ROOT/provenance/v64_3_50_pior_probe_control.yaml"
++PAIRED="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
++PAIR_REPORT="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
++METRIC_AUDIT="$V50_5_ROOT/provenance/v64_3_50_5_metric_safety_full_audit.json"
++V51_FIT="$V51_ROOT/provenance/v64_3_51_pocr_fit.json"
++V52_FIT="$V52_ROOT/provenance/v64_3_52_hodr_fit.json"
++V53_FIT="$V53_ROOT/provenance/v64_3_53_potr_fit.json"
++V53_PROFILES="$V53_ROOT/provenance/v64_3_53_operator_trajectory_profiles.jsonl"
++
++for f in "$V49_SCENE" "$V49_CAND" "$TRAIN_MANIFEST" "$TREAT_CFG" "$CONTROL_CFG" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" "$V51_FIT" "$V52_FIT" "$V53_FIT" "$V53_PROFILES"; do
++  [[ -s "$f" ]] || { echo "V54 ENGINEERING STOP missing prerequisite $f" >&2; exit 2; }
++done
++
++sha256sum -c V64_3_54_SCIENCE_MANIFEST.sha256 | tee "$OUT_ROOT/logs/v64_3_54_science_manifest.out"
++
++python - "$V53_FIT" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_54_parent_and_evidence_lock.out"
++import hashlib,json,sys
++from pathlib import Path
++v53,paired,report,metric=map(Path,sys.argv[1:])
++want53='9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e'
++wantpair='d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43'
++if hashlib.sha256(v53.read_bytes()).hexdigest()!=want53: raise SystemExit('V54 ENGINEERING STOP: V53 fit hash drift')
++d=json.load(open(v53)); n=d.get('nested_crossfit',{})
++if d.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order':
++    raise SystemExit('V54 ENGINEERING STOP: wrong V53 preregistered branch')
++if hashlib.sha256(paired.read_bytes()).hexdigest()!=wantpair: raise SystemExit('V54 ENGINEERING STOP: paired outcome hash drift')
++r=json.load(open(report)); m=json.load(open(metric))
++if r.get('pass') is not True or int(r.get('scenario_count',-1))!=502 or m.get('pass') is not True:
++    raise SystemExit('V54 ENGINEERING STOP: V50.5 paired outcome provenance invalid')
++print(json.dumps({'pass':True,'v53_fit_sha256':want53,'paired_sha256':wantpair,'branch':n['failure_diagnosis']},sort_keys=True))
++PY
++
++python -m compileall -q bdse
++pytest -q \
++  bdse/tests/test_v64_3_54_eaf_icer_pdrm.py \
++  bdse/tests/test_v64_3_53_eaf_icer_potr.py \
++  bdse/tests/test_v64_3_52_eaf_icer_hodr.py \
++  bdse/tests/test_v64_3_51_eaf_icer_pocr.py \
++  bdse/tests/test_v64_3_50_6_pior_fit_repair.py \
++  bdse/tests/test_v64_3_50_eaf_icer_pior.py \
++  bdse/tests/test_v64_3_50_5_pior_metric_safety.py \
++  bdse/tests/test_v64_3_48_eaf_icer_ocrr.py \
++  | tee "$OUT_ROOT/logs/v64_3_54_targeted_regression.out"
++
++if [[ -z "${EAF_CKPT:-}" ]]; then
++  [[ -s "$EAF_TRAIN_LOG" ]] || { echo "V54 ENGINEERING STOP missing EAF_TRAIN_LOG=$EAF_TRAIN_LOG; set EAF_CKPT explicitly" >&2; exit 2; }
++  python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen \
++    --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_54_PDRM \
++    --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_54.json" \
++    > "$OUT_ROOT/logs/v64_3_13_reaudit_v64_3_54.out"
++  SELECTED_EPOCH=$(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_54.json" <<'PY'
++import json,sys
++print(int(json.load(open(sys.argv[1]))['selected_epoch']))
++PY
++)
++  EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"
++fi
++export EAF_CKPT
++[[ -s "$EAF_CKPT" ]] || { echo "V54 ENGINEERING STOP missing checkpoint $EAF_CKPT" >&2; exit 2; }
++
++DYN_JSONL="$OUT_ROOT/provenance/v64_3_54_paired_dynamic_response_profiles.jsonl"
++DYN_REPORT="$OUT_ROOT/provenance/v64_3_54_dynamic_response_probe_report.json"
++if [[ -s "$DYN_JSONL" && -s "$DYN_REPORT" && "${V54_FORCE_DYNAMIC_REPLAY:-0}" != "1" ]]; then
++  python - "$DYN_JSONL" "$DYN_REPORT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_54_dynamic_response_reuse.out"
++import json,sys
++p,r=sys.argv[1:]; rows=[json.loads(x) for x in open(p) if x.strip()]; d=json.load(open(r))
++if len(rows)!=502 or len({x['scenario_token'] for x in rows})!=502 or d.get('pass') is not True or d.get('paired_outcome_labels_recollected') is not False:
++    raise SystemExit('V54 ENGINEERING STOP: existing paired dynamic response replay invalid')
++print('PASS V54: reusing completed short-horizon paired dynamic response replay')
++PY
++else
++  rm -rf "$OUT_ROOT/dynamic_response_probe"; mkdir -p "$OUT_ROOT/dynamic_response_probe"
++  python -m bdse.tools.run_v64_3_54_dynamic_response_probe \
++    --manifest "$TRAIN_MANIFEST" --treatment-config "$TREAT_CFG" --control-config "$CONTROL_CFG" \
++    --checkpoint "$EAF_CKPT" --nuplan-root "$NUPLAN_ROOT" --v53-operator-profiles "$V53_PROFILES" \
++    --output-root "$OUT_ROOT/dynamic_response_probe" --output-profiles "$DYN_JSONL" --output-report "$DYN_REPORT" \
++    --gpu-treatment "$GPU_TREAT" --gpu-control "$GPU_CONTROL" --workers "$WORKERS" --batch-size "$BATCH_SIZE" \
++    --heartbeat-seconds "$HEARTBEAT_SECONDS" --resume \
++    | tee "$OUT_ROOT/logs/v64_3_54_dynamic_response_probe.out"
++fi
++
++FIT_REPORT="$OUT_ROOT/provenance/v64_3_54_pdrm_fit.json"
++ANALYSIS_TABLE="$OUT_ROOT/provenance/v64_3_54_analysis_population_snapshot.jsonl"
++set +e
++python -m bdse.tools.fit_v64_3_54_eaf_icer_pdrm \
++  --v49-candidate-audit "$V49_CAND" --v49-scene-audit "$V49_SCENE" --paired-outcomes "$PAIRED" --v50-5-root "$V50_5_ROOT" \
++  --v51-fit-report "$V51_FIT" --v52-fit-report "$V52_FIT" --v53-fit-report "$V53_FIT" --dynamic-profiles "$DYN_JSONL" \
++  --output-report "$FIT_REPORT" --output-analysis-table "$ANALYSIS_TABLE" 2>&1 | tee "$OUT_ROOT/logs/v64_3_54_pdrm_fit.out"
++FIT_STATUS=${PIPESTATUS[0]}
++set -e
++
++cp "$V53_FIT" "$OUT_ROOT/provenance/v64_3_53_potr_fit_reused.json"
++cp "$DYN_REPORT" "$OUT_ROOT/provenance/v64_3_54_dynamic_response_probe_report_reused.json"
++sha256sum "$PAIRED" "$V51_FIT" "$V52_FIT" "$V53_FIT" "$V53_PROFILES" "$DYN_JSONL" > "$OUT_ROOT/provenance/V64_3_54_REUSED_EVIDENCE_AND_STATE_SHA256SUMS.txt"
++
++if [[ $FIT_STATUS -ne 0 ]]; then
++  echo "V64.3.54 PDRM mediator scientific STOP. Do not consume untouched validation; follow v64_3_54_pdrm_fit.json." >&2
++  exit "$FIT_STATUS"
++fi
++
++echo "V64.3.54 PDRM mediator identification PASS. This is not yet a t=0 deployable policy: do not run untouched validation. Follow the preregistered next branch in v64_3_54_pdrm_fit.json."
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv
+--- v53_code/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv	2026-09-05 18:45:07.555792596 +0000
+@@ -0,0 +1,11 @@
++arm,fold,conditional_auc,v52_scalar_auc,v51_scalar_auc,above_random,better_v52,better_v51,better_endpoint,rsmr_score_sum,arm_score_sum,rsmr_hard_harm,arm_hard_harm,rsmr_negrms,arm_negrms,beneficial_recall
++ENDPOINT,0,0.5095003518648838,0.5242786769880365,0.4074595355383533,True,False,True,,-2.395372857431346,-1.2692964503074824,7,6,0.17231181781429317,0.16731700738448144,0.9310344827586207
++ENDPOINT,1,0.6347402597402597,0.6477272727272727,0.6136363636363636,True,False,True,,1.3045395835435363,2.296533954823724,2,1,0.14031918141086883,0.09698678064397649,0.9090909090909091
++ENDPOINT,2,0.49876543209876545,0.345679012345679,0.4567901234567901,False,True,True,,-0.013191924063189864,-0.3465822172470939,3,2,0.15714467224703302,0.15134882194231555,0.9333333333333333
++ENDPOINT,3,0.4925249169435216,0.44019933554817275,0.595514950166113,False,True,False,,-2.6427314848308647,-3.173115365210865,8,7,0.18342391422792476,0.18781859864840839,0.9285714285714286
++ENDPOINT,4,0.4603174603174603,0.4507936507936508,0.4888888888888889,False,True,False,,-0.49417148229958174,-0.49417148229958163,5,4,0.0958716286152196,0.09894850323948653,1.0
++TEMPORAL,0,0.517945109078114,0.5242786769880365,0.4074595355383533,True,False,True,,-2.395372857431346,-1.2692964503074824,7,6,0.17231181781429317,0.16731700738448144,0.9310344827586207
++TEMPORAL,1,0.5892857142857143,0.6477272727272727,0.6136363636363636,True,False,False,,1.3045395835435363,2.290214517928787,2,1,0.14031918141086883,0.09758098522267462,1.0
++TEMPORAL,2,0.5802469135802469,0.345679012345679,0.4567901234567901,True,True,True,,-0.013191924063189864,-0.013191924063189864,3,3,0.15714467224703302,0.15814880177543955,1.0
++TEMPORAL,3,0.595514950166113,0.44019933554817275,0.595514950166113,True,True,False,,-2.6427314848308647,-3.363562786789117,8,7,0.18342391422792476,0.19660442187349755,0.8571428571428571
++TEMPORAL,4,0.6074074074074074,0.4507936507936508,0.4888888888888889,True,True,True,,-0.49417148229958174,-0.49417148229958174,5,5,0.0958716286152196,0.09841508424174401,1.0
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md
+--- v53_code/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md	2026-09-05 18:45:37.016380191 +0000
+@@ -0,0 +1,338 @@
++# V64.3.53 POTR Result Postmortem and V64.3.54 PDRM Design
++
++## 0. Formal decision
++
++V64.3.53 is **engineering/provenance valid for TRAIN-level scientific attribution**. This is not an engineering repair branch.
++
++The preregistered scientific decisions are:
++
++- frozen V52 structural-null / effect-support hurdle: **GO / retain**;
++- V53 `ENDPOINT`: **STOP**;
++- V53 `TEMPORAL`: **STOP**;
++- no V53 runtime retention policy is promoted;
++- untouched validation remains unconsumed.
++
++The formal V53 failure diagnosis is:
++
++`preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order`.
++
++Therefore V54 follows the V53 preregistered branch into **post-intervention paired dynamic response / outcome-process identification**, rather than adding more pre-execution plan geometry.
++
++---
++
++## 1. Paper-level context
++
++The current manuscript's durable conceptual backbone is the bounded planner interface and the distinction between **decision sufficiency** and predictive reconstruction. The planner exposes bounded auditable evidence, constructs an evidence-attributed frontier, chooses at most one extremal replacement, freezes that proposal, and then allows only `{same proposal, incumbent}` under a no-fallback monotone operator.
++
++The current TeX still describes the older DRC/PTMC mechanism. The V44--V53 evidence chain has moved the algorithm well beyond that implementation. The manuscript should not be mechanically patched during every TRAIN iteration; once the outcome-sufficiency mechanism stabilizes, the abstract/method/experiments need a full claim-to-code rewrite. The stable paper-level thesis should remain:
++
++**Selection--Valuation--Outcome Sufficiency under a Bounded Auditable Planner Interface.**
++
++V53 refines the Outcome Sufficiency claim rather than changing the headline:
++
++1. selected outcome is intervention-relative;
++2. effect-support sufficiency is not conditional-outcome-order sufficiency;
++3. pre-execution planned treatment geometry is not, by itself, a fold-stable sufficient state for realized effect direction.
++
++---
++
++## 2. V53 reliability audit
++
++### 2.1 Source / provenance
++
++- uploaded code zip SHA256: `37b0cc3ce184491fd013a8effe2f3c118ae73467e8db0bfa50e5fe1bed38885b`;
++- uploaded result zip SHA256: `07505de85158f4ba84de3802eca202c2dd9278ed5fc23529d0c6b1af32ab0b99`;
++- V53 fit JSON SHA256: `9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e`;
++- exact reused V50.5 paired outcome SHA256: `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`.
++
++The V53 result-defining science manifest verifies **15/15 files**. Server regression is **64/64 PASS**. An independent replay on the uploaded code is also **64/64 PASS**; Python compile and launcher syntax pass.
++
++### 2.2 State replay / evidence identity
++
++The V53 treatment-side state replay contains exactly **502/502 unique profiles**. It does not recollect paired outcome labels. The sidecar is recorded at the exact one-shot intervention anchor before execution, using the cached frozen RSMR proposal trajectory and actual runtime incumbent trajectory. Historical `nuplan_planner.py` remains byte-identical to the frozen V50.5 source.
++
++The scalar execution contrast `D` replays V51/V52 token-by-token with error <= `1e-9`; the 38 physically identical proposal/incumbent pairs remain zero contrast. Nested fitting excludes both the outer test fold and the calibration fold.
++
++### 2.3 Reliability verdict
++
++This is a preregistered **scientific STOP**, not an ENGINEERING/DATA STOP. V53 can be attributed.
++
++One reproducibility hygiene issue remains: the V53 result zip locks historical parent evidence by exact SHA but does not bundle the complete V49/V50.5 parent roots. That does not invalidate the executed result, but it makes independent third-party re-analysis less self-contained. V54 therefore emits a compact 502-row analysis-population snapshot in addition to hashes.
++
++---
++
++## 3. Strict preregistered branch decisions
++
++### 3.1 Shared V52 effect support — GO / retain
++
++The exact frozen QPE+D hurdle remains identified:
++
++- aggregate effect-support AUC: **0.6516244589**;
++- folds above random: **5/5**.
++
++This mechanism is not retested or retuned in V54. It answers a first-stage question reliably: **will the frozen proposal-versus-incumbent intervention have any measurable closed-loop effect?**
++
++### 3.2 ENDPOINT — STOP
++
++V53 ENDPOINT state:
++
++`[Q, P-Q, E-P, D, dx_T, dy_T, dyaw_T, dv_T]`.
++
++Identification:
++
++- aggregate conditional AUC: **0.5049495959**;
++- folds > 0.5: **2/5**;
++- folds > V52 scalar conditional control: **3/5**;
++- folds > V51 scalar conditional control: **3/5**;
++- preregistered identification: **FAIL**.
++
++Diagnostic OOF retention nevertheless looks attractive in aggregate:
++
++- selected: `461`;
++- beneficial retained: `114/121 = 94.21%`;
++- nonbeneficial: `381 -> 347`;
++- hard harm: `25 -> 20`;
++- score-delta sum: `-4.2409 -> -2.9866`;
++- NegRMS: `0.15486 -> 0.14766`.
++
++But `all-fold nonharm` fails. In folds 2 and 3, score sum reverses in the harmful direction. Because identification itself fails, these aggregate gains cannot justify threshold or functional rescue.
++
++**Mechanism interpretation:** terminal signed direction/channel is not a stable sufficient statistic for effectful selected-outcome order.
++
++### 3.3 TEMPORAL — STOP, but keep as diagnostic evidence
++
++TEMPORAL adds fixed DCT-II `k=1,2` modes of planned `dx(t),dy(t),dyaw(t),dv(t)`.
++
++Identification:
++
++- aggregate conditional AUC: **0.5743801653**;
++- folds > 0.5: **5/5**;
++- folds > ENDPOINT: **4/5**;
++- folds > V52 scalar: **3/5**;
++- folds > V51 scalar: **3/5**;
++- preregistered identification: **FAIL**;
++- temporal-necessity claim: **FAIL**.
++
++Diagnostic retention:
++
++- selected: `454`;
++- beneficial retained: `115/121 = 95.04%`;
++- nonbeneficial: `339`;
++- hard harm: `22`;
++- score-delta sum: `-2.8500`;
++- NegRMS: `0.15034`;
++- `all-fold nonharm`: **FAIL**.
++
++TEMPORAL is not noise: it beats endpoint in four folds and has substantially higher aggregate AUC. But it is not transport-stable relative to the already frozen scalar controls. Fold 3 is especially informative: TEMPORAL AUC `0.5955` ties V51 rather than exceeding it, while the retained score sum worsens from `-2.6427` to `-3.3636`.
++
++Therefore V53 supports only the weaker diagnostic claim:
++
++**planned temporal treatment shape contains outcome information, but it is not a preregistered stable/sufficient mediator of realized effect direction.**
++
++It must not be promoted into the backbone or tuned by adding modes/horizon/basis.
++
++---
++
++## 4. What the model has learned / has not learned
++
++### Learned and protected
++
++1. bounded EAF/support/admissibility and frozen RSMR extremal proposal selection;
++2. no-fallback incumbent containment;
++3. V44 ungated prospective interaction support;
++4. V45 agent-local longitudinal response as a supporting mediator;
++5. V47 EGO-REF as a supporting consequence coordinate;
++6. V50 metric-safe paired one-shot selected-outcome evidence;
++7. V52 structural-null/effect-support factorization over QPE+D.
++
++### Not learned
++
++Given that an intervention is effectful, the current state still cannot stably answer:
++
++**which realized intervention becomes beneficial versus harmful, and why?**
++
++V53 now rules out a natural explanation: this is not fixed merely by preserving the frozen plan's signed terminal direction or two low-order temporal modes.
++
++### What should be learned next
++
++The next object is the **realized post-intervention treatment-control divergence** during the exact one-shot exposure window. Planned geometry describes what the planner intended to apply; the paired rollout can reveal what state transition actually occurred after that operator entered the closed loop.
++
++This is a mediator-identification question. Because the state is post-treatment, it must not be used directly as the initial t=0 veto. If it is identified, a later version must make the mediator deployable by predicting it from pre-execution runtime state or by defining an auditable continuation operator.
++
++---
++
++## 5. Dominant bottleneck after V53
++
++Previous bottleneck:
++
++`effectful selected-outcome state sufficiency / directional-temporal operator contrast sufficiency`.
++
++V53 narrows it to:
++
++**post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order.**
++
++Equivalently, the key scientific question is:
++
++> after the full-set RSMR proposal is frozen and known to be effectful, is final benefit/harm determined by a realized treatment-response mediator that is absent from the pre-execution plan geometry?
++
++The paper headline is already stable and should not be renamed again.
++
++---
++
++## 6. Newly closed algorithm families
++
++V53 closes the following as *sufficient conditional-outcome state families* under the current static pairwise ranker:
++
++- scalar plan dose `D` alone (already known insufficient for sign);
++- signed terminal proposal-incumbent operator geometry;
++- fixed low-order pre-execution DCT shape of ego operator geometry.
++
++Consequently, do not perform:
++
++- endpoint transform / normalization sweep;
++- more DCT modes;
++- DCT basis sweep;
++- temporal horizon sweep;
++- peak/early handcrafted planned-trajectory statistics;
++- larger MLP/attention over the same pre-execution plan-only geometry;
++- threshold/alpha/lambda/loss/class/focal/catastrophe-weight rescue.
++
++This closure is **not** a closure of Q/P/E, D as effect-support evidence, paired outcome supervision, post-intervention dynamics, or all structured outcome functionals.
++
++All historical closures in `ALGORITHM_CHANGELOG.md` remain active.
++
++---
++
++## 7. Evidence chain through V53
++
++The mechanism chain now reads:
++
++- V34: ordinal extremal selection solved by RSMR;
++- V37--V39: selected residual/tail is real;
++- V40: pure value-head/19-D route falsified;
++- V41: endpoint/basepoint geometry is a partial mediator;
++- V42: current physical/quality consequence is a partial mediator;
++- V43: prospective horizon adds necessary information;
++- V44: ungated full-horizon prospective interaction support is a strong mediator; scene-global mode classifier is falsified;
++- V45: agent-local continuous response is identifiable and improves selected value; a point response is not sufficient;
++- V46: response second moment is identifiable but not decision-sufficient; temporal predictive features can improve regression while worsening deployment, directly establishing prediction sufficiency != decision sufficiency;
++- V47: EGO-REF is a strong supporting consequence mediator; broader representation expansion stops;
++- V48: multiplicity/logK is fresh-falsified; in-domain post-selection signal != fresh transportability;
++- V49: random-prefix selection intervention fails; changing offline selection measure != selected-outcome-law identification;
++- V50: metric-safe actual paired one-shot outcomes are obtained; paired outcome evidence != QPE-only selected-outcome state sufficiency;
++- V51: QPE+D operator-relative state is identified but sign retention is deployment-insufficient;
++- V52: QPE+D robustly identifies effect support, but static conditional sign and Pareto order fail; effect-support sufficiency != conditional-outcome-order sufficiency;
++- **V53: planned signed endpoint/temporal operator geometry still does not give fold-stable conditional ordering; planned-treatment geometry != realized-outcome mediation sufficiency.**
++
++This is a much stronger CCF-A-level mechanism story than a sequence of score-head tweaks: each failed family closes a specific sufficiency hypothesis under a bounded and auditable operator.
++
++---
++
++# V64.3.54 EAF-ICER-PDRM — Paired Dynamic Response Mediation
++
++## 8. Scientific role
++
++V54 is the exact preregistered V53 failure branch. It changes the *evidence source for the conditional mediator*, not RSMR, QPE, the paired labels, or the deployment threshold.
++
++It asks whether the missing object is:
++
++`planned treatment -> realized short-horizon paired state transition -> final paired outcome`.
++
++V54 is intentionally **not yet a deployable t=0 retention mechanism**. That restriction is part of the scientific protocol, not a limitation to hide.
++
++---
++
++## 9. V54 state collection
++
++Reuse the exact V50.5 population and outcome labels. For every one of the 502 full-set RSMR proposals, replay both original V50.5 arms:
++
++- treatment: execute the frozen proposal once;
++- control: execute the incumbent at the same anchor.
++
++Collect only simulated ego rear-axle `(x,y,yaw,speed)` from iteration `0` through the first scheduled replan. The window length is the already frozen `planner.replan_interval_ticks` (currently 5), not a tunable horizon.
++
++Construct paired realized channels in the shared t=0 control ego frame:
++
++`[dx_real(t), dy_real(t), dyaw_real(t), dv_real(t)]`.
++
++No new full-horizon score or safety metric is computed. The existing V50.5 full-horizon paired label remains the target.
++
++### Engineering acceleration
++
++V53 spent approximately `70025 s = 19.45 h` on a treatment-only full-scenario replay even though its state was available at the intervention event.
++
++V54 instead:
++
++1. runs only through the first replan window;
++2. disables new metric computation (`run_metric=false`);
++3. bypasses the expensive second BDSE replan at the terminal sample—the state is recorded immediately before that replan and the cached rollout is returned only to let the simulator exit;
++4. runs treatment/control in parallel on two GPUs when available;
++5. uses the first 8 scenes/arm as a fail-closed engineering sentinel via the existing batch mechanism;
++6. reuses completed valid batches on resume.
++
++This is a safer acceleration than reducing the 502 scientific population. The population/fold support is already marginal for some conditional outcomes, so sample shrinkage would weaken exactly the fold-stability question V53 exposed.
++
++---
++
++## 10. V54 causal arms
++
++### Arm A — REALIZED-ENDPOINT
++
++State:
++
++`[Q, P-Q, E-P, planned_D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`.
++
++Question:
++
++> Is the actual treatment-control state transition at the end of the one-shot exposure window the missing mediator?
++
++### Arm B — REALIZED-TEMPORAL
++
++Only if REALIZED-ENDPOINT does not establish the minimal mediator, append fixed DCT-II `k=1,2` coefficients of the realized paired channels over the exact exposure window.
++
++No horizon, mode-count or basis sweep is allowed.
++
++Question:
++
++> Is realized response shape necessary beyond the realized endpoint transition?
++
++---
++
++## 11. V54 identification gates
++
++The gate is deliberately stricter than V53.
++
++REALIZED-ENDPOINT must:
++
++- aggregate AUC > 0.5;
++- >=4/5 folds > 0.5;
++- aggregate and >=4/5 folds beat exact V53 TEMPORAL;
++- aggregate and >=4/5 folds beat exact V52 scalar conditional control;
++- aggregate and >=4/5 folds beat exact V51 scalar conditional control.
++
++REALIZED-TEMPORAL must satisfy all external comparator gates and also beat REALIZED-ENDPOINT in aggregate and >=4/5 folds before a temporal-necessity claim is allowed.
++
++A retrospective retention gate is computed only as a diagnostic to ask whether an oracle-available mediator contains enough ordering information. It is **not promotion evidence**, because post-intervention state is unavailable at the initial t=0 decision.
++
++---
++
++## 12. V54 preregistered next branches
++
++1. **REALIZED-ENDPOINT identified:** freeze it as the minimal outcome mediator. V55 must make it deployable via a pre-execution mediator predictor or auditable continuation operator. Do not use future state directly at t=0.
++2. **Only REALIZED-TEMPORAL identified:** realized response shape is necessary; V55 predicts/uses that process without horizon/basis tuning.
++3. **Mediator identified but retrospective retention still fails:** state contains outcome information but the static sign functional remains insufficient; next solve a structured paired dynamic outcome functional before adding more state.
++4. **Both fail:** close short-horizon realized ego-response geometry as sufficient. The next paired process must represent realized interaction/safety consequence, not more ego trajectory geometry.
++
++No untouched validation is allowed in V54 because V54 itself is not yet a deployable pre-action mechanism.
++
++---
++
++## 13. CCF-A novelty position
++
++The novelty claim should not be “DCT features” or “another response head.” The stronger algorithmic contribution is the experimentally falsifiable hierarchy of sufficient objects under a bounded monotone planner interface:
++
++`selection -> prospective valuation -> paired effect support -> conditional outcome mediation -> monotone retention`.
++
++V54 specifically tests whether the gap between planned treatment and realized response is the missing causal/decision mediator. If positive, the next deployable algorithm can be justified by mediator evidence rather than by ad-hoc feature search. If negative, the result closes another whole family and points directly to realized interaction/safety process.
++
++That discipline is important for a CCF-A submission: the paper should explain **why each deployed operator requires a different sufficient statistic**, not just report that a larger model improved a metric.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_53_TO_V64_3_54_PDRM.patch bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_TO_V64_3_54_PDRM.patch
+--- v53_code/V64_3_53_TO_V64_3_54_PDRM.patch	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_TO_V64_3_54_PDRM.patch	2026-09-05 18:49:26.913450128 +0000
+@@ -0,0 +1,770 @@
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/ALGORITHM_CHANGELOG.md bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md
++--- v53_code/ALGORITHM_CHANGELOG.md	2026-09-05 05:38:48.000000000 +0000
+++++ bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md	2026-09-05 18:45:54.816768347 +0000
++@@ -13169,3 +13169,167 @@
++ 4. If both pre-execution state families fail identification -> close pre-execution operator-trajectory geometry as sufficient; next evidence/state must come from **post-intervention paired dynamic response/outcome process**, still on-policy/paired rather than offline feature expansion.
++ 
++ Untouched validation remains unconsumed until a TRAIN arm passes all gates.
+++
+++---
+++
+++# V64.3.53 scientific result — pre-execution operator-trajectory geometry is not conditional-outcome sufficient
+++
+++## Reliability
+++
+++V53 is valid for TRAIN-level attribution; no V53.x engineering repair is required.
+++
+++- uploaded code ZIP SHA256: `37b0cc3ce184491fd013a8effe2f3c118ae73467e8db0bfa50e5fe1bed38885b`;
+++- uploaded result ZIP SHA256: `07505de85158f4ba84de3802eca202c2dd9278ed5fc23529d0c6b1af32ab0b99`;
+++- result-defining science manifest: **15/15 PASS**;
+++- server targeted regression: **64/64 PASS**;
+++- independent exact uploaded-code replay: **64/64 PASS**;
+++- treatment state replay: **502/502 unique**, no paired outcome recollection;
+++- frozen scalar D replay: exact token-by-token;
+++- V50.5 paired outcome SHA: exact `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`;
+++- termination: preregistered TRAIN scientific STOP; untouched validation unconsumed.
+++
+++## Preregistered V53 verdict
+++
+++### V52 QPE+D effect-support hurdle — retain
+++
+++- aggregate AUC: **`0.6516244589`**;
+++- 5/5 folds > random.
+++
+++This remains a supported first-stage mechanism: scalar operator-relative state can identify whether the frozen proposal/incumbent intervention produces any paired closed-loop effect.
+++
+++### ENDPOINT — STOP
+++
+++- conditional AUC: **`0.5049495959`**;
+++- > random: **2/5** folds;
+++- > V52 scalar conditional control: **3/5**;
+++- > V51 scalar control: **3/5**;
+++- identification: **FAIL**;
+++- diagnostic retention: `461 selected / 114 beneficial / 347 nonbeneficial / 20 hard harm / score-sum -2.98663 / NegRMS 0.147659`;
+++- deployment: **FAIL** because all-fold nonharm fails.
+++
+++Close signed terminal proposal-vs-incumbent geometry as a sufficient effectful conditional-outcome state.
+++
+++### TEMPORAL — STOP, diagnostic signal only
+++
+++- conditional AUC: **`0.5743801653`**;
+++- > random: **5/5**;
+++- > ENDPOINT: **4/5**;
+++- > V52 scalar: **3/5**;
+++- > V51 scalar: **3/5**;
+++- identification: **FAIL**;
+++- temporal necessity: **FAIL**;
+++- diagnostic retention: `454 selected / 115 beneficial / 339 nonbeneficial / 22 hard harm / score-sum -2.85001 / NegRMS 0.150340`;
+++- deployment: **FAIL** because all-fold nonharm fails.
+++
+++The fixed pre-execution temporal shape is informative but not fold-stable enough for promotion. Do not add more modes/horizons/bases after seeing this result.
+++
+++## Mechanism conclusion after V53
+++
+++V52 already separated `effect support` from `conditional effect order`. V53 now shows that recovering plan direction and low-order planned temporal shape does not close the conditional-order problem:
+++
+++**planned operator-trajectory geometry != realized effectful outcome mediation sufficiency.**
+++
+++The current model knows whether an intervention tends to have an effect, but it still does not stably know whether the realized effect will be beneficial or harmful.
+++
+++## Dominant bottleneck after V53
+++
+++**Post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order.**
+++
+++The next evidence must come from the realized paired transition induced by the already frozen operator, not from more pre-execution plan-only geometry.
+++
+++## Newly closed directions
+++
+++Close as sufficient conditional-outcome state families:
+++
+++- signed endpoint proposal-incumbent geometry;
+++- fixed low-order DCT-II pre-execution ego operator shape;
+++- any post-hoc rescue of these families by endpoint transform, plan-only horizon/mode/basis sweep, peak/early statistic sweep, larger MLP/attention, threshold/alpha/lambda/loss/class/focal/catastrophe weighting.
+++
+++Do **not** close Q/P/E, scalar D as effect-support evidence, the V52 effect-support factorization, metric-safe paired outcome supervision, or post-intervention/structured process models.
+++
+++All older no-repeat constraints remain active.
+++
+++# V64.3.54 EAF-ICER-PDRM — Paired Dynamic Response Mediation
+++
+++## Scientific role
+++
+++V54 executes the exact V53 failure branch:
+++
+++`ENDPOINT identification FAIL + TEMPORAL identification FAIL -> post-intervention paired dynamic response/outcome process`.
+++
+++It is a **mediator-identification experiment**, not yet a deployable t=0 retention policy.
+++
+++## Frozen contracts
+++
+++V54 freezes:
+++
+++- bounded EAF interface/support/admissibility;
+++- full-set RSMR extremal winner;
+++- same-winner-or-incumbent/no-fallback operator;
+++- exact V52 QPE+D effect-support hurdle;
+++- exact V50.5 metric-safe 502 paired outcome labels;
+++- Q/P/E consequence coordinates and scalar planned D;
+++- five outer folds;
+++- zero-bias pairwise conditional ranker with `lambda=1` for the state-identification comparison.
+++
+++No new full-horizon outcome label is collected.
+++
+++## Paired short-horizon dynamic replay
+++
+++For all 502 frozen proposal events, replay both original V50.5 arms only from the exact one-shot anchor through the **first scheduled replan**. The horizon is the frozen `planner.replan_interval_ticks` (currently 5); it is not a sweep parameter.
+++
+++Record simulated ego rear-axle `(x,y,yaw,speed)` at each tick. Form treatment-control paired realized channels in the common t0 control frame:
+++
+++`[realized dx(t), realized dy(t), realized dyaw(t), realized dv(t)]`.
+++
+++Full nuPlan metrics are disabled because the final V50.5 paired outcome labels are reused unchanged.
+++
+++## V54 causal arms
+++
+++### REALIZED-ENDPOINT
+++
+++`[Q, P-Q, E-P, planned_D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`.
+++
+++### REALIZED-TEMPORAL
+++
+++REALIZED-ENDPOINT plus fixed DCT-II `k=1,2` of the four realized paired channels over the same frozen exposure window.
+++
+++No exposure-horizon, basis, mode-count, peak/early or bandwidth sweep.
+++
+++## Stricter preregistered identification gate
+++
+++REALIZED-ENDPOINT must:
+++
+++- have aggregate AUC > 0.5 and >=4/5 folds > random;
+++- beat exact V53 TEMPORAL in aggregate and >=4/5 folds;
+++- beat exact V52 scalar conditional control in aggregate and >=4/5 folds;
+++- beat exact V51 scalar conditional control in aggregate and >=4/5 folds.
+++
+++REALIZED-TEMPORAL must satisfy all external comparator gates and additionally beat REALIZED-ENDPOINT in aggregate and >=4/5 folds before temporal necessity can be claimed.
+++
+++A retrospective retention gate is reported only as a mediator diagnostic. It cannot promote V54 because post-intervention state is unavailable at the initial t0 decision.
+++
+++## Speed / compute policy
+++
+++V53 treatment-only state replay used about **19.45 h** of batch wall time while running full scenarios and metrics even though its state was available early. V54 preserves the full 502 scientific population but:
+++
+++- truncates simulation after the one-shot exposure window;
+++- disables metric computation;
+++- records the state immediately before the first scheduled replan and bypasses that second expensive BDSE replan;
+++- parallelizes treatment/control on two GPUs when available;
+++- supports one-GPU sequential fallback;
+++- uses an 8-scene first batch as a fail-closed engineering sentinel and resumable batch certificates.
+++
+++Do not shrink the 502 population: V53 exposed a fold-stability problem, so reducing conditional support would undermine the scientific question. The correct acceleration is shorter state replay, not fewer scenes.
+++
+++## V54 next branches
+++
+++1. REALIZED-ENDPOINT identified -> freeze minimal realized transition mediator; next make it deployable via a pre-execution mediator predictor or auditable continuation operator.
+++2. Only REALIZED-TEMPORAL identified -> realized response shape is necessary; next make that mediator deployable without basis/horizon tuning.
+++3. Mediator identified but retrospective retention gate fails -> dynamic state signal exists, static sign functional remains the bottleneck; move to structured paired dynamic outcome functional before adding more state.
+++4. Both fail -> close short-horizon realized ego-response geometry; next paired evidence must represent realized interaction/safety consequence process, not more ego trajectory geometry.
+++
+++## Runtime claim boundary
+++
+++Post-intervention state must **never** be inserted into the initial t0 runtime veto as if it were available before execution. V54 emits no deployable runtime retention config and consumes no untouched validation.
+++
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt bdse_v64_3_54_eaf_icer_pdrm/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt
++--- v53_code/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt	1970-01-01 00:00:00.000000000 +0000
+++++ bdse_v64_3_54_eaf_icer_pdrm/NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt	2026-09-05 18:45:08.359456252 +0000
++@@ -0,0 +1,22 @@
+++# V64.3.54 EAF-ICER-PDRM — next server commands
+++
+++# Recommended: two GPUs, one arm per GPU. V54 is short-horizon state/mediator replay only.
+++cd bdse_v64_3_54_eaf_icer_pdrm
+++
+++V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+++V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+++V51_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_51_eaf_icer_pocr_train_v1 \
+++V52_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_52_eaf_icer_hodr_train_v1 \
+++V53_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_53_eaf_icer_potr_train_v1 \
+++NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
+++GPU_TREAT=0 GPU_CONTROL=1 \
+++bash RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
+++
+++# If only one GPU is available, run both arms sequentially on GPU 0:
+++# GPU_TREAT=0 GPU_CONTROL=0 bash RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
+++
+++# If EAF checkpoint auto-discovery does not match your layout:
+++# export EAF_CKPT=/absolute/path/to/checkpoint.pt
+++
+++# Do NOT run untouched validation in V54. V54 is a post-intervention mediator-identification experiment,
+++# not yet a deployable t=0 retention policy.
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/README_CURRENT.md bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md
++--- v53_code/README_CURRENT.md	2026-09-05 05:38:48.000000000 +0000
+++++ bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md	2026-09-05 18:45:37.124382462 +0000
++@@ -1,53 +1,39 @@
++-# BDSE current algorithm — V64.3.53 EAF-ICER-POTR
+++# BDSE current algorithm — V64.3.54 EAF-ICER-PDRM
++ 
++-**Paired Operator-Trajectory Retention**
+++**Paired Dynamic Response Mediation**
++ 
++-V53 is the preregistered follow-up to the reliable V52 HODR result.
+++V54 is the preregistered follow-up to the reliable V53 POTR scientific STOP.
++ 
++-## Scientific status before V53
+++## Scientific status after V53
++ 
++-V52 showed:
+++- V52 QPE+D structural-null/effect-support: **retained**, AUC `0.6516244589`, 5/5 folds > random.
+++- V53 ENDPOINT conditional state: **identification STOP** (`0.50495`, 2/5 > random).
+++- V53 TEMPORAL planned state: aggregate signal exists (`0.57438`, 5/5 > random, 4/5 > endpoint) but fails the preregistered frozen-control consistency requirement (3/5 > V51 and 3/5 > V52); **STOP**.
+++- Neither V53 arm passes all-fold nonharm; no runtime arm is promoted.
++ 
++-- QPE+D structural-null/effect-support identification: **PASS**, AUC `0.6516244589`, 5/5 folds > random;
++-- conditional HURDLE-SIGN on the same state: **not identified**;
++-- conditional HURDLE-PARETO on the same state: **not identified**;
++-- no V52 runtime arm is promoted.
+++Dominant bottleneck: **post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order**.
++ 
++-The current dominant bottleneck is **effectful selected-outcome state sufficiency**: scalar operator magnitude tells whether the intervention matters, but not the direction/order of its effect.
+++## V54 change
++ 
++-## V53 change
+++Freeze RSMR, Q/P/E, scalar planned D, V52 effect support, V50.5 502 paired labels, lambda=1 and the no-fallback operator.
++ 
++-Freeze:
+++Re-run both paired arms only through the first scheduled replan and collect realized treatment-control ego-state divergence. Full-horizon outcome labels are reused; metrics are disabled.
++ 
++-- full-set RSMR winner;
++-- Q/P/E;
++-- exact V52 QPE+D effect-support hurdle;
++-- exact V50.5 metric-safe 502/502 paired outcome labels;
++-- pairwise lambda=1, alpha/calibration and no-fallback containment.
+++### REALIZED-ENDPOINT
++ 
++-Change only the effectful conditional-outcome state.
+++`[Q, P-Q, E-P, D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`
++ 
++-### ENDPOINT
+++### REALIZED-TEMPORAL
++ 
++-`[Q, P-Q, E-P, D, dx_T, dy_T, wrap(dyaw_T), dv_T]`
+++REALIZED-ENDPOINT plus fixed DCT-II `k=1,2` of realized paired dx/dy/dyaw/dv during the frozen one-shot exposure window.
++ 
++-### TEMPORAL
++-
++-ENDPOINT plus two fixed DCT-II modes for signed `dx(t),dy(t),dyaw(t),dv(t)`.
++-
++-No horizon/basis sweep, attention, MLP, safety weight, new offline future observable, rerank, fallback or new threshold.
++-
++-## State acquisition
++-
++-The exact historical V50.5 planner remains byte-identical. V53 uses a dedicated process-local nuPlan wrapper to record a treatment-only pre-execution sidecar containing frozen-proposal vs actual-runtime-incumbent trajectory contrast. The old paired outcome labels are reused; they are not recollected.
+++V54 is **mediator identification only**: post-intervention state is not a legal t=0 runtime input, so V54 emits no deployable retention config and must not consume untouched validation.
++ 
++ ## Run
++ 
++ ```bash
++-cd bdse_v64_3_53_eaf_icer_potr
++-bash RUN_V64_3_53_EAF_ICER_POTR_TRAIN_1GPU.sh
+++cd bdse_v64_3_54_eaf_icer_pdrm
+++bash RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
++ ```
++ 
++-Set `V49_ROOT`, `V50_5_ROOT`, `V51_ROOT`, `V52_ROOT`, `NUPLAN_ROOT` or `EAF_CKPT` only if your server layout differs from the defaults.
++-
++-Untouched validation must remain unconsumed unless a preregistered V53 arm passes identification **and** the unchanged deployment gate.
+++Default is treatment GPU 0 / control GPU 1. On a 1-GPU server set `GPU_TREAT=0 GPU_CONTROL=0`.
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh bdse_v64_3_54_eaf_icer_pdrm/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
++--- v53_code/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh	1970-01-01 00:00:00.000000000 +0000
+++++ bdse_v64_3_54_eaf_icer_pdrm/RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh	2026-09-05 18:43:02.084400091 +0000
++@@ -0,0 +1,135 @@
+++#!/usr/bin/env bash
+++set -euo pipefail
+++
+++# V64.3.54 PDRM: exact preregistered V53 branch after both pre-execution
+++# trajectory-state families failed identification. Reuse the metric-safe V50.5
+++# paired outcomes, collect only short-horizon paired realized ego response, and
+++# perform mediator identification. V54 emits no t=0 runtime retention config.
+++
+++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+++export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
+++cd "$BDSE_ROOT"
+++export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+++export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
+++
+++GPU_TREAT="${GPU_TREAT:-0}"
+++GPU_CONTROL="${GPU_CONTROL:-1}"
+++V49_ROOT="${V49_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1}"
+++V50_5_ROOT="${V50_5_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1}"
+++V51_ROOT="${V51_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_51_eaf_icer_pocr_train_v1}"
+++V52_ROOT="${V52_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_52_eaf_icer_hodr_train_v1}"
+++V53_ROOT="${V53_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_53_eaf_icer_potr_train_v1}"
+++OUT_ROOT="${OUT_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_54_eaf_icer_pdrm_train_v1}"
+++NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan}"
+++EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
+++EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/train_log.jsonl}"
+++WORKERS="${WORKERS:-4}"
+++BATCH_SIZE="${BATCH_SIZE:-64}"
+++HEARTBEAT_SECONDS="${HEARTBEAT_SECONDS:-30}"
+++mkdir -p "$OUT_ROOT/provenance" "$OUT_ROOT/logs" "$OUT_ROOT/dynamic_response_probe"
+++
+++V49_SCENE="$V49_ROOT/provenance/v64_3_49_siir_train_scene_audit.csv"
+++V49_CAND="$V49_ROOT/provenance/v64_3_49_siir_oof_candidate_state_audit.jsonl"
+++TRAIN_MANIFEST="$V50_5_ROOT/provenance/v64_3_50_pior_train_manifest.json"
+++TREAT_CFG="$V50_5_ROOT/provenance/v64_3_50_pior_probe_treatment.yaml"
+++CONTROL_CFG="$V50_5_ROOT/provenance/v64_3_50_pior_probe_control.yaml"
+++PAIRED="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_outcomes.jsonl"
+++PAIR_REPORT="$V50_5_ROOT/provenance/v64_3_50_pior_paired_closed_loop_report.json"
+++METRIC_AUDIT="$V50_5_ROOT/provenance/v64_3_50_5_metric_safety_full_audit.json"
+++V51_FIT="$V51_ROOT/provenance/v64_3_51_pocr_fit.json"
+++V52_FIT="$V52_ROOT/provenance/v64_3_52_hodr_fit.json"
+++V53_FIT="$V53_ROOT/provenance/v64_3_53_potr_fit.json"
+++V53_PROFILES="$V53_ROOT/provenance/v64_3_53_operator_trajectory_profiles.jsonl"
+++
+++for f in "$V49_SCENE" "$V49_CAND" "$TRAIN_MANIFEST" "$TREAT_CFG" "$CONTROL_CFG" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" "$V51_FIT" "$V52_FIT" "$V53_FIT" "$V53_PROFILES"; do
+++  [[ -s "$f" ]] || { echo "V54 ENGINEERING STOP missing prerequisite $f" >&2; exit 2; }
+++done
+++
+++sha256sum -c V64_3_54_SCIENCE_MANIFEST.sha256 | tee "$OUT_ROOT/logs/v64_3_54_science_manifest.out"
+++
+++python - "$V53_FIT" "$PAIRED" "$PAIR_REPORT" "$METRIC_AUDIT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_54_parent_and_evidence_lock.out"
+++import hashlib,json,sys
+++from pathlib import Path
+++v53,paired,report,metric=map(Path,sys.argv[1:])
+++want53='9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e'
+++wantpair='d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43'
+++if hashlib.sha256(v53.read_bytes()).hexdigest()!=want53: raise SystemExit('V54 ENGINEERING STOP: V53 fit hash drift')
+++d=json.load(open(v53)); n=d.get('nested_crossfit',{})
+++if d.get('train_gate_pass') is not False or n.get('failure_diagnosis')!='preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order':
+++    raise SystemExit('V54 ENGINEERING STOP: wrong V53 preregistered branch')
+++if hashlib.sha256(paired.read_bytes()).hexdigest()!=wantpair: raise SystemExit('V54 ENGINEERING STOP: paired outcome hash drift')
+++r=json.load(open(report)); m=json.load(open(metric))
+++if r.get('pass') is not True or int(r.get('scenario_count',-1))!=502 or m.get('pass') is not True:
+++    raise SystemExit('V54 ENGINEERING STOP: V50.5 paired outcome provenance invalid')
+++print(json.dumps({'pass':True,'v53_fit_sha256':want53,'paired_sha256':wantpair,'branch':n['failure_diagnosis']},sort_keys=True))
+++PY
+++
+++python -m compileall -q bdse
+++pytest -q \
+++  bdse/tests/test_v64_3_54_eaf_icer_pdrm.py \
+++  bdse/tests/test_v64_3_53_eaf_icer_potr.py \
+++  bdse/tests/test_v64_3_52_eaf_icer_hodr.py \
+++  bdse/tests/test_v64_3_51_eaf_icer_pocr.py \
+++  bdse/tests/test_v64_3_50_6_pior_fit_repair.py \
+++  bdse/tests/test_v64_3_50_eaf_icer_pior.py \
+++  bdse/tests/test_v64_3_50_5_pior_metric_safety.py \
+++  bdse/tests/test_v64_3_48_eaf_icer_ocrr.py \
+++  | tee "$OUT_ROOT/logs/v64_3_54_targeted_regression.out"
+++
+++if [[ -z "${EAF_CKPT:-}" ]]; then
+++  [[ -s "$EAF_TRAIN_LOG" ]] || { echo "V54 ENGINEERING STOP missing EAF_TRAIN_LOG=$EAF_TRAIN_LOG; set EAF_CKPT explicitly" >&2; exit 2; }
+++  python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen \
+++    --train-log "$EAF_TRAIN_LOG" --variant REAUDIT_FOR_V64_3_54_PDRM \
+++    --output "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_54.json" \
+++    > "$OUT_ROOT/logs/v64_3_13_reaudit_v64_3_54.out"
+++  SELECTED_EPOCH=$(python - "$OUT_ROOT/provenance/v64_3_13_eaf_dmvr_reaudit_for_v64_3_54.json" <<'PY'
+++import json,sys
+++print(int(json.load(open(sys.argv[1]))['selected_epoch']))
+++PY
+++)
+++  EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"
+++fi
+++export EAF_CKPT
+++[[ -s "$EAF_CKPT" ]] || { echo "V54 ENGINEERING STOP missing checkpoint $EAF_CKPT" >&2; exit 2; }
+++
+++DYN_JSONL="$OUT_ROOT/provenance/v64_3_54_paired_dynamic_response_profiles.jsonl"
+++DYN_REPORT="$OUT_ROOT/provenance/v64_3_54_dynamic_response_probe_report.json"
+++if [[ -s "$DYN_JSONL" && -s "$DYN_REPORT" && "${V54_FORCE_DYNAMIC_REPLAY:-0}" != "1" ]]; then
+++  python - "$DYN_JSONL" "$DYN_REPORT" <<'PY' | tee "$OUT_ROOT/logs/v64_3_54_dynamic_response_reuse.out"
+++import json,sys
+++p,r=sys.argv[1:]; rows=[json.loads(x) for x in open(p) if x.strip()]; d=json.load(open(r))
+++if len(rows)!=502 or len({x['scenario_token'] for x in rows})!=502 or d.get('pass') is not True or d.get('paired_outcome_labels_recollected') is not False:
+++    raise SystemExit('V54 ENGINEERING STOP: existing paired dynamic response replay invalid')
+++print('PASS V54: reusing completed short-horizon paired dynamic response replay')
+++PY
+++else
+++  rm -rf "$OUT_ROOT/dynamic_response_probe"; mkdir -p "$OUT_ROOT/dynamic_response_probe"
+++  python -m bdse.tools.run_v64_3_54_dynamic_response_probe \
+++    --manifest "$TRAIN_MANIFEST" --treatment-config "$TREAT_CFG" --control-config "$CONTROL_CFG" \
+++    --checkpoint "$EAF_CKPT" --nuplan-root "$NUPLAN_ROOT" --v53-operator-profiles "$V53_PROFILES" \
+++    --output-root "$OUT_ROOT/dynamic_response_probe" --output-profiles "$DYN_JSONL" --output-report "$DYN_REPORT" \
+++    --gpu-treatment "$GPU_TREAT" --gpu-control "$GPU_CONTROL" --workers "$WORKERS" --batch-size "$BATCH_SIZE" \
+++    --heartbeat-seconds "$HEARTBEAT_SECONDS" --resume \
+++    | tee "$OUT_ROOT/logs/v64_3_54_dynamic_response_probe.out"
+++fi
+++
+++FIT_REPORT="$OUT_ROOT/provenance/v64_3_54_pdrm_fit.json"
+++ANALYSIS_TABLE="$OUT_ROOT/provenance/v64_3_54_analysis_population_snapshot.jsonl"
+++set +e
+++python -m bdse.tools.fit_v64_3_54_eaf_icer_pdrm \
+++  --v49-candidate-audit "$V49_CAND" --v49-scene-audit "$V49_SCENE" --paired-outcomes "$PAIRED" --v50-5-root "$V50_5_ROOT" \
+++  --v51-fit-report "$V51_FIT" --v52-fit-report "$V52_FIT" --v53-fit-report "$V53_FIT" --dynamic-profiles "$DYN_JSONL" \
+++  --output-report "$FIT_REPORT" --output-analysis-table "$ANALYSIS_TABLE" 2>&1 | tee "$OUT_ROOT/logs/v64_3_54_pdrm_fit.out"
+++FIT_STATUS=${PIPESTATUS[0]}
+++set -e
+++
+++cp "$V53_FIT" "$OUT_ROOT/provenance/v64_3_53_potr_fit_reused.json"
+++cp "$DYN_REPORT" "$OUT_ROOT/provenance/v64_3_54_dynamic_response_probe_report_reused.json"
+++sha256sum "$PAIRED" "$V51_FIT" "$V52_FIT" "$V53_FIT" "$V53_PROFILES" "$DYN_JSONL" > "$OUT_ROOT/provenance/V64_3_54_REUSED_EVIDENCE_AND_STATE_SHA256SUMS.txt"
+++
+++if [[ $FIT_STATUS -ne 0 ]]; then
+++  echo "V64.3.54 PDRM mediator scientific STOP. Do not consume untouched validation; follow v64_3_54_pdrm_fit.json." >&2
+++  exit "$FIT_STATUS"
+++fi
+++
+++echo "V64.3.54 PDRM mediator identification PASS. This is not yet a t=0 deployable policy: do not run untouched validation. Follow the preregistered next branch in v64_3_54_pdrm_fit.json."
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv
++--- v53_code/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv	1970-01-01 00:00:00.000000000 +0000
+++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv	2026-09-05 18:45:07.555792596 +0000
++@@ -0,0 +1,11 @@
+++arm,fold,conditional_auc,v52_scalar_auc,v51_scalar_auc,above_random,better_v52,better_v51,better_endpoint,rsmr_score_sum,arm_score_sum,rsmr_hard_harm,arm_hard_harm,rsmr_negrms,arm_negrms,beneficial_recall
+++ENDPOINT,0,0.5095003518648838,0.5242786769880365,0.4074595355383533,True,False,True,,-2.395372857431346,-1.2692964503074824,7,6,0.17231181781429317,0.16731700738448144,0.9310344827586207
+++ENDPOINT,1,0.6347402597402597,0.6477272727272727,0.6136363636363636,True,False,True,,1.3045395835435363,2.296533954823724,2,1,0.14031918141086883,0.09698678064397649,0.9090909090909091
+++ENDPOINT,2,0.49876543209876545,0.345679012345679,0.4567901234567901,False,True,True,,-0.013191924063189864,-0.3465822172470939,3,2,0.15714467224703302,0.15134882194231555,0.9333333333333333
+++ENDPOINT,3,0.4925249169435216,0.44019933554817275,0.595514950166113,False,True,False,,-2.6427314848308647,-3.173115365210865,8,7,0.18342391422792476,0.18781859864840839,0.9285714285714286
+++ENDPOINT,4,0.4603174603174603,0.4507936507936508,0.4888888888888889,False,True,False,,-0.49417148229958174,-0.49417148229958163,5,4,0.0958716286152196,0.09894850323948653,1.0
+++TEMPORAL,0,0.517945109078114,0.5242786769880365,0.4074595355383533,True,False,True,,-2.395372857431346,-1.2692964503074824,7,6,0.17231181781429317,0.16731700738448144,0.9310344827586207
+++TEMPORAL,1,0.5892857142857143,0.6477272727272727,0.6136363636363636,True,False,False,,1.3045395835435363,2.290214517928787,2,1,0.14031918141086883,0.09758098522267462,1.0
+++TEMPORAL,2,0.5802469135802469,0.345679012345679,0.4567901234567901,True,True,True,,-0.013191924063189864,-0.013191924063189864,3,3,0.15714467224703302,0.15814880177543955,1.0
+++TEMPORAL,3,0.595514950166113,0.44019933554817275,0.595514950166113,True,True,False,,-2.6427314848308647,-3.363562786789117,8,7,0.18342391422792476,0.19660442187349755,0.8571428571428571
+++TEMPORAL,4,0.6074074074074074,0.4507936507936508,0.4888888888888889,True,True,True,,-0.49417148229958174,-0.49417148229958174,5,5,0.0958716286152196,0.09841508424174401,1.0
++diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md
++--- v53_code/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md	1970-01-01 00:00:00.000000000 +0000
+++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md	2026-09-05 18:45:37.016380191 +0000
++@@ -0,0 +1,338 @@
+++# V64.3.53 POTR Result Postmortem and V64.3.54 PDRM Design
+++
+++## 0. Formal decision
+++
+++V64.3.53 is **engineering/provenance valid for TRAIN-level scientific attribution**. This is not an engineering repair branch.
+++
+++The preregistered scientific decisions are:
+++
+++- frozen V52 structural-null / effect-support hurdle: **GO / retain**;
+++- V53 `ENDPOINT`: **STOP**;
+++- V53 `TEMPORAL`: **STOP**;
+++- no V53 runtime retention policy is promoted;
+++- untouched validation remains unconsumed.
+++
+++The formal V53 failure diagnosis is:
+++
+++`preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order`.
+++
+++Therefore V54 follows the V53 preregistered branch into **post-intervention paired dynamic response / outcome-process identification**, rather than adding more pre-execution plan geometry.
+++
+++---
+++
+++## 1. Paper-level context
+++
+++The current manuscript's durable conceptual backbone is the bounded planner interface and the distinction between **decision sufficiency** and predictive reconstruction. The planner exposes bounded auditable evidence, constructs an evidence-attributed frontier, chooses at most one extremal replacement, freezes that proposal, and then allows only `{same proposal, incumbent}` under a no-fallback monotone operator.
+++
+++The current TeX still describes the older DRC/PTMC mechanism. The V44--V53 evidence chain has moved the algorithm well beyond that implementation. The manuscript should not be mechanically patched during every TRAIN iteration; once the outcome-sufficiency mechanism stabilizes, the abstract/method/experiments need a full claim-to-code rewrite. The stable paper-level thesis should remain:
+++
+++**Selection--Valuation--Outcome Sufficiency under a Bounded Auditable Planner Interface.**
+++
+++V53 refines the Outcome Sufficiency claim rather than changing the headline:
+++
+++1. selected outcome is intervention-relative;
+++2. effect-support sufficiency is not conditional-outcome-order sufficiency;
+++3. pre-execution planned treatment geometry is not, by itself, a fold-stable sufficient state for realized effect direction.
+++
+++---
+++
+++## 2. V53 reliability audit
+++
+++### 2.1 Source / provenance
+++
+++- uploaded code zip SHA256: `37b0cc3ce184491fd013a8effe2f3c118ae73467e8db0bfa50e5fe1bed38885b`;
+++- uploaded result zip SHA256: `07505de85158f4ba84de3802eca202c2dd9278ed5fc23529d0c6b1af32ab0b99`;
+++- V53 fit JSON SHA256: `9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e`;
+++- exact reused V50.5 paired outcome SHA256: `d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43`.
+++
+++The V53 result-defining science manifest verifies **15/15 files**. Server regression is **64/64 PASS**. An independent replay on the uploaded code is also **64/64 PASS**; Python compile and launcher syntax pass.
+++
+++### 2.2 State replay / evidence identity
+++
+++The V53 treatment-side state replay contains exactly **502/502 unique profiles**. It does not recollect paired outcome labels. The sidecar is recorded at the exact one-shot intervention anchor before execution, using the cached frozen RSMR proposal trajectory and actual runtime incumbent trajectory. Historical `nuplan_planner.py` remains byte-identical to the frozen V50.5 source.
+++
+++The scalar execution contrast `D` replays V51/V52 token-by-token with error <= `1e-9`; the 38 physically identical proposal/incumbent pairs remain zero contrast. Nested fitting excludes both the outer test fold and the calibration fold.
+++
+++### 2.3 Reliability verdict
+++
+++This is a preregistered **scientific STOP**, not an ENGINEERING/DATA STOP. V53 can be attributed.
+++
+++One reproducibility hygiene issue remains: the V53 result zip locks historical parent evidence by exact SHA but does not bundle the complete V49/V50.5 parent roots. That does not invalidate the executed result, but it makes independent third-party re-analysis less self-contained. V54 therefore emits a compact 502-row analysis-population snapshot in addition to hashes.
+++
+++---
+++
+++## 3. Strict preregistered branch decisions
+++
+++### 3.1 Shared V52 effect support — GO / retain
+++
+++The exact frozen QPE+D hurdle remains identified:
+++
+++- aggregate effect-support AUC: **0.6516244589**;
+++- folds above random: **5/5**.
+++
+++This mechanism is not retested or retuned in V54. It answers a first-stage question reliably: **will the frozen proposal-versus-incumbent intervention have any measurable closed-loop effect?**
+++
+++### 3.2 ENDPOINT — STOP
+++
+++V53 ENDPOINT state:
+++
+++`[Q, P-Q, E-P, D, dx_T, dy_T, dyaw_T, dv_T]`.
+++
+++Identification:
+++
+++- aggregate conditional AUC: **0.5049495959**;
+++- folds > 0.5: **2/5**;
+++- folds > V52 scalar conditional control: **3/5**;
+++- folds > V51 scalar conditional control: **3/5**;
+++- preregistered identification: **FAIL**.
+++
+++Diagnostic OOF retention nevertheless looks attractive in aggregate:
+++
+++- selected: `461`;
+++- beneficial retained: `114/121 = 94.21%`;
+++- nonbeneficial: `381 -> 347`;
+++- hard harm: `25 -> 20`;
+++- score-delta sum: `-4.2409 -> -2.9866`;
+++- NegRMS: `0.15486 -> 0.14766`.
+++
+++But `all-fold nonharm` fails. In folds 2 and 3, score sum reverses in the harmful direction. Because identification itself fails, these aggregate gains cannot justify threshold or functional rescue.
+++
+++**Mechanism interpretation:** terminal signed direction/channel is not a stable sufficient statistic for effectful selected-outcome order.
+++
+++### 3.3 TEMPORAL — STOP, but keep as diagnostic evidence
+++
+++TEMPORAL adds fixed DCT-II `k=1,2` modes of planned `dx(t),dy(t),dyaw(t),dv(t)`.
+++
+++Identification:
+++
+++- aggregate conditional AUC: **0.5743801653**;
+++- folds > 0.5: **5/5**;
+++- folds > ENDPOINT: **4/5**;
+++- folds > V52 scalar: **3/5**;
+++- folds > V51 scalar: **3/5**;
+++- preregistered identification: **FAIL**;
+++- temporal-necessity claim: **FAIL**.
+++
+++Diagnostic retention:
+++
+++- selected: `454`;
+++- beneficial retained: `115/121 = 95.04%`;
+++- nonbeneficial: `339`;
+++- hard harm: `22`;
+++- score-delta sum: `-2.8500`;
+++- NegRMS: `0.15034`;
+++- `all-fold nonharm`: **FAIL**.
+++
+++TEMPORAL is not noise: it beats endpoint in four folds and has substantially higher aggregate AUC. But it is not transport-stable relative to the already frozen scalar controls. Fold 3 is especially informative: TEMPORAL AUC `0.5955` ties V51 rather than exceeding it, while the retained score sum worsens from `-2.6427` to `-3.3636`.
+++
+++Therefore V53 supports only the weaker diagnostic claim:
+++
+++**planned temporal treatment shape contains outcome information, but it is not a preregistered stable/sufficient mediator of realized effect direction.**
+++
+++It must not be promoted into the backbone or tuned by adding modes/horizon/basis.
+++
+++---
+++
+++## 4. What the model has learned / has not learned
+++
+++### Learned and protected
+++
+++1. bounded EAF/support/admissibility and frozen RSMR extremal proposal selection;
+++2. no-fallback incumbent containment;
+++3. V44 ungated prospective interaction support;
+++4. V45 agent-local longitudinal response as a supporting mediator;
+++5. V47 EGO-REF as a supporting consequence coordinate;
+++6. V50 metric-safe paired one-shot selected-outcome evidence;
+++7. V52 structural-null/effect-support factorization over QPE+D.
+++
+++### Not learned
+++
+++Given that an intervention is effectful, the current state still cannot stably answer:
+++
+++**which realized intervention becomes beneficial versus harmful, and why?**
+++
+++V53 now rules out a natural explanation: this is not fixed merely by preserving the frozen plan's signed terminal direction or two low-order temporal modes.
+++
+++### What should be learned next
+++
+++The next object is the **realized post-intervention treatment-control divergence** during the exact one-shot exposure window. Planned geometry describes what the planner intended to apply; the paired rollout can reveal what state transition actually occurred after that operator entered the closed loop.
+++
+++This is a mediator-identification question. Because the state is post-treatment, it must not be used directly as the initial t=0 veto. If it is identified, a later version must make the mediator deployable by predicting it from pre-execution runtime state or by defining an auditable continuation operator.
+++
+++---
+++
+++## 5. Dominant bottleneck after V53
+++
+++Previous bottleneck:
+++
+++`effectful selected-outcome state sufficiency / directional-temporal operator contrast sufficiency`.
+++
+++V53 narrows it to:
+++
+++**post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order.**
+++
+++Equivalently, the key scientific question is:
+++
+++> after the full-set RSMR proposal is frozen and known to be effectful, is final benefit/harm determined by a realized treatment-response mediator that is absent from the pre-execution plan geometry?
+++
+++The paper headline is already stable and should not be renamed again.
+++
+++---
+++
+++## 6. Newly closed algorithm families
+++
+++V53 closes the following as *sufficient conditional-outcome state families* under the current static pairwise ranker:
+++
+++- scalar plan dose `D` alone (already known insufficient for sign);
+++- signed terminal proposal-incumbent operator geometry;
+++- fixed low-order pre-execution DCT shape of ego operator geometry.
+++
+++Consequently, do not perform:
+++
+++- endpoint transform / normalization sweep;
+++- more DCT modes;
+++- DCT basis sweep;
+++- temporal horizon sweep;
+++- peak/early handcrafted planned-trajectory statistics;
+++- larger MLP/attention over the same pre-execution plan-only geometry;
+++- threshold/alpha/lambda/loss/class/focal/catastrophe-weight rescue.
+++
+++This closure is **not** a closure of Q/P/E, D as effect-support evidence, paired outcome supervision, post-intervention dynamics, or all structured outcome functionals.
+++
+++All historical closures in `ALGORITHM_CHANGELOG.md` remain active.
+++
+++---
+++
+++## 7. Evidence chain through V53
+++
+++The mechanism chain now reads:
+++
+++- V34: ordinal extremal selection solved by RSMR;
+++- V37--V39: selected residual/tail is real;
+++- V40: pure value-head/19-D route falsified;
+++- V41: endpoint/basepoint geometry is a partial mediator;
+++- V42: current physical/quality consequence is a partial mediator;
+++- V43: prospective horizon adds necessary information;
+++- V44: ungated full-horizon prospective interaction support is a strong mediator; scene-global mode classifier is falsified;
+++- V45: agent-local continuous response is identifiable and improves selected value; a point response is not sufficient;
+++- V46: response second moment is identifiable but not decision-sufficient; temporal predictive features can improve regression while worsening deployment, directly establishing prediction sufficiency != decision sufficiency;
+++- V47: EGO-REF is a strong supporting consequence mediator; broader representation expansion stops;
+++- V48: multiplicity/logK is fresh-falsified; in-domain post-selection signal != fresh transportability;
+++- V49: random-prefix selection intervention fails; changing offline selection measure != selected-outcome-law identification;
+++- V50: metric-safe actual paired one-shot outcomes are obtained; paired outcome evidence != QPE-only selected-outcome state sufficiency;
+++- V51: QPE+D operator-relative state is identified but sign retention is deployment-insufficient;
+++- V52: QPE+D robustly identifies effect support, but static conditional sign and Pareto order fail; effect-support sufficiency != conditional-outcome-order sufficiency;
+++- **V53: planned signed endpoint/temporal operator geometry still does not give fold-stable conditional ordering; planned-treatment geometry != realized-outcome mediation sufficiency.**
+++
+++This is a much stronger CCF-A-level mechanism story than a sequence of score-head tweaks: each failed family closes a specific sufficiency hypothesis under a bounded and auditable operator.
+++
+++---
+++
+++# V64.3.54 EAF-ICER-PDRM — Paired Dynamic Response Mediation
+++
+++## 8. Scientific role
+++
+++V54 is the exact preregistered V53 failure branch. It changes the *evidence source for the conditional mediator*, not RSMR, QPE, the paired labels, or the deployment threshold.
+++
+++It asks whether the missing object is:
+++
+++`planned treatment -> realized short-horizon paired state transition -> final paired outcome`.
+++
+++V54 is intentionally **not yet a deployable t=0 retention mechanism**. That restriction is part of the scientific protocol, not a limitation to hide.
+++
+++---
+++
+++## 9. V54 state collection
+++
+++Reuse the exact V50.5 population and outcome labels. For every one of the 502 full-set RSMR proposals, replay both original V50.5 arms:
+++
+++- treatment: execute the frozen proposal once;
+++- control: execute the incumbent at the same anchor.
+++
+++Collect only simulated ego rear-axle `(x,y,yaw,speed)` from iteration `0` through the first scheduled replan. The window length is the already frozen `planner.replan_interval_ticks` (currently 5), not a tunable horizon.
+++
+++Construct paired realized channels in the shared t=0 control ego frame:
+++
+++`[dx_real(t), dy_real(t), dyaw_real(t), dv_real(t)]`.
+++
+++No new full-horizon score or safety metric is computed. The existing V50.5 full-horizon paired label remains the target.
+++
+++### Engineering acceleration
+++
+++V53 spent approximately `70025 s = 19.45 h` on a treatment-only full-scenario replay even though its state was available at the intervention event.
+++
+++V54 instead:
+++
+++1. runs only through the first replan window;
+++2. disables new metric computation (`run_metric=false`);
+++3. bypasses the expensive second BDSE replan at the terminal sample—the state is recorded immediately before that replan and the cached rollout is returned only to let the simulator exit;
+++4. runs treatment/control in parallel on two GPUs when available;
+++5. uses the first 8 scenes/arm as a fail-closed engineering sentinel via the existing batch mechanism;
+++6. reuses completed valid batches on resume.
+++
+++This is a safer acceleration than reducing the 502 scientific population. The population/fold support is already marginal for some conditional outcomes, so sample shrinkage would weaken exactly the fold-stability question V53 exposed.
+++
+++---
+++
+++## 10. V54 causal arms
+++
+++### Arm A — REALIZED-ENDPOINT
+++
+++State:
+++
+++`[Q, P-Q, E-P, planned_D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`.
+++
+++Question:
+++
+++> Is the actual treatment-control state transition at the end of the one-shot exposure window the missing mediator?
+++
+++### Arm B — REALIZED-TEMPORAL
+++
+++Only if REALIZED-ENDPOINT does not establish the minimal mediator, append fixed DCT-II `k=1,2` coefficients of the realized paired channels over the exact exposure window.
+++
+++No horizon, mode-count or basis sweep is allowed.
+++
+++Question:
+++
+++> Is realized response shape necessary beyond the realized endpoint transition?
+++
+++---
+++
+++## 11. V54 identification gates
+++
+++The gate is deliberately stricter than V53.
+++
+++REALIZED-ENDPOINT must:
+++
+++- aggregate AUC > 0.5;
+++- >=4/5 folds > 0.5;
+++- aggregate and >=4/5 folds beat exact V53 TEMPORAL;
+++- aggregate and >=4/5 folds beat exact V52 scalar conditional control;
+++- aggregate and >=4/5 folds beat exact V51 scalar conditional control.
+++
+++REALIZED-TEMPORAL must satisfy all external comparator gates and also beat REALIZED-ENDPOINT in aggregate and >=4/5 folds before a temporal-necessity claim is allowed.
+++
+++A retrospective retention gate is computed only as a diagnostic to ask whether an oracle-available mediator contains enough ordering information. It is **not promotion evidence**, because post-intervention state is unavailable at the initial t=0 decision.
+++
+++---
+++
+++## 12. V54 preregistered next branches
+++
+++1. **REALIZED-ENDPOINT identified:** freeze it as the minimal outcome mediator. V55 must make it deployable via a pre-execution mediator predictor or auditable continuation operator. Do not use future state directly at t=0.
+++2. **Only REALIZED-TEMPORAL identified:** realized response shape is necessary; V55 predicts/uses that process without horizon/basis tuning.
+++3. **Mediator identified but retrospective retention still fails:** state contains outcome information but the static sign functional remains insufficient; next solve a structured paired dynamic outcome functional before adding more state.
+++4. **Both fail:** close short-horizon realized ego-response geometry as sufficient. The next paired process must represent realized interaction/safety consequence, not more ego trajectory geometry.
+++
+++No untouched validation is allowed in V54 because V54 itself is not yet a deployable pre-action mechanism.
+++
+++---
+++
+++## 13. CCF-A novelty position
+++
+++The novelty claim should not be “DCT features” or “another response head.” The stronger algorithmic contribution is the experimentally falsifiable hierarchy of sufficient objects under a bounded monotone planner interface:
+++
+++`selection -> prospective valuation -> paired effect support -> conditional outcome mediation -> monotone retention`.
+++
+++V54 specifically tests whether the gap between planned treatment and realized response is the missing causal/decision mediator. If positive, the next deployable algorithm can be justified by mediator evidence rather than by ad-hoc feature search. If negative, the result closes another whole family and points directly to realized interaction/safety process.
+++
+++That discipline is important for a CCF-A submission: the paper should explain **why each deployed operator requires a different sufficient statistic**, not just report that a larger model improved a metric.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_53_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_54.json bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_54.json
+--- v53_code/V64_3_53_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_54.json	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_53_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_54.json	2026-09-05 18:44:00.448678162 +0000
+@@ -0,0 +1,143 @@
++{
++  "audit": "v64_3_53_uploaded_result_reliability_and_scientific_audit_for_v64_3_54",
++  "next_version": "V64.3.54-EAF-ICER-PDRM",
++  "preregistered_verdict": {
++    "endpoint": {
++      "aggregate": {
++        "beneficial_retention_recall": 0.9421487603305785,
++        "beneficial_selected_count": 114,
++        "beneficial_total_count": 121,
++        "closed_loop_negative_rms": 0.14765890212453933,
++        "closed_loop_score_delta_sum": -2.9866315602412996,
++        "closed_loop_score_delta_worst": -0.9765267961612268,
++        "hard_harm_selected_count": 20,
++        "nonbeneficial_selected_count": 347,
++        "selected_count": 461
++      },
++      "deployment_gate": {
++        "all_folds_nonharm": false,
++        "beneficial_retention": true,
++        "hard_tail": true,
++        "nonbeneficial_reduction": true,
++        "pass": false,
++        "population": true,
++        "utility_nonharm": true
++      },
++      "identification": {
++        "aggregate_auc": 0.5049495958586868,
++        "better_v51_scalar_fold_count": 3,
++        "better_v52_scalar_fold_count": 3,
++        "folds_above_random": 2,
++        "identified": false,
++        "v51_conditional_sign_auc": 0.4964580873671783,
++        "v52_scalar_conditional_sign_auc": 0.48029243483788936
++      },
++      "verdict": "STOP"
++    },
++    "formal_failure_diagnosis": "preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order",
++    "temporal": {
++      "aggregate": {
++        "beneficial_retention_recall": 0.9504132231404959,
++        "beneficial_selected_count": 115,
++        "beneficial_total_count": 121,
++        "closed_loop_negative_rms": 0.15033953205764972,
++        "closed_loop_score_delta_sum": -2.8500081255305845,
++        "closed_loop_score_delta_worst": -0.9765267961612268,
++        "hard_harm_selected_count": 22,
++        "nonbeneficial_selected_count": 339,
++        "selected_count": 454
++      },
++      "deployment_gate": {
++        "all_folds_nonharm": false,
++        "beneficial_retention": true,
++        "hard_tail": true,
++        "nonbeneficial_reduction": true,
++        "pass": false,
++        "population": true,
++        "utility_nonharm": true
++      },
++      "identification": {
++        "aggregate_auc": 0.5743801652892562,
++        "better_endpoint_fold_count": 4,
++        "better_v51_scalar_fold_count": 3,
++        "better_v52_scalar_fold_count": 3,
++        "endpoint_control_auc": 0.5049495958586868,
++        "folds_above_random": 5,
++        "identified": false,
++        "temporal_necessity_identified": false,
++        "v51_conditional_sign_auc": 0.4964580873671783,
++        "v52_scalar_conditional_sign_auc": 0.48029243483788936
++      },
++      "verdict": "STOP"
++    },
++    "v52_effect_support": {
++      "auc": 0.6516244589283049,
++      "folds_above_random": 5,
++      "verdict": "GO_RETAIN"
++    }
++  },
++  "profile_diagnostics": {
++    "D_max": 231.74712085723877,
++    "D_mean": 15.920014800244118,
++    "D_median": 9.111468315124512,
++    "D_p95": 57.597265529632544,
++    "D_zero_fraction": 0.07569721115537849,
++    "count": 502,
++    "endpoint_zero_fraction_by_channel": [
++      0.07569721115537849,
++      0.4760956175298805,
++      0.4800796812749004,
++      0.7768924302788844
++    ],
++    "physical_equal_count": 38,
++    "temporal_zero_fraction_by_coordinate": [
++      0.07569721115537849,
++      0.4760956175298805,
++      0.4820717131474104,
++      0.08167330677290836,
++      0.07569721115537849,
++      0.4760956175298805,
++      0.4940239043824701,
++      0.08167330677290836
++    ],
++    "trajectory_steps": [
++      80
++    ],
++    "unique_tokens": 502
++  },
++  "reliability_evidence": {
++    "independent_uploaded_code_targeted_replay": "64/64 PASS",
++    "launcher_bash_syntax": true,
++    "paired_labels_recollected": false,
++    "paired_outcome_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
++    "profile_count": 502,
++    "profile_probe_pass": true,
++    "profile_unique": 502,
++    "python_compile": true,
++    "scalar_D_exact_replay_all": true,
++    "science_manifest_files": 15,
++    "science_manifest_pass": true,
++    "server_targeted_regression": "64/64 PASS",
++    "termination": "preregistered scientific STOP",
++    "v53_fit_sha256": "9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e"
++  },
++  "reproducibility_caveat": "The V53 output zip hard-locks parent evidence by exact SHA but does not bundle the entire historical V50.5/V49 parent data roots. This is provenance-complete for the executed launcher but less self-contained for third-party re-analysis. V54 adds a compact self-contained analysis population snapshot.",
++  "scientific_conclusion": {
++    "learned": "The frozen QPE+D state stably identifies structural null/effect support; planned temporal treatment shape carries some aggregate conditional-order signal.",
++    "new_closure": "Close pre-execution ego operator-trajectory geometry (scalar magnitude + signed endpoint + fixed low-order planned temporal shape) as a sufficient effectful conditional-outcome state in the current static ranker family. Do not tune additional plan-only horizons/bases/transforms.",
++    "next_bottleneck": "post-intervention paired dynamic response / outcome-process sufficiency; identify realized treatment-response mediation before designing a deployable predictor or richer dynamic functional.",
++    "not_learned": "Neither signed endpoint geometry nor the fixed two-mode pre-execution temporal geometry stably identifies effectful beneficial/harmful ordering across folds, and neither yields fold-wise nonharm."
++  },
++  "uploaded_artifacts": {
++    "code_zip_sha256": "37b0cc3ce184491fd013a8effe2f3c118ae73467e8db0bfa50e5fe1bed38885b",
++    "paper_tex_sha256": "ede63e7e6c0e7e027510eb5a40279a55f16fe7d28bfc7e2c5dab1560296263c3",
++    "prior_analysis_md_sha256": "bd16527a93ea79a34ae5f97b35917ea04b1bf01b56e66aad2dcd94ca7818eb47",
++    "result_zip_sha256": "07505de85158f4ba84de3802eca202c2dd9278ed5fc23529d0c6b1af32ab0b99"
++  },
++  "verdict": {
++    "engineering_provenance_valid": true,
++    "engineering_repair_required": false,
++    "train_level_algorithm_attribution_allowed": true,
++    "untouched_validation_consumed": false
++  }
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_54_CHANGED_FILES.txt bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_CHANGED_FILES.txt
+--- v53_code/V64_3_54_CHANGED_FILES.txt	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_CHANGED_FILES.txt	2026-09-05 18:49:19.386581142 +0000
+@@ -0,0 +1,20 @@
++Modified from V64.3.53:
++- ALGORITHM_CHANGELOG.md
++- README_CURRENT.md
++
++Added for V64.3.54:
++- RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
++- NEXT_COMMANDS_V64_3_54_EAF_ICER_PDRM.txt
++- V64_3_54_PREREGISTRATION.json
++- V64_3_54_SCIENCE_MANIFEST.sha256
++- V64_3_54_ENGINEERING_VALIDATION.txt
++- V64_3_53_RESULT_POSTMORTEM_AND_V64_3_54_PDRM_DESIGN.md
++- V64_3_53_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_54.json
++- V64_3_53_FOLD_CAUSAL_AUDIT_FOR_V64_3_54.csv
++- bdse/planner/paired_dynamic_response_mediation.py
++- bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
++- bdse/tools/run_v64_3_54_dynamic_response_probe.py
++- bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py
++- bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
++
++Historical V53/V52/V51/V50 planner/science files are retained unchanged and are SHA-locked by V64_3_54_SCIENCE_MANIFEST.sha256.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_54_ENGINEERING_VALIDATION.txt bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_ENGINEERING_VALIDATION.txt
+--- v53_code/V64_3_54_ENGINEERING_VALIDATION.txt	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_ENGINEERING_VALIDATION.txt	2026-09-05 18:49:19.385740687 +0000
+@@ -0,0 +1,60 @@
++V64.3.54 EAF-ICER-PDRM — engineering validation
++================================================
++
++Scientific status
++-----------------
++V54 is a preregistered post-intervention mediator-identification experiment.
++It is NOT a deployable t=0 retention mechanism and emits no runtime retention config.
++
++V53 parent reliability replay
++-----------------------------
++- V53 result-defining science manifest: 15/15 PASS.
++- V53 uploaded-code curated causal regression: 64/64 PASS.
++- Python compile for V53: PASS.
++- V53 launcher bash syntax: PASS.
++- V53 result termination: preregistered scientific STOP, not an engineering STOP.
++
++V54 local code validation
++-------------------------
++- Python compileall: PASS.
++- RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh bash -n: PASS.
++- V54 + V53/V52/V51/V50/V48 targeted causal regression: 72/72 PASS.
++- V54 curated result-defining science manifest: 20/20 PASS.
++- Full repository test files: 132/132 covered.
++- Full repository tests, four disjoint file shards:
++    shard 0: 193 PASS
++    shard 1: 153 PASS
++    shard 2: 140 PASS
++    shard 3: 158 PASS
++    total:   644/644 PASS
++- Full-shard warnings observed: 38; shown warnings are existing PyTorch nested-tensor/Transformer warning classes, not V54 assertion failures.
++
++V54 science / provenance checks encoded in launcher
++---------------------------------------------------
++- exact V53 fit SHA256 lock:
++  9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e
++- exact V50.5 paired outcome SHA256 lock:
++  d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43
++- exact frozen population: 502 unique full-set RSMR proposal events;
++- treatment/control replan interval must match;
++- short replay uses the frozen replan interval as exposure window, no horizon sweep;
++- run_metric=false; no new full-horizon outcome labels;
++- exact target/probe identity checks inherited from frozen V50.5 runner;
++- synchronized iteration index and timestamp across treatment/control;
++- initial paired state must be identical;
++- physical-equality planned interventions must remain realized-equal within fail-closed tolerance;
++- planned scalar D in V54 profile must match V51/V52/V53 historical value token-by-token;
++- nested fit excludes outer test and calibration fold;
++- V54 writes a self-contained 502-row analysis population snapshot for future audit.
++
++Server-only validation boundary
++-------------------------------
++The current local environment does not contain the user's nuPlan package/raw DB/checkpoint, so the actual short-horizon two-arm simulation cannot be truthfully marked PASS here.
++The launcher therefore treats the first collision-safe 8-scene batch per arm as the fail-closed server sentinel. Any simulation/probe/trace mismatch stops before the remaining population is consumed.
++
++Speed change (science-preserving)
++---------------------------------
++V53 treatment-only state replay consumed 70025.489 s (~19.45 h) of summed batch wall time while running full scenarios and metrics.
++V54 keeps all 502 scenes but collects only the one-shot exposure window, disables new metrics, bypasses the expensive terminal replan after recording the pre-replan state, and can run treatment/control concurrently on two GPUs. One-GPU sequential fallback is supported.
++
++No untouched validation is permitted in V54.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_54_PREREGISTRATION.json bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_PREREGISTRATION.json
+--- v53_code/V64_3_54_PREREGISTRATION.json	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_PREREGISTRATION.json	2026-09-05 18:43:15.984174104 +0000
+@@ -0,0 +1,119 @@
++{
++  "algorithm_version": "V64.3.54-EAF-ICER-PDRM",
++  "name": "Paired Dynamic Response Mediation",
++  "scientific_role": "preregistered V53 both-preexecution-state-families-failed branch",
++  "trigger": {
++    "v53_fit_sha256": "9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e",
++    "v53_train_gate_pass": false,
++    "v53_failure_diagnosis": "preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order",
++    "v53_endpoint_identified": false,
++    "v53_temporal_identified": false,
++    "v52_effect_support_auc": 0.6516244589283049,
++    "v52_effect_support_folds_above_random": 5
++  },
++  "dominant_bottleneck": "post-intervention paired dynamic response / outcome-process sufficiency for effectful selected outcome order",
++  "mechanism_hypothesis": "Planned proposal-vs-incumbent geometry is only a proxy for the realized treatment. If effectful outcome order is mediated by the actual closed-loop response induced over the one-shot operator-exposure window, a paired realized treatment-control state transition should identify final paired outcome order more stably than the strongest V53 pre-execution temporal state.",
++  "frozen": {
++    "bounded_interface_and_EAF": true,
++    "full_set_RSMR_winner": true,
++    "same_winner_or_incumbent_no_fallback": true,
++    "V52_QPE_plus_D_effect_support": true,
++    "V50_5_metric_safe_502_paired_outcomes": true,
++    "QPE_consequence_coordinates": true,
++    "planned_scalar_D": true,
++    "pairwise_zero_bias_lambda_1_for_identification": true,
++    "outer_folds": 5
++  },
++  "state_collection": {
++    "arms": [
++      "treatment",
++      "control"
++    ],
++    "population": "exact frozen 502 V50/V51/V52/V53 full-set RSMR proposals",
++    "outcome_labels_recollected": false,
++    "metrics_recomputed": false,
++    "window": "from exact one-shot intervention anchor through the first scheduled planner replan",
++    "window_length_source": "frozen planner.replan_interval_ticks; no time-horizon sweep",
++    "synchronization": "exact simulation iteration index and timestamp across treatment/control",
++    "state": "simulated ego rear-axle x/y/yaw and speed at every tick in the exposure window",
++    "coordinate_frame": "paired treatment-control position delta rotated into shared t0 control ego frame",
++    "short_horizon_termination": true,
++    "terminal_sample_optimization": "At the first scheduled replan index, record the pre-replan state and return the cached trajectory without executing a second expensive BDSE replan; simulation terminates immediately after."
++  },
++  "arms": {
++    "realized_endpoint": {
++      "state": [
++        "Q",
++        "P-Q",
++        "E-P",
++        "planned_D",
++        "realized_dx_end",
++        "realized_dy_end",
++        "realized_dyaw_end",
++        "realized_dv_end"
++      ],
++      "question": "Is the realized one-replan state transition the missing mediator beyond planned operator geometry?",
++      "identification_gate": {
++        "aggregate_auc_gt": 0.5,
++        "folds_auc_gt_random_min": 4,
++        "aggregate_auc_gt_exact_V53_temporal": true,
++        "folds_gt_exact_V53_temporal_min": 4,
++        "aggregate_auc_gt_exact_V52_scalar": true,
++        "folds_gt_exact_V52_scalar_min": 4,
++        "aggregate_auc_gt_exact_V51_scalar": true,
++        "folds_gt_exact_V51_scalar_min": 4
++      }
++    },
++    "realized_temporal": {
++      "state": "realized_endpoint plus fixed DCT-II k=1,2 of paired realized dx/dy/dyaw/dv over the operator-exposure window",
++      "question": "If realized endpoint is insufficient, is realized response shape necessary?",
++      "identification_gate": {
++        "all_realized_endpoint_external_comparator_gates": true,
++        "aggregate_auc_gt_realized_endpoint": true,
++        "folds_gt_realized_endpoint_min": 4
++      }
++    }
++  },
++  "branch_order": [
++    "realized_endpoint",
++    "realized_temporal"
++  ],
++  "retrospective_oracle": {
++    "computed": true,
++    "purpose": "diagnostic only: test whether the post-intervention mediator plus frozen V52 support could satisfy the historical paired gate if it were available",
++    "promotion_evidence": false,
++    "runtime_deployable_at_t0": false
++  },
++  "runtime_claim_boundary": {
++    "post_intervention_state_not_t0_available": true,
++    "no_runtime_retention_config_emitted_in_v54": true,
++    "no_untouched_validation_in_v54": true,
++    "allowed_claim_if_identified": "realized paired response is an outcome mediator",
++    "forbidden_claim": "V54 itself is a deployable pre-action retention mechanism"
++  },
++  "next_branches": {
++    "if_realized_endpoint_identified": "Freeze minimal realized transition mediator. Next version must make it deployable by predicting it from runtime-available pre-execution state or by defining an auditable continuation operator; do not use future state at t0.",
++    "if_only_realized_temporal_identified": "Freeze realized temporal mediator and design a deployable temporal mediator prediction/continuation test without basis/horizon tuning.",
++    "if_identified_but_retrospective_oracle_gate_fails": "Dynamic state carries signal but static sign functional remains insufficient; next solve a structured paired dynamic outcome functional before more state expansion.",
++    "if_both_fail": "Close short-horizon realized ego-response state as sufficient; next paired evidence must represent realized interaction/safety consequence process, not more ego trajectory geometry."
++  },
++  "prohibited": [
++    "using post-intervention state directly as t0 runtime input",
++    "exposure-horizon sweep",
++    "DCT basis or mode-count sweep",
++    "peak/early handcrafted statistic sweep",
++    "larger MLP or attention",
++    "threshold/alpha/lambda/loss/class/focal/catastrophe weighting",
++    "safety scalarization",
++    "new offline future observables",
++    "resurrecting V46 predicted occupancy temporal profile",
++    "resurrecting V47 constant lateral drift",
++    "K/logK or multiplicity",
++    "random-prefix SIIR",
++    "CVaR/selected translation/binary catastrophe veto",
++    "RSMR/B/M/top-K/candidate-count change",
++    "rerank/second-best/fallback",
++    "validation pooling",
++    "untouched validation before a deployable mechanism exists"
++  ]
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/V64_3_54_SCIENCE_MANIFEST.sha256 bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_SCIENCE_MANIFEST.sha256
+--- v53_code/V64_3_54_SCIENCE_MANIFEST.sha256	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_SCIENCE_MANIFEST.sha256	2026-09-05 18:48:35.211281568 +0000
+@@ -0,0 +1,20 @@
++d8fbb9512a8d8de384dfa1a9e310f6f2282cc189b1cfe11ab86365dada993928  RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
++4de4d4841b951e0c8f5b04b8fa06835792e1a4c1bacdbbbb4a8d50656b90c249  V64_3_54_PREREGISTRATION.json
++9a1d93f491cb15683b5cc018736e01a12dd469c00db52ea3e12f49e6060c8957  bdse/planner/paired_dynamic_response_mediation.py
++a8e54301ec6e63d1d7619743e2d1de0745f2475848bc7a68964ca5789830bdad  bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
++1549ec95989edef149ce33d241c2421214695e5d06249ac171aa24b84a2a578d  bdse/tools/run_v64_3_54_dynamic_response_probe.py
++e2521f7205f47223195f50c5582503e6f60ac51e9e9dcbeea4838638be856f5f  bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py
++6b92f44aad8a35bad90adf49ee5de93dc5fbdf5f494b670d0c062ef48da20992  bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
++c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef  bdse/planner/nuplan_planner.py
++0ed17fd2688ba25cf44990b08674d72a26168097b4738822b39fb51f7c4f26c5  bdse/planner/tournament.py
++3e00c8eaa6d434c4ec4c5f478bb02dac5044ec1476c1c3de9ac199611598d23f  bdse/experiments/evaluate_closed_loop.py
++7c5472442e5a76ee6cbb6ef3189e086e4e800e8337deb14cacb26488b9050d53  bdse/tools/run_v64_3_50_pior_paired_closed_loop.py
++dda695a4bc884c410ae6cdfb0d8f4f2d82a2c9dfa3d06070b7b1be2460511bfa  bdse/tools/run_v64_3_50_5_pior_paired_closed_loop.py
++c1c1d297766d8a2e43430739d639ff1ed73f866ec193b47a5dc9e7cb997727aa  bdse/tools/fit_v64_3_50_eaf_icer_pior.py
++995662e7a83c35180b3e700755a46bc05edb977da339c80e267c5de8ae7b0d12  bdse/tools/fit_v64_3_50_6_eaf_icer_pior.py
++c842ed2ee1a1ecee7f70e48c789e165f9f7090894dc38214c9b7acab13c9bac5  bdse/tools/fit_v64_3_51_eaf_icer_pocr.py
++e45e11fea46b199648bd3f73719c9433e9b9093299d6802b39be8df002be97da  bdse/tools/fit_v64_3_52_eaf_icer_hodr.py
++472c99d4f61a1032a8358e019da8f1166c4b7047ee0cbd2df6848bf0fc74a67e  bdse/tools/fit_v64_3_53_eaf_icer_potr.py
++9f41ec949dcecd11cd90ee2325a6e84055777ff8fb52455f7aa42939b6fd7de9  bdse/planner/paired_operator_contrast_retention.py
++abf64e7adca5b7a245f22aa6d25d167238377d9106ed1f8c30ce80be05e9d91c  bdse/planner/paired_outcome_dominance_retention.py
++c3951efd8e646bdf548d3938a48b6477cfe38de75c2e1e0ff702739f485f28a8  bdse/planner/paired_operator_trajectory_retention.py
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/bdse/planner/paired_dynamic_response_mediation.py bdse_v64_3_54_eaf_icer_pdrm/bdse/planner/paired_dynamic_response_mediation.py
+--- v53_code/bdse/planner/paired_dynamic_response_mediation.py	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/bdse/planner/paired_dynamic_response_mediation.py	2026-09-05 18:33:29.990239197 +0000
+@@ -0,0 +1,142 @@
++from __future__ import annotations
++
++"""V64.3.54 PDRM: Paired Dynamic Response Mediation.
++
++V53 falsified pre-execution proposal-vs-incumbent trajectory geometry as a
++sufficient, fold-stable description of effectful paired outcome order.  V54
++therefore follows the preregistered branch and measures the *realized* paired
++ego response caused by the exact one-shot intervention.
++
++The state is deliberately diagnostic rather than a t=0 deployment input.  It is
++collected only over the already frozen one-shot operator-exposure window (from
++the intervention anchor through the first scheduled planner replan) and is used
++to identify whether realized state transition, rather than planned treatment
++geometry, mediates the final paired closed-loop outcome.
++"""
++
++from typing import Any
++import math
++import numpy as np
++
++from bdse.planner.paired_operator_contrast_retention import POCR_ADDITIVE_STATE_NAMES
++
++DYNAMIC_CHANNEL_NAMES = ["dx_local_m", "dy_local_m", "dyaw_rad", "dv_mps"]
++DYNAMIC_ENDPOINT_EXTRA_NAMES = [f"realized_{x}" for x in DYNAMIC_CHANNEL_NAMES]
++DYNAMIC_TEMPORAL_EXTRA_NAMES = [f"realized_cos{k}_{x}" for k in (1, 2) for x in DYNAMIC_CHANNEL_NAMES]
++PDRM_BASE_STATE_NAMES = list(POCR_ADDITIVE_STATE_NAMES)
++PDRM_ENDPOINT_STATE_NAMES = PDRM_BASE_STATE_NAMES + DYNAMIC_ENDPOINT_EXTRA_NAMES
++PDRM_TEMPORAL_STATE_NAMES = PDRM_ENDPOINT_STATE_NAMES + DYNAMIC_TEMPORAL_EXTRA_NAMES
++PDRM_STATE_FAMILIES = {"realized_endpoint", "realized_temporal"}
++DYNAMIC_PROFILE_SCHEMA = "v64.3.54-paired-realized-ego-response-v1"
++
++
++def _wrap(a: np.ndarray | float) -> np.ndarray | float:
++    return np.arctan2(np.sin(a), np.cos(a))
++
++
++def _cosine_coefficients(channels: np.ndarray) -> np.ndarray:
++    x = np.asarray(channels, dtype=np.float64)
++    if x.ndim != 2 or x.shape[1] != 4 or x.shape[0] < 2:
++        raise ValueError("V54 PDRM cosine basis requires [T,4] realized paired channels")
++    n = int(x.shape[0])
++    t = np.arange(n, dtype=np.float64) + 0.5
++    out: list[float] = []
++    for k in (1, 2):
++        basis = math.sqrt(2.0 / n) * np.cos(math.pi * k * t / n)
++        for c in range(4):
++            out.append(float(basis @ x[:, c]))
++    a = np.asarray(out, dtype=np.float64)
++    if a.shape != (8,) or np.any(~np.isfinite(a)):
++        raise ValueError("V54 PDRM invalid cosine coefficients")
++    return a
++
++
++def paired_realized_profile(
++    treatment_trace: np.ndarray,
++    control_trace: np.ndarray,
++    *,
++    iteration_indices: list[int] | np.ndarray,
++    timestamps_us: list[int] | np.ndarray,
++    planned_execution_contrast_linf: float,
++) -> dict[str, Any]:
++    """Build the paired realized ego-response profile in the common t0 frame.
++
++    Trace rows are [x_world, y_world, yaw_world, speed].  The treatment-control
++    position delta is rotated into the shared initial control ego frame, making
++    the response invariant to global map orientation.  This is *realized*
++    closed-loop state, not the frozen proposal trajectory used by V53.
++    """
++    tr = np.asarray(treatment_trace, dtype=np.float64)
++    cr = np.asarray(control_trace, dtype=np.float64)
++    idx = np.asarray(iteration_indices, dtype=np.int64).reshape(-1)
++    ts = np.asarray(timestamps_us, dtype=np.int64).reshape(-1)
++    if tr.ndim != 2 or cr.ndim != 2 or tr.shape != cr.shape or tr.shape[1] != 4 or tr.shape[0] < 2:
++        raise ValueError(f"V54 PDRM trace shape mismatch treatment={tr.shape} control={cr.shape}")
++    if idx.size != tr.shape[0] or ts.size != tr.shape[0]:
++        raise ValueError("V54 PDRM iteration/timestamp length mismatch")
++    if np.any(~np.isfinite(tr)) or np.any(~np.isfinite(cr)):
++        raise ValueError("V54 PDRM non-finite realized trace")
++    if not np.array_equal(idx, np.arange(idx.size, dtype=np.int64)):
++        raise ValueError(f"V54 PDRM requires contiguous synchronized iterations 0..N, got {idx.tolist()}")
++    if np.any(np.diff(ts) <= 0):
++        raise ValueError("V54 PDRM timestamps must be strictly increasing")
++
++    dxy = tr[:, :2] - cr[:, :2]
++    yaw0 = float(cr[0, 2])
++    c, s = math.cos(yaw0), math.sin(yaw0)
++    dx = c * dxy[:, 0] + s * dxy[:, 1]
++    dy = -s * dxy[:, 0] + c * dxy[:, 1]
++    dyaw = np.asarray(_wrap(tr[:, 2] - cr[:, 2]), dtype=np.float64)
++    dv = tr[:, 3] - cr[:, 3]
++    ch = np.stack([dx, dy, dyaw, dv], axis=1)
++    initial_err = float(np.max(np.abs(ch[0])))
++    if initial_err > 1.0e-8:
++        raise ValueError(f"V54 PDRM paired initial-state mismatch max_abs={initial_err}")
++    endpoint = ch[-1].copy()
++    temporal = _cosine_coefficients(ch)
++    realized_linf = float(np.max(np.abs(ch)))
++    planned_d = float(planned_execution_contrast_linf)
++    if not math.isfinite(planned_d) or planned_d < 0.0:
++        raise ValueError("V54 PDRM invalid frozen planned D")
++    return {
++        "schema": DYNAMIC_PROFILE_SCHEMA,
++        "planned_execution_contrast_linf": planned_d,
++        "realized_response_linf": realized_linf,
++        "endpoint_signed": [float(v) for v in endpoint],
++        "cosine_modes_1_2": [float(v) for v in temporal],
++        "iteration_indices": [int(v) for v in idx],
++        "timestamps_us": [int(v) for v in ts],
++        "exposure_ticks": int(idx[-1]),
++        "sample_count": int(idx.size),
++        "initial_pair_max_abs": initial_err,
++    }
++
++
++def outcome_state_from_dynamic_profile(
++    quality_value: float,
++    plan_control_value: float,
++    ego_reference_value: float,
++    profile: dict[str, Any],
++    *,
++    state_family: str,
++) -> np.ndarray:
++    fam = str(state_family).strip().lower()
++    if fam not in PDRM_STATE_FAMILIES:
++        raise ValueError(f"V54 PDRM unknown state family {state_family!r}")
++    if str(profile.get("schema", "")) != DYNAMIC_PROFILE_SCHEMA:
++        raise ValueError("V54 PDRM dynamic profile schema mismatch")
++    q, p, e = float(quality_value), float(plan_control_value), float(ego_reference_value)
++    d = float(profile.get("planned_execution_contrast_linf", float("nan")))
++    endpoint = np.asarray(profile.get("endpoint_signed", []), dtype=np.float64).reshape(-1)
++    temporal = np.asarray(profile.get("cosine_modes_1_2", []), dtype=np.float64).reshape(-1)
++    if endpoint.size != 4 or temporal.size != 8 or not math.isfinite(d) or d < 0 or np.any(~np.isfinite(endpoint)) or np.any(~np.isfinite(temporal)):
++        raise ValueError("V54 PDRM invalid dynamic profile payload")
++    z = np.asarray([q, p - q, e - p, d], dtype=np.float64)
++    z = np.concatenate([z, endpoint])
++    names = PDRM_ENDPOINT_STATE_NAMES
++    if fam == "realized_temporal":
++        z = np.concatenate([z, temporal])
++        names = PDRM_TEMPORAL_STATE_NAMES
++    if z.shape != (len(names),) or np.any(~np.isfinite(z)):
++        raise ValueError("V54 PDRM state invalid")
++    return z
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py bdse_v64_3_54_eaf_icer_pdrm/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
+--- v53_code/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py	2026-09-05 18:43:16.596347081 +0000
+@@ -0,0 +1,95 @@
++from __future__ import annotations
++
++import json
++import math
++from pathlib import Path
++from types import SimpleNamespace
++
++import numpy as np
++
++from bdse.planner.paired_dynamic_response_mediation import (
++    DYNAMIC_PROFILE_SCHEMA,
++    PDRM_ENDPOINT_STATE_NAMES,
++    PDRM_TEMPORAL_STATE_NAMES,
++    outcome_state_from_dynamic_profile,
++    paired_realized_profile,
++)
++from bdse.tools.nuplan_v54_dynamic_response_run_simulation import _ego_row
++
++
++def _trace(n=6):
++    c=np.zeros((n,4),dtype=float); c[:,0]=np.arange(n,dtype=float); c[:,2]=math.pi/2; c[:,3]=5.0
++    t=c.copy(); t[:,1]+=np.linspace(0,1,n); t[:,3]+=np.linspace(0,0.5,n)
++    return t,c
++
++
++def test_profile_zero_identity():
++    _,c=_trace(); p=paired_realized_profile(c,c,iteration_indices=list(range(6)),timestamps_us=[i*50000 for i in range(6)],planned_execution_contrast_linf=0.0)
++    assert p["schema"]==DYNAMIC_PROFILE_SCHEMA
++    assert p["realized_response_linf"]==0.0
++    assert max(abs(x) for x in p["endpoint_signed"]+p["cosine_modes_1_2"])==0.0
++
++
++def test_profile_uses_common_initial_local_frame():
++    t,c=_trace(); p=paired_realized_profile(t,c,iteration_indices=list(range(6)),timestamps_us=[i*50000 for i in range(6)],planned_execution_contrast_linf=3.0)
++    # yaw0=pi/2, a +world-y treatment displacement is +local-x.
++    assert p["endpoint_signed"][0] > 0.99
++    assert abs(p["endpoint_signed"][1]) < 1e-9
++    assert p["endpoint_signed"][3] > 0.49
++
++
++def test_profile_rejects_unsynchronized_indices():
++    t,c=_trace()
++    try:
++        paired_realized_profile(t,c,iteration_indices=[0,1,2,4,5,6],timestamps_us=[i*50000 for i in range(6)],planned_execution_contrast_linf=1.0)
++    except ValueError as exc:
++        assert "contiguous" in str(exc)
++    else:
++        raise AssertionError("expected fail-closed index check")
++
++
++def test_endpoint_and_temporal_state_shapes():
++    t,c=_trace(); p=paired_realized_profile(t,c,iteration_indices=list(range(6)),timestamps_us=[i*50000 for i in range(6)],planned_execution_contrast_linf=2.5)
++    e=outcome_state_from_dynamic_profile(1.0,1.2,1.5,p,state_family="realized_endpoint")
++    z=outcome_state_from_dynamic_profile(1.0,1.2,1.5,p,state_family="realized_temporal")
++    assert e.shape==(len(PDRM_ENDPOINT_STATE_NAMES),)
++    assert z.shape==(len(PDRM_TEMPORAL_STATE_NAMES),)
++    assert np.allclose(e[:4],[1.0,0.2,0.3,2.5])
++    assert np.allclose(z[:len(e)],e)
++
++
++def test_ego_row_reads_current_simulated_state_only():
++    rear=SimpleNamespace(x=1.0,y=2.0,heading=0.3)
++    dyn=SimpleNamespace(speed=4.5)
++    ego=SimpleNamespace(rear_axle=rear,dynamic_car_state=dyn)
++    obs=object(); hist=SimpleNamespace(current_state=(ego,obs))
++    it=SimpleNamespace(index=5,time_point=SimpleNamespace(time_us=123456))
++    row=_ego_row(SimpleNamespace(history=hist,iteration=it))
++    assert row=={"iteration_index":5,"time_us":123456,"ego_world":[1.0,2.0,0.3,4.5]}
++
++
++def test_v54_preregistration_closes_v53_preexecution_geometry():
++    p=Path(__file__).resolve().parents[2]/"V64_3_54_PREREGISTRATION.json"
++    d=json.loads(p.read_text(encoding="utf-8"))
++    assert d["trigger"]["v53_failure_diagnosis"]=="preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order"
++    assert d["branch_order"]==["realized_endpoint","realized_temporal"]
++    assert d["runtime_claim_boundary"]["post_intervention_state_not_t0_available"] is True
++
++
++def test_v54_gate_keeps_all_frozen_conditional_controls():
++    p=Path(__file__).resolve().parents[2]/"V64_3_54_PREREGISTRATION.json"
++    d=json.loads(p.read_text(encoding="utf-8"))
++    g=d["arms"]["realized_endpoint"]["identification_gate"]
++    assert g["aggregate_auc_gt_exact_V53_temporal"] is True and g["folds_gt_exact_V53_temporal_min"]==4
++    assert g["aggregate_auc_gt_exact_V52_scalar"] is True and g["folds_gt_exact_V52_scalar_min"]==4
++    assert g["aggregate_auc_gt_exact_V51_scalar"] is True and g["folds_gt_exact_V51_scalar_min"]==4
++
++
++def test_v54_short_horizon_wrapper_bypasses_terminal_replan_and_metrics():
++    root=Path(__file__).resolve().parents[2]
++    wrapper=(root/"bdse/tools/nuplan_v54_dynamic_response_run_simulation.py").read_text(encoding="utf-8")
++    runner=(root/"bdse/tools/run_v64_3_54_dynamic_response_probe.py").read_text(encoding="utf-8")
++    assert "bypass_terminal_replan = bool(idx == exposure)" in wrapper
++    assert "_cached_local_trajectory" in wrapper
++    assert '"run_metric=false"' in runner
++    assert '"outcome_labels_recollected": False' in runner
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py
+--- v53_code/bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py	2026-09-05 18:43:00.857736828 +0000
+@@ -0,0 +1,245 @@
++from __future__ import annotations
++
++"""Fit V64.3.54 PDRM realized-response mediator models.
++
++V54 is intentionally a mediator-identification experiment, not a t=0 runtime
++retention policy.  It reuses the exact V50.5 paired outcomes and V52 effect-
++support hurdle, and asks whether the realized treatment-control ego transition
++identifies effectful final outcome order better than the strongest frozen V53
++pre-execution state.
++"""
++
++import argparse
++import json
++import math
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++
++from bdse.planner.paired_dynamic_response_mediation import (
++    DYNAMIC_PROFILE_SCHEMA,
++    PDRM_ENDPOINT_STATE_NAMES,
++    PDRM_TEMPORAL_STATE_NAMES,
++    outcome_state_from_dynamic_profile,
++)
++from bdse.tools import fit_v64_3_50_eaf_icer_pior as v50
++from bdse.tools import fit_v64_3_50_6_eaf_icer_pior as v506
++from bdse.tools import fit_v64_3_51_eaf_icer_pocr as v51
++from bdse.tools import fit_v64_3_52_eaf_icer_hodr as v52
++from bdse.tools import fit_v64_3_53_eaf_icer_potr as v53
++
++FOLDS=5
++EPS=1.0e-12
++RIDGE_LAMBDA=1.0
++ARMS=("realized_endpoint","realized_temporal")
++EXPECTED_V53_SHA="9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e"
++
++
++def _sha256(path: Path) -> str:
++    import hashlib
++    h=hashlib.sha256()
++    with path.open("rb") as f:
++        for ch in iter(lambda:f.read(1024*1024),b""): h.update(ch)
++    return h.hexdigest()
++
++
++def _auc(y: np.ndarray, risk: np.ndarray) -> float:
++    return v52._auc(y,risk)
++
++
++def _check_v53(path: Path) -> dict[str,Any]:
++    if _sha256(path)!=EXPECTED_V53_SHA:
++        raise RuntimeError(f"V54 ENGINEERING STOP: V53 fit hash drift {_sha256(path)}")
++    d=json.load(open(path))
++    n=d.get("nested_crossfit",{})
++    if d.get("train_gate_pass") is not False or n.get("failure_diagnosis")!="preexecution_operator_trajectory_contrast_does_not_identify_effectful_outcome_order":
++        raise RuntimeError("V54 ENGINEERING STOP: wrong V53 preregistered branch")
++    for a in ("endpoint","temporal"):
++        if bool(n.get("arms",{}).get(a,{}).get("identification",{}).get("identified",True)):
++            raise RuntimeError(f"V54 ENGINEERING STOP: V53 {a} identification signature drift")
++    return d
++
++
++def _load_dynamic(path: Path, expected: set[str]) -> dict[str,dict[str,Any]]:
++    out={}
++    for line in path.read_text(encoding="utf-8").splitlines():
++        if not line.strip(): continue
++        r=json.loads(line); tok=str(r.get("scenario_token",""))
++        if not tok or tok in out: raise RuntimeError(f"V54 invalid/duplicate dynamic profile token={tok!r}")
++        if str(r.get("schema",""))!=DYNAMIC_PROFILE_SCHEMA: raise RuntimeError(f"V54 dynamic profile schema mismatch token={tok}")
++        if len(r.get("endpoint_signed",[]))!=4 or len(r.get("cosine_modes_1_2",[]))!=8: raise RuntimeError(f"V54 dynamic profile shape mismatch token={tok}")
++        out[tok]=r
++    if set(out)!=expected: raise RuntimeError(f"V54 dynamic profile population mismatch {len(out)}/{len(expected)}")
++    return out
++
++
++def _state(r: dict[str,Any], arm: str) -> np.ndarray:
++    return outcome_state_from_dynamic_profile(float(r["quality_value"]),float(r["plan_control_value"]),float(r["ego_ref_value"]),dict(r["dynamic_response_profile"]),state_family=arm)
++
++
++def _names(arm: str) -> list[str]:
++    if arm=="realized_endpoint": return list(PDRM_ENDPOINT_STATE_NAMES)
++    if arm=="realized_temporal": return list(PDRM_TEMPORAL_STATE_NAMES)
++    raise ValueError(arm)
++
++
++def _sign_pairs(rows: list[dict[str,Any]]) -> list[tuple[int,int]]:
++    good=[i for i,r in enumerate(rows) if v52._effect_support(r) and bool(r["closed_loop_beneficial"])]
++    bad=[i for i,r in enumerate(rows) if v52._effect_support(r) and not bool(r["closed_loop_beneficial"])]
++    return [(i,j) for i in bad for j in good]
++
++
++def _fit(rows: list[dict[str,Any]], arm: str) -> dict[str,Any]:
++    pairs=_sign_pairs(rows)
++    if len(rows)<64 or len(pairs)<64: raise ValueError(f"V54 {arm} insufficient support rows={len(rows)} pairs={len(pairs)}")
++    X=np.stack([_state(r,arm) for r in rows]); mean=X.mean(0); std=np.maximum(X.std(0),1e-6); Z=(X-mean)/std
++    D=np.stack([Z[i]-Z[j] for i,j in pairs]); w=np.zeros(Z.shape[1],dtype=np.float64)
++    before=float(D.shape[0]*math.log(2.0))
++    for _ in range(80):
++        s=D@w; q=1.0/(1.0+np.exp(np.clip(s,-60,60))); grad=-(D.T@q)+RIDGE_LAMBDA*w
++        hw=q*(1-q); H=(D.T*hw)@D+RIDGE_LAMBDA*np.eye(D.shape[1]); step=np.linalg.solve(H,grad); w-=step
++        if float(np.linalg.norm(step))<1e-9: break
++    raw=Z@w; ben=raw[np.asarray([bool(r["closed_loop_beneficial"]) for r in rows],dtype=bool)]
++    if ben.size<24: raise ValueError(f"V54 {arm} insufficient beneficial normalization={ben.size}")
++    after=float(np.sum(np.logaddexp(0.0,-D@w))+0.5*np.dot(w,w))
++    return {"model":"zero_bias_pairwise_effectful_conditional_sign_risk","state_family":arm,"feature_names":_names(arm),
++            "feature_mean":[float(x) for x in mean],"feature_std":[float(x) for x in std],"weights":[float(x) for x in w],
++            "bias":0.0,"lambda":1.0,"fit_row_count":len(rows),"pair_count":len(pairs),"objective_at_zero":before,"objective_final":after,
++            "fit_beneficial_score_mean":float(ben.mean()),"fit_beneficial_score_std":max(float(ben.std()),1e-6)}
++
++
++def _risk(r: dict[str,Any], m: dict[str,Any]) -> float:
++    z=_state(r,str(m["state_family"])); mean=np.asarray(m["feature_mean"]); std=np.asarray(m["feature_std"]); w=np.asarray(m["weights"])
++    raw=float(((z-mean)/np.maximum(std,1e-6))@w)
++    return float((raw-float(m["fit_beneficial_score_mean"]))/max(float(m["fit_beneficial_score_std"]),1e-6))
++
++
++def _threshold(cal: list[dict[str,Any]], support_model: dict[str,Any], outcome_model: dict[str,Any], alpha: float) -> tuple[float,dict[str,Any]]:
++    vals=sorted(max(v52._component_risk(r,support_model),_risk(r,outcome_model)) for r in cal if bool(r["closed_loop_beneficial"]))
++    n=len(vals); rank=int(math.ceil((n+1)*(1-alpha))) if n else 1; min_n=int(math.ceil((1-alpha)/alpha))
++    if n==0 or rank>n: raise ValueError(f"V54 calibration insufficient n={n} rank={rank}")
++    return float(vals[rank-1]),{"positive_calibration_count":n,"conformal_rank":rank,"alpha":alpha,"threshold":float(vals[rank-1]),
++                                 "single_joint_threshold":True,"diagnostic_only_post_intervention":True,"minimum_positive_count_for_finite_rank":min_n}
++
++
++def _nested(rows: list[dict[str,Any]], alpha: float, v52_report: dict[str,Any], v53_report: dict[str,Any]) -> dict[str,Any]:
++    safety=v52._safety_names(rows)
++    v52_scalar=v52_report["nested_crossfit"]["arms"]["hurdle_sign"]
++    v53_temporal=v53_report["nested_crossfit"]["arms"]["temporal"]
++    arms={}; oof={a:{} for a in ARMS}
++    for arm in ARMS:
++        folds=[]; keep_by_token={}; all_y=[]; all_r=[]
++        above=better_pre=better_v52=better_v51=0
++        for k in range(FOLDS):
++            cf=(k+1)%FOLDS; fit=[r for r in rows if int(r["outer_test_fold"]) not in {k,cf}]; cal=[r for r in rows if int(r["outer_test_fold"])==cf]; test=[r for r in rows if int(r["outer_test_fold"])==k]
++            sm=v52._fit_models(fit,"hurdle_sign",safety)["effect_support_risk"]
++            om=_fit(fit,arm); tau,ci=_threshold(cal,sm,om,alpha)
++            sr=np.asarray([v52._component_risk(r,sm) for r in test]); rr=np.asarray([_risk(r,om) for r in test])
++            # All frozen pre-execution controls are locked by the exact V53 fit hash.
++            # Requiring each comparator separately prevents a high aggregate AUC from
++            # hiding the same cross-fold reversal that falsified V53.
++            pre_auc=float(v53_temporal["folds"][k]["conditional_sign_auc"])
++            v52_auc=float(v53_temporal["folds"][k]["v52_scalar_conditional_sign_auc"])
++            v51_auc=float(v53_temporal["folds"][k]["v51_conditional_sign_auc"])
++            eff=[i for i,r in enumerate(test) if v52._effect_support(r)]; idx=np.asarray(eff,dtype=np.int64); y=np.asarray([not bool(test[i]["closed_loop_beneficial"]) for i in eff],dtype=bool)
++            auc=_auc(y,rr[idx])
++            ar=bool(math.isfinite(auc) and auc>0.5+EPS)
++            bp=bool(math.isfinite(auc) and auc>pre_auc+EPS)
++            b52=bool(math.isfinite(auc) and auc>v52_auc+EPS)
++            b51=bool(math.isfinite(auc) and auc>v51_auc+EPS)
++            above+=int(ar); better_pre+=int(bp); better_v52+=int(b52); better_v51+=int(b51)
++            all_y.extend(y.tolist()); all_r.extend(rr[idx].tolist())
++            joint=np.maximum(sr,rr); keep=[bool(x<=tau) for x in joint]
++            for r,kk,rv in zip(test,keep,rr): keep_by_token[str(r["scenario_token"])]=kk; oof[arm][str(r["scenario_token"])]=float(rv)
++            bm=v50._delta_metrics(test,[True]*len(test)); dm=v50._delta_metrics(test,keep)
++            folds.append({"fold":k,"fit_events":len(fit),"calibration_events":len(cal),"test_events":len(test),"conditional_sign_auc":auc,
++                          "v53_preexecution_temporal_auc":pre_auc,"v52_scalar_conditional_sign_auc":v52_auc,"v51_conditional_sign_auc":v51_auc,
++                          "above_random":ar,"better_v53_temporal":bp,"better_v52_scalar":b52,"better_v51_scalar":b51,
++                          "rsmr":bm,"diagnostic_retention":dm,"calibration":ci})
++        auc=_auc(np.asarray(all_y,dtype=bool),np.asarray(all_r)); pre_auc=float(v53_temporal["identification"]["aggregate_auc"])
++        pre_v52=float(v53_temporal["identification"]["v52_scalar_conditional_sign_auc"])
++        pre_v51=float(v53_temporal["identification"]["v51_conditional_sign_auc"])
++        identified=bool(
++            math.isfinite(auc) and auc>0.5+EPS and auc>pre_auc+EPS and auc>pre_v52+EPS and auc>pre_v51+EPS
++            and above>=4 and better_pre>=4 and better_v52>=4 and better_v51>=4
++        )
++        keep=v506._align_oof_keep_by_token(rows,keep_by_token); base=v50._delta_metrics(rows,[True]*len(rows)); chosen=v50._delta_metrics(rows,keep)
++        oracle=v50._gate(base,chosen,alpha,[{"rsmr":f["rsmr"],"pior":f["diagnostic_retention"]} for f in folds])
++        arms[arm]={"folds":folds,"identification":{"aggregate_auc":auc,"v53_preexecution_temporal_auc":pre_auc,
++                    "v52_scalar_conditional_sign_auc":pre_v52,"v51_conditional_sign_auc":pre_v51,"folds_above_random":above,
++                    "better_v53_temporal_fold_count":better_pre,"better_v52_scalar_fold_count":better_v52,
++                    "better_v51_scalar_fold_count":better_v51,"identified":identified},"retrospective_oracle_aggregate":chosen,
++                    "retrospective_oracle_gate":oracle,"scientific_use_of_oracle":"diagnostic_only_post_intervention_not_a_t0_deployable_retention_policy"}
++    ep=arms["realized_endpoint"]; tp=arms["realized_temporal"]
++    # temporal necessity within realized response family
++    tokens=sorted(oof["realized_endpoint"]); effmap={str(r["scenario_token"]):r for r in rows if v52._effect_support(r)}; use=[t for t in tokens if t in effmap]
++    y=np.asarray([not bool(effmap[t]["closed_loop_beneficial"]) for t in use],dtype=bool); er=np.asarray([oof["realized_endpoint"][t] for t in use]); tr=np.asarray([oof["realized_temporal"][t] for t in use])
++    eauc=_auc(y,er); tauc=_auc(y,tr); better=sum(int(float(tp["folds"][k]["conditional_sign_auc"])>float(ep["folds"][k]["conditional_sign_auc"])+EPS) for k in range(FOLDS))
++    tp["identification"]["realized_endpoint_control_auc"]=eauc; tp["identification"]["better_realized_endpoint_fold_count"]=better
++    tp["identification"]["temporal_necessity_identified"]=bool(tp["identification"]["identified"] and tauc>eauc+EPS and better>=4)
++    preferred="realized_endpoint" if ep["identification"]["identified"] else "realized_temporal" if tp["identification"]["temporal_necessity_identified"] else None
++    if preferred=="realized_endpoint": diag="realized_one_replan_ego_transition_mediates_effectful_selected_outcome_order"
++    elif preferred=="realized_temporal": diag="realized_temporal_ego_response_shape_required_beyond_realized_endpoint"
++    else: diag="short_horizon_realized_ego_response_does_not_identify_effectful_outcome_order"
++    return {"retention_alpha":alpha,"v52_effect_support_control":{"auc":float(v52_scalar["identification"]["support_auc"]),"frozen":True},
++            "v53_preexecution_control":{"temporal_auc":float(v53_temporal["identification"]["aggregate_auc"]),
++                "v52_scalar_auc":float(v53_temporal["identification"]["v52_scalar_conditional_sign_auc"]),
++                "v51_scalar_auc":float(v53_temporal["identification"]["v51_conditional_sign_auc"]),"frozen":True},
++            "arms":arms,"preferred_mediator_arm":preferred,"mediator_identification_pass":preferred is not None,"failure_diagnosis":diag}
++
++
++def main() -> None:
++    p=argparse.ArgumentParser();
++    p.add_argument("--v49-candidate-audit",type=Path,required=True); p.add_argument("--v49-scene-audit",type=Path,required=True); p.add_argument("--paired-outcomes",type=Path,required=True)
++    p.add_argument("--v50-5-root",type=Path,required=True); p.add_argument("--v51-fit-report",type=Path,required=True); p.add_argument("--v52-fit-report",type=Path,required=True)
++    p.add_argument("--v53-fit-report",type=Path,required=True); p.add_argument("--dynamic-profiles",type=Path,required=True); p.add_argument("--output-report",type=Path,required=True)
++    p.add_argument("--output-analysis-table",type=Path,required=True)
++    a=p.parse_args(); v53_report=_check_v53(a.v53_fit_report); v52_report=v53._check_v52(a.v52_fit_report); _=v52._check_v51(a.v51_fit_report)
++    states=v50._candidate_states(a.v49_candidate_audit); obs=v50._obs_risk(a.v49_scene_audit); rows=v50._join(states,a.paired_outcomes,obs)
++    scalar=v51._load_treatment_contrast(a.v50_5_root,set(states)); dyn=_load_dynamic(a.dynamic_profiles,set(states))
++    for r in rows:
++        tok=str(r["scenario_token"]); p=dyn[tok]
++        if abs(float(p["planned_execution_contrast_linf"])-float(scalar[tok]))>1e-9: raise RuntimeError(f"V54 dynamic profile planned D drift token={tok}")
++        r["operator_execution_contrast_linf"]=float(scalar[tok]); r["dynamic_response_profile"]=p
++    alpha=float(v52_report["nested_crossfit"]["retention_alpha"]); nested=_nested(rows,alpha,v52_report,v53_report)
++    # Self-contained analysis snapshot: future result audits should not depend on
++    # reconstructing the entire historical V49/V50.5 root. This file is analysis
++    # provenance only and is never consumed by the fit above.
++    a.output_analysis_table.parent.mkdir(parents=True,exist_ok=True)
++    with a.output_analysis_table.open("w",encoding="utf-8") as f:
++        for r in sorted(rows,key=lambda x:str(x["scenario_token"])):
++            p=dict(r["dynamic_response_profile"]); row={
++                "scenario_token":str(r["scenario_token"]),"outer_test_fold":int(r["outer_test_fold"]),
++                "closed_loop_beneficial":bool(r["closed_loop_beneficial"]),"closed_loop_hard_harm":bool(r.get("closed_loop_hard_harm",False)),
++                "closed_loop_score_delta":float(r["closed_loop_score_delta"]),
++                "quality_value":float(r["quality_value"]),"plan_control_value":float(r["plan_control_value"]),"ego_ref_value":float(r["ego_ref_value"]),
++                "planned_execution_contrast_linf":float(r["operator_execution_contrast_linf"]),
++                "dynamic_endpoint_signed":[float(x) for x in p["endpoint_signed"]],
++                "dynamic_cosine_modes_1_2":[float(x) for x in p["cosine_modes_1_2"]],
++                "realized_response_linf":float(p["realized_response_linf"]),
++            }
++            for k,v in r.items():
++                if str(k).startswith("hard_safety_delta_"):
++                    row[str(k)]=float(v)
++            f.write(json.dumps(row,sort_keys=True,separators=(",",":"))+"\n")
++    analysis_sha=_sha256(a.output_analysis_table)
++    report={"audit":"v64_3_54_eaf_icer_pdrm_fit","algorithm_version":"V64.3.54-EAF-ICER-PDRM","scientific_role":"preregistered_V53_both_preexecution_state_families_failed_branch_post_intervention_dynamic_response_mediation",
++            "mechanism_hypothesis":"Effect support is already identifiable, but planned operator geometry is not a fold-stable conditional outcome state. Test whether the realized paired ego state transition over the exact one-shot exposure window is the missing outcome mediator.",
++            "runtime_claim_boundary":"post-intervention mediator is not available for the initial t0 veto; this version performs mechanism identification only and emits no runtime retention config",
++            "frozen_contract":{"RSMR_selector_unchanged":True,"V52_effect_support_unchanged":True,"V50_5_paired_outcomes_unchanged":True,"QPE_and_planned_D_unchanged":True,"lambda":1.0,
++                "no_new_full_horizon_outcome_collection":True,"no_new_offline_future_observable":True,"no_rerank_second_best_fallback":True},
++            "analysis_population_snapshot":{"path":str(a.output_analysis_table),"sha256":analysis_sha,"row_count":len(rows),"role":"audit_only_not_fit_input"},
++            "nested_crossfit":nested,"mediator_identification_pass":bool(nested["mediator_identification_pass"]),"runtime_config_emitted":False,
++            "preregistered_branch_order":["realized_endpoint","realized_temporal"],
++            "preregistered_next_branch":{"if_realized_endpoint_identified":"realized one-replan state transition is the minimal mediator; next version must make it deployable via pre-execution prediction or a continuation operator, not use future state at t0",
++                "if_only_realized_temporal_identified":"realized response shape across the one-shot window is necessary; next version predicts/uses that process under an auditable temporal operator",
++                "if_identified_but_oracle_gate_fails":"dynamic state carries outcome signal but static sign functional remains insufficient; next step is structured dynamic outcome functional before any state expansion",
++                "if_both_fail":"close short-horizon ego-response mediator; next paired evidence must add realized interaction/safety consequence process, not more ego trajectory geometry"},
++            "prohibited_tuning":["post-intervention state used directly as t0 runtime input","response horizon sweep","DCT mode/basis sweep","threshold/alpha/lambda/loss/class/focal/catastrophe weighting","bigger MLP/attention","new offline future observables","RSMR/B/M/topK/candidate-count change","rerank/second-best/fallback","untouched validation before a deployable mechanism exists"]}
++    a.output_report.parent.mkdir(parents=True,exist_ok=True); a.output_report.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
++    if not nested["mediator_identification_pass"]:
++        print(json.dumps({"pass":False,"failure_diagnosis":nested["failure_diagnosis"],"runtime_config_emitted":False},sort_keys=True)); raise SystemExit(f"V64.3.54 PDRM mediator scientific STOP ({nested['failure_diagnosis']})")
++    print(json.dumps({"pass":True,"preferred_mediator_arm":nested["preferred_mediator_arm"],"runtime_config_emitted":False,"next":"design deployable mediator prediction/continuation; do not run untouched validation"},sort_keys=True))
++
++if __name__=="__main__": main()
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
+--- v53_code/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py	2026-09-05 18:43:01.446333790 +0000
+@@ -0,0 +1,153 @@
++from __future__ import annotations
++
++"""Process-local nuPlan wrapper for V64.3.54 paired dynamic response collection.
++
++Science-critical properties:
++- the historical planner/probe implementation is not edited;
++- treatment/control action semantics remain the frozen V50.5 one-shot probe;
++- only current simulated ego states are logged;
++- simulation is capped immediately after the first scheduled replan following
++  the intervention, because V54 reuses the already metric-safe V50.5 full-horizon
++  outcome labels and needs no new outcome metric;
++- run_metric=false is required by the V54 collector.
++"""
++
++import json
++import math
++import os
++import runpy
++import threading
++from pathlib import Path
++from typing import Any
++
++_LOCK = threading.Lock()
++_PATCH_MARKER = "_bdse_v64_3_54_dynamic_response_sidecar"
++_TIME_PATCH_MARKER = "_bdse_v64_3_54_short_horizon"
++
++
++def _ego_row(current_input: Any) -> dict[str, Any]:
++    try:
++        ego, _obs = current_input.history.current_state
++        it = current_input.iteration
++        rear = ego.rear_axle
++        dyn = ego.dynamic_car_state
++        speed = float(dyn.speed)
++        vals = [float(rear.x), float(rear.y), float(rear.heading), speed]
++        if any(not math.isfinite(v) for v in vals):
++            raise ValueError("non-finite ego state")
++        return {
++            "iteration_index": int(it.index),
++            "time_us": int(it.time_point.time_us),
++            "ego_world": vals,
++        }
++    except Exception as exc:  # pragma: no cover - server API guard
++        raise RuntimeError(f"V54 PDRM cannot extract current simulated ego state: {exc}") from exc
++
++
++def install_short_horizon() -> None:
++    from nuplan.planning.simulation.simulation_time_controller.step_simulation_time_controller import StepSimulationTimeController
++
++    if getattr(StepSimulationTimeController, _TIME_PATCH_MARKER, False):
++        return
++    exposure = int(os.environ.get("BDSE_V54_EXPOSURE_TICKS", "-1"))
++    if exposure < 1:
++        raise RuntimeError("V54 PDRM requires BDSE_V54_EXPOSURE_TICKS>=1")
++    original = StepSimulationTimeController.number_of_iterations
++
++    def number_of_iterations(self: Any) -> int:
++        n = int(original(self))
++        # With nuPlan's reached_end condition, N=exposure+2 executes planner
++        # iterations 0..exposure inclusive, then terminates.
++        return min(n, exposure + 2)
++
++    StepSimulationTimeController.number_of_iterations = number_of_iterations
++    setattr(StepSimulationTimeController, _TIME_PATCH_MARKER, True)
++
++
++def install_dynamic_response_sidecar() -> None:
++    from bdse.planner.nuplan_planner import BDSEPlanner
++
++    if getattr(BDSEPlanner, _PATCH_MARKER, False):
++        return
++    original = BDSEPlanner.compute_planner_trajectory
++
++    def wrapped(self: Any, current_input: Any):
++        exposure = int(os.environ.get("BDSE_V54_EXPOSURE_TICKS", "-1"))
++        if exposure < 1:
++            raise RuntimeError("V54 PDRM missing exposure ticks")
++        actual_interval = int(self._planner_replan_interval_ticks())
++        if actual_interval != exposure:
++            raise RuntimeError(
++                f"V54 PDRM operator-window mismatch planner replan_interval_ticks={actual_interval} expected={exposure}"
++            )
++        pre = _ego_row(current_input)
++        idx = int(pre["iteration_index"])
++        if idx < 0 or idx > exposure:
++            return original(self, current_input)
++
++        # At the terminal sample we need the state immediately *before* the first
++        # scheduled replan, not the result of another expensive BDSE replan.  The
++        # simulator still expects a trajectory return value for this final loop, so
++        # return the already cached local rollout.  Simulation terminates right
++        # afterwards and this returned trajectory is never part of the mediator.
++        bypass_terminal_replan = bool(idx == exposure)
++        if bypass_terminal_replan:
++            cached = getattr(self, "_cached_local_trajectory", None)
++            if cached is None:
++                raise RuntimeError("V54 PDRM terminal state reached without cached one-shot rollout")
++            out = self._to_nuplan_trajectory(cached, current_input)
++        else:
++            out = original(self, current_input)
++
++        target = getattr(self.core, "_pior_bound_target", None)
++        if not isinstance(target, dict):
++            # At iteration 0 the target is bound inside the original planner call.
++            target = getattr(self.core, "_pior_bound_target", None)
++        if not isinstance(target, dict):
++            raise RuntimeError(f"V54 PDRM missing manifest-bound probe target at iteration={idx}")
++        tok = str(target.get("scenario_token", ""))
++        if not tok:
++            raise RuntimeError("V54 PDRM bound target lacks scenario_token")
++        pcfg = ((self.core.cfg.get("selected_outcome_probe", {}) or {}) if isinstance(self.core.cfg, dict) else {})
++        arm = str(pcfg.get("arm", "")).strip().lower()
++        if arm not in {"treatment", "control"}:
++            raise RuntimeError(f"V54 PDRM invalid probe arm {arm!r}")
++        diag_path = os.environ.get("BDSE_CLOSED_LOOP_DIAG", "")
++        if not diag_path:
++            raise RuntimeError("V54 PDRM requires BDSE_CLOSED_LOOP_DIAG for sidecar location")
++        path = Path(diag_path).with_name("v54_dynamic_response_events.jsonl")
++        row = {
++            "scenario_token": tok,
++            "arm": arm,
++            "iteration_index": idx,
++            "time_us": int(pre["time_us"]),
++            "ego_world": [float(v) for v in pre["ego_world"]],
++            "exposure_ticks": exposure,
++            "state_source": "simulated_ego_state_before_planner_compute",
++            "post_intervention": bool(idx > 0),
++            "terminal_replan_bypassed": bypass_terminal_replan,
++        }
++        path.parent.mkdir(parents=True, exist_ok=True)
++        with _LOCK:
++            with path.open("a", encoding="utf-8") as f:
++                f.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
++        return out
++
++    BDSEPlanner.compute_planner_trajectory = wrapped
++    setattr(BDSEPlanner, _PATCH_MARKER, True)
++
++
++def main() -> None:
++    if os.environ.get("BDSE_V54_DYNAMIC_RESPONSE") != "1":
++        raise RuntimeError("V54 PDRM wrapper requires BDSE_V54_DYNAMIC_RESPONSE=1")
++    install_short_horizon()
++    install_dynamic_response_sidecar()
++    print(
++        "[BDSE-V54-PDRM] paired dynamic-response sidecar enabled; full outcome metrics disabled; planner/probe science unchanged",
++        flush=True,
++    )
++    runpy.run_module("nuplan.planning.script.run_simulation", run_name="__main__")
++
++
++if __name__ == "__main__":
++    main()
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' v53_code/bdse/tools/run_v64_3_54_dynamic_response_probe.py bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/run_v64_3_54_dynamic_response_probe.py
+--- v53_code/bdse/tools/run_v64_3_54_dynamic_response_probe.py	1970-01-01 00:00:00.000000000 +0000
++++ bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/run_v64_3_54_dynamic_response_probe.py	2026-09-05 18:34:51.754312790 +0000
+@@ -0,0 +1,297 @@
++from __future__ import annotations
++
++"""Collect V64.3.54 paired realized ego response over the one-shot exposure window.
++
++This collector replays both V50.5 arms but terminates immediately after the
++first scheduled planner replan and disables metric computation.  Full-horizon
++paired outcome labels are *reused* from V50.5; they are not recollected.  The
++short replay therefore changes only the mediator/state evidence source.
++"""
++
++import argparse
++import concurrent.futures
++import hashlib
++import json
++import os
++import shutil
++import subprocess
++import sys
++import time
++from pathlib import Path
++from typing import Any
++
++import yaml
++
++from bdse.planner.paired_dynamic_response_mediation import (
++    DYNAMIC_PROFILE_SCHEMA,
++    paired_realized_profile,
++)
++from bdse.tools import run_v64_3_50_pior_paired_closed_loop as base
++from bdse.tools import run_v64_3_50_5_pior_paired_closed_loop as safe
++
++NUPLAN_MODULE = "bdse.tools.nuplan_v54_dynamic_response_run_simulation"
++
++
++def _sha256(path: Path) -> str:
++    return base._sha256(path)
++
++
++def _config_replan_ticks(path: Path) -> int:
++    d = yaml.safe_load(path.read_text(encoding="utf-8"))
++    n = int(((d.get("planner", {}) or {}).get("replan_interval_ticks", -1)))
++    if n < 1:
++        raise RuntimeError(f"V54 PDRM config lacks valid planner.replan_interval_ticks: {path}")
++    return n
++
++
++def _read_trace(path: Path, tokens: list[str], arm: str, exposure: int) -> dict[str, list[dict[str, Any]]]:
++    expected = set(tokens)
++    by: dict[str, dict[int, dict[str, Any]]] = {}
++    if not path.is_file():
++        raise RuntimeError(f"V54 PDRM missing dynamic sidecar {path}")
++    for line in path.read_text(encoding="utf-8").splitlines():
++        if not line.strip():
++            continue
++        r = json.loads(line)
++        tok = str(r.get("scenario_token", "")); a = str(r.get("arm", ""))
++        idx = int(r.get("iteration_index", -1))
++        if tok not in expected or a != arm or idx < 0 or idx > exposure:
++            raise RuntimeError(f"V54 PDRM invalid dynamic row token={tok} arm={a} idx={idx}")
++        if int(r.get("exposure_ticks", -1)) != exposure:
++            raise RuntimeError(f"V54 PDRM exposure drift token={tok}")
++        vals = [float(v) for v in r.get("ego_world", [])]
++        if len(vals) != 4:
++            raise RuntimeError(f"V54 PDRM ego_world shape error token={tok} idx={idx}")
++        slot = by.setdefault(tok, {})
++        if idx in slot:
++            raise RuntimeError(f"V54 PDRM duplicate dynamic sample token={tok} idx={idx}")
++        slot[idx] = r
++    want_idx = list(range(exposure + 1))
++    out: dict[str, list[dict[str, Any]]] = {}
++    for tok in tokens:
++        got = by.get(tok, {})
++        if sorted(got) != want_idx:
++            raise RuntimeError(f"V54 PDRM incomplete dynamic trace token={tok} indices={sorted(got)} expected={want_idx}")
++        rows = [got[i] for i in want_idx]
++        ts = [int(r["time_us"]) for r in rows]
++        if any(b <= a for a, b in zip(ts, ts[1:])):
++            raise RuntimeError(f"V54 PDRM non-increasing time token={tok}: {ts}")
++        out[tok] = rows
++    return out
++
++
++def _batch_cert_valid(root: Path, *, tokens: list[str], arm: str, cfg_sha: str, ckpt_sha: str, exposure: int, meta: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
++    cp = root / ".v54_dynamic_batch_complete.json"
++    side = root / "v54_dynamic_response_events.jsonl"
++    diag = root / "pior_probe_events.jsonl"
++    target = root / "pior_probe_targets.json"
++    if not all(p.is_file() for p in (cp, side, diag, target)):
++        return None
++    try:
++        c = json.loads(cp.read_text(encoding="utf-8"))
++        if (
++            c.get("complete") is not True
++            or str(c.get("arm", "")) != arm
++            or int(c.get("scenario_count", -1)) != len(tokens)
++            or str(c.get("scenario_token_sha256", "")) != base._token_sha(tokens)
++            or str(c.get("config_sha256", "")) != cfg_sha
++            or str(c.get("checkpoint_sha256", "")) != ckpt_sha
++            or int(c.get("exposure_ticks", -1)) != exposure
++            or int(c.get("successful", -1)) != len(tokens)
++            or int(c.get("failed", -1)) != 0
++            or int(c.get("probe_fired_count", -1)) != len(tokens)
++            or str(c.get("dynamic_sidecar_sha256", "")) != _sha256(side)
++            or str(c.get("probe_events_sha256", "")) != _sha256(diag)
++        ):
++            return None
++        base._validate_probe_events(diag, tokens=tokens, meta=meta, arm=arm)
++        _read_trace(side, tokens, arm, exposure)
++        return c
++    except Exception:
++        return None
++
++
++def _run_batch(
++    *, arm: str, gpu: str, cfg: Path, checkpoint: Path, tokens: list[str], meta: dict[str, dict[str, Any]],
++    nuplan_root: Path, challenge: str, arm_root: Path, workers: int, batch_index: int, batch_count: int,
++    exposure: int, heartbeat_seconds: float, resume: bool,
++) -> dict[str, Any]:
++    root = arm_root / "batches" / f"batch_{batch_index:04d}"
++    cfg_sha = _sha256(cfg); ckpt_sha = _sha256(checkpoint)
++    if resume:
++        cert = _batch_cert_valid(root, tokens=tokens, arm=arm, cfg_sha=cfg_sha, ckpt_sha=ckpt_sha, exposure=exposure, meta=meta)
++        if cert is not None:
++            print(f"[V54-RESUME] arm={arm} batch={batch_index+1}/{batch_count} n={len(tokens)}", flush=True)
++            return cert
++    if root.exists():
++        shutil.rmtree(root)
++    root.mkdir(parents=True, exist_ok=True)
++
++    raw_files = base._batch_raw_files(tokens, meta)
++    target_payload = base._probe_target_payload(tokens, meta)
++    target_file = root / "pior_probe_targets.json"
++    semantic_sha = base._write_probe_target_file(target_file, target_payload)
++    if semantic_sha != base._payload_sha256(target_payload):
++        raise RuntimeError("V54 PDRM target semantic hash drift")
++    (root / "scenario_tokens.json").write_text(json.dumps(tokens, indent=2), encoding="utf-8")
++    diag = root / "pior_probe_events.jsonl"
++    dynamic = root / "v54_dynamic_response_events.jsonl"
++    token_override = "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":"))
++    cmd = [
++        sys.executable, "-m", "bdse.experiments.evaluate_closed_loop",
++        "--config", str(cfg), "--checkpoint", str(checkpoint), "--device", "cuda",
++        "--challenge", challenge, "--metric-aggregator", f"{challenge}_weighted_average",
++        "--output-dir", str(root), "--experiment-uid", f"v64_3_54_pdrm_{arm}_b{batch_index:04d}",
++        "--nuplan-module", NUPLAN_MODULE,
++        "--scenario-builder", "nuplan", "--worker", "single_machine_thread_pool", "--hydra-full-error",
++        "--nuplan-data-root", str(nuplan_root), "--nuplan-map-root", str(nuplan_root / "maps"),
++        "--nuplan-exp-root", str(nuplan_root / "exp"), "--nuplan-db-files", *raw_files,
++        "--", token_override, f"scenario_filter.limit_total_scenarios={len(tokens)}", "scenario_filter.shuffle=false",
++        "scenario_filter.log_names=null", *base._anchor_start_mapping_overrides(), f"worker.max_workers={int(workers)}",
++        "run_metric=false", "~callback.simulation_log_callback",
++    ]
++    env = os.environ.copy()
++    env.update({
++        "PYTHONUNBUFFERED": "1", "CUDA_VISIBLE_DEVICES": str(gpu), "BDSE_SHARE_MODEL_PER_PROCESS": "1",
++        "BDSE_SERIALIZE_GPU_INFERENCE": "0", "BDSE_SHARD_PLANNERS_ACROSS_GPUS": "0",
++        "BDSE_CLOSED_LOOP_DIAG": str(diag.resolve()), "BDSE_CLOSED_LOOP_DIAG_MODE": "pior_probe_events",
++        "BDSE_PIOR_TARGETS_FILE": str(target_file.resolve()), "BDSE_STRICT_CLOSED_LOOP_DIAG": "1",
++        "BDSE_PROFILE_CLOSED_LOOP": "0", "BDSE_V54_DYNAMIC_RESPONSE": "1",
++        "BDSE_V54_EXPOSURE_TICKS": str(exposure),
++        "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1",
++    })
++    log = root / "run.log"; started = time.time()
++    print(f"[V54-BATCH-START] arm={arm} batch={batch_index+1}/{batch_count} gpu={gpu} n={len(tokens)} exposure={exposure}", flush=True)
++    with log.open("w", encoding="utf-8") as f:
++        proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=subprocess.STDOUT)
++    heartbeat = max(5.0, float(heartbeat_seconds))
++    while True:
++        try:
++            rc = proc.wait(timeout=heartbeat); break
++        except subprocess.TimeoutExpired:
++            elapsed = time.time() - started
++            fires = max(0, base._count_probe_fires(diag))
++            util, mem = base._gpu_stats(gpu)
++            print(f"[V54-TICK] arm={arm} batch={batch_index+1}/{batch_count} elapsed={elapsed/60:.1f}m probes={fires}/{len(tokens)} gpu={util}/{mem}", flush=True)
++    text = log.read_text(encoding="utf-8", errors="replace")
++    succ, fail = base._parse_success(text); fired = base._count_probe_fires(diag)
++    if rc != 0 or succ != len(tokens) or fail != 0 or fired != len(tokens):
++        tail = "\n".join(text.replace("\r", "\n").splitlines()[-40:])
++        raise RuntimeError(f"V54 PDRM {arm} batch failed rc={rc} success={succ} failed={fail} probes={fired}/{len(tokens)}\n{tail}")
++    base._validate_probe_events(diag, tokens=tokens, meta=meta, arm=arm)
++    _read_trace(dynamic, tokens, arm, exposure)
++    wall = time.time() - started
++    cert = {
++        "complete": True, "algorithm_version": "V64.3.54-EAF-ICER-PDRM", "arm": arm,
++        "batch_index": batch_index, "batch_count": batch_count, "scenario_count": len(tokens),
++        "scenario_token_sha256": base._token_sha(tokens), "config_sha256": cfg_sha, "checkpoint_sha256": ckpt_sha,
++        "challenge": challenge, "successful": succ, "failed": fail, "probe_fired_count": fired,
++        "exposure_ticks": exposure, "run_metric": False, "outcome_labels_recollected": False,
++        "dynamic_sidecar": str(dynamic), "dynamic_sidecar_sha256": _sha256(dynamic),
++        "probe_events_sha256": _sha256(diag), "wall_time_s": wall,
++        "scenarios_per_wall_hour": len(tokens) / max(wall, 1e-9) * 3600.0,
++    }
++    (root / ".v54_dynamic_batch_complete.json").write_text(json.dumps(cert, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    print(f"[V54-BATCH-DONE] arm={arm} batch={batch_index+1}/{batch_count} wall={wall/60:.1f}m", flush=True)
++    return cert
++
++
++def _run_arm(*, arm: str, gpu: str, cfg: Path, checkpoint: Path, tokens: list[str], meta: dict[str, dict[str, Any]], nuplan_root: Path, challenge: str, output_root: Path, workers: int, batch_size: int, exposure: int, heartbeat_seconds: float, resume: bool) -> dict[str, Any]:
++    batches = base._collision_safe_batches(tokens, meta, batch_size=max(1, batch_size), first_batch_size=min(8, len(tokens)))
++    root = output_root / arm; root.mkdir(parents=True, exist_ok=True)
++    certs=[]
++    for bi, bt in enumerate(batches):
++        certs.append(_run_batch(arm=arm, gpu=gpu, cfg=cfg, checkpoint=checkpoint, tokens=bt, meta=meta,
++            nuplan_root=nuplan_root, challenge=challenge, arm_root=root, workers=workers, batch_index=bi,
++            batch_count=len(batches), exposure=exposure, heartbeat_seconds=heartbeat_seconds, resume=resume))
++    return {"arm": arm, "gpu": str(gpu), "batch_count": len(certs), "scenario_count": sum(int(c["scenario_count"]) for c in certs),
++            "total_batch_wall_time_s": sum(float(c["wall_time_s"]) for c in certs), "batches": certs}
++
++
++def _collect_arm_traces(output_root: Path, arm: str, tokens: list[str], exposure: int) -> dict[str, list[dict[str, Any]]]:
++    merged: dict[str, list[dict[str, Any]]] = {}
++    for p in sorted((output_root / arm / "batches").glob("batch_*/v54_dynamic_response_events.jsonl")):
++        local_tokens=[]
++        # derive token set directly from sidecar and validate with _read_trace
++        for line in p.read_text(encoding="utf-8").splitlines():
++            if line.strip(): local_tokens.append(str(json.loads(line).get("scenario_token", "")))
++        uniq=sorted(set(local_tokens))
++        part=_read_trace(p, uniq, arm, exposure)
++        for tok, rows in part.items():
++            if tok in merged: raise RuntimeError(f"V54 duplicate token across batches arm={arm} token={tok}")
++            merged[tok]=rows
++    if set(merged) != set(tokens):
++        raise RuntimeError(f"V54 arm trace population mismatch arm={arm} {len(merged)}/{len(tokens)}")
++    return merged
++
++
++def _load_planned_d(path: Path, tokens: list[str]) -> dict[str, float]:
++    out={}
++    for line in path.read_text(encoding="utf-8").splitlines():
++        if not line.strip(): continue
++        r=json.loads(line); tok=str(r.get("scenario_token", ""))
++        if tok in out: raise RuntimeError(f"V54 duplicate V53 profile token={tok}")
++        out[tok]=float(r.get("execution_contrast_linf", float("nan")))
++    if set(out)!=set(tokens): raise RuntimeError(f"V54 V53 profile population mismatch {len(out)}/{len(tokens)}")
++    return out
++
++
++def main() -> None:
++    p=argparse.ArgumentParser()
++    p.add_argument("--manifest",type=Path,required=True); p.add_argument("--treatment-config",type=Path,required=True); p.add_argument("--control-config",type=Path,required=True)
++    p.add_argument("--checkpoint",type=Path,required=True); p.add_argument("--nuplan-root",type=Path,required=True); p.add_argument("--v53-operator-profiles",type=Path,required=True)
++    p.add_argument("--output-root",type=Path,required=True); p.add_argument("--output-profiles",type=Path,required=True); p.add_argument("--output-report",type=Path,required=True)
++    p.add_argument("--gpu-treatment",default="0"); p.add_argument("--gpu-control",default="1"); p.add_argument("--workers",type=int,default=4); p.add_argument("--batch-size",type=int,default=64)
++    p.add_argument("--heartbeat-seconds",type=float,default=30.0); p.add_argument("--challenge",default="closed_loop_nonreactive_agents"); p.add_argument("--resume",action="store_true")
++    a=p.parse_args()
++    safe._assert_frozen_base_runner()
++    tokens,meta,_raw=base._manifest(a.manifest)
++    if len(tokens)!=502 or len(set(tokens))!=502: raise RuntimeError("V54 PDRM requires exact frozen 502 population")
++    et=_config_replan_ticks(a.treatment_config); ec=_config_replan_ticks(a.control_config)
++    if et!=ec: raise RuntimeError(f"V54 PDRM treatment/control replan interval mismatch {et} vs {ec}")
++    exposure=et
++    planned_d=_load_planned_d(a.v53_operator_profiles,tokens)
++
++    kw=dict(checkpoint=a.checkpoint,tokens=tokens,meta=meta,nuplan_root=a.nuplan_root,challenge=str(a.challenge),output_root=a.output_root,
++            workers=int(a.workers),batch_size=int(a.batch_size),exposure=exposure,heartbeat_seconds=float(a.heartbeat_seconds),resume=bool(a.resume))
++    if str(a.gpu_treatment)!=str(a.gpu_control):
++        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
++            ft=ex.submit(_run_arm,arm="treatment",gpu=str(a.gpu_treatment),cfg=a.treatment_config,**kw)
++            fc=ex.submit(_run_arm,arm="control",gpu=str(a.gpu_control),cfg=a.control_config,**kw)
++            ts,cs=ft.result(),fc.result()
++    else:
++        ts=_run_arm(arm="treatment",gpu=str(a.gpu_treatment),cfg=a.treatment_config,**kw)
++        cs=_run_arm(arm="control",gpu=str(a.gpu_control),cfg=a.control_config,**kw)
++
++    tr=_collect_arm_traces(a.output_root,"treatment",tokens,exposure)
++    cr=_collect_arm_traces(a.output_root,"control",tokens,exposure)
++    profiles=[]; equal_count=0; realized_nonzero=0
++    for tok in sorted(tokens):
++        rt,rc=tr[tok],cr[tok]
++        its=[int(x["iteration_index"]) for x in rt]; ics=[int(x["iteration_index"]) for x in rc]
++        tts=[int(x["time_us"]) for x in rt]; cts=[int(x["time_us"]) for x in rc]
++        if its!=ics or tts!=cts: raise RuntimeError(f"V54 PDRM arm synchronization mismatch token={tok}")
++        ta=[x["ego_world"] for x in rt]; ca=[x["ego_world"] for x in rc]
++        prof=paired_realized_profile(ta,ca,iteration_indices=its,timestamps_us=tts,planned_execution_contrast_linf=planned_d[tok])
++        if planned_d[tok] <= 1e-10:
++            equal_count += 1
++            if float(prof["realized_response_linf"]) > 1e-6:
++                raise RuntimeError(f"V54 PDRM planned-physical-equal treatment/control diverged token={tok} realized={prof['realized_response_linf']}")
++        if float(prof["realized_response_linf"]) > 1e-8: realized_nonzero += 1
++        profiles.append({"scenario_token":tok,**prof})
++    a.output_profiles.parent.mkdir(parents=True,exist_ok=True)
++    with a.output_profiles.open("w",encoding="utf-8") as f:
++        for r in profiles: f.write(json.dumps(r,sort_keys=True,separators=(",",":"))+"\n")
++    report={
++        "audit":"v64_3_54_paired_dynamic_response_probe","algorithm_version":"V64.3.54-EAF-ICER-PDRM","pass":True,
++        "scientific_role":"paired_post_intervention_realized_ego_response_mediator_state_only",
++        "scenario_count":502,"scenario_token_sha256":base._token_sha(tokens),"exposure_ticks":exposure,"sample_count_per_arm_per_scene":exposure+1,
++        "exposure_window_definition":"exact frozen planner replan interval from one-shot intervention anchor through first scheduled replan",
++        "paired_outcome_labels_recollected":False,"run_metric":False,"short_horizon_only":True,"profile_schema":DYNAMIC_PROFILE_SCHEMA,
++        "profile_sha256":_sha256(a.output_profiles),"planned_physical_equal_count":equal_count,"realized_nonzero_count":realized_nonzero,
++        "treatment_summary":ts,"control_summary":cs,"two_gpu_parallel":str(a.gpu_treatment)!=str(a.gpu_control),
++    }
++    a.output_report.parent.mkdir(parents=True,exist_ok=True); a.output_report.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
++    print(json.dumps({"pass":True,"profiles":502,"exposure_ticks":exposure,"profile_sha256":report["profile_sha256"]},sort_keys=True))
++
++if __name__=="__main__": main()

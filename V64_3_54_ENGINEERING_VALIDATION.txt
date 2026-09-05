@@ -1,0 +1,60 @@
+V64.3.54 EAF-ICER-PDRM — engineering validation
+================================================
+
+Scientific status
+-----------------
+V54 is a preregistered post-intervention mediator-identification experiment.
+It is NOT a deployable t=0 retention mechanism and emits no runtime retention config.
+
+V53 parent reliability replay
+-----------------------------
+- V53 result-defining science manifest: 15/15 PASS.
+- V53 uploaded-code curated causal regression: 64/64 PASS.
+- Python compile for V53: PASS.
+- V53 launcher bash syntax: PASS.
+- V53 result termination: preregistered scientific STOP, not an engineering STOP.
+
+V54 local code validation
+-------------------------
+- Python compileall: PASS.
+- RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh bash -n: PASS.
+- V54 + V53/V52/V51/V50/V48 targeted causal regression: 72/72 PASS.
+- V54 curated result-defining science manifest: 20/20 PASS.
+- Full repository test files: 132/132 covered.
+- Full repository tests, four disjoint file shards:
+    shard 0: 193 PASS
+    shard 1: 153 PASS
+    shard 2: 140 PASS
+    shard 3: 158 PASS
+    total:   644/644 PASS
+- Full-shard warnings observed: 38; shown warnings are existing PyTorch nested-tensor/Transformer warning classes, not V54 assertion failures.
+
+V54 science / provenance checks encoded in launcher
+---------------------------------------------------
+- exact V53 fit SHA256 lock:
+  9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e
+- exact V50.5 paired outcome SHA256 lock:
+  d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43
+- exact frozen population: 502 unique full-set RSMR proposal events;
+- treatment/control replan interval must match;
+- short replay uses the frozen replan interval as exposure window, no horizon sweep;
+- run_metric=false; no new full-horizon outcome labels;
+- exact target/probe identity checks inherited from frozen V50.5 runner;
+- synchronized iteration index and timestamp across treatment/control;
+- initial paired state must be identical;
+- physical-equality planned interventions must remain realized-equal within fail-closed tolerance;
+- planned scalar D in V54 profile must match V51/V52/V53 historical value token-by-token;
+- nested fit excludes outer test and calibration fold;
+- V54 writes a self-contained 502-row analysis population snapshot for future audit.
+
+Server-only validation boundary
+-------------------------------
+The current local environment does not contain the user's nuPlan package/raw DB/checkpoint, so the actual short-horizon two-arm simulation cannot be truthfully marked PASS here.
+The launcher therefore treats the first collision-safe 8-scene batch per arm as the fail-closed server sentinel. Any simulation/probe/trace mismatch stops before the remaining population is consumed.
+
+Speed change (science-preserving)
+---------------------------------
+V53 treatment-only state replay consumed 70025.489 s (~19.45 h) of summed batch wall time while running full scenarios and metrics.
+V54 keeps all 502 scenes but collects only the one-shot exposure window, disables new metrics, bypasses the expensive terminal replan after recording the pre-replan state, and can run treatment/control concurrently on two GPUs. One-GPU sequential fallback is supported.
+
+No untouched validation is permitted in V54.
