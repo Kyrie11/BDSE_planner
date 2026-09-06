@@ -1,63 +1,86 @@
-# BDSE current algorithm — V64.3.55 EAF-ICER-DMOR
+# BDSE current algorithm — V64.3.56 EAF-ICER-RCPR
 
-**Dynamic-Mediator Outcome Retention**
+**Realized Constraint-Process Retention**
 
-V54.1 is reliable for TRAIN attribution. It identifies the realized one-replan
-paired ego endpoint as a genuine effectful selected-outcome mediator, while the
-same historical binary sign retention still fails fold-wise deployment nonharm.
-V55 therefore freezes the identified mediator and changes the scientific object
-in a strict order: first the outcome **functional**, then—only if that oracle
-closes—the t0 **mediator bridge**.
+V55 is reliable for TRAIN attribution. Its REALIZED-DOMINANCE arm identifies an
+unweighted paired-outcome Pareto functional (`concordance=0.567756`, 4/5 folds
+above random and 5/5 above the V52 static Pareto control), but the unchanged
+deployment gate still fails beneficial retention and fold-wise nonharm. The
+PREDICTED-DOMINANCE branch was correctly not evaluated.
 
-## Frozen evidence chain entering V55
+This closes the combination of **static one-replan realized ego motion + tested
+static sign/Pareto functionals** as deployment-sufficient. V56 executes the
+last preregistered internal state family: realized operator-relative
+interaction/safety constraint consequence.
 
-- V52 QPE+D effect-support hurdle: retained (`AUC=0.6516244589`, 5/5 > random).
-- V54 REALIZED-ENDPOINT: mediator identification GO (`AUC=0.6117518845`,
-  5/5 > random, 5/5 > V51, 5/5 > V52, 4/5 > V53 TEMPORAL).
-- V54 REALIZED-TEMPORAL: STOP as temporal necessity (only 2/5 > endpoint and
-  lower aggregate AUC).
-- V54 binary-sign retrospective retention: STOP because all-fold nonharm fails,
-  despite aggregate hard-harm / score-sum / NegRMS improvements.
+## Frozen components
 
-Dominant bottleneck: **operator-aligned structured outcome order over an
-identified realized mediator, followed by a t0 mediator bridge**.
+- bounded EAF interface, support/admissibility;
+- frozen full-set RSMR winner;
+- same-winner/incumbent, veto-only, no fallback/rerank/second-best;
+- exact V50.5 metric-safe 502 paired outcomes;
+- V52 QPE+D effect-support hurdle;
+- V54 realized one-replan ego endpoint mediator;
+- **V55 unweighted Pareto functional and exact deployment gate**;
+- V53 fixed planned endpoint + DCT-II k=1,2 profile;
+- five folds, `lambda=1`, `alpha=0.07791855203619909`.
 
-## Arm A — REALIZED-DOMINANCE (diagnostic oracle)
+## Branch A — REALIZED-CONSTRAINT-PROCESS
 
-State is exactly the frozen V54 realized endpoint:
+Replay the exact V50.5 treatment/control one-shot intervention only through the
+first scheduled replan (5 ticks), with final metrics disabled. At each current
+simulated state record three lower-is-safer runtime-semantic channels:
 
-`[Q, P-Q, E-P, D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`.
+1. agent occupancy interaction risk;
+2. agent TTC risk;
+3. hard route-corridor excess.
 
-The V52 effect-support hurdle is unchanged. The conditional binary sign ranker
-is replaced by an unweighted Pareto pairwise order over the existing paired
-closed-loop official-score delta and hard-safety deltas. Trade-off pairs are
-omitted rather than scalarized.
+The paired process is `control risk - treatment risk` on post-intervention ticks
+1..5. Larger is better on every channel. No safety weight, scalarization,
+attention, DCT, horizon sweep, or new outcome label is introduced.
 
-Arm A must identify Pareto order and pass the exact historical paired deployment
-gate. It is not deployable because the realized mediator is post-intervention.
+The outcome state is:
 
-## Arm B — PREDICTED-DOMINANCE (t0 candidate)
+`QPE+D + exact V54 realized endpoint + 15-D realized constraint process`.
 
-**This arm is not evaluated at all unless Arm A fully passes.**
+The functional is exactly V55. It must beat random and the exact V55
+REALIZED-DOMINANCE concordance in aggregate and >=4/5 folds, then pass the
+unchanged deployment gate.
 
-The V54 realized endpoint is distilled from the already-fixed V53 pre-execution
-operator profile (signed terminal contrast + fixed DCT-II k=1,2 contrast) with a
-zero-bias, zero-preserving multi-output ridge (`lambda=1`). Predictor fitting is
-nested and excluded from outer test/calibration folds; outcome training uses
-inner-OOF mediator predictions.
+This is a diagnostic/oracle branch, not t0-deployable.
 
-The same Pareto functional and the same deployment gate are then applied. A
-V55 TRAIN pass means this t0-available branch passes. At that point algorithm
-search freezes immediately; the next work is engineering-only runtime
-integration and untouched paired validation.
+## Branch B — PREDICTED-CONSTRAINT-PROCESS
+
+**Not fit/scored unless Branch A fully passes.**
+
+A zero-bias, zero-preserving `lambda=1` ridge predicts the realized constraint
+process from the fixed V53 planned profile plus `D * t0 current constraint
+risk`; the V54 endpoint predictor is the exact V55 model family. Nested inner
+OOF predictions are used to train the outcome ranker.
+
+Both nuisance predictions must beat zero-response baselines aggregate and >=4/5
+folds, and the same outcome/deployment gates must pass. A full pass freezes the
+algorithm immediately for runtime integration and untouched validation.
+
+## Final internal convergence rule
+
+V56 is the final internal state-family test.
+
+- Oracle FAIL -> stop internal algorithm search by falsification; no V57/V58
+  feature/state variants.
+- Oracle PASS but the single preregistered t0 bridge FAIL -> stop state-family
+  search; do not increase nuisance capacity.
+- Predicted branch full PASS -> freeze; only runtime integration, untouched
+  validation, then external baselines/official benchmarking.
 
 ## Run
 
 ```bash
-cd bdse_v64_3_55_eaf_icer_dmor
-bash RUN_V64_3_55_EAF_ICER_DMOR_TRAIN.sh
+cd bdse_v64_3_56_eaf_icer_rcpr
+bash RUN_V64_3_56_EAF_ICER_RCPR_TRAIN.sh
 ```
 
-V55 is **fit-only**. It reuses V50.5 paired outcomes, V53 planned profiles and
-V54 dynamic mediator profiles; no GPU simulation or new nuPlan metrics are
-required.
+Two GPUs are used for treatment/control short-horizon replay by default. Set
+`GPU_TREAT=0 GPU_CONTROL=0` for one-GPU sequential execution. Final paired
+outcomes are reused from V50.5; only the new 5-tick constraint mediator is
+recollected.

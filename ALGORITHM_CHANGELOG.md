@@ -13499,3 +13499,173 @@ If REALIZED-DOMINANCE passes but PREDICTED-DOMINANCE fails, mediator prediction 
 ## Compute policy
 
 V55 is fit-only. Reuse V50.5 paired outcomes, V53 planned profiles, and V54 realized mediator profiles. No GPU simulation or new nuPlan metrics are required.
+
+---
+
+# V64.3.55 scientific result — structured Pareto functional identified, but one-replan ego mediator remains deployment-insufficient
+
+## Reliability
+
+V55 is valid for TRAIN attribution.
+
+- exact preregistered code ZIP SHA256: `f99b678f1674add6f260af4bd68d8019e71430be67a026345aba5ec87aebdee7`;
+- result ZIP SHA256: `c211f6de0661688f72eee255678a6bef037c995db8c8a4e370359581177c65f6`;
+- result-defining science manifest: 19/19 PASS;
+- server targeted regression: 77/77 PASS;
+- independent exact-code targeted replay: 77/77 PASS;
+- V50.5 paired outcomes, V52 fit, V53 planned profiles, V54 fit/dynamic-profile hashes: exact;
+- PREDICTED-DOMINANCE was not evaluated after oracle failure;
+- untouched validation remained unconsumed.
+
+## Preregistered V55 verdict
+
+### REALIZED-DOMINANCE — Identification GO + Deployment STOP
+
+The unweighted paired-outcome Pareto functional over the exact V54 realized endpoint mediator is identifiable:
+
+- Pareto concordance `0.5677562327`;
+- exact V52 static QPE+D Pareto control `0.4977285319`;
+- `4/5` folds > random;
+- `5/5` folds > V52 static Pareto.
+
+But the unchanged deployment gate fails:
+
+- selected `447`;
+- beneficial `111/121 = 91.7355%`;
+- nonbeneficial `381 -> 336`;
+- hard harm `25 -> 17`;
+- score sum `-4.2409 -> -2.2999`;
+- NegRMS `0.15486 -> 0.14347`;
+- beneficial-retention FAIL;
+- all-fold nonharm FAIL.
+
+Fold 2 is the decisive regime reversal: concordance is only `0.464879`; the policy removes one beneficial and no nonbeneficial proposal, while score sum changes from approximately `-0.0132` to `-0.8056`. Fold 3 retains only `22/28` beneficial proposals.
+
+This is not eligible for threshold/alpha rescue. The failure is conditional outcome ordering under the current state family.
+
+### PREDICTED-DOMINANCE — not evaluated
+
+Strict branch order was obeyed. Do not infer mediator predictability from V55.
+
+## V55 mechanism conclusion
+
+Retain the V55 unweighted Pareto partial-order functional as an **identified supporting outcome functional**, not as a runtime policy.
+
+New evidence statement:
+
+`structured outcome-functional identifiability != fold-stable deployment sufficiency when state contains only realized ego motion`.
+
+The paired selected outcome depends on what the ego intervention does to surrounding interaction/constraint margins, not merely how the ego itself moves.
+
+## Newly closed family
+
+Close as deployment-sufficient:
+
+**static one-replan realized ego mediator + tested static sign/Pareto functional family**.
+
+Do not rescue this family with:
+
+- threshold/alpha/lambda/loss changes;
+- class/focal/catastrophe weighting;
+- safety scalarization/weights;
+- bigger MLP/attention;
+- more ego endpoint/DCT/horizon/basis/peak/early features;
+- sign/Pareto policy union.
+
+Do not close V54 realized endpoint as a diagnostic mediator, V55 Pareto order as a supporting functional, V52 effect support, or paired outcome supervision.
+
+## Dominant bottleneck after V55
+
+**Operator-relative realized constraint-consequence process sufficiency for stable safety-utility outcome order.**
+
+This is the final eligible internal state family under the convergence protocol.
+
+---
+
+# V64.3.56 EAF-ICER-RCPR — Realized Constraint-Process Retention
+
+## Scientific role
+
+V56 is the final preregistered internal state-family test. It freezes:
+
+- bounded EAF interface/support/admissibility;
+- full-set RSMR winner;
+- same-winner-or-incumbent/no-fallback;
+- V50.5 metric-safe 502 paired outcomes;
+- V52 QPE+D effect-support hurdle;
+- V54 realized endpoint mediator;
+- **V55 unweighted Pareto functional and unchanged deployment gate**;
+- V53 planned operator profile basis;
+- five outer folds, lambda=1, alpha=`0.07791855203619909`.
+
+Only the state family changes from realized ego motion to realized constraint consequence.
+
+## Realized constraint process
+
+Replay the exact V50.5 treatment/control one-shot intervention only from t0 through the frozen first replan (`5` ticks). At each current simulated state record three lower-is-safer runtime-semantic coordinates:
+
+1. `agent_occupancy_risk`: ungated interaction potential using the existing box/radius and closing-speed envelope geometry;
+2. `agent_ttc_risk`: radial constant-velocity TTC risk with the frozen soft interaction gate and safe-TTC scale;
+3. `hard_offroute_excess_m`: continuous route-corridor hard-margin excess.
+
+For ticks `1..5`, store `control risk - treatment risk`, so larger is better on every coordinate. The 15-D process is raw and fixed: no DCT/attention/pooling/peak/early/horizon/basis sweep and no safety scalarization.
+
+No final nuPlan metric/outcome label is recollected. V50.5 paired outcomes remain the labels.
+
+Engineering identity gate: the frozen V53 `38` planned-physical-equality interventions must produce `L_inf <= 1e-6` realized constraint-process difference.
+
+## Branch A — REALIZED-CONSTRAINT-PROCESS
+
+State:
+
+`QPE+D + exact V54 realized endpoint + 15-D realized paired constraint process`.
+
+Functional: exact V55 effect-support + unweighted Pareto ranker + conformal/deployment gate.
+
+Preregistered identification:
+
+- aggregate Pareto concordance > `0.5`;
+- >=4/5 folds > random;
+- aggregate > exact V55 REALIZED-DOMINANCE `0.5677562327`;
+- >=4/5 folds > exact V55 control;
+- unchanged deployment gate PASS.
+
+This arm is an oracle/mediator test and is not t0-deployable.
+
+## Branch B — PREDICTED-CONSTRAINT-PROCESS
+
+Eligible only if Branch A fully passes. The implementation is sequential fail-closed: Branch B is not fit/scored if Branch A fails.
+
+Runtime-predictable state:
+
+- predicted V54 realized endpoint via the exact V55 zero-bias, zero-preserving lambda=1 ridge;
+- predicted 15-D constraint process via a zero-bias, zero-preserving lambda=1 multi-output ridge.
+
+Fixed process-predictor input:
+
+- V53 signed endpoint (4);
+- V53 DCT-II k=1,2 planned modes (8);
+- `D * t0 current constraint risk` (3).
+
+The D-gated context enforces physical identity: planned `D=0` implies zero predictor input and zero predicted process.
+
+Both endpoint and process prediction must beat their zero-response baselines in normalized MSE aggregate and >=4/5 folds. Outcome identification and the unchanged deployment gate must then pass.
+
+## Final internal convergence stop
+
+- PREDICTED-CONSTRAINT-PROCESS PASS -> freeze immediately; engineering-only runtime integration, untouched paired validation, then external baselines/official benchmarking. No more TRAIN tuning.
+- REALIZED-CONSTRAINT-PROCESS FAIL -> **STOP internal algorithm search by falsification**. No V57/V58 state/feature families.
+- REALIZED oracle PASS but predicted bridge FAIL -> **STOP internal state-family search**. Do not add nuisance capacity; treat deployment bridge as a limitation/future-work boundary and proceed to external baselines.
+- predicted state identified but deployment FAIL -> STOP internal search; do not tune state/functional/threshold.
+
+## Compute policy
+
+Keep all 502 scenes because V55's failure is fold stability. Recollect only the 5-tick paired mediator process with `run_metric=false`; reuse V50.5 final paired outcomes. Treatment/control may run in parallel on two GPUs, with one-GPU sequential fallback, an 8-scene first-batch sentinel, and resumable collision-safe batches.
+
+## Paper line
+
+Keep the stable headline:
+
+**Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface.**
+
+V56 tests the final state-level hypothesis that outcome sufficiency for an extremal no-fallback intervention is mediated by **operator-relative realized constraint consequence**, rather than by additional ego geometry or generic prediction capacity.

@@ -1,0 +1,80 @@
+{
+  "algorithm_version": "V64.3.56-EAF-ICER-RCPR",
+  "branch_order": [
+    "realized_constraint_process",
+    "predicted_constraint_process"
+  ],
+  "branch_order_policy": "strict sequential fail-closed: predicted_constraint_process is not fit/scored if the realized oracle does not fully pass identification and deployment",
+  "frozen": {
+    "V50_5_metric_safe_502_paired_outcomes": true,
+    "V52_QPE_plus_D_effect_support": true,
+    "V53_planned_operator_profile_basis": true,
+    "V54_realized_endpoint_mediator": true,
+    "V55_pareto_functional_and_deployment_gate": true,
+    "bounded_EAF_interface_support_admissibility": true,
+    "exposure_ticks": 5,
+    "full_set_RSMR_winner": true,
+    "outer_folds": 5,
+    "pairwise_ridge_lambda": 1.0,
+    "retention_alpha": 0.07791855203619909,
+    "safety_scalarization": false,
+    "same_winner_or_incumbent_no_fallback": true
+  },
+  "internal_search_stop": {
+    "if_predicted_constraint_process_passes": "freeze immediately; engineering-only runtime integration and untouched paired validation; no more TRAIN tuning",
+    "if_predicted_identified_but_deployment_fails": "STOP internal search; runtime state is identified but the frozen operator gate still does not close. Do not tune functional/threshold/state.",
+    "if_realized_constraint_process_fails": "STOP internal algorithm search by falsification; do not create V57 feature/state variants. Proceed to external baselines/official benchmarking with the strongest frozen deployable backbone and present RCPR as the final outcome-sufficiency falsification boundary.",
+    "if_realized_passes_predicted_fails": "STOP internal state-family search; the oracle mechanism is sufficient but the single predeclared runtime bridge is not. Do not add nuisance capacity. Proceed to external baselines while treating deployable bridge as a limitation/future work unless a separate paper revision is justified."
+  },
+  "mechanism_hypothesis": "The remaining fold instability is not missing ego motion but missing realized treatment-control constraint consequence. A short-horizon paired process aligned with collision/interaction, TTC and off-route semantics should disambiguate valuable interventions from hard-tail/nonbeneficial interventions while keeping the V55 Pareto outcome functional unchanged.",
+  "name": "Realized Constraint-Process Retention",
+  "paper_line": "Selection-Valuation-Outcome Sufficiency under a Bounded Auditable Planner Interface; V56 tests whether realized constraint consequence, rather than more ego geometry, is the final missing state object for constrained selected-outcome order.",
+  "predicted_constraint_process": {
+    "constraint_predictor": "zero-bias zero-preserving lambda=1 ridge; input=fixed V53 planned endpoint+DCT plus D-gated t0 current constraint risk; target=fixed V56 process",
+    "eligible_only_if": "realized_constraint_process identification AND deployment PASS",
+    "endpoint_predictor": "exact V55 zero-bias zero-preserving lambda=1 planned-profile ridge",
+    "final_runtime_artifact": "if full PASS, fit with fold 0 frozen calibration and emit t0-only endpoint/process predictors + frozen support/Pareto/calibration; no post-intervention input",
+    "identity_contract": "planned D=0 -> complete predictor input=0 -> predicted endpoint/process=0",
+    "nuisance_gate": "both endpoint and process normalized MSE beat their zero-response baselines in aggregate and >=4/5 folds",
+    "outcome_gate": "same identification comparison to exact V55 control plus exact frozen deployment gate",
+    "runtime_deployable": true,
+    "state": "QPE+D + cross-fitted predicted V54 realized endpoint + cross-fitted predicted realized constraint process"
+  },
+  "prohibited": [
+    "RSMR/B/M/top-K/candidate-count changes",
+    "rerank/second-best/fallback",
+    "K/logK/multiplicity",
+    "random-prefix SIIR",
+    "CVaR/selected translation/binary catastrophe veto",
+    "threshold/alpha/lambda/loss/class/focal/catastrophe weighting",
+    "safety scalarization or safety weights",
+    "larger MLP/attention",
+    "new offline future observables",
+    "ego endpoint/DCT/horizon/basis/peak/early sweeps",
+    "realized ego temporal DCT resurrection",
+    "using post-intervention realized process at t0",
+    "untouched validation before a t0 TRAIN PASS",
+    "A/B pooling"
+  ],
+  "realized_constraint_process": {
+    "channels": [
+      "agent_occupancy_risk: frozen box/radius soft interaction geometry with closing-speed buffer",
+      "agent_ttc_risk: frozen soft-envelope-gated radial TTC risk",
+      "hard_offroute_excess_m: frozen route-corridor width + hard off-route margin excess"
+    ],
+    "deployment_gate": "exact frozen V50/V51/V52/V55 paired gate",
+    "functional": "exact V55 effect-support hurdle plus unweighted paired-outcome Pareto ranker",
+    "identification_gate": {
+      "aggregate_concordance_gt_exact_V55_realized_dominance": true,
+      "folds_above_random_min": 4,
+      "folds_gt_exact_V55_realized_dominance_min": 4,
+      "pareto_concordance_gt": 0.5
+    },
+    "identity_gate": "exact V53 planned-physical-equality count must be 38 and each such token must have realized process L_inf <= 1e-6",
+    "no_new_final_metrics_or_outcomes": true,
+    "process_sign": "control risk - treatment risk; larger is better on every channel",
+    "runtime_deployable": false,
+    "state": "QPE+D + exact V54 realized endpoint + paired treatment-control process of [agent occupancy risk, TTC risk, hard off-route excess] at fixed post-intervention ticks 1..5"
+  },
+  "scientific_role": "V55 realized ego mediator plus static Pareto functional identified but deployment-insufficient branch; final internal state-family test"
+}

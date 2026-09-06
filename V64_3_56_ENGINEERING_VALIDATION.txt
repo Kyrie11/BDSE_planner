@@ -1,0 +1,64 @@
+V64.3.56 EAF-ICER-RCPR ENGINEERING VALIDATION
+================================================
+
+Scientific status
+-----------------
+Implementation/preregistration complete. No V56 scientific TRAIN result has
+been run or claimed in this environment.
+
+Result-defining source / provenance
+-----------------------------------
+- V56 science manifest: 26/26 PASS
+- V55 exact parent code/result signature is hard-locked by launcher
+- V50.5 paired outcome SHA is hard-locked
+- V52 fit, V53 planned profile, V54 fit/dynamic profile, V55 fit hashes are hard-locked
+- V55 preregistered branch signature is hard-checked:
+    REALIZED-DOMINANCE functional_identified=True
+    REALIZED-DOMINANCE deployment_gate.pass=False
+    PREDICTED-DOMINANCE status=NOT_EVALUATED_BY_PREREGISTERED_BRANCH_ORDER
+
+Static validation
+-----------------
+- Python compileall: PASS
+- RUN_V64_3_56_EAF_ICER_RCPR_TRAIN.sh bash -n: PASS
+- V56 focused tests: 8/8 PASS
+- V56 + V55/V54/V53/V52/V51/V50/V48 targeted causal regression: 85/85 PASS
+
+Full repository
+---------------
+- test files: 134/134 covered by four mutually exclusive file shards
+- shard 0: 196 PASS
+- shard 1: 166 PASS
+- shard 2: 147 PASS
+- shard 3: 153 PASS
+- total: 662/662 PASS
+- warnings: existing PyTorch Transformer nested-tensor warning classes only;
+  no new failure or warning class observed.
+
+V56-specific fail-closed contracts
+----------------------------------
+- actual nuPlan adapter monkey-patch install test: PASS
+- constraint risk channels are finite/nonnegative and physically directional: PASS
+- paired process sign is control-risk minus treatment-risk: PASS
+- treatment/control traces require exact token, iteration 0..5 and timestamp synchronization
+- initial paired constraint state must match within 1e-8
+- V53 planned-physical-equality population must be exactly 38 scenes
+- all 38 planned-equality scenes must have realized constraint-process L_inf <= 1e-6
+- collector uses run_metric=false and does not recollect final outcome labels
+- Branch B is source-level and preregistration-level sequential fail-closed; it is not fit/scored if Branch A does not fully pass
+- t0 predictor is zero-bias/zero-preserving; D=0 gates the t0 constraint context to zero
+
+Scientific isolation
+--------------------
+V56 changes only the conditional outcome state family relative to V55:
+  realized ego motion -> realized ego motion + paired realized constraint process.
+V55 effect support, Pareto functional, lambda, alpha, folds, RSMR winner,
+paired outcome labels and deployment gate are frozen.
+
+Local environment limitation
+----------------------------
+The current container does not contain the user's server nuPlan raw DB and EAF
+checkpoint, so the real 502x2 short-horizon constraint-process replay cannot be
+executed here. The launcher therefore retains an 8-scene first-batch fail-closed
+server sentinel plus resumable batch certificates. No server-only validation is
+misrepresented as locally completed.

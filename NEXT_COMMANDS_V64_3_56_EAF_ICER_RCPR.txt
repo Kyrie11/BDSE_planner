@@ -1,0 +1,23 @@
+# V64.3.56 EAF-ICER-RCPR next server command
+
+cd bdse_v64_3_56_eaf_icer_rcpr
+
+V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V52_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_52_eaf_icer_hodr_train_v1 \
+V53_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_53_eaf_icer_potr_train_v1 \
+V54_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_54_eaf_icer_pdrm_train_v1 \
+V55_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_55_eaf_icer_dmor_train_v1 \
+NUPLAN_ROOT=/data0/senzeyu2/dataset/CapPlan/data/nuplan \
+GPU_TREAT=0 GPU_CONTROL=1 \
+bash RUN_V64_3_56_EAF_ICER_RCPR_TRAIN.sh
+
+# If checkpoint auto-resolution is not appropriate on the server:
+# export EAF_CKPT=/absolute/path/to/checkpoint.pt
+
+# One-GPU fallback (scientifically identical, treatment/control sequential):
+# GPU_TREAT=0 GPU_CONTROL=0 bash RUN_V64_3_56_EAF_ICER_RCPR_TRAIN.sh
+
+# Do NOT run untouched validation before a PREDICTED-CONSTRAINT-PROCESS full TRAIN PASS.
+# If the launcher terminates with preregistered scientific STOP (exit 3), the V56
+# convergence protocol says to stop internal state/feature search rather than tune V57/V58 variants.

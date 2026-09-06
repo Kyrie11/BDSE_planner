@@ -1,0 +1,62 @@
+{
+  "algorithm_attribution_allowed": true,
+  "audit": "v64_3_55_uploaded_result_reliability_and_scientific_audit_for_v64_3_56",
+  "code_exact_preregistered_v55": true,
+  "code_zip_sha256": "f99b678f1674add6f260af4bd68d8019e71430be67a026345aba5ec87aebdee7",
+  "expected_code_zip_sha256": "f99b678f1674add6f260af4bd68d8019e71430be67a026345aba5ec87aebdee7",
+  "local_exact_targeted_replay": "77/77 PASS",
+  "paired_outcome_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
+  "predicted_branch_consumed": false,
+  "predicted_dominance": {
+    "eligible_by_branch_order": false,
+    "pass": false,
+    "status": "NOT_EVALUATED_BY_PREREGISTERED_BRANCH_ORDER"
+  },
+  "preregistered_branch_order": [
+    "realized_dominance",
+    "predicted_dominance"
+  ],
+  "realized_dominance": {
+    "aggregate": {
+      "beneficial_retention_recall": 0.9173553719008265,
+      "beneficial_selected_count": 111,
+      "beneficial_total_count": 121,
+      "closed_loop_negative_rms": 0.14347021067560844,
+      "closed_loop_score_delta_sum": -2.2998731710826466,
+      "closed_loop_score_delta_worst": -0.9765267961612268,
+      "hard_harm_selected_count": 17,
+      "nonbeneficial_selected_count": 336,
+      "selected_count": 447
+    },
+    "deployment_gate": {
+      "all_folds_nonharm": false,
+      "beneficial_retention": false,
+      "hard_tail": true,
+      "nonbeneficial_reduction": true,
+      "pass": false,
+      "population": true,
+      "utility_nonharm": true
+    },
+    "identification": {
+      "better_v52_static_pareto_fold_count": 5,
+      "folds_above_random": 4,
+      "functional_identified": true,
+      "mediator_prediction": null,
+      "pareto_concordance": 0.5677562326869806,
+      "v52_static_pareto_concordance": 0.49772853185595567
+    },
+    "verdict": "IDENTIFICATION_GO_DEPLOYMENT_STOP"
+  },
+  "reliability_verdict": "PASS_VALID_FOR_TRAIN_ATTRIBUTION",
+  "result_zip_sha256": "c211f6de0661688f72eee255678a6bef037c995db8c8a4e370359581177c65f6",
+  "science_manifest_ok_count": 19,
+  "science_manifest_pass": true,
+  "scientific_stop_reason": "realized_mediator_plus_static_pareto_functional_still_deployment_insufficient",
+  "server_targeted_regression": "77/77 PASS",
+  "untouched_validation_consumed": false,
+  "v52_fit_sha256": "7a21fead5383ebd6aafaeb5da586346a77e5707050cb359511a06971b742a16b",
+  "v53_operator_profiles_sha256": "9a69c196a1d76e9c5d424068df223ec26f0e481252f25f67d5bb17fd355aaef6",
+  "v54_dynamic_profiles_sha256": "dd2bdd809a757ce74973d7ce2c3189fad60dc0d3e0125d7fcec9ca7ad1bda373",
+  "v54_fit_sha256": "10f3e60c82bb8b82f1f688e866a27008e1498b67d2e194b0c7aadec5368536d8",
+  "v55_fit_sha256": "cf7d91b9cf20d62978e766e6b8c739eee75e00011f5a208c2892af419e56dc88"
+}
