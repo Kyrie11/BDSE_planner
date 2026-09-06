@@ -54,3 +54,21 @@ def test_converged_benchmark_summary_rejects_unsafe_rows(tmp_path: Path, monkeyp
         assert "metric-safety" in str(exc)
     else:
         raise AssertionError("unsafe rows must fail closed")
+
+
+def test_converged_suite_uses_file_backed_manifests_not_giant_token_argv() -> None:
+    src = Path(suite.__file__).read_text(encoding="utf-8")
+    assert '"--scenario-tokens-file", str(token_manifest)' in src
+    assert '"--scenario-tokens-sha256", str(token_sha)' in src
+    assert '"--nuplan-db-files-file", str(db_manifest)' in src
+    assert 'token_override = "scenario_filter.scenario_tokens="' not in src
+
+
+def test_own_frozen_budget_sweep_is_evaluation_only_and_uses_queue_transport() -> None:
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh").read_text(encoding="utf-8")
+    assert '--systems bdse --resume' in text
+    assert '--schedule-mode queue' in text
+    assert 'BUDGETS="${BUDGETS:-8 16 24}"' in text
+    assert 'frozen B16 learned policy; cross-budget interface robustness' in text
+    assert 'RUN_FAIR_EXTERNAL_BASELINES_TRAIN' not in text

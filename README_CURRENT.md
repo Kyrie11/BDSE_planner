@@ -1,86 +1,62 @@
-# BDSE current algorithm — V64.3.56 EAF-ICER-RCPR
+# BDSE current status — V64.3.56 converged / benchmark-ready
 
-**Realized Constraint-Process Retention**
+## Scientific state
 
-V55 is reliable for TRAIN attribution. Its REALIZED-DOMINANCE arm identifies an
-unweighted paired-outcome Pareto functional (`concordance=0.567756`, 4/5 folds
-above random and 5/5 above the V52 static Pareto control), but the unchanged
-deployment gate still fails beneficial retention and fold-wise nonharm. The
-PREDICTED-DOMINANCE branch was correctly not evaluated.
+Internal TRAIN algorithm search is **closed by preregistered falsification** at V64.3.56. The final realized constraint-process oracle passed the paired deployment gate but did not pass the required fold-stable incremental-identification gate over V55 (2/5 < 4/5). The predicted t0 branch was therefore not evaluated. Do not create V57/V58 feature/state variants or tune V56 after seeing this result.
 
-This closes the combination of **static one-replan realized ego motion + tested
-static sign/Pareto functionals** as deployment-sufficient. V56 executes the
-last preregistered internal state family: realized operator-relative
-interaction/safety constraint consequence.
+The external benchmark uses the strongest fully t0-deployable frozen backbone:
 
-## Frozen components
+**bounded evidence -> complete EAF -> frozen full-set RSMR extremal proposal -> same proposal/incumbent no-fallback operator.**
 
-- bounded EAF interface, support/admissibility;
-- frozen full-set RSMR winner;
-- same-winner/incumbent, veto-only, no fallback/rerank/second-best;
-- exact V50.5 metric-safe 502 paired outcomes;
-- V52 QPE+D effect-support hurdle;
-- V54 realized one-replan ego endpoint mediator;
-- **V55 unweighted Pareto functional and exact deployment gate**;
-- V53 fixed planned endpoint + DCT-II k=1,2 profile;
-- five folds, `lambda=1`, `alpha=0.07791855203619909`.
+V54–V56 post-intervention mediators are diagnostic only and are never used by the external runtime planner.
 
-## Branch A — REALIZED-CONSTRAINT-PROCESS
+## Primary budget protocol
 
-Replay the exact V50.5 treatment/control one-shot intervention only through the
-first scheduled replan (5 ticks), with final metrics disabled. At each current
-simulated state record three lower-is-safer runtime-semantic channels:
+- **Primary paper comparison:** B=16, M=24.
+- External trainable adapters (GameFormer-/DTPP-/PlanTF-/PLUTO-inspired): independently trained and validated at B=8,16,24.
+- BDSE: the learned method was developed/frozen at B=16. B=8/B=24 runs reuse the same frozen EAF/RSMR learned artifacts and are reported as **cross-budget interface robustness**, not budget-specific retraining.
+- A truly matched-training BDSE B8/B24 curve would require a new preregistered EAF retrain + RSMR refit per budget before test inspection; changing only one YAML field is not equivalent.
 
-1. agent occupancy interaction risk;
-2. agent TTC risk;
-3. hard route-corridor excess.
+## Closed-loop argv transport repair
 
-The paired process is `control risk - treatment risk` on post-intervention ticks
-1..5. Larger is better on every channel. No safety weight, scalarization,
-attention, DCT, horizon sweep, or new outcome label is introduced.
+The previous benchmark launcher could fail before Python startup with:
 
-The outcome state is:
+`OSError: [Errno 7] Argument list too long`
 
-`QPE+D + exact V54 realized endpoint + 15-D realized constraint process`.
+because all 66,671 scenario tokens were serialized into one Hydra argv string. The repaired runner now transports ordered scenario tokens (and a potentially long raw-DB file subset) through JSON manifests with SHA verification. The exact Hydra token override is reconstructed inside the isolated evaluator process. Manifest-backed nuPlan execution uses an in-process `runpy` transport to avoid a second `execve` with the same oversized argument.
 
-The functional is exactly V55. It must beat random and the exact V55
-REALIZED-DOMINANCE concordance in aggregate and >=4/5 folds, then pass the
-unchanged deployment gate.
+This preserves the full ordered population and official metric aggregation; it is not scenario subsampling or shard averaging.
 
-This is a diagnostic/oracle branch, not t0-deployable.
+## Metric safety
 
-## Branch B — PREDICTED-CONSTRAINT-PROCESS
+All formal closed-loop runs use `bdse.tools.nuplan_metric_safe_run_simulation`. Planner/simulation workers remain parallel, but the stateful nuPlan metric callback is serialized within each process. Resume rejects legacy rows without the required metric-safety provenance.
 
-**Not fit/scored unless Branch A fully passes.**
+## Main commands
 
-A zero-bias, zero-preserving `lambda=1` ridge predicts the realized constraint
-process from the fixed V53 planned profile plus `D * t0 current constraint
-risk`; the V54 endpoint predictor is the exact V55 model family. Nested inner
-OOF predictions are used to train the outcome ranker.
-
-Both nuisance predictions must beat zero-response baselines aggregate and >=4/5
-folds, and the same outcome/deployment gates must pass. A full pass freezes the
-algorithm immediately for runtime integration and untouched validation.
-
-## Final internal convergence rule
-
-V56 is the final internal state-family test.
-
-- Oracle FAIL -> stop internal algorithm search by falsification; no V57/V58
-  feature/state variants.
-- Oracle PASS but the single preregistered t0 bridge FAIL -> stop state-family
-  search; do not increase nuisance capacity.
-- Predicted branch full PASS -> freeze; only runtime integration, untouched
-  validation, then external baselines/official benchmarking.
-
-## Run
+External budget-specific training:
 
 ```bash
-cd bdse_v64_3_56_eaf_icer_rcpr
-bash RUN_V64_3_56_EAF_ICER_RCPR_TRAIN.sh
+GPUS=0,1 BUDGETS="8 16 24" \
+  bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
 ```
 
-Two GPUs are used for treatment/control short-horizon replay by default. Set
-`GPU_TREAT=0 GPU_CONTROL=0` for one-GPU sequential execution. Final paired
-outcomes are reused from V50.5; only the new 5-tick constraint mediator is
-recollected.
+Primary matched B16 benchmark (BDSE + all controlled baselines):
+
+```bash
+GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 \
+  bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
+```
+
+Full B8/B16/B24 sweep after B16 is frozen/completed:
+
+```bash
+GPUS=0,1 BUDGETS="8 16 24" CL_WORKERS_PER_JOB=4 \
+  bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
+```
+
+BDSE-only frozen cross-budget robustness:
+
+```bash
+GPUS=0,1 BUDGETS="8 16 24" CL_WORKERS_PER_JOB=4 \
+  bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
+```

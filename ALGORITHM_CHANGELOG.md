@@ -13730,3 +13730,31 @@ TRAIN algorithm search is closed. External benchmarking uses the strongest fully
 Primary matched-interface comparison is B=16. B=8/B=24 for BDSE are frozen-policy cross-budget robustness ablations unless a separately preregistered per-budget BDSE fit exists; external trainable adapters use budget-specific checkpoints. PDM-Closed-style in this repository must remain labeled as a style baseline, not the official PDM-Closed implementation.
 
 Formal closed-loop comparison must use metric-safe serialized nuPlan metric callbacks. Older fixed-budget closed-loop results without this provenance marker are invalidated for resume because V50.4 demonstrated that concurrent shared MetricsEngine callbacks can fail loudly or silently contaminate metrics.
+
+---
+
+# V64.3.56 post-convergence engineering repair — file-backed full-test transport (no algorithm change)
+
+## Trigger
+
+The formal fixed-budget closed-loop launcher failed before the child evaluator started with Linux `E2BIG` / `OSError: [Errno 7] Argument list too long`. The root cause was serialization of all 66,671 ordered test scenario tokens into one Hydra argv element (`scenario_filter.scenario_tokens=[...]`), whose length exceeded the kernel's per-argument exec limit. This is an engineering transport failure and carries **no algorithm evidence**.
+
+## Repair
+
+- Replace giant scenario-token argv transport with a JSON token manifest plus ordered-token SHA256.
+- Replace potentially long raw-DB-file argv transport with a JSON DB-file manifest.
+- Validate manifest uniqueness/hash in `evaluate_closed_loop.py` and reconstruct the exact Hydra override in memory.
+- For manifest-backed runs, execute the metric-safe nuPlan module inside the already isolated evaluator process rather than re-execing an oversized Hydra argv.
+- Preserve the full ordered test population, one official aggregator, GPU isolation, 4 simulation workers/job, and metric-callback serialization.
+- Resume continues to reject legacy results without metric-safe provenance.
+
+## Scientific lock
+
+No V56 algorithm source, RSMR/EAF artifact, outcome-state family, threshold, loss, budget, or convergence decision is changed. **Internal TRAIN search remains CLOSED.** This patch is benchmark engineering only.
+
+## Budget reporting lock
+
+- B16 remains the primary matched-interface result.
+- External trainable adapters remain independently trained per B8/B16/B24.
+- Frozen BDSE B8/B24 remain cross-budget robustness, not post-convergence retraining.
+- A matched-training BDSE budget curve is allowed only as a separately preregistered future experiment that retrains EAF and refits RSMR per budget before looking at test outcomes.

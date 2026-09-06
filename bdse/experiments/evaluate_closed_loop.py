@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
+import json
 import os
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -232,6 +235,126 @@ def _hydra_list(values: list[str]) -> str:
     return "[" + ",".join(str(Path(v).expanduser()) for v in values) + "]"
 
 
+def _sha256_lines(values: list[str]) -> str:
+    """Hash an ordered string manifest with the repository's token convention."""
+    return hashlib.sha256(("\n".join(values) + "\n").encode("utf-8")).hexdigest()
+
+
+def _load_string_manifest(path: str | Path, *, kind: str) -> list[str]:
+    """Load a JSON array (preferred) or newline-delimited manifest fail-closed."""
+    manifest = Path(path).expanduser()
+    if not manifest.is_file():
+        raise FileNotFoundError(f"{kind} manifest not found: {manifest}")
+    text = manifest.read_text(encoding="utf-8")
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        raw = [line.strip() for line in text.splitlines() if line.strip()]
+    if not isinstance(raw, list):
+        raise ValueError(f"{kind} manifest must contain a JSON list or one value per line: {manifest}")
+    values = [str(x).strip() for x in raw if str(x).strip()]
+    if not values:
+        raise ValueError(f"{kind} manifest is empty: {manifest}")
+    return values
+
+
+def _inject_scenario_token_manifest(
+    overrides: list[str],
+    path: str | Path | None,
+    expected_sha256: str | None,
+) -> list[str]:
+    """Materialize exact scenario tokens in memory instead of the parent argv.
+
+    The benchmark population can exceed Linux MAX_ARG_STRLEN if encoded as one
+    shell/exec argument.  This helper keeps the scientific population identical
+    while moving only its transport from argv to a checked file manifest.
+    """
+    if path is None:
+        return list(overrides)
+    if _has_override(overrides, "scenario_filter.scenario_tokens"):
+        raise ValueError(
+            "scenario tokens were supplied both by --scenario-tokens-file and a raw Hydra override; "
+            "use exactly one source"
+        )
+    tokens = _load_string_manifest(path, kind="scenario-token")
+    if len(set(tokens)) != len(tokens):
+        raise ValueError("scenario-token manifest contains duplicates; ordered paired population must be unique")
+    actual = _sha256_lines(tokens)
+    if expected_sha256 and actual != str(expected_sha256):
+        raise RuntimeError(
+            f"scenario-token manifest SHA mismatch: expected={expected_sha256} actual={actual} path={path}"
+        )
+    out = list(overrides)
+    out.insert(0, "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":")))
+    return out
+
+
+def _command_payload_bytes(cmd: list[str], env: dict[str, str] | None = None) -> tuple[int, int, int]:
+    """Return (argv bytes, max single-arg bytes, environment bytes)."""
+    encoded = [os.fsencode(str(x)) for x in cmd]
+    argv_bytes = sum(len(x) + 1 for x in encoded)
+    max_arg = max((len(x) + 1 for x in encoded), default=0)
+    env_bytes = 0
+    if env is not None:
+        env_bytes = sum(len(os.fsencode(str(k))) + len(os.fsencode(str(v))) + 2 for k, v in env.items())
+    return argv_bytes, max_arg, env_bytes
+
+
+def _exec_transport_is_safe(cmd: list[str], env: dict[str, str]) -> bool:
+    """Conservatively decide whether execve transport is safe on Linux/POSIX.
+
+    Linux additionally caps each individual argument at roughly 128 KiB.  The
+    public test token override can be much larger even when total ARG_MAX has
+    not yet been reached.  Keep a margin for libc/kernel accounting.
+    """
+    argv_bytes, max_arg, env_bytes = _command_payload_bytes(cmd, env)
+    try:
+        arg_max = int(os.sysconf("SC_ARG_MAX"))
+    except (AttributeError, OSError, ValueError):
+        arg_max = 2 * 1024 * 1024
+    single_limit = 120 * 1024
+    total_limit = max(128 * 1024, int(arg_max * 0.75))
+    return max_arg < single_limit and (argv_bytes + env_bytes) < total_limit
+
+
+def _run_python_module_in_process(cmd: list[str], env: dict[str, str]) -> None:
+    """Run ``python -m module ...`` without a second execve.
+
+    evaluate_closed_loop itself is already isolated in one benchmark subprocess,
+    so in-process Hydra execution preserves per-task GPU/environment isolation
+    while removing OS argv-size limits.
+    """
+    if len(cmd) < 3 or Path(cmd[0]).resolve() != Path(sys.executable).resolve() or cmd[1] != "-m":
+        raise ValueError(f"in-process transport requires a python -m command, got: {cmd[:3]}")
+    module = str(cmd[2])
+    old_argv = list(sys.argv)
+    old_cwd = os.getcwd()
+    changed: dict[str, str | None] = {}
+    for key, value in env.items():
+        if os.environ.get(key) != value:
+            changed[key] = os.environ.get(key)
+            os.environ[key] = value
+    sys.argv = [module, *[str(x) for x in cmd[3:]]]
+    try:
+        try:
+            runpy.run_module(module, run_name="__main__")
+        except SystemExit as exc:
+            code = 0 if exc.code is None else int(exc.code) if isinstance(exc.code, int) else 1
+            if code != 0:
+                raise subprocess.CalledProcessError(code, cmd) from exc
+    finally:
+        sys.argv = old_argv
+        try:
+            os.chdir(old_cwd)
+        except FileNotFoundError:
+            pass
+        for key, old in changed.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+
+
 def _db_load_paths_from_root(root: str | Path) -> list[str]:
     """Return nuPlan-compatible DB load paths for a local root.
 
@@ -419,12 +542,28 @@ def build_nuplan_command(args: argparse.Namespace, overrides: list[str]) -> tupl
     return env_overrides, base + final_overrides
 
 
-def _run_nuplan_command(cmd: list[str], env: dict[str, str], *, retry_without_splitter: bool) -> None:
+def _run_nuplan_command(
+    cmd: list[str],
+    env: dict[str, str],
+    *,
+    retry_without_splitter: bool,
+    force_inprocess: bool = False,
+) -> None:
     # Do not retry by assigning a YAML null to a defaults-list group: Hydra
     # treats group overrides as string/list selections. With nuPlan's common
     # config searchpath restored, splitter/nuplan resolves to the official no-op
     # YAML, so no fallback is needed.
-    subprocess.run(cmd, check=True, env=env)
+    argv_bytes, max_arg, env_bytes = _command_payload_bytes(cmd, env)
+    use_inprocess = bool(force_inprocess or not _exec_transport_is_safe(cmd, env))
+    print(
+        f"[nuplan-transport] mode={'inprocess' if use_inprocess else 'execve'} "
+        f"argv_bytes={argv_bytes} max_arg_bytes={max_arg} env_bytes={env_bytes}",
+        flush=True,
+    )
+    if use_inprocess:
+        _run_python_module_in_process(cmd, env)
+    else:
+        subprocess.run(cmd, check=True, env=env)
 
 
 def main() -> None:
@@ -466,6 +605,24 @@ def main() -> None:
             "Use this when the split is spread over multiple folders such as train_boston/train_pittsburgh."
         ),
     )
+    parser.add_argument(
+        "--nuplan-db-files-file",
+        type=str,
+        default=None,
+        help="JSON/newline manifest of nuPlan DB files/directories; avoids oversized parent argv.",
+    )
+    parser.add_argument(
+        "--scenario-tokens-file",
+        type=str,
+        default=None,
+        help="JSON/newline ordered scenario-token manifest. Tokens are injected into Hydra in memory.",
+    )
+    parser.add_argument(
+        "--scenario-tokens-sha256",
+        type=str,
+        default=None,
+        help="Optional expected SHA256 of the ordered token manifest (newline canonicalization).",
+    )
     parser.add_argument("--hydra-full-error", action="store_true", help="Set HYDRA_FULL_ERROR=1 for full Hydra stack traces.")
     parser.add_argument("--disable-splitter", dest="disable_splitter", action="store_true", default=False, help="Remove nuPlan's splitter default if your local Hydra setup explicitly requires it.")
     parser.add_argument("--keep-splitter", dest="disable_splitter", action="store_false", help="Keep nuPlan's splitter default. This is now the default.")
@@ -477,17 +634,41 @@ def main() -> None:
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
     if args.config and not Path(args.config).exists():
         raise FileNotFoundError(f"BDSE config not found: {args.config}")
+    if args.nuplan_db_files and args.nuplan_db_files_file:
+        raise ValueError("use only one of --nuplan-db-files and --nuplan-db-files-file")
+    if args.nuplan_db_files_file:
+        args.nuplan_db_files = _load_string_manifest(args.nuplan_db_files_file, kind="nuPlan DB")
     Path(_challenge_scoped_output_dir(args.output_dir, _canonical_challenge_name(args.challenge))).mkdir(parents=True, exist_ok=True)
     overrides = _split_overrides(args.overrides)
+    overrides = _inject_scenario_token_manifest(
+        overrides, args.scenario_tokens_file, args.scenario_tokens_sha256
+    )
     env_assignments, cmd = build_nuplan_command(args, overrides)
-    print(" ".join(env_assignments + cmd))
+    argv_bytes, max_arg, _ = _command_payload_bytes(cmd)
+    if max_arg < 16 * 1024 and argv_bytes < 128 * 1024:
+        print(" ".join(env_assignments + cmd))
+    else:
+        print(
+            f"[nuplan-command] module={args.nuplan_module} argv_items={len(cmd)} "
+            f"argv_bytes={argv_bytes} max_arg_bytes={max_arg} "
+            f"scenario_tokens_file={args.scenario_tokens_file or ''}",
+            flush=True,
+        )
     if args.dry_run:
         return
     env = os.environ.copy()
     for item in env_assignments:
         k, v = item.split("=", 1)
         env[k] = v
-    _run_nuplan_command(cmd, env, retry_without_splitter=bool(args.disable_splitter))
+    _run_nuplan_command(
+        cmd,
+        env,
+        retry_without_splitter=bool(args.disable_splitter),
+        # A file-backed manifest exists specifically to remove execve argv-size
+        # dependence.  Keep nuPlan inside this already isolated evaluator
+        # subprocess even when a small debug manifest would technically fit.
+        force_inprocess=bool(args.scenario_tokens_file or args.nuplan_db_files_file),
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,799 @@
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -13730,3 +13730,31 @@
+ Primary matched-interface comparison is B=16. B=8/B=24 for BDSE are frozen-policy cross-budget robustness ablations unless a separately preregistered per-budget BDSE fit exists; external trainable adapters use budget-specific checkpoints. PDM-Closed-style in this repository must remain labeled as a style baseline, not the official PDM-Closed implementation.
+ 
+ Formal closed-loop comparison must use metric-safe serialized nuPlan metric callbacks. Older fixed-budget closed-loop results without this provenance marker are invalidated for resume because V50.4 demonstrated that concurrent shared MetricsEngine callbacks can fail loudly or silently contaminate metrics.
++
++---
++
++# V64.3.56 post-convergence engineering repair — file-backed full-test transport (no algorithm change)
++
++## Trigger
++
++The formal fixed-budget closed-loop launcher failed before the child evaluator started with Linux `E2BIG` / `OSError: [Errno 7] Argument list too long`. The root cause was serialization of all 66,671 ordered test scenario tokens into one Hydra argv element (`scenario_filter.scenario_tokens=[...]`), whose length exceeded the kernel's per-argument exec limit. This is an engineering transport failure and carries **no algorithm evidence**.
++
++## Repair
++
++- Replace giant scenario-token argv transport with a JSON token manifest plus ordered-token SHA256.
++- Replace potentially long raw-DB-file argv transport with a JSON DB-file manifest.
++- Validate manifest uniqueness/hash in `evaluate_closed_loop.py` and reconstruct the exact Hydra override in memory.
++- For manifest-backed runs, execute the metric-safe nuPlan module inside the already isolated evaluator process rather than re-execing an oversized Hydra argv.
++- Preserve the full ordered test population, one official aggregator, GPU isolation, 4 simulation workers/job, and metric-callback serialization.
++- Resume continues to reject legacy results without metric-safe provenance.
++
++## Scientific lock
++
++No V56 algorithm source, RSMR/EAF artifact, outcome-state family, threshold, loss, budget, or convergence decision is changed. **Internal TRAIN search remains CLOSED.** This patch is benchmark engineering only.
++
++## Budget reporting lock
++
++- B16 remains the primary matched-interface result.
++- External trainable adapters remain independently trained per B8/B16/B24.
++- Frozen BDSE B8/B24 remain cross-budget robustness, not post-convergence retraining.
++- A matched-training BDSE budget curve is allowed only as a separately preregistered future experiment that retrains EAF and refits RSMR per budget before looking at test outcomes.
+--- a/NEXT_COMMANDS_V64_3_56_CONVERGED_EXTERNAL_BENCHMARK.txt
++++ b/NEXT_COMMANDS_V64_3_56_CONVERGED_EXTERNAL_BENCHMARK.txt
+@@ -1,19 +1,48 @@
+-# 1) Train external trainable adapters separately at B8/B16/B24 (same command as user runbook)
+-GPUS=0,1 bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
++# V64.3.56 converged benchmark commands after the full-test argv transport repair.
++# Internal TRAIN algorithm search is closed. Do not create V57 or tune V56 from test results.
+ 
+-# 2) Run one paired metric-safe full closed-loop sweep containing BDSE + all baselines.
+-#    B16 is the primary matched-interface comparison; BDSE B8/B24 are explicitly cross-budget ablations.
+-GPUS=0,1 CL_WORKERS_PER_JOB=4 \
++# -----------------------------------------------------------------------------
++# 0) External trainable adapters: independent TRAIN/VAL checkpoints per budget.
++#    This matches the uploaded runbook and is the correct protocol for those adapters.
++# -----------------------------------------------------------------------------
++GPUS=0,1 BUDGETS="8 16 24" \
++  bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
++
++# -----------------------------------------------------------------------------
++# 1) PRIMARY PAPER RESULT: B=16 only, all systems, identical ordered tokens.
++#    Run this first.  B16 is the matched-interface headline comparison.
++# -----------------------------------------------------------------------------
++GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 \
+ V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+ EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+ bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
+ 
+-# Optional: explicitly set the checkpoint if automatic V13 epoch resolution is not suitable.
+-# EAF_CKPT=/path/to/bdse_v64_saqa_bcc.epoch_XXXX.pt ... bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
++# -----------------------------------------------------------------------------
++# 2) BUDGET ROBUSTNESS: B8/B24 (B16 may be included; --resume avoids rerunning it).
++#    External trainable adapters use B-specific checkpoints.
++#    BDSE uses the same frozen B16 learned EAF/RSMR artifacts and changes only B.
++# -----------------------------------------------------------------------------
++GPUS=0,1 BUDGETS="8 16 24" CL_WORKERS_PER_JOB=4 \
++V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
++EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
++bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
+ 
+-# 3) Recommended secondary robustness check after the primary nonreactive sweep:
+-#    reactive agents at the primary B16 only (same systems / same metric-safe runner).
+-GPUS=0,1 CL_WORKERS_PER_JOB=4 BUDGETS="16" CL_CHALLENGE=closed_loop_reactive_agents \
++# Optional: external baselines only, one budget at a time.
++GPUS=0,1 BUDGETS="8"  CL_WORKERS_PER_JOB=4 bash RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
++GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 bash RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
++GPUS=0,1 BUDGETS="24" CL_WORKERS_PER_JOB=4 bash RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
++
++# Optional: BDSE-only frozen cross-budget robustness, one budget at a time.
++# There is intentionally NO post-convergence B8/B24 training command for BDSE.
++GPUS=0,1 BUDGETS="8"  CL_WORKERS_PER_JOB=4 bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
++GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
++GPUS=0,1 BUDGETS="24" CL_WORKERS_PER_JOB=4 bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
++
++# -----------------------------------------------------------------------------
++# 3) Recommended secondary robustness after the primary nonreactive B16 result:
++#    reactive agents at B16 only.
++# -----------------------------------------------------------------------------
++GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 CL_CHALLENGE=closed_loop_reactive_agents \
+ BENCH_OUT_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/closed_loop/v64_3_56_converged_reactive_B16 \
+ V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+ EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+--- a/README_CURRENT.md
++++ b/README_CURRENT.md
+@@ -1,86 +1,62 @@
+-# BDSE current algorithm — V64.3.56 EAF-ICER-RCPR
++# BDSE current status — V64.3.56 converged / benchmark-ready
+ 
+-**Realized Constraint-Process Retention**
++## Scientific state
+ 
+-V55 is reliable for TRAIN attribution. Its REALIZED-DOMINANCE arm identifies an
+-unweighted paired-outcome Pareto functional (`concordance=0.567756`, 4/5 folds
+-above random and 5/5 above the V52 static Pareto control), but the unchanged
+-deployment gate still fails beneficial retention and fold-wise nonharm. The
+-PREDICTED-DOMINANCE branch was correctly not evaluated.
++Internal TRAIN algorithm search is **closed by preregistered falsification** at V64.3.56. The final realized constraint-process oracle passed the paired deployment gate but did not pass the required fold-stable incremental-identification gate over V55 (2/5 < 4/5). The predicted t0 branch was therefore not evaluated. Do not create V57/V58 feature/state variants or tune V56 after seeing this result.
+ 
+-This closes the combination of **static one-replan realized ego motion + tested
+-static sign/Pareto functionals** as deployment-sufficient. V56 executes the
+-last preregistered internal state family: realized operator-relative
+-interaction/safety constraint consequence.
++The external benchmark uses the strongest fully t0-deployable frozen backbone:
+ 
+-## Frozen components
++**bounded evidence -> complete EAF -> frozen full-set RSMR extremal proposal -> same proposal/incumbent no-fallback operator.**
+ 
+-- bounded EAF interface, support/admissibility;
+-- frozen full-set RSMR winner;
+-- same-winner/incumbent, veto-only, no fallback/rerank/second-best;
+-- exact V50.5 metric-safe 502 paired outcomes;
+-- V52 QPE+D effect-support hurdle;
+-- V54 realized one-replan ego endpoint mediator;
+-- **V55 unweighted Pareto functional and exact deployment gate**;
+-- V53 fixed planned endpoint + DCT-II k=1,2 profile;
+-- five folds, `lambda=1`, `alpha=0.07791855203619909`.
++V54–V56 post-intervention mediators are diagnostic only and are never used by the external runtime planner.
+ 
+-## Branch A — REALIZED-CONSTRAINT-PROCESS
++## Primary budget protocol
+ 
+-Replay the exact V50.5 treatment/control one-shot intervention only through the
+-first scheduled replan (5 ticks), with final metrics disabled. At each current
+-simulated state record three lower-is-safer runtime-semantic channels:
++- **Primary paper comparison:** B=16, M=24.
++- External trainable adapters (GameFormer-/DTPP-/PlanTF-/PLUTO-inspired): independently trained and validated at B=8,16,24.
++- BDSE: the learned method was developed/frozen at B=16. B=8/B=24 runs reuse the same frozen EAF/RSMR learned artifacts and are reported as **cross-budget interface robustness**, not budget-specific retraining.
++- A truly matched-training BDSE B8/B24 curve would require a new preregistered EAF retrain + RSMR refit per budget before test inspection; changing only one YAML field is not equivalent.
+ 
+-1. agent occupancy interaction risk;
+-2. agent TTC risk;
+-3. hard route-corridor excess.
++## Closed-loop argv transport repair
+ 
+-The paired process is `control risk - treatment risk` on post-intervention ticks
+-1..5. Larger is better on every channel. No safety weight, scalarization,
+-attention, DCT, horizon sweep, or new outcome label is introduced.
++The previous benchmark launcher could fail before Python startup with:
+ 
+-The outcome state is:
++`OSError: [Errno 7] Argument list too long`
+ 
+-`QPE+D + exact V54 realized endpoint + 15-D realized constraint process`.
++because all 66,671 scenario tokens were serialized into one Hydra argv string. The repaired runner now transports ordered scenario tokens (and a potentially long raw-DB file subset) through JSON manifests with SHA verification. The exact Hydra token override is reconstructed inside the isolated evaluator process. Manifest-backed nuPlan execution uses an in-process `runpy` transport to avoid a second `execve` with the same oversized argument.
+ 
+-The functional is exactly V55. It must beat random and the exact V55
+-REALIZED-DOMINANCE concordance in aggregate and >=4/5 folds, then pass the
+-unchanged deployment gate.
++This preserves the full ordered population and official metric aggregation; it is not scenario subsampling or shard averaging.
+ 
+-This is a diagnostic/oracle branch, not t0-deployable.
++## Metric safety
+ 
+-## Branch B — PREDICTED-CONSTRAINT-PROCESS
++All formal closed-loop runs use `bdse.tools.nuplan_metric_safe_run_simulation`. Planner/simulation workers remain parallel, but the stateful nuPlan metric callback is serialized within each process. Resume rejects legacy rows without the required metric-safety provenance.
+ 
+-**Not fit/scored unless Branch A fully passes.**
++## Main commands
+ 
+-A zero-bias, zero-preserving `lambda=1` ridge predicts the realized constraint
+-process from the fixed V53 planned profile plus `D * t0 current constraint
+-risk`; the V54 endpoint predictor is the exact V55 model family. Nested inner
+-OOF predictions are used to train the outcome ranker.
+-
+-Both nuisance predictions must beat zero-response baselines aggregate and >=4/5
+-folds, and the same outcome/deployment gates must pass. A full pass freezes the
+-algorithm immediately for runtime integration and untouched validation.
+-
+-## Final internal convergence rule
+-
+-V56 is the final internal state-family test.
+-
+-- Oracle FAIL -> stop internal algorithm search by falsification; no V57/V58
+-  feature/state variants.
+-- Oracle PASS but the single preregistered t0 bridge FAIL -> stop state-family
+-  search; do not increase nuisance capacity.
+-- Predicted branch full PASS -> freeze; only runtime integration, untouched
+-  validation, then external baselines/official benchmarking.
+-
+-## Run
++External budget-specific training:
+ 
+ ```bash
+-cd bdse_v64_3_56_eaf_icer_rcpr
+-bash RUN_V64_3_56_EAF_ICER_RCPR_TRAIN.sh
++GPUS=0,1 BUDGETS="8 16 24" \
++  bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
+ ```
+ 
+-Two GPUs are used for treatment/control short-horizon replay by default. Set
+-`GPU_TREAT=0 GPU_CONTROL=0` for one-GPU sequential execution. Final paired
+-outcomes are reused from V50.5; only the new 5-tick constraint mediator is
+-recollected.
++Primary matched B16 benchmark (BDSE + all controlled baselines):
++
++```bash
++GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 \
++  bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
++```
++
++Full B8/B16/B24 sweep after B16 is frozen/completed:
++
++```bash
++GPUS=0,1 BUDGETS="8 16 24" CL_WORKERS_PER_JOB=4 \
++  bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
++```
++
++BDSE-only frozen cross-budget robustness:
++
++```bash
++GPUS=0,1 BUDGETS="8 16 24" CL_WORKERS_PER_JOB=4 \
++  bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
++```
+--- /dev/null
++++ b/RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
+@@ -0,0 +1,73 @@
++#!/usr/bin/env bash
++set -euo pipefail
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++export BDSE_ROOT="${BDSE_ROOT:-$SCRIPT_DIR}"
++BDSE_ROOT="$(cd "$BDSE_ROOT" && pwd)"
++[[ "$BDSE_ROOT" == "$SCRIPT_DIR" ]] || { echo "BDSE_ROOT must be repository root: $SCRIPT_DIR" >&2; exit 2; }
++cd "$BDSE_ROOT"
++export PYTHONPATH="$BDSE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
++export OUTPUTS_ROOT="${OUTPUTS_ROOT:-$BDSE_ROOT/outputs}"
++
++# This is evaluation-only.  The converged BDSE/EAF-RSMR learned artifacts were
++# frozen at B=16.  B=8/B=24 are cross-budget interface robustness ablations,
++# not budget-specific retraining.  Do not use test results to refit EAF/RSMR.
++export EAF_V64_3_13_ROOT="${EAF_V64_3_13_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1}"
++export V47_ROOT="${V47_ROOT:-$OUTPUTS_ROOT/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1}"
++export OWN_CONFIG="${OWN_CONFIG:-$V47_ROOT/provenance/v64_3_47_rsmr.yaml}"
++export EAF_TRAIN_LOG="${EAF_TRAIN_LOG:-$EAF_V64_3_13_ROOT/train/bdse_v64_saqa_bcc.train_log.jsonl}"
++
++export OWN_CL_OUT_ROOT="${OWN_CL_OUT_ROOT:-$OUTPUTS_ROOT/closed_loop/v64_3_56_own_frozen_budget_robustness}"
++export BDSE_TEST_CACHE="${BDSE_TEST_CACHE:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_test_2}"
++export NUPLAN_ROOT="${NUPLAN_ROOT:-/data0/senzeyu2/dataset/nuplan}"
++export NUPLAN_MAP_ROOT="${NUPLAN_MAP_ROOT:-$NUPLAN_ROOT/maps}"
++export NUPLAN_EXP_ROOT="${NUPLAN_EXP_ROOT:-$NUPLAN_ROOT/exp}"
++export NUPLAN_TEST_DB_ROOT="${NUPLAN_TEST_DB_ROOT:-/data0/senzeyu2/dataset/CapPlan/data/nuplan/nuplan-v1.1/splits/test}"
++export GPUS="${GPUS:-0,1}"
++export BUDGETS="${BUDGETS:-8 16 24}"
++export PROPOSAL_TOP_M="${PROPOSAL_TOP_M:-24}"
++export CL_CHALLENGE="${CL_CHALLENGE:-closed_loop_nonreactive_agents}"
++export CL_LIMIT="${CL_LIMIT:-0}"
++export CL_WORKERS_PER_JOB="${CL_WORKERS_PER_JOB:-4}"
++export CL_TOKEN_SCAN_WORKERS="${CL_TOKEN_SCAN_WORKERS:-8}"
++export CL_TOKEN_PROGRESS_SECONDS="${CL_TOKEN_PROGRESS_SECONDS:-5}"
++export CL_HEARTBEAT_SECONDS="${CL_HEARTBEAT_SECONDS:-15}"
++export PYTHONUNBUFFERED=1
++
++[[ -s "$OWN_CONFIG" ]] || { echo "missing frozen RSMR config: $OWN_CONFIG" >&2; exit 2; }
++[[ -s "$EAF_TRAIN_LOG" ]] || { echo "missing V13 train log: $EAF_TRAIN_LOG" >&2; exit 2; }
++[[ -d "$BDSE_TEST_CACHE/public_set_test" ]] || { echo "missing test cache: $BDSE_TEST_CACHE/public_set_test" >&2; exit 2; }
++[[ -d "$NUPLAN_TEST_DB_ROOT" ]] || { echo "missing raw test DB root: $NUPLAN_TEST_DB_ROOT" >&2; exit 2; }
++find "$NUPLAN_TEST_DB_ROOT" -maxdepth 1 -type f -name '*.db' -print -quit | grep -q . || { echo "no direct .db files under $NUPLAN_TEST_DB_ROOT" >&2; exit 2; }
++sha256sum -c V64_3_56_SCIENCE_MANIFEST.sha256 >/dev/null
++
++mkdir -p "$OWN_CL_OUT_ROOT/provenance"
++if [[ -z "${EAF_CKPT:-}" ]]; then
++  python -m bdse.tools.check_v64_3_13_eaf_dmvr_screen \
++    --train-log "$EAF_TRAIN_LOG" --variant CONVERGED_OWN_BUDGET_ROBUSTNESS \
++    --output "$OWN_CL_OUT_ROOT/provenance/v64_3_13_reaudit.json" \
++    > "$OWN_CL_OUT_ROOT/provenance/v64_3_13_reaudit.out"
++  SELECTED_EPOCH="$(python - "$OWN_CL_OUT_ROOT/provenance/v64_3_13_reaudit.json" <<'PY'
++import json,sys
++r=json.load(open(sys.argv[1]))
++if not r.get('training_instrumentation_valid',False) or not r.get('acquisition_frozen',False) or not r.get('value_estimation_gain',False):
++    raise SystemExit('STOP: V13 frozen checkpoint prerequisites changed')
++print(int(r['selected_epoch']))
++PY
++)"
++  export EAF_CKPT="$EAF_V64_3_13_ROOT/train/checkpoints/bdse_v64_saqa_bcc.epoch_$(printf '%04d' "$((SELECTED_EPOCH+1))").pt"
++fi
++[[ -s "$EAF_CKPT" ]] || { echo "missing frozen EAF checkpoint: $EAF_CKPT" >&2; exit 2; }
++
++python -m bdse.tools.run_fixed_budget_closed_loop_suite \
++  --own-config "$OWN_CONFIG" --own-checkpoint "$EAF_CKPT" \
++  --own-label "BDSE-EAF-RSMR (frozen B16 learned policy; cross-budget interface robustness)" \
++  --split-cache "$BDSE_TEST_CACHE" --token-split public_set_test --limit "$CL_LIMIT" \
++  --nuplan-root "$NUPLAN_ROOT" --nuplan-map-root "$NUPLAN_MAP_ROOT" --nuplan-exp-root "$NUPLAN_EXP_ROOT" --nuplan-db-root "$NUPLAN_TEST_DB_ROOT" \
++  --budgets $BUDGETS --proposal-top-m "$PROPOSAL_TOP_M" \
++  --challenge "$CL_CHALLENGE" --output-root "$OWN_CL_OUT_ROOT/results" \
++  --gpus "$GPUS" --workers-per-job "$CL_WORKERS_PER_JOB" --schedule-mode queue \
++  --token-scan-workers "$CL_TOKEN_SCAN_WORKERS" --token-progress-seconds "$CL_TOKEN_PROGRESS_SECONDS" \
++  --heartbeat-seconds "$CL_HEARTBEAT_SECONDS" \
++  --systems bdse --resume
++
++echo "DONE: frozen BDSE cross-budget robustness B=[$BUDGETS] under $OWN_CL_OUT_ROOT"
+--- /dev/null
++++ b/V64_3_56_BUDGET_EXPERIMENT_POLICY.md
+@@ -0,0 +1,7 @@
++# V64.3.56 fixed-budget experiment policy
++
++1. **Primary result:** B=16, M=24, identical ordered test tokens, metric-safe full closed loop.
++2. **External trainable adapters:** train and validate independent checkpoints at B=8,16,24 using the same TRAIN/VAL split and checkpoint-selection rule.
++3. **BDSE:** do not refit after internal-search convergence. The frozen B16 EAF checkpoint and frozen RSMR model are the headline runtime method. Evaluate them at B=8/16/24 only as a cross-budget interface-robustness curve.
++4. **Why not silently retrain BDSE B8/B24?** V13 EAF training was explicitly B16-only and RSMR is fit on the resulting B16 frontier distribution. A true matched-training B8/B24 BDSE curve therefore requires retraining EAF and refitting RSMR per budget. That is a valid separate experiment only if preregistered before test inspection; it is not equivalent to changing one YAML field.
++5. **Reporting:** keep the B16 matched-interface table separate from the cross-budget robustness plot/table. Label controlled architecture adapters as `*-inspired` unless official repositories are reproduced independently.
+--- /dev/null
++++ b/V64_3_56_CLOSED_LOOP_ARGV_TRANSPORT_REPAIR.md
+@@ -0,0 +1,23 @@
++# V64.3.56 benchmark engineering repair: file-backed scenario transport
++
++## Failure
++The converged closed-loop runner previously serialized all 66,671 ordered scenario tokens into one Hydra override (`scenario_filter.scenario_tokens=[...]`) and passed it through `execve(2)`.  Linux limits the length of an individual argv string; the single override was roughly 1.27 MB, so the child Python process could not even start and raised `OSError: [Errno 7] Argument list too long`.
++
++This was an engineering transport failure. It does not change the frozen V56 science result or any planner algorithm.
++
++## Repair
++- `run_fixed_budget_closed_loop_suite.py` writes the ordered token list to `scenario_tokens.json` and passes only the manifest path + ordered SHA256 to `evaluate_closed_loop.py`.
++- A potentially long resolved raw-DB list is also transported through a JSON manifest.
++- `evaluate_closed_loop.py` validates the token manifest hash and uniqueness before reconstructing the exact Hydra override in memory.
++- Because re-execing the reconstructed 1.27 MB single argument would fail again, manifest-backed nuPlan runs execute the metric-safe `python -m ...` target in the already isolated evaluation process via `runpy`, preserving its environment/GPU isolation without a second `execve`.
++- Ordinary small invocations still use subprocess execution.
++- The complete 66,671-token population and one official metric aggregation are preserved; this is not scenario subsampling or post-hoc shard averaging.
++
++## Scientific invariants
++- Ordered token list and SHA remain identical across all systems and budgets.
++- Metric-safe serialization remains enabled; only the stateful metric callback is serialized, not planner/simulation workers.
++- V64.3.56 science sources and the frozen EAF/RSMR artifacts are unchanged.
++- Resume accepts only runs with the required metric-safety provenance.
++
++## Budget interpretation
++The paper-grade primary comparison is B=16. External trainable adapters are trained separately at B=8/16/24. The converged BDSE model remains the frozen B16 learned method; B=8/B=24 are cross-budget interface robustness tests unless a new, separately preregistered budget-specific EAF/RSMR refit is performed before looking at test results.
+--- a/V64_3_56_CONVERGED_BENCHMARK_ENGINEERING_MANIFEST.sha256
++++ b/V64_3_56_CONVERGED_BENCHMARK_ENGINEERING_MANIFEST.sha256
+@@ -1,9 +1,16 @@
+-bc6bf952c5f0d88f5dfaab112b9fc8ec50d7b3191db9b0b032239bc755367d03  bdse/tools/run_fixed_budget_closed_loop_suite.py
++86cc95234c7a28f997714ec0797ecefe47a7ef1b88419a1d968db5ba100f525f  bdse/tools/run_fixed_budget_closed_loop_suite.py
++286c74989697c91500e858c132074ebe3af021b9753a1b916f841fb6a462d9c5  bdse/experiments/evaluate_closed_loop.py
+ 7750f3f90b2fa45e2045a4d0dcacd7e92b70548556cf15d51d24192ff24c6ac2  bdse/tools/summarize_v64_3_56_converged_benchmark.py
+-50db363d735772e8d1553e9784ab8d1db0ba73cab674141261f6dfbad1d87699  bdse/tests/test_v64_3_56_converged_external_benchmark.py
++009d5067d289e91291cde5b937dfbac752783815a3bb98b920e4084b8b7c59e7  bdse/tests/test_followup_training_and_closed_loop.py
++ff9436561072fcb9d16eda3d7c804fb22e2be5ac84eac0ae1e3e68d22101284d  bdse/tests/test_v64_3_56_converged_external_benchmark.py
+ 6a912e53914682367c0273b43134ea75f3d4e11aea240c183052bb0dea0ccd4f  RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
++91fb6c01d0bc2afafd76b2757a0778e09650fde4d860ee677f160b3720ef6900  RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
++0388d9955d04035fd4f6f11d9b469f85e67ccc732606c301a6aad93abb1e784a  RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
++bc9bdc30ade6c9d625ec52b8f3456972a6b8292f292969d9f598f49744757be0  V64_3_56_CLOSED_LOOP_ARGV_TRANSPORT_REPAIR.md
++354325f22044da7a0829f900150413b436a0afe401b515e06198eaf1003b6010  V64_3_56_BUDGET_EXPERIMENT_POLICY.md
+ e9cc4a8d515550605b68cb7d1934529fbf5c2b3df6ca6b0918402f6998d576f7  V64_3_56_RESULT_POSTMORTEM_AND_EXTERNAL_CONVERGENCE.md
+ 51686acc75798a6024694e28ea35a6b1396c314028b0d5b98ef24f736aecae0a  V64_3_56_EXTERNAL_BENCHMARK_PROTOCOL.md
+-92fbbdaf1238b251b3bc91c483fef7ab1241e727945c677ae9b947370cf393b2  NEXT_COMMANDS_V64_3_56_CONVERGED_EXTERNAL_BENCHMARK.txt
+-e08c15b647b1b6a8f8033f37ab58f53b20e869505427977a021bbb268c2f38c8  V64_3_56_CONVERGED_BENCHMARK_ENGINEERING_VALIDATION.txt
+-b907626363aabe7721957aee11d25aa1791a7a6be2bd7434815250d1396eff72  ALGORITHM_CHANGELOG.md
++0c174ee4d75b416d4d73807afb741ee1db3401bf20143366b0da69a945023332  NEXT_COMMANDS_V64_3_56_CONVERGED_EXTERNAL_BENCHMARK.txt
++d558df5339d0deb1bc2fdc4c05e7b04e5783401625c90d10aa3f4a9f31a62c70  V64_3_56_CONVERGED_BENCHMARK_ENGINEERING_VALIDATION.txt
++25b9b1ddf33665385b169a913f3b3c00a0190149c3912d21ba84273cd3a78455  README_CURRENT.md
++4fbdc01985447e4d51c53e2d4438e9951cb8f11d73ea961b76f2bd3db2e5787d  ALGORITHM_CHANGELOG.md
+--- a/V64_3_56_CONVERGED_BENCHMARK_ENGINEERING_VALIDATION.txt
++++ b/V64_3_56_CONVERGED_BENCHMARK_ENGINEERING_VALIDATION.txt
+@@ -1,25 +1,56 @@
+-V64.3.56 post-convergence benchmark engineering validation
++V64.3.56 converged benchmark-ready engineering validation
++=========================================================
++Scope: post-convergence benchmark engineering only. No V56 algorithm/science source is modified.
+ 
+-Scientific algorithm status:
+-- no V57/V58 algorithm created
+-- V56 science manifest unchanged and PASS
+-- benchmarked own method is frozen t0-deployable EAF-RSMR; V54/V55/V56 post-intervention oracle state is excluded
++Trigger fixed
++-------------
++Formal closed-loop evaluation on 66,671 ordered scenarios failed before Python child startup with:
++  OSError: [Errno 7] Argument list too long
++Root cause: all scenario tokens were serialized into one Hydra argv element. A synthetic 66,671-token contract reproduces a single argument of ~1.27 MB, above Linux's per-argument exec limit.
+ 
+-Engineering repairs:
+-- fixed-budget closed-loop suite now uses bdse.tools.nuplan_metric_safe_run_simulation for every system
+-- process-wide stateful nuPlan metric callbacks are serialized; simulation/planner workers remain parallel
+-- resume requires metric_engine_serialized=true and exact metric-safe module provenance, invalidating older unsafe summaries
+-- own model display label corrected to generic/frozen RSMR label instead of stale BDSE-PTMC wording
+-- own B8/B24 results receive explicit frozen-policy cross-budget warning
+-- new convergence benchmark launcher runs BDSE + GameFormer-inspired + DTPP-inspired + PlanTF-inspired + PLUTO-inspired + PDM-Closed-style on one paired token manifest
+-- B16 is explicitly primary; B8/B24 BDSE are robustness ablations
++Repair
++------
++PASS: scenario tokens transported by JSON manifest + ordered SHA256.
++PASS: resolved raw DB file subset transported by JSON manifest.
++PASS: evaluator validates manifest uniqueness/hash before reconstruction.
++PASS: manifest-backed nuPlan target uses in-process runpy transport inside the already isolated evaluator process; no second oversized execve.
++PASS: small non-manifest invocations retain subprocess transport.
++PASS: metric-safe nuPlan module remains bdse.tools.nuplan_metric_safe_run_simulation.
++PASS: metric serialization environment remains BDSE_PIOR_METRIC_ENGINE_SERIALIZATION=1.
++PASS: resume still rejects rows without metric-safety provenance.
++PASS: full ordered population / official aggregation semantics preserved; no scenario subsampling or shard averaging introduced.
+ 
+-Validation:
+-- Python compileall: PASS
+-- benchmark launcher bash -n: PASS
+-- original V56 science manifest: PASS
+-- focused benchmark/external/closed-loop/metric-safety tests: 38/38 PASS
+-- full repository: 666/666 PASS
+-- test files: 135/135 covered
+-- four mutually exclusive test-file shards: 195 + 162 + 148 + 161 = 666
+-- warnings: historical PyTorch Transformer nested-tensor warnings only; no new warning class
++Budget protocol
++---------------
++PASS: B16 remains primary matched-interface result.
++PASS: external trainable adapters require B-specific B8/B16/B24 checkpoints.
++PASS: frozen BDSE B8/B24 are explicitly cross-budget interface robustness; no post-convergence retraining is introduced.
++PASS: dedicated BDSE-only frozen cross-budget launcher added for auditable testing.
++
++Static validation
++-----------------
++PASS: Python compileall.
++PASS: bash -n RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh.
++PASS: bash -n RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh.
++PASS: bash -n RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh.
++PASS: original V64_3_56_SCIENCE_MANIFEST.sha256 unchanged and verifies.
++
++Targeted regression
++-------------------
++PASS: 24/24
++  bdse/tests/test_followup_training_and_closed_loop.py
++  bdse/tests/test_v64_3_56_converged_external_benchmark.py
++Includes an oversized-Hydra-argument regression that verifies the no-exec transport path.
++
++Full repository regression
++--------------------------
++PASS: 670/670 tests across 135 test files.
++Four mutually exclusive file shards:
++  197 + 162 + 150 + 161 = 670
++Only pre-existing PyTorch Transformer nested-tensor warnings were observed; no new warning class.
++
++Scientific status
++-----------------
++PASS: internal TRAIN search remains CLOSED by V56 preregistered falsification.
++PASS: V54/V55/V56 post-intervention oracle states are not added to runtime benchmark configs.
++PASS: external benchmark runtime own method remains frozen EAF + full-set RSMR.
+--- a/bdse/experiments/evaluate_closed_loop.py
++++ b/bdse/experiments/evaluate_closed_loop.py
+@@ -2,7 +2,10 @@
+ 
+ import argparse
+ import difflib
++import hashlib
++import json
+ import os
++import runpy
+ import subprocess
+ import sys
+ from pathlib import Path
+@@ -232,6 +235,126 @@
+     return "[" + ",".join(str(Path(v).expanduser()) for v in values) + "]"
+ 
+ 
++def _sha256_lines(values: list[str]) -> str:
++    """Hash an ordered string manifest with the repository's token convention."""
++    return hashlib.sha256(("\n".join(values) + "\n").encode("utf-8")).hexdigest()
++
++
++def _load_string_manifest(path: str | Path, *, kind: str) -> list[str]:
++    """Load a JSON array (preferred) or newline-delimited manifest fail-closed."""
++    manifest = Path(path).expanduser()
++    if not manifest.is_file():
++        raise FileNotFoundError(f"{kind} manifest not found: {manifest}")
++    text = manifest.read_text(encoding="utf-8")
++    try:
++        raw = json.loads(text)
++    except json.JSONDecodeError:
++        raw = [line.strip() for line in text.splitlines() if line.strip()]
++    if not isinstance(raw, list):
++        raise ValueError(f"{kind} manifest must contain a JSON list or one value per line: {manifest}")
++    values = [str(x).strip() for x in raw if str(x).strip()]
++    if not values:
++        raise ValueError(f"{kind} manifest is empty: {manifest}")
++    return values
++
++
++def _inject_scenario_token_manifest(
++    overrides: list[str],
++    path: str | Path | None,
++    expected_sha256: str | None,
++) -> list[str]:
++    """Materialize exact scenario tokens in memory instead of the parent argv.
++
++    The benchmark population can exceed Linux MAX_ARG_STRLEN if encoded as one
++    shell/exec argument.  This helper keeps the scientific population identical
++    while moving only its transport from argv to a checked file manifest.
++    """
++    if path is None:
++        return list(overrides)
++    if _has_override(overrides, "scenario_filter.scenario_tokens"):
++        raise ValueError(
++            "scenario tokens were supplied both by --scenario-tokens-file and a raw Hydra override; "
++            "use exactly one source"
++        )
++    tokens = _load_string_manifest(path, kind="scenario-token")
++    if len(set(tokens)) != len(tokens):
++        raise ValueError("scenario-token manifest contains duplicates; ordered paired population must be unique")
++    actual = _sha256_lines(tokens)
++    if expected_sha256 and actual != str(expected_sha256):
++        raise RuntimeError(
++            f"scenario-token manifest SHA mismatch: expected={expected_sha256} actual={actual} path={path}"
++        )
++    out = list(overrides)
++    out.insert(0, "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":")))
++    return out
++
++
++def _command_payload_bytes(cmd: list[str], env: dict[str, str] | None = None) -> tuple[int, int, int]:
++    """Return (argv bytes, max single-arg bytes, environment bytes)."""
++    encoded = [os.fsencode(str(x)) for x in cmd]
++    argv_bytes = sum(len(x) + 1 for x in encoded)
++    max_arg = max((len(x) + 1 for x in encoded), default=0)
++    env_bytes = 0
++    if env is not None:
++        env_bytes = sum(len(os.fsencode(str(k))) + len(os.fsencode(str(v))) + 2 for k, v in env.items())
++    return argv_bytes, max_arg, env_bytes
++
++
++def _exec_transport_is_safe(cmd: list[str], env: dict[str, str]) -> bool:
++    """Conservatively decide whether execve transport is safe on Linux/POSIX.
++
++    Linux additionally caps each individual argument at roughly 128 KiB.  The
++    public test token override can be much larger even when total ARG_MAX has
++    not yet been reached.  Keep a margin for libc/kernel accounting.
++    """
++    argv_bytes, max_arg, env_bytes = _command_payload_bytes(cmd, env)
++    try:
++        arg_max = int(os.sysconf("SC_ARG_MAX"))
++    except (AttributeError, OSError, ValueError):
++        arg_max = 2 * 1024 * 1024
++    single_limit = 120 * 1024
++    total_limit = max(128 * 1024, int(arg_max * 0.75))
++    return max_arg < single_limit and (argv_bytes + env_bytes) < total_limit
++
++
++def _run_python_module_in_process(cmd: list[str], env: dict[str, str]) -> None:
++    """Run ``python -m module ...`` without a second execve.
++
++    evaluate_closed_loop itself is already isolated in one benchmark subprocess,
++    so in-process Hydra execution preserves per-task GPU/environment isolation
++    while removing OS argv-size limits.
++    """
++    if len(cmd) < 3 or Path(cmd[0]).resolve() != Path(sys.executable).resolve() or cmd[1] != "-m":
++        raise ValueError(f"in-process transport requires a python -m command, got: {cmd[:3]}")
++    module = str(cmd[2])
++    old_argv = list(sys.argv)
++    old_cwd = os.getcwd()
++    changed: dict[str, str | None] = {}
++    for key, value in env.items():
++        if os.environ.get(key) != value:
++            changed[key] = os.environ.get(key)
++            os.environ[key] = value
++    sys.argv = [module, *[str(x) for x in cmd[3:]]]
++    try:
++        try:
++            runpy.run_module(module, run_name="__main__")
++        except SystemExit as exc:
++            code = 0 if exc.code is None else int(exc.code) if isinstance(exc.code, int) else 1
++            if code != 0:
++                raise subprocess.CalledProcessError(code, cmd) from exc
++    finally:
++        sys.argv = old_argv
++        try:
++            os.chdir(old_cwd)
++        except FileNotFoundError:
++            pass
++        for key, old in changed.items():
++            if old is None:
++                os.environ.pop(key, None)
++            else:
++                os.environ[key] = old
++
++
+ def _db_load_paths_from_root(root: str | Path) -> list[str]:
+     """Return nuPlan-compatible DB load paths for a local root.
+ 
+@@ -419,12 +542,28 @@
+     return env_overrides, base + final_overrides
+ 
+ 
+-def _run_nuplan_command(cmd: list[str], env: dict[str, str], *, retry_without_splitter: bool) -> None:
++def _run_nuplan_command(
++    cmd: list[str],
++    env: dict[str, str],
++    *,
++    retry_without_splitter: bool,
++    force_inprocess: bool = False,
++) -> None:
+     # Do not retry by assigning a YAML null to a defaults-list group: Hydra
+     # treats group overrides as string/list selections. With nuPlan's common
+     # config searchpath restored, splitter/nuplan resolves to the official no-op
+     # YAML, so no fallback is needed.
+-    subprocess.run(cmd, check=True, env=env)
++    argv_bytes, max_arg, env_bytes = _command_payload_bytes(cmd, env)
++    use_inprocess = bool(force_inprocess or not _exec_transport_is_safe(cmd, env))
++    print(
++        f"[nuplan-transport] mode={'inprocess' if use_inprocess else 'execve'} "
++        f"argv_bytes={argv_bytes} max_arg_bytes={max_arg} env_bytes={env_bytes}",
++        flush=True,
++    )
++    if use_inprocess:
++        _run_python_module_in_process(cmd, env)
++    else:
++        subprocess.run(cmd, check=True, env=env)
+ 
+ 
+ def main() -> None:
+@@ -466,6 +605,24 @@
+             "Use this when the split is spread over multiple folders such as train_boston/train_pittsburgh."
+         ),
+     )
++    parser.add_argument(
++        "--nuplan-db-files-file",
++        type=str,
++        default=None,
++        help="JSON/newline manifest of nuPlan DB files/directories; avoids oversized parent argv.",
++    )
++    parser.add_argument(
++        "--scenario-tokens-file",
++        type=str,
++        default=None,
++        help="JSON/newline ordered scenario-token manifest. Tokens are injected into Hydra in memory.",
++    )
++    parser.add_argument(
++        "--scenario-tokens-sha256",
++        type=str,
++        default=None,
++        help="Optional expected SHA256 of the ordered token manifest (newline canonicalization).",
++    )
+     parser.add_argument("--hydra-full-error", action="store_true", help="Set HYDRA_FULL_ERROR=1 for full Hydra stack traces.")
+     parser.add_argument("--disable-splitter", dest="disable_splitter", action="store_true", default=False, help="Remove nuPlan's splitter default if your local Hydra setup explicitly requires it.")
+     parser.add_argument("--keep-splitter", dest="disable_splitter", action="store_false", help="Keep nuPlan's splitter default. This is now the default.")
+@@ -477,17 +634,41 @@
+         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
+     if args.config and not Path(args.config).exists():
+         raise FileNotFoundError(f"BDSE config not found: {args.config}")
++    if args.nuplan_db_files and args.nuplan_db_files_file:
++        raise ValueError("use only one of --nuplan-db-files and --nuplan-db-files-file")
++    if args.nuplan_db_files_file:
++        args.nuplan_db_files = _load_string_manifest(args.nuplan_db_files_file, kind="nuPlan DB")
+     Path(_challenge_scoped_output_dir(args.output_dir, _canonical_challenge_name(args.challenge))).mkdir(parents=True, exist_ok=True)
+     overrides = _split_overrides(args.overrides)
++    overrides = _inject_scenario_token_manifest(
++        overrides, args.scenario_tokens_file, args.scenario_tokens_sha256
++    )
+     env_assignments, cmd = build_nuplan_command(args, overrides)
+-    print(" ".join(env_assignments + cmd))
++    argv_bytes, max_arg, _ = _command_payload_bytes(cmd)
++    if max_arg < 16 * 1024 and argv_bytes < 128 * 1024:
++        print(" ".join(env_assignments + cmd))
++    else:
++        print(
++            f"[nuplan-command] module={args.nuplan_module} argv_items={len(cmd)} "
++            f"argv_bytes={argv_bytes} max_arg_bytes={max_arg} "
++            f"scenario_tokens_file={args.scenario_tokens_file or ''}",
++            flush=True,
++        )
+     if args.dry_run:
+         return
+     env = os.environ.copy()
+     for item in env_assignments:
+         k, v = item.split("=", 1)
+         env[k] = v
+-    _run_nuplan_command(cmd, env, retry_without_splitter=bool(args.disable_splitter))
++    _run_nuplan_command(
++        cmd,
++        env,
++        retry_without_splitter=bool(args.disable_splitter),
++        # A file-backed manifest exists specifically to remove execve argv-size
++        # dependence.  Keep nuPlan inside this already isolated evaluator
++        # subprocess even when a small debug manifest would technically fit.
++        force_inprocess=bool(args.scenario_tokens_file or args.nuplan_db_files_file),
++    )
+ 
+ 
+ if __name__ == "__main__":
+--- a/bdse/tests/test_followup_training_and_closed_loop.py
++++ b/bdse/tests/test_followup_training_and_closed_loop.py
+@@ -475,3 +475,37 @@
+     assert out.endswith("/outputs/closed_loop/closed_loop_nonreactive_agents/eid")
+     assert out.count("closed_loop_nonreactive_agents") == 1
+     assert "closed_loop_nonreactive_agents/eid/closed_loop_nonreactive_agents" not in " ".join(cmd)
++
++
++def test_closed_loop_file_backed_token_manifest_is_hash_checked(tmp_path: Path):
++    import json
++    import hashlib
++    from bdse.experiments import evaluate_closed_loop as ec
++
++    tokens = ["tok_a", "tok_b", "tok_c"]
++    manifest = tmp_path / "tokens.json"
++    manifest.write_text(json.dumps(tokens), encoding="utf-8")
++    digest = hashlib.sha256(("\n".join(tokens) + "\n").encode("utf-8")).hexdigest()
++    out = ec._inject_scenario_token_manifest([], manifest, digest)
++    override = next(x for x in out if x.startswith("scenario_filter.scenario_tokens="))
++    assert 'tok_a' in override and 'tok_c' in override
++    try:
++        ec._inject_scenario_token_manifest([], manifest, "0" * 64)
++    except RuntimeError as exc:
++        assert "SHA mismatch" in str(exc)
++    else:
++        raise AssertionError("mismatched token manifest must fail closed")
++
++
++def test_closed_loop_large_hydra_argument_uses_inprocess_transport(monkeypatch):
++    from bdse.experiments import evaluate_closed_loop as ec
++
++    huge = "scenario_filter.scenario_tokens=[" + ("x" * (130 * 1024)) + "]"
++    cmd = [ec.sys.executable, "-m", "fake.nuplan.module", huge]
++    assert not ec._exec_transport_is_safe(cmd, {})
++
++    seen = {}
++    monkeypatch.setattr(ec.runpy, "run_module", lambda module, run_name: seen.update(module=module, argv=list(ec.sys.argv)))
++    ec._run_python_module_in_process(cmd, dict(ec.os.environ))
++    assert seen["module"] == "fake.nuplan.module"
++    assert seen["argv"][1] == huge
+--- a/bdse/tests/test_v64_3_56_converged_external_benchmark.py
++++ b/bdse/tests/test_v64_3_56_converged_external_benchmark.py
+@@ -54,3 +54,21 @@
+         assert "metric-safety" in str(exc)
+     else:
+         raise AssertionError("unsafe rows must fail closed")
++
++
++def test_converged_suite_uses_file_backed_manifests_not_giant_token_argv() -> None:
++    src = Path(suite.__file__).read_text(encoding="utf-8")
++    assert '"--scenario-tokens-file", str(token_manifest)' in src
++    assert '"--scenario-tokens-sha256", str(token_sha)' in src
++    assert '"--nuplan-db-files-file", str(db_manifest)' in src
++    assert 'token_override = "scenario_filter.scenario_tokens="' not in src
++
++
++def test_own_frozen_budget_sweep_is_evaluation_only_and_uses_queue_transport() -> None:
++    root = Path(__file__).resolve().parents[2]
++    text = (root / "RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh").read_text(encoding="utf-8")
++    assert '--systems bdse --resume' in text
++    assert '--schedule-mode queue' in text
++    assert 'BUDGETS="${BUDGETS:-8 16 24}"' in text
++    assert 'frozen B16 learned policy; cross-budget interface robustness' in text
++    assert 'RUN_FAIR_EXTERNAL_BASELINES_TRAIN' not in text
+--- a/bdse/tools/run_fixed_budget_closed_loop_suite.py
++++ b/bdse/tools/run_fixed_budget_closed_loop_suite.py
+@@ -372,8 +372,14 @@
+     if root.exists():
+         shutil.rmtree(root)
+     root.mkdir(parents=True, exist_ok=True)
+-    (root / "scenario_tokens.json").write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+-    token_override = "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":"))
++    token_manifest = root / "scenario_tokens.json"
++    token_manifest.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
++    # Never serialize the full test population into this process' argv.  The
++    # full public_set_test contains O(10^5) tokens and a single Hydra override
++    # such as scenario_filter.scenario_tokens=[...] can exceed Linux'
++    # MAX_ARG_STRLEN before Python/nuPlan even starts.  Pass a short manifest
++    # path to the evaluator; it validates the hash, constructs the Hydra
++    # override in memory, and dispatches nuPlan in-process when needed.
+     task_device = "cpu" if task.name == "pdm_closed_style" else args.device
+     cmd = [
+         sys.executable, "-m", "bdse.experiments.evaluate_closed_loop",
+@@ -390,15 +396,22 @@
+         "--nuplan-data-root", str(args.nuplan_root),
+         "--nuplan-map-root", str(args.nuplan_map_root),
+         "--nuplan-exp-root", str(args.nuplan_exp_root),
++        "--scenario-tokens-file", str(token_manifest),
++        "--scenario-tokens-sha256", str(token_sha),
+     ]
+     if args.resolved_db_files:
+-        cmd += ["--nuplan-db-files", *[str(p) for p in args.resolved_db_files]]
++        db_manifest = root / "nuplan_db_files.json"
++        db_manifest.write_text(
++            json.dumps([str(p.resolve()) for p in args.resolved_db_files], indent=2),
++            encoding="utf-8",
++        )
++        cmd += ["--nuplan-db-files-file", str(db_manifest)]
+     else:
+         cmd += ["--nuplan-db-root", str(args.nuplan_db_root)]
+     if task.checkpoint is not None:
+         cmd += ["--checkpoint", str(task.checkpoint)]
+     cmd += [
+-        "--", token_override,
++        "--",
+         f"scenario_filter.limit_total_scenarios={len(tokens)}",
+         "scenario_filter.shuffle=false",
+         "scenario_filter.log_names=null",
+@@ -727,7 +740,6 @@
+         "nuplan_exp_root": str(args.nuplan_exp_root.resolve()),
+         "budgets": [int(x) for x in args.budgets],
+         "proposal_top_m": int(args.proposal_top_m),
+-        "nuplan_db_mode": "restricted_files" if args.resolved_db_files else "root",
+         "nuplan_db_file_count": len(args.resolved_db_files) if args.resolved_db_files else -1,
+         "nuplan_workers_per_job": int(args.workers_per_job),
+         "token_scan_workers": int(args.token_scan_workers),

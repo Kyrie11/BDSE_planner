@@ -475,3 +475,37 @@ def test_closed_loop_output_dir_is_not_double_scoped(tmp_path: Path):
     assert out.endswith("/outputs/closed_loop/closed_loop_nonreactive_agents/eid")
     assert out.count("closed_loop_nonreactive_agents") == 1
     assert "closed_loop_nonreactive_agents/eid/closed_loop_nonreactive_agents" not in " ".join(cmd)
+
+
+def test_closed_loop_file_backed_token_manifest_is_hash_checked(tmp_path: Path):
+    import json
+    import hashlib
+    from bdse.experiments import evaluate_closed_loop as ec
+
+    tokens = ["tok_a", "tok_b", "tok_c"]
+    manifest = tmp_path / "tokens.json"
+    manifest.write_text(json.dumps(tokens), encoding="utf-8")
+    digest = hashlib.sha256(("\n".join(tokens) + "\n").encode("utf-8")).hexdigest()
+    out = ec._inject_scenario_token_manifest([], manifest, digest)
+    override = next(x for x in out if x.startswith("scenario_filter.scenario_tokens="))
+    assert 'tok_a' in override and 'tok_c' in override
+    try:
+        ec._inject_scenario_token_manifest([], manifest, "0" * 64)
+    except RuntimeError as exc:
+        assert "SHA mismatch" in str(exc)
+    else:
+        raise AssertionError("mismatched token manifest must fail closed")
+
+
+def test_closed_loop_large_hydra_argument_uses_inprocess_transport(monkeypatch):
+    from bdse.experiments import evaluate_closed_loop as ec
+
+    huge = "scenario_filter.scenario_tokens=[" + ("x" * (130 * 1024)) + "]"
+    cmd = [ec.sys.executable, "-m", "fake.nuplan.module", huge]
+    assert not ec._exec_transport_is_safe(cmd, {})
+
+    seen = {}
+    monkeypatch.setattr(ec.runpy, "run_module", lambda module, run_name: seen.update(module=module, argv=list(ec.sys.argv)))
+    ec._run_python_module_in_process(cmd, dict(ec.os.environ))
+    assert seen["module"] == "fake.nuplan.module"
+    assert seen["argv"][1] == huge

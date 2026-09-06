@@ -1,25 +1,56 @@
-V64.3.56 post-convergence benchmark engineering validation
+V64.3.56 converged benchmark-ready engineering validation
+=========================================================
+Scope: post-convergence benchmark engineering only. No V56 algorithm/science source is modified.
 
-Scientific algorithm status:
-- no V57/V58 algorithm created
-- V56 science manifest unchanged and PASS
-- benchmarked own method is frozen t0-deployable EAF-RSMR; V54/V55/V56 post-intervention oracle state is excluded
+Trigger fixed
+-------------
+Formal closed-loop evaluation on 66,671 ordered scenarios failed before Python child startup with:
+  OSError: [Errno 7] Argument list too long
+Root cause: all scenario tokens were serialized into one Hydra argv element. A synthetic 66,671-token contract reproduces a single argument of ~1.27 MB, above Linux's per-argument exec limit.
 
-Engineering repairs:
-- fixed-budget closed-loop suite now uses bdse.tools.nuplan_metric_safe_run_simulation for every system
-- process-wide stateful nuPlan metric callbacks are serialized; simulation/planner workers remain parallel
-- resume requires metric_engine_serialized=true and exact metric-safe module provenance, invalidating older unsafe summaries
-- own model display label corrected to generic/frozen RSMR label instead of stale BDSE-PTMC wording
-- own B8/B24 results receive explicit frozen-policy cross-budget warning
-- new convergence benchmark launcher runs BDSE + GameFormer-inspired + DTPP-inspired + PlanTF-inspired + PLUTO-inspired + PDM-Closed-style on one paired token manifest
-- B16 is explicitly primary; B8/B24 BDSE are robustness ablations
+Repair
+------
+PASS: scenario tokens transported by JSON manifest + ordered SHA256.
+PASS: resolved raw DB file subset transported by JSON manifest.
+PASS: evaluator validates manifest uniqueness/hash before reconstruction.
+PASS: manifest-backed nuPlan target uses in-process runpy transport inside the already isolated evaluator process; no second oversized execve.
+PASS: small non-manifest invocations retain subprocess transport.
+PASS: metric-safe nuPlan module remains bdse.tools.nuplan_metric_safe_run_simulation.
+PASS: metric serialization environment remains BDSE_PIOR_METRIC_ENGINE_SERIALIZATION=1.
+PASS: resume still rejects rows without metric-safety provenance.
+PASS: full ordered population / official aggregation semantics preserved; no scenario subsampling or shard averaging introduced.
 
-Validation:
-- Python compileall: PASS
-- benchmark launcher bash -n: PASS
-- original V56 science manifest: PASS
-- focused benchmark/external/closed-loop/metric-safety tests: 38/38 PASS
-- full repository: 666/666 PASS
-- test files: 135/135 covered
-- four mutually exclusive test-file shards: 195 + 162 + 148 + 161 = 666
-- warnings: historical PyTorch Transformer nested-tensor warnings only; no new warning class
+Budget protocol
+---------------
+PASS: B16 remains primary matched-interface result.
+PASS: external trainable adapters require B-specific B8/B16/B24 checkpoints.
+PASS: frozen BDSE B8/B24 are explicitly cross-budget interface robustness; no post-convergence retraining is introduced.
+PASS: dedicated BDSE-only frozen cross-budget launcher added for auditable testing.
+
+Static validation
+-----------------
+PASS: Python compileall.
+PASS: bash -n RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh.
+PASS: bash -n RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh.
+PASS: bash -n RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh.
+PASS: original V64_3_56_SCIENCE_MANIFEST.sha256 unchanged and verifies.
+
+Targeted regression
+-------------------
+PASS: 24/24
+  bdse/tests/test_followup_training_and_closed_loop.py
+  bdse/tests/test_v64_3_56_converged_external_benchmark.py
+Includes an oversized-Hydra-argument regression that verifies the no-exec transport path.
+
+Full repository regression
+--------------------------
+PASS: 670/670 tests across 135 test files.
+Four mutually exclusive file shards:
+  197 + 162 + 150 + 161 = 670
+Only pre-existing PyTorch Transformer nested-tensor warnings were observed; no new warning class.
+
+Scientific status
+-----------------
+PASS: internal TRAIN search remains CLOSED by V56 preregistered falsification.
+PASS: V54/V55/V56 post-intervention oracle states are not added to runtime benchmark configs.
+PASS: external benchmark runtime own method remains frozen EAF + full-set RSMR.

@@ -1,19 +1,48 @@
-# 1) Train external trainable adapters separately at B8/B16/B24 (same command as user runbook)
-GPUS=0,1 bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
+# V64.3.56 converged benchmark commands after the full-test argv transport repair.
+# Internal TRAIN algorithm search is closed. Do not create V57 or tune V56 from test results.
 
-# 2) Run one paired metric-safe full closed-loop sweep containing BDSE + all baselines.
-#    B16 is the primary matched-interface comparison; BDSE B8/B24 are explicitly cross-budget ablations.
-GPUS=0,1 CL_WORKERS_PER_JOB=4 \
+# -----------------------------------------------------------------------------
+# 0) External trainable adapters: independent TRAIN/VAL checkpoints per budget.
+#    This matches the uploaded runbook and is the correct protocol for those adapters.
+# -----------------------------------------------------------------------------
+GPUS=0,1 BUDGETS="8 16 24" \
+  bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
+
+# -----------------------------------------------------------------------------
+# 1) PRIMARY PAPER RESULT: B=16 only, all systems, identical ordered tokens.
+#    Run this first.  B16 is the matched-interface headline comparison.
+# -----------------------------------------------------------------------------
+GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 \
 V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
 EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
 bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
 
-# Optional: explicitly set the checkpoint if automatic V13 epoch resolution is not suitable.
-# EAF_CKPT=/path/to/bdse_v64_saqa_bcc.epoch_XXXX.pt ... bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
+# -----------------------------------------------------------------------------
+# 2) BUDGET ROBUSTNESS: B8/B24 (B16 may be included; --resume avoids rerunning it).
+#    External trainable adapters use B-specific checkpoints.
+#    BDSE uses the same frozen B16 learned EAF/RSMR artifacts and changes only B.
+# -----------------------------------------------------------------------------
+GPUS=0,1 BUDGETS="8 16 24" CL_WORKERS_PER_JOB=4 \
+V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
 
-# 3) Recommended secondary robustness check after the primary nonreactive sweep:
-#    reactive agents at the primary B16 only (same systems / same metric-safe runner).
-GPUS=0,1 CL_WORKERS_PER_JOB=4 BUDGETS="16" CL_CHALLENGE=closed_loop_reactive_agents \
+# Optional: external baselines only, one budget at a time.
+GPUS=0,1 BUDGETS="8"  CL_WORKERS_PER_JOB=4 bash RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
+GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 bash RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
+GPUS=0,1 BUDGETS="24" CL_WORKERS_PER_JOB=4 bash RUN_EXTERNAL_FIXED_BUDGET_CLOSED_LOOP_TEST_B8_B16_B24_2GPU.sh
+
+# Optional: BDSE-only frozen cross-budget robustness, one budget at a time.
+# There is intentionally NO post-convergence B8/B24 training command for BDSE.
+GPUS=0,1 BUDGETS="8"  CL_WORKERS_PER_JOB=4 bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
+GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
+GPUS=0,1 BUDGETS="24" CL_WORKERS_PER_JOB=4 bash RUN_V64_3_56_OWN_FROZEN_B8_B16_B24_CLOSED_LOOP_2GPU.sh
+
+# -----------------------------------------------------------------------------
+# 3) Recommended secondary robustness after the primary nonreactive B16 result:
+#    reactive agents at B16 only.
+# -----------------------------------------------------------------------------
+GPUS=0,1 BUDGETS="16" CL_WORKERS_PER_JOB=4 CL_CHALLENGE=closed_loop_reactive_agents \
 BENCH_OUT_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/closed_loop/v64_3_56_converged_reactive_B16 \
 V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
 EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \

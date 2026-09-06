@@ -372,8 +372,14 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
-    (root / "scenario_tokens.json").write_text(json.dumps(tokens, indent=2), encoding="utf-8")
-    token_override = "scenario_filter.scenario_tokens=" + json.dumps(tokens, separators=(",", ":"))
+    token_manifest = root / "scenario_tokens.json"
+    token_manifest.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+    # Never serialize the full test population into this process' argv.  The
+    # full public_set_test contains O(10^5) tokens and a single Hydra override
+    # such as scenario_filter.scenario_tokens=[...] can exceed Linux'
+    # MAX_ARG_STRLEN before Python/nuPlan even starts.  Pass a short manifest
+    # path to the evaluator; it validates the hash, constructs the Hydra
+    # override in memory, and dispatches nuPlan in-process when needed.
     task_device = "cpu" if task.name == "pdm_closed_style" else args.device
     cmd = [
         sys.executable, "-m", "bdse.experiments.evaluate_closed_loop",
@@ -390,15 +396,22 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
         "--nuplan-data-root", str(args.nuplan_root),
         "--nuplan-map-root", str(args.nuplan_map_root),
         "--nuplan-exp-root", str(args.nuplan_exp_root),
+        "--scenario-tokens-file", str(token_manifest),
+        "--scenario-tokens-sha256", str(token_sha),
     ]
     if args.resolved_db_files:
-        cmd += ["--nuplan-db-files", *[str(p) for p in args.resolved_db_files]]
+        db_manifest = root / "nuplan_db_files.json"
+        db_manifest.write_text(
+            json.dumps([str(p.resolve()) for p in args.resolved_db_files], indent=2),
+            encoding="utf-8",
+        )
+        cmd += ["--nuplan-db-files-file", str(db_manifest)]
     else:
         cmd += ["--nuplan-db-root", str(args.nuplan_db_root)]
     if task.checkpoint is not None:
         cmd += ["--checkpoint", str(task.checkpoint)]
     cmd += [
-        "--", token_override,
+        "--",
         f"scenario_filter.limit_total_scenarios={len(tokens)}",
         "scenario_filter.shuffle=false",
         "scenario_filter.log_names=null",
@@ -727,7 +740,6 @@ def main() -> None:
         "nuplan_exp_root": str(args.nuplan_exp_root.resolve()),
         "budgets": [int(x) for x in args.budgets],
         "proposal_top_m": int(args.proposal_top_m),
-        "nuplan_db_mode": "restricted_files" if args.resolved_db_files else "root",
         "nuplan_db_file_count": len(args.resolved_db_files) if args.resolved_db_files else -1,
         "nuplan_workers_per_job": int(args.workers_per_job),
         "token_scan_workers": int(args.token_scan_workers),
