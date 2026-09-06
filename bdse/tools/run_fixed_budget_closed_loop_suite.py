@@ -25,6 +25,10 @@ import yaml
 from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
 
 
+METRIC_SAFE_NUPLAN_MODULE = "bdse.tools.nuplan_metric_safe_run_simulation"
+METRIC_SAFE_ENV_KEY = "BDSE_PIOR_METRIC_ENGINE_SERIALIZATION"
+
+
 @dataclass(frozen=True)
 class SystemTask:
     name: str
@@ -44,6 +48,31 @@ def sha256(path: Path) -> str:
 
 def _token_hash(tokens: list[str]) -> str:
     return hashlib.sha256(("\n".join(tokens) + "\n").encode("utf-8")).hexdigest()
+
+
+def _resume_summary_compatible(
+    data: dict[str, Any],
+    *,
+    scenario_count: int,
+    token_sha: str,
+    config_sha: str,
+    checkpoint_sha: str,
+) -> bool:
+    """Only resume results produced by the metric-safe benchmark path.
+
+    V50.4 established that concurrent access to nuPlan's shared stateful
+    MetricsEngine can fail loudly or silently contaminate final metrics.  Older
+    fixed-budget results did not carry a metric-safety provenance marker, so
+    they must not be reused after this benchmark repair.
+    """
+    return bool(
+        int(data.get("scenario_count", -1)) == int(scenario_count)
+        and str(data.get("scenario_token_sha256", "")) == str(token_sha)
+        and str(data.get("config_sha256", "")) == str(config_sha)
+        and str(data.get("checkpoint_sha256", "")) == str(checkpoint_sha)
+        and data.get("metric_engine_serialized") is True
+        and str(data.get("nuplan_module", "")) == METRIC_SAFE_NUPLAN_MODULE
+    )
 
 
 def _read_token_and_hint(path: Path) -> tuple[str, str] | None:
@@ -327,11 +356,12 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
     expected_ckpt_sha = "" if task.checkpoint is None else sha256(task.checkpoint)
     if args.resume and summary_path.is_file() and complete_path.is_file():
         data = json.loads(summary_path.read_text(encoding="utf-8"))
-        if (
-            int(data.get("scenario_count", -1)) == len(tokens)
-            and str(data.get("scenario_token_sha256", "")) == token_sha
-            and str(data.get("config_sha256", "")) == sha256(task.config)
-            and str(data.get("checkpoint_sha256", "")) == expected_ckpt_sha
+        if _resume_summary_compatible(
+            data,
+            scenario_count=len(tokens),
+            token_sha=token_sha,
+            config_sha=sha256(task.config),
+            checkpoint_sha=expected_ckpt_sha,
         ):
             print(
                 f"[task-resume] system={task.name} B={task.budget} already complete; "
@@ -353,7 +383,7 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
         "--metric-aggregator", args.metric_aggregator,
         "--output-dir", str(root),
         "--experiment-uid", f"fixedB{task.budget}_{task.name}_{args.challenge}_{len(tokens)}",
-        "--nuplan-module", "nuplan.planning.script.run_simulation",
+        "--nuplan-module", METRIC_SAFE_NUPLAN_MODULE,
         "--scenario-builder", "nuplan",
         "--worker", "single_machine_thread_pool",
         "--hydra-full-error",
@@ -389,6 +419,7 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
         "BDSE_SHARD_PLANNERS_ACROSS_GPUS": "0",
         "BDSE_PROFILE_CLOSED_LOOP": "1",
         "BDSE_CLOSED_LOOP_PROFILE_JSON": str(root / "bdse_closed_loop_profile.json"),
+        METRIC_SAFE_ENV_KEY: "1",
         "OMP_NUM_THREADS": "1",
         "MKL_NUM_THREADS": "1",
         "OPENBLAS_NUM_THREADS": "1",
@@ -480,14 +511,25 @@ def run_task(task: SystemTask, gpu: str, tokens: list[str], token_sha: str, args
         "checkpoint": "" if task.checkpoint is None else str(task.checkpoint.resolve()),
         "checkpoint_sha256": expected_ckpt_sha,
         "metric_file": str(metric_file),
+        "metric_engine_serialized": True,
+        "nuplan_module": METRIC_SAFE_NUPLAN_MODULE,
         "budget_semantics_warning": (
             "Current repository PDM-Closed-style scorer is not the official PDM-Closed planner and its static J0 does not consume selected evidence; B is interface accounting rather than the original planner's proposal count."
-            if task.name == "pdm_closed_style" else ""
+            if task.name == "pdm_closed_style" else
+            (
+                "BDSE was fit at B=16; B=8/B=24 are frozen-policy cross-budget robustness ablations, not budget-specific retraining. Use B=16 as the primary matched-interface comparison unless a preregistered per-budget BDSE fit is supplied."
+                if task.name == "bdse" and int(task.budget) != 16 else ""
+            )
         ),
     }
     summary.update(metrics)
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    complete_path.write_text(json.dumps({"complete": True, "scenario_token_sha256": token_sha}, indent=2), encoding="utf-8")
+    complete_path.write_text(json.dumps({
+        "complete": True,
+        "scenario_token_sha256": token_sha,
+        "metric_engine_serialized": True,
+        "nuplan_module": METRIC_SAFE_NUPLAN_MODULE,
+    }, indent=2), encoding="utf-8")
     print(
         f"[task-done] system={task.name} B={task.budget} scenarios={success}/{len(tokens)} "
         f"wall={wall / 60.0:.1f}min throughput={summary['scenarios_per_wall_hour']:.1f} scenarios/h output={root}",
@@ -570,6 +612,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Paired test-set nuPlan closed-loop suite for B in {8,16,24} with fixed upstream M.")
     p.add_argument("--own-config", type=Path, default=None, help="Resolved deployed config for the user's BDSE model; required only when --systems includes bdse.")
     p.add_argument("--own-checkpoint", type=Path, default=None, help="Required only when --systems includes bdse.")
+    p.add_argument("--own-label", type=str, default="BDSE frozen deployable model", help="Display label for --systems bdse; does not change planner behavior.")
     p.add_argument("--external-checkpoint-root", type=Path, default=Path("outputs/external_fixed_budget"), help="Root containing B{budget}/{name}_budgeted.best.pt checkpoints from budget-specific training")
     p.add_argument("--allow-shared-external-checkpoint", action="store_true", help="Allow legacy one-checkpoint-for-all-B evaluation; use only for cross-budget ablations, not the strict primary comparison")
     p.add_argument("--split-cache", type=Path, required=True, help="BDSE NPZ test cache root, e.g. .../bdse_test_2")
@@ -701,7 +744,7 @@ def main() -> None:
     }
     if "bdse" in args.systems:
         assert args.own_config is not None
-        source_specs["bdse"] = ("BDSE-PTMC (user model; frozen-policy cross-budget ablation when B differs from fitted B)", args.own_config, None)
+        source_specs["bdse"] = (str(args.own_label), args.own_config, None)
     unknown = [x for x in args.systems if x not in source_specs]
     if unknown:
         raise ValueError(f"unknown --systems: {unknown}")

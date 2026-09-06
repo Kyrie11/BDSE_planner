@@ -13669,3 +13669,64 @@ Keep the stable headline:
 **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface.**
 
 V56 tests the final state-level hypothesis that outcome sufficiency for an extremal no-fallback intervention is mediated by **operator-relative realized constraint consequence**, rather than by additional ego geometry or generic prediction capacity.
+
+---
+
+# V64.3.56 scientific result — internal search converged by falsification; transition to external benchmarking
+
+## Reliability
+
+The uploaded V56 package is exact (`52229d8c51a17bfb02a4dd68bbda41f07697ce6b1d5b1a1240a6d6c27a98f55f`).
+The result package is engineering/provenance-valid: V56 science manifest PASS, 85/85 targeted regression PASS, exact V50.5/V52/V53/V54/V55 parent/evidence hashes, 502/502 control and 502/502 treatment constraint-process replays, zero simulation failures, exact paired token/timestamp alignment, and all 38 planned-physical-equality interventions retain exactly zero realized process difference. No final outcome label was recollected.
+
+## Preregistered verdict
+
+### REALIZED-CONSTRAINT-PROCESS — Deployment GO, mechanism-identification STOP
+
+The oracle policy is operationally strong on consumed TRAIN paired outcomes:
+
+- selected `441`;
+- beneficial `115/121 = 95.0413%`;
+- nonbeneficial `381 -> 326`;
+- hard harm `25 -> 15`;
+- closed-loop score sum `-4.2409 -> +0.8408`;
+- NegRMS `0.15486 -> 0.12989`;
+- unchanged deployment gate: all components PASS, including all-fold nonharm.
+
+However, the preregistered causal-identification requirement fails:
+
+- Pareto concordance `0.576731 > 0.5`;
+- `4/5` folds above random;
+- exact V55 control `0.567756`;
+- only `2/5` folds beat the exact V55 control, below the preregistered `4/5` requirement.
+
+Therefore the new realized constraint-process state is **not identified as a stable incremental mechanism**. The aggregate policy improvement cannot be promoted or used to relax the gate.
+
+### PREDICTED-CONSTRAINT-PROCESS — NOT EVALUATED
+
+Strict branch order was obeyed. Because the oracle did not fully pass identification + deployment, the t0 bridge was not fit/scored. Do not infer predictor success or failure.
+
+## Internal convergence decision
+
+This is preregistered **case B**:
+
+`REALIZED-CONSTRAINT-PROCESS oracle fails full promotion -> internal search converged by falsification`.
+
+Do not create V57/V58 state/feature variants. Do not rescue V56 with threshold, alpha, lambda, Pareto weighting, safety scalarization, larger MLP/attention, process channel transforms, horizon/basis sweeps, or post-hoc policy union.
+
+Retain as scientific evidence:
+
+- V52 effect-support factorization;
+- V54 realized ego endpoint as an identified diagnostic mediator;
+- V55 unweighted Pareto partial order as an identified supporting functional;
+- V56 policy-level observation that direct constraint consequence can produce a strong deployment rotation, **without** claiming the V56 state family itself is identified.
+
+The paper headline remains **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface**. V56 establishes the falsification boundary: even a deployment-aligned realized interaction/safety process cannot be attributed as a stable incremental state family under the preregistered fold criterion.
+
+## Post-convergence benchmark policy
+
+TRAIN algorithm search is closed. External benchmarking uses the strongest fully t0-deployable frozen backbone: full-set EAF-RSMR. V54/V55/V56 post-intervention oracle state is never used at runtime.
+
+Primary matched-interface comparison is B=16. B=8/B=24 for BDSE are frozen-policy cross-budget robustness ablations unless a separately preregistered per-budget BDSE fit exists; external trainable adapters use budget-specific checkpoints. PDM-Closed-style in this repository must remain labeled as a style baseline, not the official PDM-Closed implementation.
+
+Formal closed-loop comparison must use metric-safe serialized nuPlan metric callbacks. Older fixed-budget closed-loop results without this provenance marker are invalidated for resume because V50.4 demonstrated that concurrent shared MetricsEngine callbacks can fail loudly or silently contaminate metrics.

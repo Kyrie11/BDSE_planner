@@ -1,0 +1,25 @@
+V64.3.56 post-convergence benchmark engineering validation
+
+Scientific algorithm status:
+- no V57/V58 algorithm created
+- V56 science manifest unchanged and PASS
+- benchmarked own method is frozen t0-deployable EAF-RSMR; V54/V55/V56 post-intervention oracle state is excluded
+
+Engineering repairs:
+- fixed-budget closed-loop suite now uses bdse.tools.nuplan_metric_safe_run_simulation for every system
+- process-wide stateful nuPlan metric callbacks are serialized; simulation/planner workers remain parallel
+- resume requires metric_engine_serialized=true and exact metric-safe module provenance, invalidating older unsafe summaries
+- own model display label corrected to generic/frozen RSMR label instead of stale BDSE-PTMC wording
+- own B8/B24 results receive explicit frozen-policy cross-budget warning
+- new convergence benchmark launcher runs BDSE + GameFormer-inspired + DTPP-inspired + PlanTF-inspired + PLUTO-inspired + PDM-Closed-style on one paired token manifest
+- B16 is explicitly primary; B8/B24 BDSE are robustness ablations
+
+Validation:
+- Python compileall: PASS
+- benchmark launcher bash -n: PASS
+- original V56 science manifest: PASS
+- focused benchmark/external/closed-loop/metric-safety tests: 38/38 PASS
+- full repository: 666/666 PASS
+- test files: 135/135 covered
+- four mutually exclusive test-file shards: 195 + 162 + 148 + 161 = 666
+- warnings: historical PyTorch Transformer nested-tensor warnings only; no new warning class

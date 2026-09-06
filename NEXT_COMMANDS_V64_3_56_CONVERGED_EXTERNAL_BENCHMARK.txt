@@ -1,0 +1,20 @@
+# 1) Train external trainable adapters separately at B8/B16/B24 (same command as user runbook)
+GPUS=0,1 bash RUN_FAIR_EXTERNAL_BASELINES_TRAIN_B8_B16_B24_2GPU.sh
+
+# 2) Run one paired metric-safe full closed-loop sweep containing BDSE + all baselines.
+#    B16 is the primary matched-interface comparison; BDSE B8/B24 are explicitly cross-budget ablations.
+GPUS=0,1 CL_WORKERS_PER_JOB=4 \
+V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
+
+# Optional: explicitly set the checkpoint if automatic V13 epoch resolution is not suitable.
+# EAF_CKPT=/path/to/bdse_v64_saqa_bcc.epoch_XXXX.pt ... bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh
+
+# 3) Recommended secondary robustness check after the primary nonreactive sweep:
+#    reactive agents at the primary B16 only (same systems / same metric-safe runner).
+GPUS=0,1 CL_WORKERS_PER_JOB=4 BUDGETS="16" CL_CHALLENGE=closed_loop_reactive_agents \
+BENCH_OUT_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/closed_loop/v64_3_56_converged_reactive_B16 \
+V47_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_47_eaf_icer_fsfr_screen_2gpu_v1 \
+EAF_V64_3_13_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_13_eaf_dmvr_screen_2gpu_v1 \
+bash RUN_V64_3_56_CONVERGED_CLOSED_LOOP_B8_B16_B24_2GPU.sh

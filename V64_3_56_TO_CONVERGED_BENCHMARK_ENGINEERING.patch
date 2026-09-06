@@ -1,0 +1,192 @@
+--- /mnt/data/v56_code/bdse_v64_3_56_eaf_icer_rcpr/bdse/tools/run_fixed_budget_closed_loop_suite.py	2026-09-05 05:38:40.000000000 +0000
++++ /mnt/data/bdse_v64_3_56_converged_benchmark_ready/bdse/tools/run_fixed_budget_closed_loop_suite.py	2026-09-06 04:46:13.464053553 +0000
+@@ -25,6 +25,10 @@
+ from bdse.data.nuplan_dataset import PreprocessedBDSEDataset
+ 
+ 
++METRIC_SAFE_NUPLAN_MODULE = "bdse.tools.nuplan_metric_safe_run_simulation"
++METRIC_SAFE_ENV_KEY = "BDSE_PIOR_METRIC_ENGINE_SERIALIZATION"
++
++
+ @dataclass(frozen=True)
+ class SystemTask:
+     name: str
+@@ -46,6 +50,31 @@
+     return hashlib.sha256(("\n".join(tokens) + "\n").encode("utf-8")).hexdigest()
+ 
+ 
++def _resume_summary_compatible(
++    data: dict[str, Any],
++    *,
++    scenario_count: int,
++    token_sha: str,
++    config_sha: str,
++    checkpoint_sha: str,
++) -> bool:
++    """Only resume results produced by the metric-safe benchmark path.
++
++    V50.4 established that concurrent access to nuPlan's shared stateful
++    MetricsEngine can fail loudly or silently contaminate final metrics.  Older
++    fixed-budget results did not carry a metric-safety provenance marker, so
++    they must not be reused after this benchmark repair.
++    """
++    return bool(
++        int(data.get("scenario_count", -1)) == int(scenario_count)
++        and str(data.get("scenario_token_sha256", "")) == str(token_sha)
++        and str(data.get("config_sha256", "")) == str(config_sha)
++        and str(data.get("checkpoint_sha256", "")) == str(checkpoint_sha)
++        and data.get("metric_engine_serialized") is True
++        and str(data.get("nuplan_module", "")) == METRIC_SAFE_NUPLAN_MODULE
++    )
++
++
+ def _read_token_and_hint(path: Path) -> tuple[str, str] | None:
+     try:
+         with np.load(path, allow_pickle=False) as z:
+@@ -327,11 +356,12 @@
+     expected_ckpt_sha = "" if task.checkpoint is None else sha256(task.checkpoint)
+     if args.resume and summary_path.is_file() and complete_path.is_file():
+         data = json.loads(summary_path.read_text(encoding="utf-8"))
+-        if (
+-            int(data.get("scenario_count", -1)) == len(tokens)
+-            and str(data.get("scenario_token_sha256", "")) == token_sha
+-            and str(data.get("config_sha256", "")) == sha256(task.config)
+-            and str(data.get("checkpoint_sha256", "")) == expected_ckpt_sha
++        if _resume_summary_compatible(
++            data,
++            scenario_count=len(tokens),
++            token_sha=token_sha,
++            config_sha=sha256(task.config),
++            checkpoint_sha=expected_ckpt_sha,
+         ):
+             print(
+                 f"[task-resume] system={task.name} B={task.budget} already complete; "
+@@ -353,7 +383,7 @@
+         "--metric-aggregator", args.metric_aggregator,
+         "--output-dir", str(root),
+         "--experiment-uid", f"fixedB{task.budget}_{task.name}_{args.challenge}_{len(tokens)}",
+-        "--nuplan-module", "nuplan.planning.script.run_simulation",
++        "--nuplan-module", METRIC_SAFE_NUPLAN_MODULE,
+         "--scenario-builder", "nuplan",
+         "--worker", "single_machine_thread_pool",
+         "--hydra-full-error",
+@@ -389,6 +419,7 @@
+         "BDSE_SHARD_PLANNERS_ACROSS_GPUS": "0",
+         "BDSE_PROFILE_CLOSED_LOOP": "1",
+         "BDSE_CLOSED_LOOP_PROFILE_JSON": str(root / "bdse_closed_loop_profile.json"),
++        METRIC_SAFE_ENV_KEY: "1",
+         "OMP_NUM_THREADS": "1",
+         "MKL_NUM_THREADS": "1",
+         "OPENBLAS_NUM_THREADS": "1",
+@@ -480,14 +511,25 @@
+         "checkpoint": "" if task.checkpoint is None else str(task.checkpoint.resolve()),
+         "checkpoint_sha256": expected_ckpt_sha,
+         "metric_file": str(metric_file),
++        "metric_engine_serialized": True,
++        "nuplan_module": METRIC_SAFE_NUPLAN_MODULE,
+         "budget_semantics_warning": (
+             "Current repository PDM-Closed-style scorer is not the official PDM-Closed planner and its static J0 does not consume selected evidence; B is interface accounting rather than the original planner's proposal count."
+-            if task.name == "pdm_closed_style" else ""
++            if task.name == "pdm_closed_style" else
++            (
++                "BDSE was fit at B=16; B=8/B=24 are frozen-policy cross-budget robustness ablations, not budget-specific retraining. Use B=16 as the primary matched-interface comparison unless a preregistered per-budget BDSE fit is supplied."
++                if task.name == "bdse" and int(task.budget) != 16 else ""
++            )
+         ),
+     }
+     summary.update(metrics)
+     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+-    complete_path.write_text(json.dumps({"complete": True, "scenario_token_sha256": token_sha}, indent=2), encoding="utf-8")
++    complete_path.write_text(json.dumps({
++        "complete": True,
++        "scenario_token_sha256": token_sha,
++        "metric_engine_serialized": True,
++        "nuplan_module": METRIC_SAFE_NUPLAN_MODULE,
++    }, indent=2), encoding="utf-8")
+     print(
+         f"[task-done] system={task.name} B={task.budget} scenarios={success}/{len(tokens)} "
+         f"wall={wall / 60.0:.1f}min throughput={summary['scenarios_per_wall_hour']:.1f} scenarios/h output={root}",
+@@ -570,6 +612,7 @@
+     p = argparse.ArgumentParser(description="Paired test-set nuPlan closed-loop suite for B in {8,16,24} with fixed upstream M.")
+     p.add_argument("--own-config", type=Path, default=None, help="Resolved deployed config for the user's BDSE model; required only when --systems includes bdse.")
+     p.add_argument("--own-checkpoint", type=Path, default=None, help="Required only when --systems includes bdse.")
++    p.add_argument("--own-label", type=str, default="BDSE frozen deployable model", help="Display label for --systems bdse; does not change planner behavior.")
+     p.add_argument("--external-checkpoint-root", type=Path, default=Path("outputs/external_fixed_budget"), help="Root containing B{budget}/{name}_budgeted.best.pt checkpoints from budget-specific training")
+     p.add_argument("--allow-shared-external-checkpoint", action="store_true", help="Allow legacy one-checkpoint-for-all-B evaluation; use only for cross-budget ablations, not the strict primary comparison")
+     p.add_argument("--split-cache", type=Path, required=True, help="BDSE NPZ test cache root, e.g. .../bdse_test_2")
+@@ -701,7 +744,7 @@
+     }
+     if "bdse" in args.systems:
+         assert args.own_config is not None
+-        source_specs["bdse"] = ("BDSE-PTMC (user model; frozen-policy cross-budget ablation when B differs from fitted B)", args.own_config, None)
++        source_specs["bdse"] = (str(args.own_label), args.own_config, None)
+     unknown = [x for x in args.systems if x not in source_specs]
+     if unknown:
+         raise ValueError(f"unknown --systems: {unknown}")
+--- /mnt/data/v56_code/bdse_v64_3_56_eaf_icer_rcpr/ALGORITHM_CHANGELOG.md	2026-09-06 02:54:32.000000000 +0000
++++ /mnt/data/bdse_v64_3_56_converged_benchmark_ready/ALGORITHM_CHANGELOG.md	2026-09-06 04:47:32.008022630 +0000
+@@ -13669,3 +13669,64 @@
+ **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface.**
+ 
+ V56 tests the final state-level hypothesis that outcome sufficiency for an extremal no-fallback intervention is mediated by **operator-relative realized constraint consequence**, rather than by additional ego geometry or generic prediction capacity.
++
++---
++
++# V64.3.56 scientific result — internal search converged by falsification; transition to external benchmarking
++
++## Reliability
++
++The uploaded V56 package is exact (`52229d8c51a17bfb02a4dd68bbda41f07697ce6b1d5b1a1240a6d6c27a98f55f`).
++The result package is engineering/provenance-valid: V56 science manifest PASS, 85/85 targeted regression PASS, exact V50.5/V52/V53/V54/V55 parent/evidence hashes, 502/502 control and 502/502 treatment constraint-process replays, zero simulation failures, exact paired token/timestamp alignment, and all 38 planned-physical-equality interventions retain exactly zero realized process difference. No final outcome label was recollected.
++
++## Preregistered verdict
++
++### REALIZED-CONSTRAINT-PROCESS — Deployment GO, mechanism-identification STOP
++
++The oracle policy is operationally strong on consumed TRAIN paired outcomes:
++
++- selected `441`;
++- beneficial `115/121 = 95.0413%`;
++- nonbeneficial `381 -> 326`;
++- hard harm `25 -> 15`;
++- closed-loop score sum `-4.2409 -> +0.8408`;
++- NegRMS `0.15486 -> 0.12989`;
++- unchanged deployment gate: all components PASS, including all-fold nonharm.
++
++However, the preregistered causal-identification requirement fails:
++
++- Pareto concordance `0.576731 > 0.5`;
++- `4/5` folds above random;
++- exact V55 control `0.567756`;
++- only `2/5` folds beat the exact V55 control, below the preregistered `4/5` requirement.
++
++Therefore the new realized constraint-process state is **not identified as a stable incremental mechanism**. The aggregate policy improvement cannot be promoted or used to relax the gate.
++
++### PREDICTED-CONSTRAINT-PROCESS — NOT EVALUATED
++
++Strict branch order was obeyed. Because the oracle did not fully pass identification + deployment, the t0 bridge was not fit/scored. Do not infer predictor success or failure.
++
++## Internal convergence decision
++
++This is preregistered **case B**:
++
++`REALIZED-CONSTRAINT-PROCESS oracle fails full promotion -> internal search converged by falsification`.
++
++Do not create V57/V58 state/feature variants. Do not rescue V56 with threshold, alpha, lambda, Pareto weighting, safety scalarization, larger MLP/attention, process channel transforms, horizon/basis sweeps, or post-hoc policy union.
++
++Retain as scientific evidence:
++
++- V52 effect-support factorization;
++- V54 realized ego endpoint as an identified diagnostic mediator;
++- V55 unweighted Pareto partial order as an identified supporting functional;
++- V56 policy-level observation that direct constraint consequence can produce a strong deployment rotation, **without** claiming the V56 state family itself is identified.
++
++The paper headline remains **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface**. V56 establishes the falsification boundary: even a deployment-aligned realized interaction/safety process cannot be attributed as a stable incremental state family under the preregistered fold criterion.
++
++## Post-convergence benchmark policy
++
++TRAIN algorithm search is closed. External benchmarking uses the strongest fully t0-deployable frozen backbone: full-set EAF-RSMR. V54/V55/V56 post-intervention oracle state is never used at runtime.
++
++Primary matched-interface comparison is B=16. B=8/B=24 for BDSE are frozen-policy cross-budget robustness ablations unless a separately preregistered per-budget BDSE fit exists; external trainable adapters use budget-specific checkpoints. PDM-Closed-style in this repository must remain labeled as a style baseline, not the official PDM-Closed implementation.
++
++Formal closed-loop comparison must use metric-safe serialized nuPlan metric callbacks. Older fixed-budget closed-loop results without this provenance marker are invalidated for resume because V50.4 demonstrated that concurrent shared MetricsEngine callbacks can fail loudly or silently contaminate metrics.
