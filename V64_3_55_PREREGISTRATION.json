@@ -1,0 +1,92 @@
+{
+  "algorithm_version": "V64.3.55-EAF-ICER-DMOR",
+  "arms": {
+    "predicted_dominance": {
+      "deployment_gate": "exact frozen V50/V51/V52 paired gate",
+      "eligible_only_if": "realized_dominance identification AND exact deployment gate PASS; otherwise this arm is not fit, scored, or reported",
+      "functional": "identical Pareto functional to realized_dominance",
+      "mediator_identification_gate": {
+        "aggregate_normalized_mse_lt_zero_mediator_baseline": true,
+        "folds_better_zero_min": 4
+      },
+      "mediator_predictor": "zero-bias zero-preserving multi-output ridge, lambda=1, input=fixed V53 planned endpoint+DCT channels, target=V54 realized endpoint",
+      "outcome_identification_gate": {
+        "aggregate_concordance_gt_exact_V52_static_pareto": true,
+        "folds_concordance_gt_random_min": 4,
+        "folds_gt_exact_V52_static_pareto_min": 4,
+        "pareto_concordance_gt": 0.5
+      },
+      "runtime_deployable": true,
+      "state": "QPE+D plus cross-fitted predicted realized endpoint"
+    },
+    "realized_dominance": {
+      "deployment_gate": "exact frozen V50/V51/V52 paired gate",
+      "functional": "effect-support hurdle plus unweighted Pareto pairwise order over existing paired closed-loop score and hard-safety deltas",
+      "identification_gate": {
+        "aggregate_concordance_gt_exact_V52_static_pareto": true,
+        "folds_concordance_gt_random_min": 4,
+        "folds_gt_exact_V52_static_pareto_min": 4,
+        "pareto_concordance_gt": 0.5
+      },
+      "question": "Does operator-aligned structured outcome order close the deployment gap once the mediator state is actually sufficient?",
+      "runtime_deployable": false,
+      "state": "QPE+D plus exact V54 realized endpoint mediator"
+    }
+  },
+  "branch_order": [
+    "realized_dominance",
+    "predicted_dominance"
+  ],
+  "branch_order_policy": "strict sequential fail-closed: predicted_dominance is not evaluated if realized_dominance fails",
+  "dominant_bottleneck": "operator-aligned structured outcome order over an identified realized mediator, followed by t0 mediator distillation",
+  "frozen": {
+    "V50_5_metric_safe_502_paired_outcomes": true,
+    "V52_QPE_plus_D_effect_support": true,
+    "V53_planned_endpoint_and_DCT_basis": true,
+    "V54_realized_endpoint_definition": true,
+    "bounded_interface_EAF_support_admissibility": true,
+    "full_set_RSMR_winner": true,
+    "outer_folds": 5,
+    "pairwise_ridge_lambda": 1.0,
+    "retention_alpha": 0.07791855203619909,
+    "safety_scalarization": false,
+    "same_winner_or_incumbent_no_fallback": true
+  },
+  "internal_convergence_condition": "A t0-deployable TRAIN arm passes the frozen nested identification and deployment gates. Freeze immediately; no further TRAIN algorithm tuning. Perform engineering-only runtime integration and untouched paired validation. If untouched passes independently, internal algorithm search stops and external baseline/official closed-loop benchmarking begins.",
+  "mechanism_hypothesis": "V54 identifies the actual one-replan treatment-control ego transition, but binary beneficial/nonbeneficial ranking fails to preserve deployment severity and hard-tail order. If the realized endpoint is a sufficient mediator, an unweighted paired outcome dominance functional should close the historical paired deployment gate. Only after that diagnostic oracle passes may the mediator be distilled from the already-fixed V53 pre-execution planned operator profile and tested as a t0-available state.",
+  "name": "Dynamic-Mediator Outcome Retention",
+  "next_branches": {
+    "if_predicted_dominance_passes": "freeze; engineering-only runtime integration; untouched paired validation; no more TRAIN tuning",
+    "if_predicted_identified_but_deployment_fails": "static predicted-mediator state plus Pareto functional exhausted; do not tune thresholds or add state; only a temporal/constraint outcome process is eligible",
+    "if_realized_dominance_fails": "close the combination of static one-replan ego mediator with currently tested static sign/Pareto functionals as deployment-sufficient; retain the realized endpoint as an identified diagnostic mediator. The next and final internal state family is realized interaction/safety consequence process, not more ego geometry.",
+    "if_realized_passes_predicted_fails": "mediator prediction is the sole remaining static bottleneck; permit at most one predeclared runtime dynamics nuisance model without changing outcome state/functional"
+  },
+  "prohibited": [
+    "using true post-intervention V54 mediator at t0",
+    "response/planned horizon sweep",
+    "DCT basis or mode-count sweep",
+    "endpoint/peak/early handcrafted feature sweep",
+    "safety weights or safety scalarization",
+    "threshold/alpha/lambda/loss/class/focal/catastrophe weighting",
+    "larger MLP or attention",
+    "new offline future observables",
+    "RSMR/B/M/top-K/candidate-count change",
+    "rerank/second-best/fallback",
+    "K/logK/multiplicity",
+    "random-prefix SIIR",
+    "CVaR/selected translation/binary catastrophe veto",
+    "validation pooling",
+    "untouched validation before a t0-deployable TRAIN PASS"
+  ],
+  "scientific_role": "V54 realized endpoint mediator identified but static sign oracle all-fold-nonharm failed branch",
+  "train_pass_definition": "predicted_dominance mediator prediction identified AND structured outcome identified AND exact deployment gate PASS, with realized_dominance already PASS",
+  "trigger": {
+    "v52_effect_support_auc": 0.6516244589283049,
+    "v54_dynamic_profiles_sha256": "dd2bdd809a757ce74973d7ce2c3189fad60dc0d3e0125d7fcec9ca7ad1bda373",
+    "v54_fit_sha256": "10f3e60c82bb8b82f1f688e866a27008e1498b67d2e194b0c7aadec5368536d8",
+    "v54_realized_endpoint_auc": 0.6117518844791572,
+    "v54_realized_endpoint_identified": true,
+    "v54_realized_endpoint_static_sign_oracle_pass": false,
+    "v54_realized_temporal_necessity_identified": false
+  }
+}

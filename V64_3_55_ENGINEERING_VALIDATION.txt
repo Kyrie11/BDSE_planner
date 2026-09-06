@@ -1,0 +1,82 @@
+V64.3.55 EAF-ICER-DMOR ENGINEERING VALIDATION
+================================================
+
+Scientific status
+-----------------
+V55 code/design is implemented and preregistered. No V55 scientific TRAIN fit
+was executed in the delivery environment, and no V55 success is claimed.
+
+V54 trigger reliability (uploaded result)
+-----------------------------------------
+- uploaded V54.1 repaired code ZIP SHA256:
+  b841cd90ce8cb93f58404be1ecb98df6a99fc12b05e68578fe3a14efc5f8fe14
+- uploaded V54 result ZIP SHA256:
+  76c6b81b8bf007222ee08ce598aaac195d62eff3453815ade1d999bbc0c6b4f7
+- V54 result-defining science manifest: 20/20 PASS
+- V54 server targeted regression: 74/74 PASS
+- V50.5 paired outcome SHA256 exact:
+  d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43
+- V52 fit SHA256 exact:
+  7a21fead5383ebd6aafaeb5da586346a77e5707050cb359511a06971b742a16b
+- V53 fit SHA256 exact:
+  9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e
+- V53 operator-profile SHA256 exact:
+  9a69c196a1d76e9c5d424068df223ec26f0e481252f25f67d5bb17fd355aaef6
+- V54 fit SHA256 exact:
+  10f3e60c82bb8b82f1f688e866a27008e1498b67d2e194b0c7aadec5368536d8
+- V54 dynamic profile SHA256 exact:
+  dd2bdd809a757ce74973d7ce2c3189fad60dc0d3e0125d7fcec9ca7ad1bda373
+- treatment/control short-horizon collection: 502/502 each, zero failures
+- samples: exactly 6 synchronized samples/arm/scene, iterations 0..5
+- paired token, iteration and timestamp identity: PASS
+- initial paired state identity: 502/502 PASS
+- planned-physical-equality -> realized-zero: 38/38 PASS
+- new outcome labels / final nuPlan metrics collected by V54: NO
+- untouched validation consumed: NO
+
+V55 implementation checks
+-------------------------
+- Python compileall: PASS
+- launcher bash -n: PASS
+- V55 curated result-defining science manifest: 19/19 PASS
+- V55 focused tests: 8/8 PASS
+- V55 + V54/V53/V52/V51/V50/V50.5/V48 targeted causal suite: 77/77 PASS
+- full repository: 654/654 PASS
+- test files: 133/133 covered
+- mutually exclusive test-file shards:
+    shard 0: 200 PASS
+    shard 1: 161 PASS
+    shard 2: 139 PASS
+    shard 3: 154 PASS
+    total:   654 PASS
+- only pre-existing PyTorch Transformer nested-tensor warning class observed
+
+Scientific-protocol checks added in V55
+---------------------------------------
+- REALIZED-DOMINANCE is evaluated first.
+- PREDICTED-DOMINANCE is NOT fit/scored/emitted unless REALIZED-DOMINANCE
+  passes both its identification gate and the unchanged paired deployment gate.
+- V53 planned operator profile input is SHA locked.
+- V54 realized mediator artifact is SHA locked.
+- paired V50.5 outcomes and V52 parent fit are SHA locked.
+- mediator nuisance fitting excludes outer test + calibration folds.
+- outer-fit outcome training consumes inner-OOF predicted mediators.
+- mediator predictor is zero-bias / zero-preserving with fixed lambda=1.
+- true post-intervention mediator is diagnostic-only and is never serialized as
+  a t0 runtime input.
+- no safety scalarization, threshold/alpha/lambda sweep, larger MLP, new offline
+  future observable, RSMR change, rerank, second-best or fallback is introduced.
+
+Coordinate-frame audit
+----------------------
+- V53 proposal/incumbent candidate trajectories are represented in ego-local
+  coordinates by the frozen nuPlan adapter.
+- V54 treatment-control realized position delta is rotated into the common t0
+  control ego frame.
+- Therefore V55 planned-profile -> realized-endpoint nuisance prediction does
+  not mix world and local frames.
+
+Conclusion
+----------
+Engineering validation PASS for delivery. Scientific V55 status remains
+UNRUN/UNCLAIMED until the server executes RUN_V64_3_55_EAF_ICER_DMOR_TRAIN.sh.

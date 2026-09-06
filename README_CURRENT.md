@@ -1,45 +1,63 @@
-# BDSE current algorithm — V64.3.54 EAF-ICER-PDRM
+# BDSE current algorithm — V64.3.55 EAF-ICER-DMOR
 
-**Paired Dynamic Response Mediation**
+**Dynamic-Mediator Outcome Retention**
 
+V54.1 is reliable for TRAIN attribution. It identifies the realized one-replan
+paired ego endpoint as a genuine effectful selected-outcome mediator, while the
+same historical binary sign retention still fails fold-wise deployment nonharm.
+V55 therefore freezes the identified mediator and changes the scientific object
+in a strict order: first the outcome **functional**, then—only if that oracle
+closes—the t0 **mediator bridge**.
 
-> **Engineering repair V64.3.54.1:** the original V54 wrapper referenced the
-> non-existent class `BDSEPlanner`.  It now patches the actual adapter
-> `BDSEnuPlanPlanner` and verifies the required adapter methods fail-closed.
-> Scientific V54 design and the run command are unchanged.
+## Frozen evidence chain entering V55
 
-V54 is the preregistered follow-up to the reliable V53 POTR scientific STOP.
+- V52 QPE+D effect-support hurdle: retained (`AUC=0.6516244589`, 5/5 > random).
+- V54 REALIZED-ENDPOINT: mediator identification GO (`AUC=0.6117518845`,
+  5/5 > random, 5/5 > V51, 5/5 > V52, 4/5 > V53 TEMPORAL).
+- V54 REALIZED-TEMPORAL: STOP as temporal necessity (only 2/5 > endpoint and
+  lower aggregate AUC).
+- V54 binary-sign retrospective retention: STOP because all-fold nonharm fails,
+  despite aggregate hard-harm / score-sum / NegRMS improvements.
 
-## Scientific status after V53
+Dominant bottleneck: **operator-aligned structured outcome order over an
+identified realized mediator, followed by a t0 mediator bridge**.
 
-- V52 QPE+D structural-null/effect-support: **retained**, AUC `0.6516244589`, 5/5 folds > random.
-- V53 ENDPOINT conditional state: **identification STOP** (`0.50495`, 2/5 > random).
-- V53 TEMPORAL planned state: aggregate signal exists (`0.57438`, 5/5 > random, 4/5 > endpoint) but fails the preregistered frozen-control consistency requirement (3/5 > V51 and 3/5 > V52); **STOP**.
-- Neither V53 arm passes all-fold nonharm; no runtime arm is promoted.
+## Arm A — REALIZED-DOMINANCE (diagnostic oracle)
 
-Dominant bottleneck: **post-intervention paired dynamic response / outcome-process sufficiency for effectful selected-outcome order**.
+State is exactly the frozen V54 realized endpoint:
 
-## V54 change
+`[Q, P-Q, E-P, D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`.
 
-Freeze RSMR, Q/P/E, scalar planned D, V52 effect support, V50.5 502 paired labels, lambda=1 and the no-fallback operator.
+The V52 effect-support hurdle is unchanged. The conditional binary sign ranker
+is replaced by an unweighted Pareto pairwise order over the existing paired
+closed-loop official-score delta and hard-safety deltas. Trade-off pairs are
+omitted rather than scalarized.
 
-Re-run both paired arms only through the first scheduled replan and collect realized treatment-control ego-state divergence. Full-horizon outcome labels are reused; metrics are disabled.
+Arm A must identify Pareto order and pass the exact historical paired deployment
+gate. It is not deployable because the realized mediator is post-intervention.
 
-### REALIZED-ENDPOINT
+## Arm B — PREDICTED-DOMINANCE (t0 candidate)
 
-`[Q, P-Q, E-P, D, realized_dx_end, realized_dy_end, realized_dyaw_end, realized_dv_end]`
+**This arm is not evaluated at all unless Arm A fully passes.**
 
-### REALIZED-TEMPORAL
+The V54 realized endpoint is distilled from the already-fixed V53 pre-execution
+operator profile (signed terminal contrast + fixed DCT-II k=1,2 contrast) with a
+zero-bias, zero-preserving multi-output ridge (`lambda=1`). Predictor fitting is
+nested and excluded from outer test/calibration folds; outcome training uses
+inner-OOF mediator predictions.
 
-REALIZED-ENDPOINT plus fixed DCT-II `k=1,2` of realized paired dx/dy/dyaw/dv during the frozen one-shot exposure window.
-
-V54 is **mediator identification only**: post-intervention state is not a legal t=0 runtime input, so V54 emits no deployable retention config and must not consume untouched validation.
+The same Pareto functional and the same deployment gate are then applied. A
+V55 TRAIN pass means this t0-available branch passes. At that point algorithm
+search freezes immediately; the next work is engineering-only runtime
+integration and untouched paired validation.
 
 ## Run
 
 ```bash
-cd bdse_v64_3_54_eaf_icer_pdrm
-bash RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
+cd bdse_v64_3_55_eaf_icer_dmor
+bash RUN_V64_3_55_EAF_ICER_DMOR_TRAIN.sh
 ```
 
-Default is treatment GPU 0 / control GPU 1. On a 1-GPU server set `GPU_TREAT=0 GPU_CONTROL=0`.
+V55 is **fit-only**. It reuses V50.5 paired outcomes, V53 planned profiles and
+V54 dynamic mediator profiles; no GPU simulation or new nuPlan metrics are
+required.

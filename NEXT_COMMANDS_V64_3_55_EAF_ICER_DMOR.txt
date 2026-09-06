@@ -1,0 +1,16 @@
+# V64.3.55 EAF-ICER-DMOR — next server command
+
+cd bdse_v64_3_55_eaf_icer_dmor
+
+V49_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_49_eaf_icer_siir_screen_2gpu_v1 \
+V50_5_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_50_5_eaf_icer_pior_train_2gpu_v1 \
+V52_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_52_eaf_icer_hodr_train_v1 \
+V53_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_53_eaf_icer_potr_train_v1 \
+V54_ROOT=/home/senzeyu2/code/BDSE_planner/outputs/outputs_v64_3_54_eaf_icer_pdrm_train_v1 \
+bash RUN_V64_3_55_EAF_ICER_DMOR_TRAIN.sh
+
+# Notes
+# - Fit-only: no GPU simulation and no new closed-loop outcome collection.
+# - REALIZED-DOMINANCE is evaluated first.
+# - PREDICTED-DOMINANCE is not fit/evaluated unless REALIZED-DOMINANCE fully PASSes.
+# - Do NOT run untouched validation unless the launcher reports a deployable TRAIN PASS.

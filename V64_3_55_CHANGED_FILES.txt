@@ -1,0 +1,23 @@
+V64.3.55 EAF-ICER-DMOR changed / added files relative to V64.3.54.1
+
+Modified:
+- ALGORITHM_CHANGELOG.md
+- README_CURRENT.md
+
+Added:
+- RUN_V64_3_55_EAF_ICER_DMOR_TRAIN.sh
+- NEXT_COMMANDS_V64_3_55_EAF_ICER_DMOR.txt
+- V64_3_54_RESULT_POSTMORTEM_AND_V64_3_55_DMOR_DESIGN.md
+- V64_3_54_UPLOADED_RESULT_RELIABILITY_AND_SCIENTIFIC_AUDIT_FOR_V64_3_55.json
+- V64_3_54_FOLD_CAUSAL_AUDIT_FOR_V64_3_55.csv
+- V64_3_55_PREREGISTRATION.json
+- V64_3_55_SCIENCE_MANIFEST.sha256
+- V64_3_55_ENGINEERING_VALIDATION.txt
+- bdse/planner/paired_dynamic_mediator_outcome_retention.py
+- bdse/tools/fit_v64_3_55_eaf_icer_dmor.py
+- bdse/tests/test_v64_3_55_eaf_icer_dmor.py
+
+No historical runtime planner/tournament or paired-outcome source was modified.
+- V64_3_54_1_TO_V64_3_55_DMOR.patch
+- V64_3_55_CHANGED_FILES.txt
+- V64_3_55_SHA256SUMS.txt

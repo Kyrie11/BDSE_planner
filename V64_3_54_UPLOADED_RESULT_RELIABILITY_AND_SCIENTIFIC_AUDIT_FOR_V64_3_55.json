@@ -1,0 +1,41 @@
+{
+  "audit": "v64_3_54_uploaded_result_reliability_and_scientific_audit_for_v64_3_55",
+  "next_branch": "structured dynamic outcome functional first; only if oracle sufficient, distill mediator to t0 using fixed V53 planned operator profile",
+  "paired_dynamic_collection": {
+    "all_initial_states_identical": "502/502",
+    "control_failed": 0,
+    "control_scenarios": 502,
+    "control_success": 502,
+    "exposure_ticks": 5,
+    "outcome_labels_recollected": false,
+    "pairwise_token_iteration_timestamp_identity": "PASS",
+    "planned_equal_implies_realized_zero": "38/38",
+    "planned_physical_equal_count": 38,
+    "profile_sha256": "dd2bdd809a757ce74973d7ce2c3189fad60dc0d3e0125d7fcec9ca7ad1bda373",
+    "realized_nonzero_count": 464,
+    "run_metric": false,
+    "samples_per_arm_per_scene": 6,
+    "treatment_failed": 0,
+    "treatment_scenarios": 502,
+    "treatment_success": 502
+  },
+  "parent_locks": {
+    "V50_5_paired_outcome_sha256": "d592baa3508ae9dc084eebcbb3505d9accadc724601ab35a1253d3536af39d43",
+    "V52_fit_sha256": "7a21fead5383ebd6aafaeb5da586346a77e5707050cb359511a06971b742a16b",
+    "V53_fit_sha256": "9174ffeac064a85bef6c1727915d93903271f9afe1770f5e5ba3e3e51efe1b6e",
+    "V54_fit_sha256": "10f3e60c82bb8b82f1f688e866a27008e1498b67d2e194b0c7aadec5368536d8"
+  },
+  "reliability_pass": true,
+  "science_manifest": "20/20 PASS",
+  "server_targeted_regression": "74/74 PASS",
+  "uploaded_code_zip_sha256": "b841cd90ce8cb93f58404be1ecb98df6a99fc12b05e68578fe3a14efc5f8fe14",
+  "uploaded_result_zip_sha256": "76c6b81b8bf007222ee08ce598aaac195d62eff3453815ade1d999bbc0c6b4f7",
+  "v54_verdict": {
+    "effect_support": "GO_RETAIN_FROZEN_V52",
+    "failure_diagnosis": "realized_endpoint_mediator_identified_but_static_binary_sign_retention_fails_all_fold_nonharm",
+    "preferred_mediator_arm": "realized_endpoint",
+    "realized_endpoint": "GO_MEDIATOR_IDENTIFIED_NOT_DEPLOYABLE_POLICY",
+    "realized_temporal": "STOP_TEMPORAL_NECESSITY_NOT_IDENTIFIED",
+    "retrospective_static_sign_retention": "STOP_ALL_FOLD_NONHARM_FAIL"
+  }
+}

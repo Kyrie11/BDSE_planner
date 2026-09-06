@@ -13358,3 +13358,144 @@ Do not shrink the 502 population: V53 exposed a fold-stability problem, so reduc
 
 Post-intervention state must **never** be inserted into the initial t0 runtime veto as if it were available before execution. V54 emits no deployable runtime retention config and consumes no untouched validation.
 
+
+---
+
+# V64.3.54 scientific result — realized endpoint mediator identified, sign-only deployment ordering insufficient
+
+## Reliability
+
+V54.1 is valid for TRAIN attribution.
+
+- repaired code ZIP SHA256: `b841cd90ce8cb93f58404be1ecb98df6a99fc12b05e68578fe3a14efc5f8fe14`;
+- result ZIP SHA256: `76c6b81b8bf007222ee08ce598aaac195d62eff3453815ade1d999bbc0c6b4f7`;
+- science manifest: 20/20 PASS;
+- targeted regression: 74/74 PASS;
+- control/treatment dynamic replay: 502/502 each, zero failures, exactly six synchronized samples per scene (iterations 0..5);
+- V50.5 paired outcome SHA and V53 parent fit SHA: exact replay;
+- no new outcome labels or final nuPlan metrics collected;
+- untouched validation unconsumed.
+
+Raw paired sidecar audit confirms exact token, iteration and timestamp identity across arms; all 502 initial states match and all 38 planned-physical-equality interventions produce zero realized response.
+
+## Preregistered V54 verdict
+
+### V52 effect support — GO / retain
+
+Freeze the existing QPE+D structural-null/effect-support hurdle (`AUC=0.6516244589`, 5/5 folds > random).
+
+### REALIZED-ENDPOINT — mediator identification GO, runtime promotion STOP
+
+- effectful conditional AUC: `0.6117518845`;
+- > random: 5/5 folds;
+- > V51 scalar: 5/5;
+- > V52 scalar: 5/5;
+- > V53 pre-execution temporal: 4/5.
+
+Therefore the one-replan treatment-control realized endpoint is a genuine selected-outcome mediator.
+
+The retrospective sign-retention diagnostic nevertheless fails the unchanged paired deployment gate only on all-fold nonharm:
+
+- selected `446`;
+- beneficial `113/121 = 93.39%`;
+- nonbeneficial `381 -> 333`;
+- hard harm `25 -> 17`;
+- score sum `-4.2409 -> -2.2731`;
+- NegRMS `0.15486 -> 0.14363`.
+
+Fold 2 is the decisive reversal: AUC remains above random but score sum changes from approximately `-0.0132` to `-0.8056`, with no hard-harm reduction. This falsifies binary sign ranking as a sufficient deployment order even with an identified mediator.
+
+### REALIZED-TEMPORAL — STOP as temporal necessity
+
+- aggregate AUC `0.6090727454`;
+- 5/5 > random;
+- 4/5 > V53 pre-execution temporal;
+- only 2/5 > REALIZED-ENDPOINT and lower aggregate AUC.
+
+Do not add more realized DCT modes, horizons, early/peak statistics, basis variants or attention.
+
+## Mechanism conclusion
+
+V54 adds two evidence-chain statements:
+
+`planned operator geometry != realized treatment mediation`,
+
+and
+
+`realized mediator identification != deployment outcome-order sufficiency`.
+
+The first-order mediator is the signed realized state transition; response magnitude alone is not sufficient. The remaining static failure is functional: beneficial/nonbeneficial binary order does not preserve negative severity/hard-tail deployment semantics.
+
+## Dominant bottleneck after V54
+
+**Operator-aligned structured outcome order over an identified realized mediator, followed by a t0 mediator bridge.**
+
+The paper headline remains stable: **Selection–Valuation–Outcome Sufficiency under a Bounded Auditable Planner Interface**.
+
+## Newly retained mechanism
+
+Retain V54 `realized one-replan endpoint` as an **identified diagnostic mediator**, not a t0 runtime feature.
+
+## Newly closed directions
+
+Close:
+
+- realized low-order temporal profile as a necessary addition beyond the endpoint mediator;
+- any V54 response horizon/basis/mode/peak/early sweep;
+- binary sign-only conditional retention over the V54 realized mediator as deployment-sufficient;
+- direct use of realized post-intervention state at the initial t0 veto.
+
+Do not close paired outcome supervision, V52 effect-support factorization, structured paired outcome functionals, or mediator distillation.
+
+All historical no-repeat constraints remain active.
+
+# V64.3.55 EAF-ICER-DMOR — Dynamic-Mediator Outcome Retention
+
+## Scientific role
+
+V55 jointly executes the two overlapping preregistered V54 consequences without confounding them:
+
+1. because the realized endpoint is identified but the sign oracle fails deployment, solve the **structured functional** first;
+2. only if the true-mediator structured oracle closes its full gate, test whether the mediator can be made t0-available by **pre-execution distillation**.
+
+This prevents wasting an iteration predicting a mediator whose known sign functional is already insufficient.
+
+## Arm A — REALIZED-DOMINANCE
+
+Freeze the exact V54 realized endpoint state and replace only the effectful binary sign ranker with an unweighted Pareto pairwise order over the existing paired closed-loop score and hard-safety delta vector. Ambiguous trade-offs are omitted; no safety scalarization or weight is introduced.
+
+Identification requires:
+
+- Pareto concordance > 0.5 aggregate and >=4/5 folds;
+- concordance above the exact V52 static QPE+D HURDLE-PARETO control in aggregate and >=4/5 folds;
+- unchanged paired deployment gate PASS.
+
+This arm is diagnostic only because the mediator is post-intervention.
+
+## Arm B — PREDICTED-DOMINANCE
+
+Eligible only if REALIZED-DOMINANCE fully passes. The code is sequential fail-closed: if Arm A fails identification or deployment, Arm B is not fit/scored/reported.
+
+Distill the V54 realized endpoint from the exact fixed V53 pre-execution planned operator profile (four terminal signed channels + DCT-II k=1,2 channels). The nuisance model is a zero-bias, zero-preserving multi-output ridge with fixed lambda=1 and RMS scaling without centering. Thus a physically identical planned treatment predicts zero realized response exactly.
+
+Nested isolation:
+
+- outer test and calibration folds are excluded from mediator fitting;
+- outcome training uses inner cross-fitted predicted mediators on the outer fit population;
+- calibration/test use only a predictor fit on the outer fitting folds.
+
+Mediator prediction must beat the zero-response baseline in normalized MSE aggregate and >=4/5 folds. The same Pareto outcome functional and exact historical deployment gate then apply.
+
+A V55 TRAIN pass means **PREDICTED-DOMINANCE passes**. At that point freeze immediately; only engineering runtime integration + untouched paired validation are allowed.
+
+## Convergence / search-space stop
+
+Internal algorithm search stops after an untouched validation pass of a frozen t0-deployable mechanism.
+
+If REALIZED-DOMINANCE fails, close the **combination** of the static one-replan ego mediator with the tested static sign/Pareto functionals as deployment-sufficient; retain the V54 endpoint as an identified diagnostic mediator. The next and final eligible internal state family is a realized interaction/safety consequence process; do not return to ego-trajectory feature expansion.
+
+If REALIZED-DOMINANCE passes but PREDICTED-DOMINANCE fails, mediator prediction is the sole remaining static bottleneck. At most one predeclared runtime dynamics nuisance model may be attempted without changing the outcome state/functional; no horizon/basis/MLP/threshold sweeps.
+
+## Compute policy
+
+V55 is fit-only. Reuse V50.5 paired outcomes, V53 planned profiles, and V54 realized mediator profiles. No GPU simulation or new nuPlan metrics are required.
