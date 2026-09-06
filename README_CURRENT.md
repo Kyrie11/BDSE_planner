@@ -2,6 +2,12 @@
 
 **Paired Dynamic Response Mediation**
 
+
+> **Engineering repair V64.3.54.1:** the original V54 wrapper referenced the
+> non-existent class `BDSEPlanner`.  It now patches the actual adapter
+> `BDSEnuPlanPlanner` and verifies the required adapter methods fail-closed.
+> Scientific V54 design and the run command are unchanged.
+
 V54 is the preregistered follow-up to the reliable V53 POTR scientific STOP.
 
 ## Scientific status after V53

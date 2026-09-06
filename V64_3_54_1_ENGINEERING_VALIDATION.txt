@@ -1,0 +1,39 @@
+V64.3.54.1 engineering-only repair validation
+==============================================
+
+Scientific mechanism: UNCHANGED from V64.3.54 PDRM.
+Original run command: UNCHANGED.
+
+Root cause reproduced:
+- `from bdse.planner.nuplan_planner import BDSEPlanner` -> ImportError.
+- actual adapter class: `BDSEnuPlanPlanner`.
+
+Repaired adapter interface checks:
+- BDSEnuPlanPlanner import: PASS
+- compute_planner_trajectory callable: PASS
+- _planner_replan_interval_ticks callable: PASS
+- _to_nuplan_trajectory callable: PASS
+- process-local V54 sidecar patch install/uninstall regression: PASS
+
+Result-defining checks:
+- V50.5 frozen base-runner SHA lock: PASS
+- V54 science manifest: PASS (all entries)
+- Python compileall: PASS
+- RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh bash -n: PASS
+
+Tests:
+- V54 focused: 10/10 PASS
+- V54 + V53/V52/V51/V50/V48 targeted causal regression: 74/74 PASS
+- full repository: 646/646 PASS
+- test files: 132/132 covered
+- file shards: 195 + 153 + 140 + 158 = 646 PASS
+
+Warnings:
+- historical PyTorch Transformer nested-tensor warnings only;
+- no new failure or warning class observed.
+
+Server-only boundary:
+- local environment does not contain nuPlan/raw DB/checkpoint, so a real server
+  short-horizon simulation was not claimed as locally executed.
+- the repaired launcher itself performs the first 8-scene/arm fail-closed batch
+  sentinel before proceeding through the 502-scene collection.

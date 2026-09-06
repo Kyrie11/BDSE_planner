@@ -14,7 +14,8 @@ from bdse.planner.paired_dynamic_response_mediation import (
     outcome_state_from_dynamic_profile,
     paired_realized_profile,
 )
-from bdse.tools.nuplan_v54_dynamic_response_run_simulation import _ego_row
+import bdse.tools.nuplan_v54_dynamic_response_run_simulation as v54_wrapper
+from bdse.tools.nuplan_v54_dynamic_response_run_simulation import _ego_row, _resolve_nuplan_planner_class
 
 
 def _trace(n=6):
@@ -66,6 +67,34 @@ def test_ego_row_reads_current_simulated_state_only():
     it=SimpleNamespace(index=5,time_point=SimpleNamespace(time_us=123456))
     row=_ego_row(SimpleNamespace(history=hist,iteration=it))
     assert row=={"iteration_index":5,"time_us":123456,"ego_world":[1.0,2.0,0.3,4.5]}
+
+
+def test_v54_wrapper_resolves_real_nuplan_adapter_interface():
+    cls = _resolve_nuplan_planner_class()
+    assert cls.__name__ == "BDSEnuPlanPlanner"
+    assert callable(getattr(cls, "compute_planner_trajectory", None))
+    assert callable(getattr(cls, "_planner_replan_interval_ticks", None))
+    assert callable(getattr(cls, "_to_nuplan_trajectory", None))
+
+
+def test_v54_dynamic_sidecar_installs_on_actual_adapter():
+    cls = _resolve_nuplan_planner_class()
+    original = cls.compute_planner_trajectory
+    marker = v54_wrapper._PATCH_MARKER
+    had_marker = hasattr(cls, marker)
+    old_marker = getattr(cls, marker, None)
+    try:
+        if had_marker:
+            delattr(cls, marker)
+        v54_wrapper.install_dynamic_response_sidecar()
+        assert cls.compute_planner_trajectory is not original
+        assert getattr(cls, marker, False) is True
+    finally:
+        cls.compute_planner_trajectory = original
+        if had_marker:
+            setattr(cls, marker, old_marker)
+        elif hasattr(cls, marker):
+            delattr(cls, marker)
 
 
 def test_v54_preregistration_closes_v53_preexecution_geometry():

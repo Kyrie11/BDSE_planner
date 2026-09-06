@@ -1,3 +1,28 @@
+
+# V64.3.54.1 engineering repair — nuPlan adapter class binding
+
+This is an **engineering-only repair** of V64.3.54 PDRM.  The scientific mechanism,
+502-scene population, paired V50.5 outcome labels, exposure window, mediator state,
+folds, loss, calibration, and preregistered gates are unchanged.
+
+The original V54 process-local wrapper attempted to import a non-existent Python
+class `BDSEPlanner`.  In this repository `BDSEPlanner` is only the planner display
+name (`self._name`); the concrete nuPlan adapter class is `BDSEnuPlanPlanner`.  The
+launcher therefore failed before any simulation could start.
+
+Repair:
+
+- bind the process-local V54 wrapper to `BDSEnuPlanPlanner`;
+- fail closed if `compute_planner_trajectory`, `_planner_replan_interval_ticks`, or
+  `_to_nuplan_trajectory` drift from the expected adapter interface;
+- add a regression test that resolves the real adapter class and checks these
+  methods, so the original typo cannot pass the V54 test suite again;
+- update the V54 result-defining science manifest for the repaired wrapper/test.
+
+No algorithm family is opened or closed by this repair, and no V54 scientific
+outcome should be attributed until the repaired original launcher completes.
+
+---
 # v49 DBAP — Deployment-Boundary Action Preservation
 
 ## 日期

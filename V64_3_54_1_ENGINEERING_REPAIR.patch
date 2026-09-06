@@ -1,0 +1,166 @@
+diff -ruN '--exclude=V64_3_54_1_ENGINEERING_REPAIR.md' '--exclude=V64_3_54_1_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_54_1_ENGINEERING_REPAIR.patch' '--exclude=V64_3_54_1_CHANGED_FILES.txt' '--exclude=V64_3_54_1_SHA256SUMS.txt' /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md
+--- /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md	2026-09-05 18:45:54.000000000 +0000
++++ /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/ALGORITHM_CHANGELOG.md	2026-09-05 23:43:02.200053151 +0000
+@@ -1,3 +1,28 @@
++
++# V64.3.54.1 engineering repair — nuPlan adapter class binding
++
++This is an **engineering-only repair** of V64.3.54 PDRM.  The scientific mechanism,
++502-scene population, paired V50.5 outcome labels, exposure window, mediator state,
++folds, loss, calibration, and preregistered gates are unchanged.
++
++The original V54 process-local wrapper attempted to import a non-existent Python
++class `BDSEPlanner`.  In this repository `BDSEPlanner` is only the planner display
++name (`self._name`); the concrete nuPlan adapter class is `BDSEnuPlanPlanner`.  The
++launcher therefore failed before any simulation could start.
++
++Repair:
++
++- bind the process-local V54 wrapper to `BDSEnuPlanPlanner`;
++- fail closed if `compute_planner_trajectory`, `_planner_replan_interval_ticks`, or
++  `_to_nuplan_trajectory` drift from the expected adapter interface;
++- add a regression test that resolves the real adapter class and checks these
++  methods, so the original typo cannot pass the V54 test suite again;
++- update the V54 result-defining science manifest for the repaired wrapper/test.
++
++No algorithm family is opened or closed by this repair, and no V54 scientific
++outcome should be attributed until the repaired original launcher completes.
++
++---
+ # v49 DBAP — Deployment-Boundary Action Preservation
+ 
+ ## 日期
+diff -ruN '--exclude=V64_3_54_1_ENGINEERING_REPAIR.md' '--exclude=V64_3_54_1_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_54_1_ENGINEERING_REPAIR.patch' '--exclude=V64_3_54_1_CHANGED_FILES.txt' '--exclude=V64_3_54_1_SHA256SUMS.txt' /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md
+--- /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md	2026-09-05 18:45:37.000000000 +0000
++++ /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/README_CURRENT.md	2026-09-05 23:43:02.203824976 +0000
+@@ -2,6 +2,12 @@
+ 
+ **Paired Dynamic Response Mediation**
+ 
++
++> **Engineering repair V64.3.54.1:** the original V54 wrapper referenced the
++> non-existent class `BDSEPlanner`.  It now patches the actual adapter
++> `BDSEnuPlanPlanner` and verifies the required adapter methods fail-closed.
++> Scientific V54 design and the run command are unchanged.
++
+ V54 is the preregistered follow-up to the reliable V53 POTR scientific STOP.
+ 
+ ## Scientific status after V53
+diff -ruN '--exclude=V64_3_54_1_ENGINEERING_REPAIR.md' '--exclude=V64_3_54_1_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_54_1_ENGINEERING_REPAIR.patch' '--exclude=V64_3_54_1_CHANGED_FILES.txt' '--exclude=V64_3_54_1_SHA256SUMS.txt' /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_SCIENCE_MANIFEST.sha256 /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_SCIENCE_MANIFEST.sha256
+--- /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_SCIENCE_MANIFEST.sha256	2026-09-05 18:48:35.000000000 +0000
++++ /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/V64_3_54_SCIENCE_MANIFEST.sha256	2026-09-05 23:46:50.553173874 +0000
+@@ -1,10 +1,10 @@
+ d8fbb9512a8d8de384dfa1a9e310f6f2282cc189b1cfe11ab86365dada993928  RUN_V64_3_54_EAF_ICER_PDRM_TRAIN.sh
+ 4de4d4841b951e0c8f5b04b8fa06835792e1a4c1bacdbbbb4a8d50656b90c249  V64_3_54_PREREGISTRATION.json
+ 9a1d93f491cb15683b5cc018736e01a12dd469c00db52ea3e12f49e6060c8957  bdse/planner/paired_dynamic_response_mediation.py
+-a8e54301ec6e63d1d7619743e2d1de0745f2475848bc7a68964ca5789830bdad  bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
++2ce4cf2e8379934ae3680858ac794441820d5656d7199d78a3b78fcea22d45ce  bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
+ 1549ec95989edef149ce33d241c2421214695e5d06249ac171aa24b84a2a578d  bdse/tools/run_v64_3_54_dynamic_response_probe.py
+ e2521f7205f47223195f50c5582503e6f60ac51e9e9dcbeea4838638be856f5f  bdse/tools/fit_v64_3_54_eaf_icer_pdrm.py
+-6b92f44aad8a35bad90adf49ee5de93dc5fbdf5f494b670d0c062ef48da20992  bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
++bb73be8beeca2d1917d8563fe00c36cf0264a38be39a445bc5651ca78ec226da  bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
+ c3a6e37901349408b7c8e6ab7b3811f905f3a81b0c441e6aa7ddf4dde92131ef  bdse/planner/nuplan_planner.py
+ 0ed17fd2688ba25cf44990b08674d72a26168097b4738822b39fb51f7c4f26c5  bdse/planner/tournament.py
+ 3e00c8eaa6d434c4ec4c5f478bb02dac5044ec1476c1c3de9ac199611598d23f  bdse/experiments/evaluate_closed_loop.py
+diff -ruN '--exclude=V64_3_54_1_ENGINEERING_REPAIR.md' '--exclude=V64_3_54_1_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_54_1_ENGINEERING_REPAIR.patch' '--exclude=V64_3_54_1_CHANGED_FILES.txt' '--exclude=V64_3_54_1_SHA256SUMS.txt' /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
+--- /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py	2026-09-05 18:43:16.000000000 +0000
++++ /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/bdse/tests/test_v64_3_54_eaf_icer_pdrm.py	2026-09-05 23:43:40.213596812 +0000
+@@ -14,7 +14,8 @@
+     outcome_state_from_dynamic_profile,
+     paired_realized_profile,
+ )
+-from bdse.tools.nuplan_v54_dynamic_response_run_simulation import _ego_row
++import bdse.tools.nuplan_v54_dynamic_response_run_simulation as v54_wrapper
++from bdse.tools.nuplan_v54_dynamic_response_run_simulation import _ego_row, _resolve_nuplan_planner_class
+ 
+ 
+ def _trace(n=6):
+@@ -68,6 +69,34 @@
+     assert row=={"iteration_index":5,"time_us":123456,"ego_world":[1.0,2.0,0.3,4.5]}
+ 
+ 
++def test_v54_wrapper_resolves_real_nuplan_adapter_interface():
++    cls = _resolve_nuplan_planner_class()
++    assert cls.__name__ == "BDSEnuPlanPlanner"
++    assert callable(getattr(cls, "compute_planner_trajectory", None))
++    assert callable(getattr(cls, "_planner_replan_interval_ticks", None))
++    assert callable(getattr(cls, "_to_nuplan_trajectory", None))
++
++
++def test_v54_dynamic_sidecar_installs_on_actual_adapter():
++    cls = _resolve_nuplan_planner_class()
++    original = cls.compute_planner_trajectory
++    marker = v54_wrapper._PATCH_MARKER
++    had_marker = hasattr(cls, marker)
++    old_marker = getattr(cls, marker, None)
++    try:
++        if had_marker:
++            delattr(cls, marker)
++        v54_wrapper.install_dynamic_response_sidecar()
++        assert cls.compute_planner_trajectory is not original
++        assert getattr(cls, marker, False) is True
++    finally:
++        cls.compute_planner_trajectory = original
++        if had_marker:
++            setattr(cls, marker, old_marker)
++        elif hasattr(cls, marker):
++            delattr(cls, marker)
++
++
+ def test_v54_preregistration_closes_v53_preexecution_geometry():
+     p=Path(__file__).resolve().parents[2]/"V64_3_54_PREREGISTRATION.json"
+     d=json.loads(p.read_text(encoding="utf-8"))
+diff -ruN '--exclude=V64_3_54_1_ENGINEERING_REPAIR.md' '--exclude=V64_3_54_1_ENGINEERING_VALIDATION.txt' '--exclude=V64_3_54_1_ENGINEERING_REPAIR.patch' '--exclude=V64_3_54_1_CHANGED_FILES.txt' '--exclude=V64_3_54_1_SHA256SUMS.txt' /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
+--- /mnt/data/v54_original/bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py	2026-09-05 18:43:01.000000000 +0000
++++ /mnt/data/v54_fix_work/bdse_v64_3_54_eaf_icer_pdrm/bdse/tools/nuplan_v54_dynamic_response_run_simulation.py	2026-09-05 23:43:02.195488266 +0000
+@@ -64,12 +64,36 @@
+     setattr(StepSimulationTimeController, _TIME_PATCH_MARKER, True)
+ 
+ 
++def _resolve_nuplan_planner_class():
++    """Resolve the actual nuPlan adapter and fail closed on interface drift.
++
++    ``BDSEPlanner`` is only the runtime display name (``self._name``); the
++    concrete adapter class exported by ``nuplan_planner.py`` is
++    ``BDSEnuPlanPlanner``.  V54 patches the adapter process-locally so the
++    historical planner source remains byte-identical.
++    """
++    from bdse.planner.nuplan_planner import BDSEnuPlanPlanner
++
++    required = (
++        "compute_planner_trajectory",
++        "_planner_replan_interval_ticks",
++        "_to_nuplan_trajectory",
++    )
++    missing = [name for name in required if not callable(getattr(BDSEnuPlanPlanner, name, None))]
++    if missing:
++        raise RuntimeError(
++            "V54 PDRM nuPlan planner adapter interface drift: "
++            + ", ".join(missing)
++        )
++    return BDSEnuPlanPlanner
++
++
+ def install_dynamic_response_sidecar() -> None:
+-    from bdse.planner.nuplan_planner import BDSEPlanner
++    PlannerClass = _resolve_nuplan_planner_class()
+ 
+-    if getattr(BDSEPlanner, _PATCH_MARKER, False):
++    if getattr(PlannerClass, _PATCH_MARKER, False):
+         return
+-    original = BDSEPlanner.compute_planner_trajectory
++    original = PlannerClass.compute_planner_trajectory
+ 
+     def wrapped(self: Any, current_input: Any):
+         exposure = int(os.environ.get("BDSE_V54_EXPOSURE_TICKS", "-1"))
+@@ -133,8 +157,8 @@
+                 f.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+         return out
+ 
+-    BDSEPlanner.compute_planner_trajectory = wrapped
+-    setattr(BDSEPlanner, _PATCH_MARKER, True)
++    PlannerClass.compute_planner_trajectory = wrapped
++    setattr(PlannerClass, _PATCH_MARKER, True)
+ 
+ 
+ def main() -> None:

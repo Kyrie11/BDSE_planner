@@ -64,12 +64,36 @@ def install_short_horizon() -> None:
     setattr(StepSimulationTimeController, _TIME_PATCH_MARKER, True)
 
 
-def install_dynamic_response_sidecar() -> None:
-    from bdse.planner.nuplan_planner import BDSEPlanner
+def _resolve_nuplan_planner_class():
+    """Resolve the actual nuPlan adapter and fail closed on interface drift.
 
-    if getattr(BDSEPlanner, _PATCH_MARKER, False):
+    ``BDSEPlanner`` is only the runtime display name (``self._name``); the
+    concrete adapter class exported by ``nuplan_planner.py`` is
+    ``BDSEnuPlanPlanner``.  V54 patches the adapter process-locally so the
+    historical planner source remains byte-identical.
+    """
+    from bdse.planner.nuplan_planner import BDSEnuPlanPlanner
+
+    required = (
+        "compute_planner_trajectory",
+        "_planner_replan_interval_ticks",
+        "_to_nuplan_trajectory",
+    )
+    missing = [name for name in required if not callable(getattr(BDSEnuPlanPlanner, name, None))]
+    if missing:
+        raise RuntimeError(
+            "V54 PDRM nuPlan planner adapter interface drift: "
+            + ", ".join(missing)
+        )
+    return BDSEnuPlanPlanner
+
+
+def install_dynamic_response_sidecar() -> None:
+    PlannerClass = _resolve_nuplan_planner_class()
+
+    if getattr(PlannerClass, _PATCH_MARKER, False):
         return
-    original = BDSEPlanner.compute_planner_trajectory
+    original = PlannerClass.compute_planner_trajectory
 
     def wrapped(self: Any, current_input: Any):
         exposure = int(os.environ.get("BDSE_V54_EXPOSURE_TICKS", "-1"))
@@ -133,8 +157,8 @@ def install_dynamic_response_sidecar() -> None:
                 f.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
         return out
 
-    BDSEPlanner.compute_planner_trajectory = wrapped
-    setattr(BDSEPlanner, _PATCH_MARKER, True)
+    PlannerClass.compute_planner_trajectory = wrapped
+    setattr(PlannerClass, _PATCH_MARKER, True)
 
 
 def main() -> None:

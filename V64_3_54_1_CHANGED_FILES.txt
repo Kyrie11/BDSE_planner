@@ -1,0 +1,10 @@
+ALGORITHM_CHANGELOG.md
+README_CURRENT.md
+V64_3_54_SCIENCE_MANIFEST.sha256
+bdse/tools/nuplan_v54_dynamic_response_run_simulation.py
+bdse/tests/test_v64_3_54_eaf_icer_pdrm.py
+V64_3_54_1_ENGINEERING_REPAIR.md
+V64_3_54_1_ENGINEERING_VALIDATION.txt
+V64_3_54_1_ENGINEERING_REPAIR.patch
+V64_3_54_1_CHANGED_FILES.txt
+V64_3_54_1_SHA256SUMS.txt
