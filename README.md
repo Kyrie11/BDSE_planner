@@ -12,6 +12,10 @@ generated YAML variants.
 - `RUN_TRAIN.sh`: stable two-GPU training launcher (override `NPROC_PER_NODE`).
 - `RUN_BUDGET_PROFILE.sh`: cached-runtime core cost profile.
 - `RUN_RUNTIME_BUDGET_PROFILE.sh`: actual nuPlan planner-call profile.
+- `RUN_COMPUTE_PRESSURE_STUDY.sh`: strict $B/M/K$/response-mode interventions.
+- `RUN_EVIDENCE_STUDY.sh`: offline matched-cost consequence, criticality,
+  stopping, and intervention protocol.
+- `RUN_CLOSED_LOOP_EVIDENCE_STUDY.sh`: paired reactive and latency-aware nuPlan runs.
 - `bdse/experiments/train.py`: training entry point.
 - `bdse/experiments/evaluate_open_loop.py` and `evaluate_closed_loop.py`:
   evaluation entry points.

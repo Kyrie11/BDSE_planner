@@ -5,13 +5,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 OWN_CONFIG="${OWN_CONFIG:-bdse/configs/deployment.yaml}"
-: "${EAF_CKPT:?Set frozen EAF checkpoint}"
-: "${NUPLAN_DB_ROOT:?Set actual raw nuPlan DB directory; NPZ cache is insufficient}"
-: "${SCENARIO_TOKENS_FILE:?Set an audited compatible raw-DB scenario token manifest}"
+EAF_CKPT="${EAF_CKPT:-}"
+NUPLAN_DB_ROOT="${NUPLAN_DB_ROOT:-}"
+SCENARIO_TOKENS_FILE="${SCENARIO_TOKENS_FILE:-}"
+missing=()
+[[ -n "$EAF_CKPT" ]] || missing+=("EAF_CKPT (frozen checkpoint)")
+[[ -n "$NUPLAN_DB_ROOT" ]] || missing+=("NUPLAN_DB_ROOT (raw nuPlan DB directory; NPZ cache is insufficient)")
+[[ -n "$SCENARIO_TOKENS_FILE" ]] || missing+=("SCENARIO_TOKENS_FILE (ordered, audited raw-DB scenario-token manifest)")
+if ((${#missing[@]})); then
+  printf 'missing required environment inputs:\n' >&2
+  printf '  - %s\n' "${missing[@]}" >&2
+  printf 'example: EAF_CKPT=... NUPLAN_DB_ROOT=... SCENARIO_TOKENS_FILE=... bash %s\n' "$0" >&2
+  exit 2
+fi
+OWN_CONFIG="$(realpath -m -- "$OWN_CONFIG")"
+EAF_CKPT="$(realpath -m -- "$EAF_CKPT")"
+NUPLAN_DB_ROOT="$(realpath -m -- "$NUPLAN_DB_ROOT")"
+SCENARIO_TOKENS_FILE="$(realpath -m -- "$SCENARIO_TOKENS_FILE")"
 PROFILE_ROOT="${PROFILE_ROOT:-$SCRIPT_DIR/outputs/runtime_budget_profile_$(date -u +%Y%m%dT%H%M%SZ)}"
 [[ ! -e "$PROFILE_ROOT" ]] || { echo "PROFILE_ROOT must be new" >&2; exit 2; }
-[[ -s "$OWN_CONFIG" && -s "$EAF_CKPT" && -s "$SCENARIO_TOKENS_FILE" ]] || { echo "missing config/checkpoint/token manifest" >&2; exit 2; }
 mkdir -p "$PROFILE_ROOT"
+python -m bdse.tools.validate_runtime_inputs --repo-root "$SCRIPT_DIR" \
+  --config "$OWN_CONFIG" --checkpoint "$EAF_CKPT" --raw-db-root "$NUPLAN_DB_ROOT" \
+  --token-manifest "$SCENARIO_TOKENS_FILE" --json-output "$PROFILE_ROOT/input_validation.json"
 export CUDA_VISIBLE_DEVICES="${PROFILE_GPU:-0}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
