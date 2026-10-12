@@ -16,6 +16,10 @@ from bdse.planner.operator_conditioned_risk_retention import operator_state as _
 from bdse.planner.paired_operator_contrast_retention import operator_state as _pocr_operator_state, runtime_certificate as _pocr_runtime_certificate
 from bdse.planner.paired_outcome_dominance_retention import operator_state as _hodr_operator_state, runtime_certificate as _hodr_runtime_certificate
 from bdse.planner.paired_operator_trajectory_retention import runtime_states as _potr_runtime_states, runtime_certificate as _potr_runtime_certificate
+from bdse.planner.semantic_attribution import (
+    family_feature_matrix as _semantic_family_feature_matrix,
+    type_feature_matrix as _semantic_type_feature_matrix,
+)
 from bdse.utils import softmin_np
 
 
@@ -1662,43 +1666,13 @@ def _icer_semantic_family_feature_matrix(
     the *same selected atoms*.  There is no sorting, L1 normalization, learned
     embedding, validation-selected family weight, or family-specific threshold.
     """
-    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
-    K = len(valid); a = int(anchor_action); legacy = int(legacy_action)
-    out = np.zeros((K, len(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)), dtype=np.float64)
-    contrib = np.zeros((0, K), dtype=np.float64)
-    if atom_contrib_star is not None:
-        raw = np.asarray(atom_contrib_star, dtype=np.float64)
-        if raw.ndim == 2 and raw.shape[1] >= K:
-            contrib = raw[:, :K]
-    if selected_atom_family_ids is None:
-        return out, list(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)
-    fam = np.asarray(selected_atom_family_ids, dtype=np.int64).reshape(-1)
-    if contrib.shape[0] != fam.size:
-        if contrib.shape[0] == 0 and fam.size == 0:
-            return out, list(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)
-        raise ValueError(
-            f"EAF-ICER semantic-family attribution requires one family id per selected atom: "
-            f"contrib_rows={contrib.shape[0]} family_ids={fam.size}"
-        )
-    unknown = sorted(set(int(x) for x in fam.tolist()) - {0, *_ICER_SEMANTIC_FAMILY_IDS})
-    if unknown:
-        raise ValueError(f"EAF-ICER semantic-family attribution received unknown family ids {unknown}")
-    legacy_vec = (
-        contrib[:, legacy]
-        if contrib.size and 0 <= legacy < K and legacy != a
-        else np.zeros((contrib.shape[0],), dtype=np.float64)
+    return _semantic_family_feature_matrix(
+        atom_contrib_star,
+        selected_atom_family_ids,
+        valid_mask,
+        anchor_action,
+        legacy_action,
     )
-    for b in np.flatnonzero(valid).tolist():
-        if b == a:
-            continue
-        cand = contrib[:, b] if contrib.size else np.zeros((0,), dtype=np.float64)
-        delta = cand - legacy_vec if contrib.size else np.zeros((0,), dtype=np.float64)
-        for j, f in enumerate(_ICER_SEMANTIC_FAMILY_IDS):
-            mask = fam == int(f)
-            if np.any(mask):
-                out[b, j] = float(np.sum(cand[mask]))
-                out[b, len(_ICER_SEMANTIC_FAMILY_IDS) + j] = float(np.sum(delta[mask]))
-    return out, list(_ICER_SEMANTIC_FAMILY_FEATURE_NAMES)
 
 _ICER_SEMANTIC_TYPE_NAMES = (
     "occupancy",
@@ -1737,44 +1711,13 @@ def _icer_semantic_type_feature_matrix(
     aggregate-DRC candidate; it is never allowed to re-rank or resurrect an
     alternative.
     """
-    valid = np.asarray(valid_mask, dtype=bool).reshape(-1)
-    K = len(valid); a = int(anchor_action); legacy = int(legacy_action)
-    out = np.zeros((K, len(_ICER_SEMANTIC_TYPE_FEATURE_NAMES)), dtype=np.float64)
-    contrib = np.zeros((0, K), dtype=np.float64)
-    if atom_contrib_star is not None:
-        raw = np.asarray(atom_contrib_star, dtype=np.float64)
-        if raw.ndim == 2 and raw.shape[1] >= K:
-            contrib = raw[:, :K]
-    if selected_atom_type_names is None:
-        return out, list(_ICER_SEMANTIC_TYPE_FEATURE_NAMES)
-    types = np.asarray([str(x) for x in list(selected_atom_type_names)], dtype=object).reshape(-1)
-    if contrib.shape[0] != types.size:
-        if contrib.shape[0] == 0 and types.size == 0:
-            return out, list(_ICER_SEMANTIC_TYPE_FEATURE_NAMES)
-        raise ValueError(
-            "EAF-ICER type-resolved attribution requires one atom type per selected attribution row: "
-            f"contrib_rows={contrib.shape[0]} type_names={types.size}"
-        )
-    unknown = sorted(set(types.tolist()) - set(_ICER_SEMANTIC_TYPE_NAMES))
-    if unknown:
-        raise ValueError(f"EAF-ICER type-resolved attribution received unknown selected atom types {unknown}")
-    legacy_vec = (
-        contrib[:, legacy]
-        if contrib.size and 0 <= legacy < K and legacy != a
-        else np.zeros((contrib.shape[0],), dtype=np.float64)
+    return _semantic_type_feature_matrix(
+        atom_contrib_star,
+        selected_atom_type_names,
+        valid_mask,
+        anchor_action,
+        legacy_action,
     )
-    T = len(_ICER_SEMANTIC_TYPE_NAMES)
-    for b in np.flatnonzero(valid).tolist():
-        if b == a:
-            continue
-        cand = contrib[:, b] if contrib.size else np.zeros((0,), dtype=np.float64)
-        delta = cand - legacy_vec if contrib.size else np.zeros((0,), dtype=np.float64)
-        for j, name in enumerate(_ICER_SEMANTIC_TYPE_NAMES):
-            mask = types == name
-            if np.any(mask):
-                out[b, j] = float(np.sum(cand[mask]))
-                out[b, T + j] = float(np.sum(delta[mask]))
-    return out, list(_ICER_SEMANTIC_TYPE_FEATURE_NAMES)
 
 
 def _decisive_frontier_dacer_features(
@@ -3521,6 +3464,11 @@ def _apply_decisive_frontier_icer(
     diag: dict[str, Any] = {
         "decisive_frontier_icer_enabled": float(enabled),
         "decisive_frontier_icer_instrument_features": float(instrument),
+        "decisive_frontier_icer_semantic_attribution_available": float(
+            atom_contrib_star is not None
+            and np.asarray(atom_contrib_star).ndim == 2
+            and np.asarray(atom_contrib_star).shape[0] > 0
+        ),
         "decisive_frontier_icer_active": float(applies),
         "decisive_frontier_icer_legacy_selected_action": float(legacy),
         "decisive_frontier_icer_baseline_action": float(baseline),
