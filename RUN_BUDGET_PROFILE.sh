@@ -9,6 +9,7 @@ CACHE_ROOT="${CACHE_ROOT:-/data0/senzeyu2/dataset/nuplan/data/cache/bdse_val_v2}
 PROFILE_ROOT="${PROFILE_ROOT:-$SCRIPT_DIR/outputs/budget_profile_$(date -u +%Y%m%dT%H%M%SZ)}"
 PROFILE_GPU="${PROFILE_GPU:-0}"
 MODE="${MODE:-native}"
+SWEEP_SEMANTICS="${SWEEP_SEMANTICS:-strict}"
 LIMIT="${LIMIT:-1000}"
 WARMUP="${WARMUP:-20}"
 REPEATS="${REPEATS:-1}"
@@ -32,6 +33,7 @@ for i in "${!budgets[@]}"; do
   python -m bdse.tools.profile_planning_budget --cache-root "$CACHE_ROOT" \
     --manifest "$PROFILE_ROOT/workload/workload_manifest.json" --config "$OWN_CONFIG" \
     --checkpoint "$EAF_CKPT" --device cuda:0 --budget "$budget" --proposal-top-m "$proposal" \
+    --sweep-semantics "$SWEEP_SEMANTICS" \
     --mode "$MODE" --warmup "$WARMUP" --repeats "$REPEATS" --seed "$SEED" \
     "${deadline_args[@]}" \
     --output "$PROFILE_ROOT/B${budget}_M${proposal}_${MODE}"

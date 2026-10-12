@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -24,6 +25,17 @@ def parse_args():
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--budget", type=int, default=16)
     parser.add_argument("--proposal-top-m", type=int, default=24)
+    parser.add_argument(
+        "--sweep-semantics", choices=["strict", "deployment"], default="strict",
+        help=("strict disables adaptive fallback expansion and caps selector minima so the requested "
+              "B/M are causal interventions; deployment preserves the shipped policy"),
+    )
+    parser.add_argument("--candidate-k", type=int, default=None, help="Optional final candidate-bank size intervention")
+    parser.add_argument("--candidate-pool-k", type=int, default=None, help="Optional pre-pruning candidate pool size")
+    parser.add_argument(
+        "--response-modes", default=None,
+        help="Comma-separated enabled robust response modes, e.g. logged,cv,brake",
+    )
     parser.add_argument("--mode", choices=["native", "attribution"], default="native")
     parser.add_argument("--deadline-ms", type=float, default=None)
     parser.add_argument("--limit", type=int, default=1000, help="0 means every NPZ; sample is log-balanced")
@@ -74,6 +86,91 @@ def file_sha(path):
     return digest.hexdigest()
 
 
+def _apportion_counts(counts: dict[str, object], total: int) -> dict[str, int]:
+    """Deterministically preserve a candidate-family mixture at a new total."""
+    if total <= 0:
+        raise ValueError("candidate total must be positive")
+    names = list(counts)
+    raw = [max(0.0, float(counts[name])) for name in names]
+    denom = sum(raw)
+    if not names or denom <= 0:
+        raise ValueError("candidate counts must contain positive entries")
+    quotas = [total * value / denom for value in raw]
+    out = [int(value) for value in quotas]
+    for index in sorted(range(len(names)), key=lambda i: (quotas[i] - out[i], raw[i], -i), reverse=True)[: total - sum(out)]:
+        out[index] += 1
+    return {name: value for name, value in zip(names, out)}
+
+
+def controlled_overrides(base_cfg: dict, args: argparse.Namespace) -> tuple[dict, dict]:
+    """Build and audit one profiling intervention without mutating the base config."""
+    overrides: dict = {
+        "evidence": {"budget": int(args.budget)},
+        "selector": {"proposal_top_m": int(args.proposal_top_m)},
+    }
+    audit = {
+        "sweep_semantics": args.sweep_semantics,
+        "requested_budget": int(args.budget),
+        "requested_proposal_top_m": int(args.proposal_top_m),
+        "requested_candidate_k": args.candidate_k,
+        "requested_candidate_pool_k": args.candidate_pool_k,
+        "requested_response_modes": args.response_modes,
+    }
+    if args.sweep_semantics == "strict":
+        # A controlled B/M sweep must not silently replace B=8 by a fallback B=16.
+        # Structural-safety atoms may remain outside B when the deployed contract
+        # explicitly declares them free, but the decision selector and fallback
+        # are not allowed to expand the requested treatment.
+        overrides["selector"].update({
+            "min_selected_atoms": min(
+                int(args.budget), int((base_cfg.get("selector", {}) or {}).get("min_selected_atoms", args.budget))
+            ),
+            "adverse_certificate_fill_to_budget_after_certified": False,
+        })
+        overrides["fallback"] = {
+            "enabled": False,
+            "expand_rivals": False,
+            "expand_budget": False,
+            "rival_stages": [],
+            "budget_stages": [],
+            "max_additional_stages": 0,
+        }
+    if args.candidate_k is not None:
+        k = int(args.candidate_k)
+        if k < 2:
+            raise ValueError("candidate-k must be at least 2")
+        candidate = deepcopy(base_cfg.get("candidate", {}) or {})
+        pool_k = int(args.candidate_pool_k if args.candidate_pool_k is not None else max(k, candidate.get("pool_K", k)))
+        if pool_k < k:
+            raise ValueError("candidate-pool-k must be >= candidate-k")
+        candidate["K"] = k
+        candidate["pool_K"] = pool_k
+        if candidate.get("counts"):
+            candidate["counts"] = _apportion_counts(candidate["counts"], k)
+        if candidate.get("pool_counts"):
+            candidate["pool_counts"] = _apportion_counts(candidate["pool_counts"], pool_k)
+        candidate["min_valid_candidates"] = min(k, int(candidate.get("min_valid_candidates", k)))
+        for key in ("prune_preserve_safe", "prune_preserve_conflict", "prune_preserve_history"):
+            if key in candidate:
+                candidate[key] = min(int(candidate[key]), k)
+        overrides["candidate"] = candidate
+    if args.response_modes is not None:
+        requested = [x.strip() for x in str(args.response_modes).split(",") if x.strip()]
+        modes = deepcopy(((base_cfg.get("teacher", {}) or {}).get("robust_modes", {}) or {}))
+        unknown = sorted(set(requested) - set(modes))
+        if not requested or unknown:
+            raise ValueError(f"invalid response modes; requested={requested}, unknown={unknown}, available={sorted(modes)}")
+        mass = sum(float((modes[name] or {}).get("prob", 0.0)) for name in requested)
+        for name, entry in modes.items():
+            entry = dict(entry or {})
+            entry["enabled"] = name in requested
+            if name in requested:
+                entry["prob"] = float(entry.get("prob", 0.0)) / mass if mass > 0 else 1.0 / len(requested)
+            modes[name] = entry
+        overrides.setdefault("teacher", {})["robust_modes"] = modes
+    return overrides, audit
+
+
 def main():
     args = parse_args()
     if args.budget <= 0 or args.proposal_top_m < args.budget:
@@ -113,8 +210,23 @@ def main():
     os.environ["BDSE_PROFILE_CLOSED_LOOP"] = "1"
     from bdse.config import load_config
     from bdse.planner.nuplan_planner import BDSEPlannerCore
-    cfg = load_config(args.config, {"evidence": {"budget": args.budget},
-                                   "selector": {"proposal_top_m": args.proposal_top_m}})
+    base_cfg = load_config(args.config)
+    overrides, intervention_audit = controlled_overrides(base_cfg, args)
+    cfg = load_config(args.config, overrides)
+    effective_modes = [
+        name for name, entry in (((cfg.get("teacher", {}) or {}).get("robust_modes", {}) or {}).items())
+        if bool((entry or {}).get("enabled", False))
+    ]
+    intervention_audit.update({
+        "effective_budget": int((cfg.get("evidence", {}) or {}).get("budget", -1)),
+        "effective_proposal_top_m": int((cfg.get("selector", {}) or {}).get("proposal_top_m", -1)),
+        "effective_selector_min_selected_atoms": int((cfg.get("selector", {}) or {}).get("min_selected_atoms", -1)),
+        "effective_fallback_enabled": bool((cfg.get("fallback", {}) or {}).get("enabled", False)),
+        "effective_candidate_k": int((cfg.get("candidate", {}) or {}).get("K", -1)),
+        "effective_candidate_pool_k": int((cfg.get("candidate", {}) or {}).get("pool_K", -1)),
+        "effective_response_modes": effective_modes,
+        "effective_response_mode_count": len(effective_modes),
+    })
     if (cfg.get("selected_outcome_probe", {}) or {}).get("enabled", False):
         raise SystemExit("refuse TRAIN-only selected_outcome_probe config; use frozen deployment config")
     # Also refuse any alternative config that nests a collection-only probe.
@@ -146,6 +258,7 @@ def main():
                 "config_file_sha256": file_sha(args.config), "rule_only": args.rule_only,
                 "setup_ms_excluded": (time.perf_counter() - setup_start) * 1000,
                 "workload": manifest, "arguments": vars(args),
+                "controlled_intervention": intervention_audit,
                 "claim_limit": "cached-runtime core service only; not live end-to-end deadline or safety proof"}
     (args.output / "provenance.json").write_text(json.dumps(resolved, indent=2, default=str), encoding="utf-8")
     prefix = args.output / "trace"
@@ -155,6 +268,11 @@ def main():
         measure_call(lambda: core.plan_from_runtime(runtime0), device=device, mode=args.mode,
                      context={"warmup": True, "sequence_index": i, "stream_id": "cache_core",
                               "budget": args.budget, "proposal_top_m": args.proposal_top_m,
+                              "sweep_semantics": args.sweep_semantics,
+                              "candidate_k": intervention_audit["effective_candidate_k"],
+                              "candidate_pool_k": intervention_audit["effective_candidate_pool_k"],
+                              "response_mode_count": intervention_audit["effective_response_mode_count"],
+                              "response_modes": ",".join(intervention_audit["effective_response_modes"]),
                               "rule_only": args.rule_only, **identity0},
                      deadline_ms=args.deadline_ms, output_prefix=prefix)
     measured = 0
@@ -165,6 +283,11 @@ def main():
             load_ms = (time.perf_counter() - load_start) * 1000
             context = {"warmup": False, "sequence_index": measured, "stream_id": "cache_core",
                        "budget": args.budget, "proposal_top_m": args.proposal_top_m,
+                       "sweep_semantics": args.sweep_semantics,
+                       "candidate_k": intervention_audit["effective_candidate_k"],
+                       "candidate_pool_k": intervention_audit["effective_candidate_pool_k"],
+                       "response_mode_count": intervention_audit["effective_response_mode_count"],
+                       "response_modes": ",".join(intervention_audit["effective_response_modes"]),
                        "repeat": repeat, "npz_load_ms_excluded": load_ms,
                        "workload_path": str(path), "log_id": str(path.parent),
                        "rule_only": args.rule_only, "includes_runtime_feature_build": False,

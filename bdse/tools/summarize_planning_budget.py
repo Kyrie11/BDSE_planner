@@ -31,7 +31,9 @@ def summarize_files(paths, deadlines=None, periods=None):
     groups = collections.defaultdict(list)
     for row in rows:
         key = (row["scope"], row["mode"], row.get("budget"), row.get("proposal_top_m"),
-               row.get("cached_plan", False), row.get("rule_only", False), row.get("device"))
+               row.get("candidate_k"), row.get("candidate_pool_k"), row.get("response_modes"),
+               row.get("sweep_semantics"), row.get("cached_plan", False),
+               row.get("rule_only", False), row.get("device"))
         groups[key].append(row)
     reports = []
     for key, bucket in sorted(groups.items(), key=lambda x: repr(x[0])):
@@ -42,7 +44,8 @@ def summarize_files(paths, deadlines=None, periods=None):
         logs = {r.get("log_id") for r in bucket if r.get("log_id")}
         warmup = [r["wall_ms"] for r in _all_warmup(paths, key)]
         item = {"scope": key[0], "mode": key[1], "budget": key[2], "proposal_top_m": key[3],
-                "cached_plan": key[4], "rule_only": key[5], "device": key[6],
+                "candidate_k": key[4], "candidate_pool_k": key[5], "response_modes": key[6],
+                "sweep_semantics": key[7], "cached_plan": key[8], "rule_only": key[9], "device": key[10],
                 "wall_ms": latency_stats(values), "warmup_wall_ms": latency_stats(warmup),
                 "log_count": len(logs), "low_tail_sample_warning": len(values) < 1000,
                 "deadline_sensitivity_service_only": {
@@ -86,7 +89,9 @@ def _all_warmup(paths, key):
                 except ValueError:
                     continue
                 row_key = (r.get("scope"), r.get("mode"), r.get("budget"), r.get("proposal_top_m"),
-                           r.get("cached_plan", False), r.get("rule_only", False), r.get("device"))
+                           r.get("candidate_k"), r.get("candidate_pool_k"), r.get("response_modes"),
+                           r.get("sweep_semantics"), r.get("cached_plan", False),
+                           r.get("rule_only", False), r.get("device"))
                 if row_key == key and r.get("warmup", False) and r.get("status") == "ok":
                     yield r
 
